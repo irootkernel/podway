@@ -55,11 +55,16 @@ failures/results, worktree targeting and local clock generation. File descriptor
 leaf names and modes stay private to file handling; authoring borrows bytes.
 
 `command/preflight.rs` is the sole fence-facts replacement boundary for READS.
-It owns status parsing, missing-fact gating, fill-only-missing behavior, the gated
-standard-status fetch and prepared-state rejection. It borrows the original
-Direct `Invocation`, retaining its deadline and requested-command error
-attribution; `Command::needs_preflight` stays in grammar because flag validation
-also uses it. Shared error attribution remains with entry coordination.
+It owns missing-fact gating, fill-only-missing behavior and prepared-state
+rejection, and obtains its facts from the Engine-owned typed preflight-facts
+operation: the CLI passes one fresh request identity with the original
+selector, fences, observation and deadline, and receives typed owned facts or
+the same rendered failure the status read produced. No public status envelope
+is fetched, built or parsed on this path; the retained status parser serves
+only the later interactive-start consumer. It borrows the original Direct
+`Invocation`, retaining its deadline and requested-command error attribution;
+`Command::needs_preflight` stays in grammar because flag validation also uses
+it. Shared error attribution remains with entry coordination.
 
 Keep four observations distinct: fence preflight; dynamic completion's separate
 best-effort 500 ms query; offline fresh-start preview versus stateful replacement

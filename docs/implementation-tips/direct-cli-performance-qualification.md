@@ -483,6 +483,50 @@ tests pin borrowed-versus-owned byte identity, exact-fit and one-byte-over
 budget boundaries, the swallowed trailing error after a full window, and
 pointer identity of the moved owned strings and entries.
 
+### READS typed fence-preflight facts
+
+READS-004 replaces the CLI's automatic fence-preflight boundary: instead of
+executing a Standard `session.status` read and parsing its public envelope, the
+CLI calls an Engine-owned typed facts operation
+(`execute_direct_preflight_facts_v1`) that mirrors the original admission and
+validation order — workspace resolution, Store read admission with the same
+lease/gate/transaction lifetimes, one clock read, the eager current view, the
+expected-session fence, and the complete shared Standard projection with its
+schema validation. The internal Standard result map serves validation only: it
+is retained through the exact envelope-equivalent Stage 5 checks and dropped
+before owned typed facts return. Those Stage 5 checks reproduce the original
+envelope's fallible conditions in their original order — the generated-at
+clock formatting, the workspace constructor bound, the document depth and byte
+limits (each variable member serialized individually, the actual workspace
+sequence digits, and one pinned framing constant), and the absolute-root
+pattern — without constructing, parsing, or reconstructing a public envelope.
+Facts themselves derive directly from typed validated state.
+
+Equivalence evidence: C1 component checks pin the framing constant, depth
+counting and byte accounting against real serialization and the real protocol
+validator (schema-valid synthetic oracle maps are labeled as non-Core-admitted
+and not production-window reachable), and compare the extracted production
+Stage 5 sequence with the original envelope constructor across clock, root and
+multi-fault variants with exact `ProtocolError` variants and attribution.
+Engine integration tests prove byte-identical public failures for the real
+reachable classes (corrupt Store admission, persisted timestamp corruption,
+out-of-range clock, wrong expected session), field-identical facts on success,
+and the post-facts guard release for both shared and cold lease paths with a
+real competing writer committing inside the gap. CLI stdin commands carry
+process-local debug counters proving zero facts/status preflight activity;
+a genuine automatic preflight and an explicit status read provide positive
+controls, and a release-profile candidate emits no instrumentation.
+
+Honest residual cost: the eager Standard projection and its schema validation,
+plus the component serializations feeding the exact byte check, remain on the
+preflight path. No latency, RSS or zero-copy claim is made here; READS-005
+owns matched comparison. The other status consumers keep their existing paths
+unchanged: dynamic completion's separate best-effort query, the later
+interactive-start status read after `SESSION_START_DECISION_REQUIRED`, and
+the stateful replacement/reset disposition observations that do read status —
+while the offline fresh-start preview makes no status read at all, as
+[System Architecture](../architecture/system.md) keeps distinct.
+
 ### READS registered latency comparison protocol
 
 READS freezes its matched comparison before any optimization. Comparisons

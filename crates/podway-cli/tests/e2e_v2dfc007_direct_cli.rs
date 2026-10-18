@@ -9,7 +9,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::cli_fixture::{Fixture, GuardedChild, podway_binary};
+use super::cli_fixture::{
+    Fixture, GuardedChild, assert_read004_counters, output_with_stdin_counted, podway_binary,
+    reads004_preflight_counters,
+};
 use podway_protocol::{ErrorEnvelopeV2, OutputEnvelopeV4};
 use serde_json::{Value, json};
 
@@ -1813,8 +1816,16 @@ fn delegation_stdin_acceptance_receipt_and_completion_preserve_the_real_attempt(
         fixture.run(&["outcome", "lookup", "--idempotency-key", "accept"])["result"]["found"],
         false
     );
-    let output = fixture.output_with_stdin(&["delegation", "accept", "--stdin"], &bytes);
+    let bytes = serde_json::to_vec(&input).unwrap();
+    // READS-004: the fresh-key race body is frozen here, before the first
+    // successful acceptance child runs. That child is the confirmed
+    // competing edit; the frozen body keeps the original document fences.
+    let mut raced = input.clone();
+    raced["idempotency_key"] = json!("reads004-counted-accept-race");
+    let raced_bytes = serde_json::to_vec(&raced).unwrap();
+    let output = output_with_stdin_counted(&fixture, &["delegation", "accept", "--stdin"], &bytes);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_read004_counters(&output, (0, 0));
     let original = serde_json::from_slice::<OutputEnvelopeV4>(&output.stdout)
         .unwrap()
         .into_value();
@@ -1823,13 +1834,49 @@ fn delegation_stdin_acceptance_receipt_and_completion_preserve_the_real_attempt(
         original["result"]["schema"],
         "podway.delegation-accept-result/v2"
     );
-    let output = fixture.output_with_stdin(&["delegation", "accept", "--stdin"], &bytes);
+    let output = output_with_stdin_counted(&fixture, &["delegation", "accept", "--stdin"], &bytes);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_read004_counters(&output, (0, 0));
     assert_eq!(
         serde_json::from_slice::<OutputEnvelopeV4>(&output.stdout)
             .unwrap()
             .into_value(),
         original
+    );
+    // READS-004: the debug-only process-local counters prove that stdin-owned
+    // delegation acceptance performs no facts preflight and no Standard-status
+    // dispatch — on the first application, the replay, and the pre-frozen
+    // fresh-key body losing to its own session fence after the confirmed
+    // acceptance edit above. The same selected binary child carries behavior
+    // in every configuration; counter assertions apply only to the
+    // instrumented debug harness.
+    let post_competitor = fixture.run(&["status"]);
+    let output =
+        output_with_stdin_counted(&fixture, &["delegation", "accept", "--stdin"], &raced_bytes);
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+    assert_read004_counters(&output, (0, 0));
+    let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(error.as_value()["code"], "SESSION_REVISION_CONFLICT");
+    assert_eq!(
+        error.as_value()["details"]["expected_revision"],
+        input["session_revision"]
+    );
+    assert_eq!(
+        error.as_value()["details"]["current_revision"],
+        post_competitor["result"]["session"]["revision"]
+    );
+    assert_eq!(
+        fixture.run(&["status"])["result"],
+        post_competitor["result"]
+    );
+    assert_eq!(
+        fixture.run(&[
+            "outcome",
+            "lookup",
+            "--idempotency-key",
+            "reads004-counted-accept-race"
+        ])["result"]["found"],
+        false
     );
     let receipt = fixture.run(&receipt_args);
     assert_eq!(receipt["command"], "delegation.receipt");
@@ -2190,16 +2237,24 @@ fn record_stdin_preserves_identity_applies_one_atomic_batch_and_replays_without_
         ]
     });
     let bytes = serde_json::to_vec(&input).unwrap();
-    let output = fixture.output_with_stdin(&["record", "--stdin"], &bytes);
+    // READS-004: the fresh-key race body is frozen here, before the first
+    // successful batch child runs. That child is the confirmed competing
+    // edit; the frozen body keeps the original document fences unchanged.
+    let mut raced = input.clone();
+    raced["idempotency_key"] = json!("reads004-counted-record-race");
+    let raced_bytes = serde_json::to_vec(&raced).unwrap();
+    let output = output_with_stdin_counted(&fixture, &["record", "--stdin"], &bytes);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_read004_counters(&output, (0, 0));
     let response = serde_json::from_slice::<OutputEnvelopeV4>(&output.stdout)
         .unwrap()
         .into_value();
     assert_eq!(response["command"], "item.record_many");
     assert_eq!(response["result"]["items"][0]["item_id"], "alpha");
     assert_eq!(response["result"]["items"][1]["item_id"], "zeta");
-    let replay = fixture.output_with_stdin(&["record", "--stdin"], &bytes);
+    let replay = output_with_stdin_counted(&fixture, &["record", "--stdin"], &bytes);
     assert_eq!(replay.status.code(), Some(0), "{replay:?}");
+    assert_read004_counters(&replay, (0, 0));
     assert_eq!(
         serde_json::from_slice::<OutputEnvelopeV4>(&replay.stdout)
             .unwrap()
@@ -2229,9 +2284,13 @@ fn record_stdin_preserves_identity_applies_one_atomic_batch_and_replays_without_
     );
     let mut stale = input;
     stale["idempotency_key"] = json!("rejected-batch");
-    let output =
-        fixture.output_with_stdin(&["record", "--stdin"], &serde_json::to_vec(&stale).unwrap());
+    let output = output_with_stdin_counted(
+        &fixture,
+        &["record", "--stdin"],
+        &serde_json::to_vec(&stale).unwrap(),
+    );
     assert_eq!(output.status.code(), Some(4), "{output:?}");
+    assert_read004_counters(&output, (0, 0));
     let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(error.as_value()["code"], "SESSION_REVISION_CONFLICT");
     assert_eq!(fixture.run(&["status"])["result"], after["result"]);
@@ -2245,9 +2304,13 @@ fn record_stdin_preserves_identity_applies_one_atomic_batch_and_replays_without_
         {"item_id":"alpha","expected_item_revision":1,"record":{"type":"integer","value":43}},
         {"item_id":"zeta","expected_item_revision":0,"clear":true}
     ]);
-    let output =
-        fixture.output_with_stdin(&["record", "--stdin"], &serde_json::to_vec(&stale).unwrap());
+    let output = output_with_stdin_counted(
+        &fixture,
+        &["record", "--stdin"],
+        &serde_json::to_vec(&stale).unwrap(),
+    );
     assert_eq!(output.status.code(), Some(4), "{output:?}");
+    assert_read004_counters(&output, (0, 0));
     let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(error.as_value()["code"], "ITEM_REVISION_CONFLICT");
     assert_eq!(fixture.run(&["observe"])["result"], observed["result"]);
@@ -2260,6 +2323,82 @@ fn record_stdin_preserves_identity_applies_one_atomic_batch_and_replays_without_
         ])["result"]["found"],
         false
     );
+    // READS-004: the pre-frozen fresh-key body loses to its own original
+    // document fences against the confirmed competing batch, with exact
+    // fence details, no outcome, and the post-competitor state unchanged.
+    let output = output_with_stdin_counted(&fixture, &["record", "--stdin"], &raced_bytes);
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+    assert_read004_counters(&output, (0, 0));
+    let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(error.as_value()["code"], "SESSION_REVISION_CONFLICT");
+    assert_eq!(
+        error.as_value()["details"]["expected_revision"],
+        status["session"]["revision"]
+    );
+    assert_eq!(
+        error.as_value()["details"]["current_revision"],
+        after["result"]["session"]["revision"]
+    );
+    assert_eq!(fixture.run(&["status"])["result"], after["result"]);
+    assert_eq!(
+        fixture.run(&[
+            "outcome",
+            "lookup",
+            "--idempotency-key",
+            "reads004-counted-record-race"
+        ])["result"]["found"],
+        false
+    );
+}
+
+/// READS-004 candidate instrumentation check. The private token makes an
+/// instrumented debug child report its process-local preflight counters; a
+/// genuinely uninstrumented release-profile candidate must emit nothing. The
+/// release run context marks its selected candidate explicitly
+/// (`PODWAY_READS004_UNINSTRUMENTED_CANDIDATE`), because an external
+/// candidate may itself be a debug build; unmarked external selections
+/// assert behavior only. In the instrumented debug harness the same test
+/// proves the counters are genuine: an automatic fence preflight reports
+/// facts=1/status=0 and an explicit status read reports facts=0/status=1,
+/// so the zero observations in the stdin races cannot be vacuous.
+#[test]
+fn reads004_candidate_reports_no_preflight_counters_when_uninstrumented() {
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    let output = output_with_stdin_counted(&fixture, &["record", "--stdin"], b"not-json");
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    if std::env::var_os("PODWAY_READS004_UNINSTRUMENTED_CANDIDATE").is_some() {
+        assert_eq!(reads004_preflight_counters(&output), None);
+    } else if super::cli_fixture::reads004_counter_harness() {
+        assert_eq!(reads004_preflight_counters(&output), Some((0, 0)));
+        // Positive controls on the selected debug binary: a real session.
+        fixture.run(&[
+            "start",
+            "--preset",
+            "small-change-v2",
+            "--task",
+            "counter control",
+            "--idempotency-key",
+            "control-start",
+        ]);
+        fixture.run(&["begin", "--idempotency-key", "control-begin"]);
+        let status = output_with_stdin_counted(&fixture, &["status"], b"");
+        assert_eq!(status.status.code(), Some(0), "{status:?}");
+        assert_eq!(reads004_preflight_counters(&status), Some((0, 1)));
+        let automatic = output_with_stdin_counted(
+            &fixture,
+            &[
+                "set",
+                "scope-summary",
+                "counter control value",
+                "--idempotency-key",
+                "control-set",
+            ],
+            b"",
+        );
+        assert_eq!(automatic.status.code(), Some(0), "{automatic:?}");
+        assert_eq!(reads004_preflight_counters(&automatic), Some((1, 0)));
+    }
 }
 
 #[test]

@@ -472,3 +472,460 @@ fn direct_failure_catalog_preserves_store_fences_domain_and_recovery() {
     );
     assert_eq!(value["details"]["actual_session_id"], OTHER);
 }
+
+// READS-004: the typed fence-preflight facts facade must equal the Standard
+// status read it replaces — identical failures with identical envelopes on
+// every reachable condition, and identical facts on success.
+
+mod reads004_equivalence {
+    use podway_core::{BlockerState, SessionLifecycle, UnixMillis};
+    use podway_engine::{
+        direct_api::{
+            DirectCommandV1, DirectRequestV1, DirectResponseV1, execute_direct_preflight_facts_v1,
+            execute_direct_v1,
+        },
+        direct_execution::{
+            DirectPreflightFactsResponseV1, DirectReadCommandV1, NativeDirectIdSourceV1,
+            envelope_equivalent_status_bytes_v1,
+        },
+        execution::ExecutionClockV1,
+        v2_read_service::GraphStatusTierV2,
+        workspace::DirectWorkspaceResolverV1,
+    };
+    use podway_git::{
+        DiagnosticPathDisplayV1, GitResolveErrorV1, GitResolverContractV1, LosslessPathV1,
+        NativeGitResolverV1, ValidatedWorktreeV1, WorktreeRootsV1, WorktreeSelectorV1,
+    };
+    use podway_protocol::{Rfc3339MillisV1, SessionBlockV1, validate_daemon_free_document_v1};
+    use podway_store::IdempotencyKeyV1;
+    use serde_json::Value;
+
+    use super::super::int_v2dfc006_direct_execution::{Clock, deadline, digest};
+    use super::super::int_v2dfc006_races::{
+        READS004_RESPONSE, cursor_fences, graph, prepare_fixture, reads004_facts_request,
+    };
+
+    fn resolver() -> DirectWorkspaceResolverV1<NativeGitResolverV1> {
+        DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest())
+    }
+
+    fn status_request(selector: &WorktreeSelectorV1) -> DirectRequestV1 {
+        DirectRequestV1 {
+            selector: selector.clone(),
+            expected_workspace_id: None,
+            request_id: podway_protocol::RequestIdV1::new(READS004_RESPONSE).unwrap(),
+            command: DirectCommandV1::Read {
+                command: DirectReadCommandV1::Status {
+                    tier: GraphStatusTierV2::Standard,
+                    history_before: None,
+                },
+                expected_session_id: None,
+            },
+            idempotency_key: None,
+            deadline: deadline(),
+            observed_at: Rfc3339MillisV1::new("2023-11-14T22:13:20.001Z").unwrap(),
+            timeout_ms: 5000,
+        }
+    }
+
+    /// Both paths share one request identity and observation, so identical
+    /// failures must produce byte-identical public envelopes.
+    fn identical_failures(
+        selector: &WorktreeSelectorV1,
+        clock: &impl ExecutionClockV1,
+    ) -> (Value, Value) {
+        let old = match execute_direct_v1(
+            &resolver(),
+            status_request(selector),
+            clock,
+            &NativeDirectIdSourceV1,
+        )
+        .unwrap()
+        {
+            DirectResponseV1::Success(output) => {
+                panic!("status unexpectedly succeeded: {}", output.as_value())
+            }
+            DirectResponseV1::Failure(error) => error.into_value(),
+        };
+        let new = match execute_direct_preflight_facts_v1(
+            &resolver(),
+            reads004_facts_request(selector),
+            clock,
+        )
+        .unwrap()
+        {
+            DirectPreflightFactsResponseV1::Facts(facts) => {
+                panic!("facts unexpectedly succeeded: {facts:?}")
+            }
+            DirectPreflightFactsResponseV1::Failure(error) => error.into_value(),
+        };
+        assert!(
+            validate_daemon_free_document_v1("podway.error/v2", &old),
+            "old path produced an invalid error envelope"
+        );
+        assert_eq!(
+            serde_json::to_vec(&old).unwrap(),
+            serde_json::to_vec(&new).unwrap(),
+            "facts failure diverged from the Standard status failure"
+        );
+        (old, new)
+    }
+
+    struct YearTenThousand;
+    impl ExecutionClockV1 for YearTenThousand {
+        fn now(&self) -> UnixMillis {
+            UnixMillis::new(253_402_300_800_000)
+        }
+    }
+
+    #[test]
+    fn reads004_facts_equal_the_standard_status_success_and_envelope_bytes() {
+        let (temporary, selector, store) = prepare_fixture();
+        let value = match execute_direct_v1(
+            &resolver(),
+            status_request(&selector),
+            &Clock,
+            &NativeDirectIdSourceV1,
+        )
+        .unwrap()
+        {
+            DirectResponseV1::Success(output) => output.into_value(),
+            DirectResponseV1::Failure(error) => panic!("status failed: {}", error.into_value()),
+        };
+        let facts = match execute_direct_preflight_facts_v1(
+            &resolver(),
+            reads004_facts_request(&selector),
+            &Clock,
+        )
+        .unwrap()
+        {
+            DirectPreflightFactsResponseV1::Facts(facts) => facts,
+            DirectPreflightFactsResponseV1::Failure(error) => {
+                panic!("facts failed: {}", error.into_value())
+            }
+        };
+        // The typed facts equal what the old CLI parsed from the envelope.
+        assert_eq!(
+            facts.workspace_id.as_str(),
+            value["workspace"]["uuid"].as_str().unwrap()
+        );
+        assert_eq!(
+            facts.session_id.as_str(),
+            value["result"]["session"]["id"].as_str().unwrap()
+        );
+        assert_eq!(
+            facts.session_revision.get(),
+            value["result"]["session"]["revision"].as_u64().unwrap()
+        );
+        assert_eq!(facts.lifecycle, SessionLifecycle::Running);
+        assert_eq!(
+            value["result"]["session"]["lifecycle"].as_str(),
+            Some("running")
+        );
+        assert_eq!(
+            facts
+                .attempt_id
+                .as_ref()
+                .map(|attempt| attempt.as_str().to_owned()),
+            value["result"]["current"]["attempt"]["attempt_id"]
+                .as_str()
+                .map(str::to_owned)
+        );
+        let parsed_items: Vec<(String, u64)> = value["result"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| {
+                (
+                    item["item_id"].as_str().unwrap().to_owned(),
+                    item["revision"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        let facts_items: Vec<(String, u64)> = facts
+            .item_revisions
+            .iter()
+            .map(|(id, revision)| (id.clone(), revision.get()))
+            .collect();
+        assert_eq!(facts_items, parsed_items);
+        assert_eq!(
+            facts.goal_revision.map(|revision| revision.get()),
+            value["result"].get("goal_revision").and_then(Value::as_u64),
+        );
+        // C1 constructor parity on the real projected result: the exact
+        // envelope-equivalent byte accounting equals the serialized length of
+        // the envelope the old path actually built.
+        assert_eq!(
+            serde_json::to_vec(&value).unwrap().len(),
+            envelope_equivalent_status_bytes_v1(
+                &value["result"],
+                value["workspace"]["root"].as_str().unwrap(),
+                READS004_RESPONSE,
+                value["workspace"]["uuid"].as_str().unwrap(),
+                value["generated_at"].as_str().unwrap(),
+                value["workspace"]["latest_workspace_sequence"]
+                    .as_u64()
+                    .unwrap(),
+            )
+        );
+        drop(store);
+        drop(temporary);
+    }
+
+    #[test]
+    fn reads004_facts_fail_identically_on_persisted_timestamp_corruption() {
+        let (temporary, selector, store) = prepare_fixture();
+        let block = DirectCommandV1::Cursor(
+            podway_engine::direct_execution::DirectCursorCommandV1::Block(SessionBlockV1 {
+                reason: "reads004 equivalence blocker".into(),
+                preconditions: cursor_fences(&graph(&store)),
+            }),
+        );
+        let request = DirectRequestV1 {
+            command: block,
+            idempotency_key: Some(IdempotencyKeyV1::new("reads004-block").unwrap()),
+            ..status_request(&selector)
+        };
+        match execute_direct_v1(&resolver(), request, &Clock, &NativeDirectIdSourceV1).unwrap() {
+            DirectResponseV1::Success(_) => {}
+            DirectResponseV1::Failure(error) => panic!("block failed: {}", error.into_value()),
+        }
+        let state = graph(&store);
+        let attempt = state.trace().active_attempt().unwrap().attempt_id();
+        let memory = state
+            .workflow_memory()
+            .attempts()
+            .iter()
+            .find(|memory| memory.attempt_id() == attempt)
+            .unwrap();
+        let blocker = memory
+            .blockers()
+            .iter()
+            .find(|blocker| blocker.state() == BlockerState::Open)
+            .expect("engine block created an open blocker");
+        let connection = rusqlite::Connection::open(store.layout().database()).unwrap();
+        connection
+            .execute(
+                "UPDATE v2_blockers SET created_at_ms = ?1 WHERE blocker_id = ?2",
+                rusqlite::params![253_402_300_800_000i64, blocker.blocker_id().as_str()],
+            )
+            .unwrap();
+        drop(connection);
+        let (old, _) = identical_failures(&selector, &Clock);
+        assert_eq!(old["code"], "INTERNAL_ERROR");
+        // Multi-fault priority: the persisted projection failure keeps
+        // precedence even when the clock is also out of range.
+        let (multi, _) = identical_failures(&selector, &YearTenThousand);
+        assert_eq!(multi["code"], old["code"]);
+        drop(store);
+        drop(temporary);
+    }
+
+    #[test]
+    fn reads004_facts_fail_identically_on_an_out_of_range_clock() {
+        let (temporary, selector, _store) = prepare_fixture();
+        let (old, _) = identical_failures(&selector, &YearTenThousand);
+        assert_eq!(old["code"], "REQUEST_INVALID");
+        assert_eq!(old["exit_code"], 2);
+        drop(temporary);
+    }
+
+    #[test]
+    fn reads004_facts_fail_identically_on_corrupt_store_admission() {
+        // The paired Store-admission corruption case: the current attempt's
+        // recorded item value is replaced by an undecodable payload (READS-
+        // 001's owned corruption pattern), so both facades refuse during the
+        // eager Store decode — before projection — with identical public
+        // envelopes and no read side effects.
+        let (temporary, selector, store) = prepare_fixture();
+        let attempt = graph(&store)
+            .trace()
+            .active_attempt()
+            .unwrap()
+            .attempt_id()
+            .clone();
+        {
+            let connection = rusqlite::Connection::open(store.layout().database()).unwrap();
+            connection
+                .execute(
+                    "UPDATE v2_item_slots SET value_json='{\"kind\":\"mystery\"}' \
+                     WHERE attempt_id = ?1 AND item_id = 'i01'",
+                    rusqlite::params![attempt.as_str()],
+                )
+                .unwrap();
+        }
+        // Read-side-effect preimage captured after the corruption write.
+        let database_before = std::fs::read(store.layout().database()).unwrap();
+        let wal_before = std::fs::read(store.layout().wal()).ok();
+        let shm_before = store.layout().shm().exists();
+        let (old, new) = identical_failures(&selector, &Clock);
+        assert_eq!(old["code"], new["code"]);
+        assert_eq!(old["code"], "WORKSPACE_STATE_UNREADABLE");
+        assert_eq!(old["exit_code"], 5);
+        assert_eq!(old["retryable"], false);
+        // Both reads are write-free: identical files, sidecars and outcomes.
+        assert_eq!(
+            std::fs::read(store.layout().database()).unwrap(),
+            database_before
+        );
+        assert_eq!(std::fs::read(store.layout().wal()).ok(), wal_before);
+        assert_eq!(store.layout().shm().exists(), shm_before);
+        drop(store);
+        drop(temporary);
+    }
+
+    #[test]
+    fn reads004_facts_fail_identically_on_a_wrong_expected_session() {
+        let (temporary, selector, _store) = prepare_fixture();
+        let wrong = podway_core::SessionId::new("00000000-0000-4000-8000-000000000099").unwrap();
+        let mut old_request = status_request(&selector);
+        old_request.command = DirectCommandV1::Read {
+            command: DirectReadCommandV1::Status {
+                tier: GraphStatusTierV2::Standard,
+                history_before: None,
+            },
+            expected_session_id: Some(wrong.clone()),
+        };
+        let old = match execute_direct_v1(&resolver(), old_request, &Clock, &NativeDirectIdSourceV1)
+            .unwrap()
+        {
+            DirectResponseV1::Success(output) => {
+                panic!("status unexpectedly succeeded: {}", output.as_value())
+            }
+            DirectResponseV1::Failure(error) => error.into_value(),
+        };
+        let facts_request = podway_engine::direct_execution::DirectPreflightFactsRequestV1 {
+            expected_session_id: Some(wrong),
+            ..reads004_facts_request(&selector)
+        };
+        let new =
+            match execute_direct_preflight_facts_v1(&resolver(), facts_request, &Clock).unwrap() {
+                DirectPreflightFactsResponseV1::Facts(facts) => {
+                    panic!("facts unexpectedly succeeded: {facts:?}")
+                }
+                DirectPreflightFactsResponseV1::Failure(error) => error.into_value(),
+            };
+        assert_eq!(old["code"], "SESSION_ID_MISMATCH");
+        assert_eq!(
+            serde_json::to_vec(&old).unwrap(),
+            serde_json::to_vec(&new).unwrap(),
+            "facts diverged on the expected-session fence"
+        );
+        drop(temporary);
+    }
+
+    /// Rebuilding a worktree through the public `ValidatedWorktreeV1::new`
+    /// supplies `TransientWorktreeEvidenceV1::Unavailable`; workspace
+    /// revalidation requires native transient Git-object evidence on both
+    /// sides, so a rebuilt worktree is refused before either facade reaches
+    /// Stage 5 — independent of the display text. `display: None`
+    /// reconstructs the unchanged native display as the control proving that
+    /// boundary.
+    struct RebuiltWorktreeResolver {
+        display: Option<String>,
+        inner: NativeGitResolverV1,
+    }
+    impl GitResolverContractV1 for RebuiltWorktreeResolver {
+        fn resolve(
+            &self,
+            selector: WorktreeSelectorV1,
+        ) -> Result<ValidatedWorktreeV1, GitResolveErrorV1> {
+            let native = self.inner.resolve(selector)?;
+            let roots = native.roots();
+            let display = DiagnosticPathDisplayV1::new(
+                self.display
+                    .clone()
+                    .unwrap_or_else(|| roots.worktree_root().display().as_str().to_owned()),
+            )
+            .unwrap();
+            let rebuilt = WorktreeRootsV1::new(
+                LosslessPathV1::from_base64url(
+                    roots.worktree_root().path_bytes_base64url().clone(),
+                    display,
+                ),
+                roots.common_directory_root().clone(),
+                roots.worktree_administration_root().clone(),
+            );
+            Ok(ValidatedWorktreeV1::new(
+                native.identity().clone(),
+                rebuilt,
+                native.kind().clone(),
+                native.containment().clone(),
+                native.move_metadata().clone(),
+            )
+            .unwrap())
+        }
+    }
+
+    #[test]
+    fn reads004_facts_reject_rebuilt_worktrees_identically_at_the_evidence_boundary() {
+        // Public-constructor worktrees lack the native transient Git-object
+        // evidence revalidation requires, so they are refused before either
+        // facade reaches its Stage 5 workspace checks. The unchanged-display
+        // control proves the refusal is that evidence boundary and not the
+        // display text; the divergent displays fail byte-identically to it.
+        // This establishes no facade-level Stage 5 root reachability or
+        // display-coherence claim; root-condition coverage stays with the
+        // retained Stage 5 predicate and the C1 component checks.
+        let scenarios: &[(&str, Option<String>)] = &[
+            ("unchanged-native-display control", None),
+            ("relative display", Some("fixture".to_owned())),
+            ("oversized display", Some(format!("/{}", "a".repeat(4_096)))),
+        ];
+        let mut control: Option<Value> = None;
+        for (name, display) in scenarios {
+            let (temporary, selector, _store) = prepare_fixture();
+            let resolver = DirectWorkspaceResolverV1::new(
+                RebuiltWorktreeResolver {
+                    display: display.clone(),
+                    inner: NativeGitResolverV1::new(),
+                },
+                digest(),
+            );
+            let old = match execute_direct_v1(
+                &resolver,
+                status_request(&selector),
+                &Clock,
+                &NativeDirectIdSourceV1,
+            )
+            .unwrap()
+            {
+                DirectResponseV1::Success(output) => {
+                    panic!("status unexpectedly succeeded: {}", output.as_value())
+                }
+                DirectResponseV1::Failure(error) => error.into_value(),
+            };
+            let new = match execute_direct_preflight_facts_v1(
+                &resolver,
+                reads004_facts_request(&selector),
+                &Clock,
+            )
+            .unwrap()
+            {
+                DirectPreflightFactsResponseV1::Facts(facts) => {
+                    panic!("facts unexpectedly succeeded: {name}: {facts:?}")
+                }
+                DirectPreflightFactsResponseV1::Failure(error) => error.into_value(),
+            };
+            assert_eq!(
+                old["code"], "WORKSPACE_STATE_UNREADABLE",
+                "{name} changed the original admission boundary"
+            );
+            assert_eq!(
+                serde_json::to_vec(&old).unwrap(),
+                serde_json::to_vec(&new).unwrap(),
+                "facts diverged from the status read at {name}"
+            );
+            if let Some(control) = &control {
+                assert_eq!(
+                    serde_json::to_vec(control).unwrap(),
+                    serde_json::to_vec(&old).unwrap(),
+                    "{name} diverged from the unchanged-display control"
+                );
+            } else {
+                control = Some(old);
+            }
+            drop(temporary);
+        }
+    }
+}

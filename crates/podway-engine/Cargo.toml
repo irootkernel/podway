@@ -23,6 +23,7 @@ uuid.workspace = true
 serde_norway.workspace = true
 podway-store = { path = "../podway-store", features = ["test-support"] }
 tempfile.workspace = true
+rusqlite.workspace = true
 
 [[test]]
 name = "int_suite"

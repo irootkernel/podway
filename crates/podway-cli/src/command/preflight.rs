@@ -1,22 +1,20 @@
-//! Gated fence preflight; the sole future READS facts replacement boundary.
+//! Gated fence preflight over the Engine's typed READS facts operation.
 
 use std::{
     io::{self, IsTerminal},
     ops::ControlFlow,
 };
 
-use podway_core::{AttemptId, GoalRevisionNumberV2, Revision, SessionId, WorkspaceId};
+use podway_core::{
+    AttemptId, GoalRevisionNumberV2, Revision, SessionId, SessionLifecycle, WorkspaceId,
+};
 use serde_json::{Map, Value};
 
 use super::{
     ArchiveCommand, Cli, Command, ExplicitPreconditions, GoalCommand, LocalFailure, RunResult,
     direct, invalid_v2_value, item_id, preflight_error,
 };
-use podway_engine::{
-    direct_api::{self as protocol_boundary, DirectCommandV1 as Direct},
-    direct_execution::DirectReadCommandV1 as ReadCommand,
-    v2_read_service::GraphStatusTierV2,
-};
+use podway_engine::direct_execution::DirectPreflightFactsV1;
 
 #[derive(Clone, Debug)]
 pub(super) struct StatusFacts {
@@ -49,6 +47,30 @@ impl StatusPreflight {
                 LocalFailure::response_invalid("status response omitted workspace identity")
             })?;
         Self::from_parts(result, workspace_id)
+    }
+
+    /// READS-004: constructs the CLI fence-preflight carrier directly from
+    /// the Engine's typed owned facts. No status envelope is fetched, built
+    /// or parsed on the automatic preflight path.
+    pub(super) fn from_facts(facts: DirectPreflightFactsV1) -> Self {
+        let lifecycle = match facts.lifecycle {
+            SessionLifecycle::Prepared => "prepared",
+            SessionLifecycle::Running => "running",
+            SessionLifecycle::Completed => "completed",
+            SessionLifecycle::Cancelled => "cancelled",
+        }
+        .to_owned();
+        Self {
+            transport_workspace_id: facts.workspace_id,
+            facts: StatusFacts {
+                session_id: facts.session_id,
+                session_revision: facts.session_revision,
+                attempt_id: facts.attempt_id,
+                item_revisions: facts.item_revisions,
+                goal_revision: facts.goal_revision,
+                lifecycle,
+            },
+        }
     }
 
     pub(super) fn from_parts(
@@ -227,24 +249,18 @@ pub(super) fn prepare(
         return Ok(ControlFlow::Continue(None));
     }
     let route = cli.command.canonical_route();
-    let status = invocation.execute(
-        Direct::Read {
-            command: ReadCommand::Status {
-                tier: GraphStatusTierV2::Standard,
-                history_before: None,
-            },
-            expected_session_id: fences.session_id.clone(),
-        },
-        fences.workspace_id.clone(),
-        None,
-    )?;
-    let output = match status {
-        protocol_boundary::DirectResponseV1::Success(output) => output,
-        protocol_boundary::DirectResponseV1::Failure(error) => {
-            return Ok(ControlFlow::Break(preflight_error(&cli.command, error)?));
-        }
-    };
-    let facts = StatusPreflight::from_direct(&output)?;
+    // READS-004: the typed Engine facts operation replaces the gated
+    // Standard-status fetch and its envelope parser. One fresh request
+    // identity, the caller's fences, and no idempotency-key surface.
+    let facts =
+        match invocation.preflight_facts(fences.workspace_id.clone(), fences.session_id.clone())? {
+            podway_engine::direct_execution::DirectPreflightFactsResponseV1::Facts(facts) => {
+                StatusPreflight::from_facts(facts)
+            }
+            podway_engine::direct_execution::DirectPreflightFactsResponseV1::Failure(error) => {
+                return Ok(ControlFlow::Break(preflight_error(&cli.command, error)?));
+            }
+        };
     fill_facts(&cli.command, fences, &facts);
     if facts.facts.lifecycle == "prepared"
         && (cli.command.is_item_mutation()
@@ -265,7 +281,8 @@ pub(super) fn prepare(
         // Prepared state has no attempt or goal fence to autofill. Reject it
         // without manufacturing identities, after checking caller-owned fences.
         if let Some(key) = &cli.idempotency_key {
-            protocol_boundary::IdempotencyKeyV1::new(key.clone()).map_err(invalid_v2_value)?;
+            podway_engine::direct_api::IdempotencyKeyV1::new(key.clone())
+                .map_err(invalid_v2_value)?;
         } else if cli.json || !io::stdin().is_terminal() || !io::stdout().is_terminal() {
             return Err(LocalFailure::request_invalid(
                 "automation mutations require --idempotency-key",
@@ -291,11 +308,12 @@ pub(super) fn prepare(
 
 #[cfg(test)]
 mod reads001_parser_surface_tests {
-    //! READS-001 characterization of the fence-preflight parser's rejection
-    //! surface with unit-crafted maps. These branches are not producible by
-    //! the real engine's success envelope absent an engine bug: they are the
-    //! recorded replacement obligations for READS-004, kept separate from
-    //! input-reachable failures that flow through `preflight_error`.
+    //! READS-001 characterization of the status parser's rejection surface
+    //! with unit-crafted maps. READS-004 removed the automatic preflight's
+    //! fetch/parse boundary; `from_direct`/`from_parts` remain in production
+    //! only for the later interactive-start status consumer, and these tests
+    //! keep that retained surface characterized. They are not producible by
+    //! the real engine's success envelope absent an engine bug.
     use super::*;
     use serde_json::json;
 

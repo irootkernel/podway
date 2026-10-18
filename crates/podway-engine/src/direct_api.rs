@@ -21,8 +21,9 @@ use crate::{
     direct_error::{DirectErrorContextV1, DirectMaintenanceRecoveryV1, render_direct_error_v1},
     direct_execution::{
         DirectCursorCommandV1, DirectCursorRequestV1, DirectExecutionErrorV1, DirectIdSourceV1,
-        DirectReadCommandV1, DirectReadRequestV1, OutcomeLookupRequestV1, execute_cursor_v1,
-        execute_read_v1, lookup_outcome_v1,
+        DirectPreflightFactsRequestV1, DirectPreflightFactsResponseV1, DirectReadCommandV1,
+        DirectReadRequestV1, OutcomeLookupRequestV1, execute_cursor_v1, execute_read_v1,
+        lookup_outcome_v1, preflight_facts_v1,
     },
     direct_items::{
         DirectItemCommandV1, DirectItemRequestV1, DirectRecordManyRequestV1, execute_item_v1,
@@ -140,6 +141,34 @@ pub fn execute_direct_with_error_observer_v1<R: GitResolverContractV1>(
 type MaintenanceObserver =
     Arc<dyn Fn(crate::direct_maintenance::DirectMaintenanceBoundaryV1) + Send + Sync>;
 
+/// READS-004 debug-only, process-local preflight instrumentation: one counter
+/// at the typed facts facade entry and one at the Standard status dispatch.
+/// Release builds compile the counters away entirely; the CLI prints them
+/// only under its private test token.
+#[cfg(debug_assertions)]
+mod reads004_preflight_counters {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    pub(super) static FACTS_ENTRIES: AtomicUsize = AtomicUsize::new(0);
+    pub(super) static STATUS_DISPATCHES: AtomicUsize = AtomicUsize::new(0);
+
+    pub(super) fn record(counter: &AtomicUsize) {
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Reads the debug-only process-local preflight counters (facts entries,
+/// Standard status dispatches). Absent from release builds.
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub fn reads004_debug_preflight_counters_v1() -> (usize, usize) {
+    use std::sync::atomic::Ordering;
+    (
+        reads004_preflight_counters::FACTS_ENTRIES.load(Ordering::Relaxed),
+        reads004_preflight_counters::STATUS_DISPATCHES.load(Ordering::Relaxed),
+    )
+}
+
 /// Isolated debug-binary qualification observes the same maintenance boundaries as Engine tests.
 #[cfg(debug_assertions)]
 #[doc(hidden)]
@@ -180,25 +209,76 @@ fn execute_direct_inner_v1<R: GitResolverContractV1>(
     let result = dispatch(resolver, request, clock, ids, maintenance_observer);
     match result {
         Ok(output) => Ok(DirectResponseV1::Success(output)),
-        Err(mut error) => {
-            if let Some(observer) = observer {
-                observer(&error);
-            }
-            if is_maintenance(&error) {
-                match observe_maintenance(resolver, selector) {
-                    Ok(recovery) => context.maintenance = recovery,
-                    Err(observation_error) => {
-                        if let Some(observer) = observer {
-                            observer(&observation_error);
-                        }
-                        error = observation_error;
-                    }
+        Err(error) => Ok(DirectResponseV1::Failure(finish_direct_error_v1(
+            error,
+            &mut context,
+            resolver,
+            &selector,
+            observer,
+        )?)),
+    }
+}
+
+/// The one shared error finisher: observer notification, maintenance recovery
+/// observation with its replacement semantics, and public error rendering.
+/// Every direct entry point must fail through this single path.
+fn finish_direct_error_v1<R: GitResolverContractV1>(
+    mut error: DirectExecutionErrorV1,
+    context: &mut DirectErrorContextV1,
+    resolver: &DirectWorkspaceResolverV1<R>,
+    selector: &WorktreeSelectorV1,
+    observer: Option<&dyn Fn(&DirectExecutionErrorV1)>,
+) -> Result<ErrorEnvelopeV2, ProtocolError> {
+    if let Some(observer) = observer {
+        observer(&error);
+    }
+    if is_maintenance(&error) {
+        match observe_maintenance(resolver, selector.clone()) {
+            Ok(recovery) => context.maintenance = recovery,
+            Err(observation_error) => {
+                if let Some(observer) = observer {
+                    observer(&observation_error);
                 }
+                error = observation_error;
             }
-            Ok(DirectResponseV1::Failure(render_direct_error_v1(
-                &error, &context,
-            )?))
         }
+    }
+    render_direct_error_v1(&error, context)
+}
+
+/// READS-004 typed fence-preflight facts entry: renders failures through the
+/// same shared error finisher as every direct response, with the original
+/// `session.status` command attribution the CLI status preflight consumed.
+/// Returns owned typed facts on success; never constructs a public output
+/// envelope, and never consumes an idempotency key.
+#[doc(hidden)]
+pub fn execute_direct_preflight_facts_v1<R: GitResolverContractV1>(
+    resolver: &DirectWorkspaceResolverV1<R>,
+    request: DirectPreflightFactsRequestV1,
+    clock: &impl ExecutionClockV1,
+) -> Result<DirectPreflightFactsResponseV1, ProtocolError> {
+    #[cfg(debug_assertions)]
+    reads004_preflight_counters::record(&reads004_preflight_counters::FACTS_ENTRIES);
+    let mut context = DirectErrorContextV1 {
+        request_id: request.request_id.clone(),
+        command: CommandNameV1::new(
+            DirectReadCommandV1::Status {
+                tier: crate::v2_read_service::GraphStatusTierV2::Standard,
+                history_before: None,
+            }
+            .command_name(),
+        )?,
+        observed_at: request.observed_at.clone(),
+        idempotency_key: None,
+        timeout_ms: request.timeout_ms,
+        maintenance: None,
+    };
+    let selector = request.selector.clone();
+    match preflight_facts_v1(resolver, request, clock) {
+        Ok(facts) => Ok(DirectPreflightFactsResponseV1::Facts(facts)),
+        Err(error) => Ok(DirectPreflightFactsResponseV1::Failure(
+            finish_direct_error_v1(error, &mut context, resolver, &selector, None)?,
+        )),
     }
 }
 
@@ -401,18 +481,24 @@ fn dispatch<R: GitResolverContractV1>(
         DirectCommandV1::Read {
             command,
             expected_session_id,
-        } => execute_read_v1(
-            resolver,
-            DirectReadRequestV1 {
-                request_id: request.request_id,
-                selector: request.selector,
-                expected_workspace_id: request.expected_workspace_id,
-                expected_session_id,
-                command,
-                deadline: request.deadline,
-            },
-            clock,
-        ),
+        } => {
+            #[cfg(debug_assertions)]
+            if matches!(command, DirectReadCommandV1::Status { .. }) {
+                reads004_preflight_counters::record(&reads004_preflight_counters::STATUS_DISPATCHES);
+            }
+            execute_read_v1(
+                resolver,
+                DirectReadRequestV1 {
+                    request_id: request.request_id,
+                    selector: request.selector,
+                    expected_workspace_id: request.expected_workspace_id,
+                    expected_session_id,
+                    command,
+                    deadline: request.deadline,
+                },
+                clock,
+            )
+        }
         DirectCommandV1::Start(command) => start_session_v1(
             resolver,
             DirectStartRequestV1 {

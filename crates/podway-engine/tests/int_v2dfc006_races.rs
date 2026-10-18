@@ -121,7 +121,7 @@ fn rejection(response: DirectResponseV1, code: &str) {
     assert_eq!(value["code"], code);
 }
 
-fn graph(store: &DirectStoreV1) -> GraphSessionStateV2 {
+pub(super) fn graph(store: &DirectStoreV1) -> GraphSessionStateV2 {
     store
         .prepare_graph(deadline())
         .unwrap()
@@ -130,7 +130,10 @@ fn graph(store: &DirectStoreV1) -> GraphSessionStateV2 {
         .clone()
 }
 
-fn item_fences(graph: &GraphSessionStateV2, item: &str) -> ItemMutationPreconditionsWireV1 {
+pub(super) fn item_fences(
+    graph: &GraphSessionStateV2,
+    item: &str,
+) -> ItemMutationPreconditionsWireV1 {
     let attempt = graph.trace().active_attempt().unwrap().attempt_id();
     let memory = graph
         .workflow_memory()
@@ -150,7 +153,7 @@ fn item_fences(graph: &GraphSessionStateV2, item: &str) -> ItemMutationPrecondit
     }
 }
 
-fn cursor_fences(graph: &GraphSessionStateV2) -> SessionMutationPreconditionsWireV1 {
+pub(super) fn cursor_fences(graph: &GraphSessionStateV2) -> SessionMutationPreconditionsWireV1 {
     SessionMutationPreconditionsWireV1 {
         expected_session_id: graph.trace().session_id().clone(),
         expected_session_revision: graph.trace().revision(),
@@ -227,7 +230,7 @@ fn attach(selector: &WorktreeSelectorV1, store: &DirectStoreV1, key: &str) {
     );
 }
 
-fn prepare_fixture() -> (tempfile::TempDir, WorktreeSelectorV1, DirectStoreV1) {
+pub(super) fn prepare_fixture() -> (tempfile::TempDir, WorktreeSelectorV1, DirectStoreV1) {
     let (temporary, selector, store, _) = fixture();
     let mut items: Vec<Value> = (1..=16)
         .map(|index| {
@@ -1847,4 +1850,337 @@ fn multi_gib_sparse_artifact_attach_and_complete_succeed_at_the_default_timeout(
         );
     }
     store.verify_integrity(deadline()).unwrap();
+}
+
+// READS-004: the typed fence-preflight facts operation returns owned facts
+// only after the Store read transaction, the process-local connection gate and
+// the actual shared/cold-exclusive DirectOpenLease have all been released; a
+// real competing writer then commits inside that gap and the original-fence
+// mutation fails closed exactly as before.
+
+pub(super) const READS004_RESPONSE: &str = "00000000-0000-4000-8000-000000000077";
+
+pub(super) fn reads004_facts_request(
+    selector: &WorktreeSelectorV1,
+) -> podway_engine::direct_execution::DirectPreflightFactsRequestV1 {
+    podway_engine::direct_execution::DirectPreflightFactsRequestV1 {
+        request_id: RequestIdV1::new(READS004_RESPONSE).unwrap(),
+        selector: selector.clone(),
+        expected_workspace_id: None,
+        expected_session_id: None,
+        deadline: deadline(),
+        observed_at: Rfc3339MillisV1::new("2023-11-14T22:13:20.001Z").unwrap(),
+        timeout_ms: 5000,
+    }
+}
+
+pub(super) fn reads004_facts(
+    selector: &WorktreeSelectorV1,
+) -> podway_engine::direct_execution::DirectPreflightFactsV1 {
+    use podway_engine::direct_api::execute_direct_preflight_facts_v1;
+    use podway_engine::direct_execution::DirectPreflightFactsResponseV1;
+    match execute_direct_preflight_facts_v1(&resolver(), reads004_facts_request(selector), &Clock)
+        .unwrap()
+    {
+        DirectPreflightFactsResponseV1::Facts(facts) => facts,
+        DirectPreflightFactsResponseV1::Failure(error) => {
+            panic!("preflight facts failed: {:?}", error.into_value())
+        }
+    }
+}
+
+/// Failure-safe caller reconciliation: the spawned caller is joined on every
+/// path, including parent assertion panics, so the fixture is never cleaned up
+/// around a live caller. Joins are bounded by the caller's own existing
+/// rendezvous and invocation deadlines; no new budget is introduced.
+struct Reads004Caller<T> {
+    handle: Option<std::thread::JoinHandle<T>>,
+}
+impl<T: Send + 'static> Reads004Caller<T> {
+    fn spawn(body: impl FnOnce() -> T + Send + 'static) -> Self {
+        Self {
+            handle: Some(std::thread::spawn(body)),
+        }
+    }
+    fn join(mut self) -> std::thread::Result<T> {
+        self.handle
+            .take()
+            .expect("reads004 caller already joined")
+            .join()
+    }
+}
+impl<T> Drop for Reads004Caller<T> {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// The post-competitor state baseline both races compare after the rejected
+/// original-fence mutation: committed sequence, session revision and the
+/// complete active-attempt slot map (identifier, revision, value presence).
+fn reads004_state_baseline(store: &DirectStoreV1) -> (u64, u64, Vec<(String, u64, bool)>) {
+    let state = graph(store);
+    let attempt = state.trace().active_attempt().unwrap().attempt_id();
+    let memory = state
+        .workflow_memory()
+        .attempts()
+        .iter()
+        .find(|memory| memory.attempt_id() == attempt)
+        .unwrap();
+    let slots = memory
+        .item_slots()
+        .iter()
+        .map(|slot| {
+            (
+                slot.item_id().as_str().to_owned(),
+                slot.revision().get(),
+                slot.value().is_some(),
+            )
+        })
+        .collect();
+    (sequence(store), state.trace().revision().get(), slots)
+}
+
+#[test]
+fn reads004_cold_facts_release_all_guards_before_a_competing_commit() {
+    use podway_core::SessionLifecycle;
+
+    let (temporary, selector, store) = prepare_fixture();
+    // Controlled cold precondition: force a full truncate checkpoint so every
+    // committed frame reaches the main database, then remove both sidecars —
+    // the lossless cold Store state the classification tests build. Podway
+    // never creates sidecars during an unmarked cold read, so no intervening
+    // actor exists between this setup and the facts read.
+    {
+        let connection = rusqlite::Connection::open(store.layout().database()).unwrap();
+        connection
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+            .unwrap();
+    }
+    let wal = store.layout().wal();
+    let shm = store.layout().shm();
+    if wal.exists() {
+        assert_eq!(
+            std::fs::metadata(&wal).unwrap().len(),
+            0,
+            "fixture WAL still holds uncheckpointed frames"
+        );
+        std::fs::remove_file(&wal).unwrap();
+    }
+    if shm.exists() {
+        std::fs::remove_file(&shm).unwrap();
+    }
+    assert!(!wal.exists() && !shm.exists());
+    let before = sequence(&store);
+    let facts_selector = selector.clone();
+    let mutation_selector = selector.clone();
+    // Caller 1 runs the real facts facade on its own thread and pauses at a
+    // lease-free rendezvous only after the facade returned successfully, with
+    // the read transaction, connection gate and lease already dropped by the
+    // Store read boundary's RAII scope. It resumes only on the explicit
+    // channel below and returns its final response for exact assertion; the
+    // guard joins it on every path before the fixture is dropped.
+    let (arrive, arrive_rx) = mpsc::channel::<(SessionId, Revision, AttemptId, Revision)>();
+    let (resume, resume_rx) = mpsc::channel::<()>();
+    let caller = Reads004Caller::spawn(move || {
+        let facts = reads004_facts(&facts_selector);
+        assert_eq!(facts.lifecycle, SessionLifecycle::Running);
+        let item_revision = facts
+            .item_revisions
+            .iter()
+            .find(|(id, _)| id == "i01")
+            .expect("active item fence")
+            .1;
+        arrive
+            .send((
+                facts.session_id.clone(),
+                facts.session_revision,
+                facts.attempt_id.clone().expect("running attempt fence"),
+                item_revision,
+            ))
+            .expect("test parent left the arrival rendezvous");
+        resume_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("caller 1 missed the bounded resume rendezvous");
+        let command = DirectCommandV1::Item(DirectItemCommandV1::Set(ItemSetV1 {
+            item_id: ItemId::new("i01").unwrap(),
+            value: "reads004-cold-caller".into(),
+            preconditions: ItemMutationPreconditionsWireV1 {
+                expected_session_id: facts.session_id.clone(),
+                expected_attempt_id: facts.attempt_id.clone().unwrap(),
+                expected_item_revision: item_revision,
+            },
+        }));
+        execute_direct_v1(
+            &resolver(),
+            request(&mutation_selector, command, "reads004-cold-caller"),
+            &Clock,
+            &NativeDirectIdSourceV1,
+        )
+    });
+    let (_session_id, session_revision, _attempt_id, item_revision) = arrive_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("facts caller missed the bounded arrival rendezvous");
+    // The real competing writer commits on this thread while caller 1 is
+    // paused at the post-facts rendezvous: its own lease, gate and write
+    // admission can succeed only because the facts read released every guard
+    // it briefly held.
+    success(
+        execute_direct_v1(
+            &resolver(),
+            request(
+                &selector,
+                set(&graph(&store), "i01", "reads004-cold-competing"),
+                "reads004-cold-competing",
+            ),
+            &Clock,
+            &NativeDirectIdSourceV1,
+        )
+        .unwrap(),
+    );
+    // Confirm the competing commit, and capture the post-competitor state
+    // baseline, before caller 1 resumes.
+    assert!(outcome(&store, "reads004-cold-competing").is_some());
+    assert_eq!(sequence(&store), before + 1);
+    let baseline = reads004_state_baseline(&store);
+    resume
+        .send(())
+        .expect("caller 1 already left the rendezvous");
+    let response = caller.join().expect("caller 1 thread panicked").unwrap();
+    let DirectResponseV1::Failure(error) = response else {
+        panic!("stale facts committed")
+    };
+    let value = error.into_value();
+    assert_eq!(value["code"], "ITEM_REVISION_CONFLICT");
+    assert_eq!(value["details"]["expected_revision"], item_revision.get());
+    let final_graph = graph(&store);
+    assert_eq!(
+        value["details"]["current_revision"],
+        item_fences(&final_graph, "i01")
+            .expected_item_revision
+            .get()
+    );
+    // Full state equality with the post-competitor baseline: the rejected
+    // mutation left no outcome, revision, slot or sequence effect, and the
+    // Store stays coherent.
+    assert_eq!(reads004_state_baseline(&store), baseline);
+    assert_eq!(outcome(&store, "reads004-cold-caller"), None);
+    assert!(outcome(&store, "reads004-cold-competing").is_some());
+    assert_eq!(
+        final_graph.trace().revision().get(),
+        session_revision.get() + 1
+    );
+    store.verify_integrity(deadline()).unwrap();
+    drop(temporary);
+}
+
+#[test]
+fn reads004_shared_facts_release_all_guards_with_warm_sidecars() {
+    use podway_core::SessionLifecycle;
+
+    let (temporary, selector, store) = prepare_fixture();
+    // Warm precondition straight from the fixture: its clean Store closes
+    // leave both SQLite sidecars in place, so every admission here takes the
+    // shared lease branch (maintenance.rs returns Shared when both sidecars
+    // exist). No intervening actor touches the fixture before the facts read.
+    assert!(
+        store.layout().wal().exists() && store.layout().shm().exists(),
+        "fixture is not warm: a SQLite sidecar is missing"
+    );
+    let before = sequence(&store);
+    assert!(
+        store.layout().wal().exists() && store.layout().shm().exists(),
+        "fixture lost its warm sidecars before the facts read"
+    );
+    let facts_selector = selector.clone();
+    let mutation_selector = selector.clone();
+    // Caller 1 pauses at the same lease-free post-return rendezvous; the
+    // shared lease and connection gate it briefly held must already be free.
+    // The guard joins the caller on every path before the fixture is dropped.
+    let (arrive, arrive_rx) = mpsc::channel::<(SessionId, Revision, AttemptId)>();
+    let (resume, resume_rx) = mpsc::channel::<()>();
+    let caller = Reads004Caller::spawn(move || {
+        let facts = reads004_facts(&facts_selector);
+        assert_eq!(facts.lifecycle, SessionLifecycle::Running);
+        arrive
+            .send((
+                facts.session_id.clone(),
+                facts.session_revision,
+                facts.attempt_id.clone().expect("running attempt fence"),
+            ))
+            .expect("test parent left the arrival rendezvous");
+        resume_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("caller 1 missed the bounded resume rendezvous");
+        let command = DirectCommandV1::Cursor(DirectCursorCommandV1::Complete(SessionCompleteV1 {
+            preconditions: SessionMutationPreconditionsWireV1 {
+                expected_session_id: facts.session_id.clone(),
+                expected_session_revision: facts.session_revision,
+                expected_attempt_id: facts.attempt_id.clone().unwrap(),
+            },
+        }));
+        execute_direct_v1(
+            &resolver(),
+            request(&mutation_selector, command, "reads004-shared-caller"),
+            &Clock,
+            &NativeDirectIdSourceV1,
+        )
+    });
+    let (_session_id, session_revision, _attempt_id) = arrive_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("facts caller missed the bounded arrival rendezvous");
+    // The real competing writer commits on this thread while caller 1 is
+    // paused, through the same process-local connection gate the facts read
+    // must have released.
+    success(
+        execute_direct_v1(
+            &resolver(),
+            request(
+                &selector,
+                set(&graph(&store), "i01", "reads004-shared-competing"),
+                "reads004-shared-competing",
+            ),
+            &Clock,
+            &NativeDirectIdSourceV1,
+        )
+        .unwrap(),
+    );
+    // Confirm the competing commit, and capture the post-competitor state
+    // baseline, before caller 1 resumes.
+    assert!(outcome(&store, "reads004-shared-competing").is_some());
+    assert_eq!(sequence(&store), before + 1);
+    let baseline = reads004_state_baseline(&store);
+    resume
+        .send(())
+        .expect("caller 1 already left the rendezvous");
+    let response = caller.join().expect("caller 1 thread panicked").unwrap();
+    let DirectResponseV1::Failure(error) = response else {
+        panic!("stale facts committed")
+    };
+    let value = error.into_value();
+    assert_eq!(value["code"], "SESSION_REVISION_CONFLICT");
+    assert_eq!(
+        value["details"]["expected_revision"],
+        session_revision.get()
+    );
+    let final_graph = graph(&store);
+    assert_eq!(
+        value["details"]["current_revision"],
+        final_graph.trace().revision().get()
+    );
+    // Full state equality with the post-competitor baseline: the session is
+    // still running, the rejected key has no outcome, no slot or sequence
+    // effect remains, and the Store stays coherent on the warm sidecars.
+    assert_eq!(final_graph.trace().lifecycle(), SessionLifecycle::Running);
+    assert_eq!(reads004_state_baseline(&store), baseline);
+    assert_eq!(outcome(&store, "reads004-shared-caller"), None);
+    assert!(outcome(&store, "reads004-shared-competing").is_some());
+    assert_eq!(
+        final_graph.trace().revision().get(),
+        session_revision.get() + 1
+    );
+    store.verify_integrity(deadline()).unwrap();
+    drop(temporary);
 }

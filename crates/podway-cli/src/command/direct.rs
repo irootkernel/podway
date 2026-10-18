@@ -97,6 +97,33 @@ impl Invocation {
         )
         .map_err(|_| LocalFailure::internal("the Engine could not construct a valid response"))
     }
+
+    /// READS-004 typed fence-preflight facts: exactly one fresh request
+    /// identity, the original selector, fences, observation and deadline, and
+    /// no idempotency-key surface. Failures render through the same shared
+    /// Engine error finisher with `session.status` attribution; the outer
+    /// protocol failure keeps the direct invocation's local mapping.
+    pub(super) fn preflight_facts(
+        &self,
+        workspace: Option<WorkspaceId>,
+        expected_session_id: Option<SessionId>,
+    ) -> Result<podway_engine::direct_execution::DirectPreflightFactsResponseV1, LocalFailure> {
+        let request = podway_engine::direct_execution::DirectPreflightFactsRequestV1 {
+            request_id: RequestIdV1::new(Uuid::new_v4().to_string()).map_err(invalid_v2_value)?,
+            selector: self.selector.clone(),
+            expected_workspace_id: workspace,
+            expected_session_id,
+            deadline: self.deadline,
+            observed_at: self.observed_at.clone(),
+            timeout_ms: self.timeout_ms,
+        };
+        podway_engine::direct_api::execute_direct_preflight_facts_v1(
+            &self.resolver,
+            request,
+            &podway_engine::native_execution::WallUtcExecutionClockV1,
+        )
+        .map_err(|_| LocalFailure::internal("the Engine could not construct a valid response"))
+    }
 }
 
 #[cfg(debug_assertions)]

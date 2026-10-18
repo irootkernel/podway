@@ -326,12 +326,14 @@ candidate at `052f8625`):
   constructed — and the evidence family persists in the relational
   `v2_resolved_evidence_references` table, so missing-source corruption
   classifies as a Store admission failure (`WORKSPACE_STATE_UNREADABLE`),
-  not a projection failure. Open rows carried to READS-004 as equivalence
-  obligations: extreme persisted `UnixMillis` values, schema-size arithmetic
-  for the standard-status path (a drift guard built on exact field overhead
-  or a normal-ASCII identifier invariant is the form such a proof would
-  take), and the selected-readback fallback's precise invariant trace if it
-  is excluded. None of these rows is claimed proven unreachable here.
+  not a projection failure. The rows once open for READS-004 closed with the
+  delivered exact-retention design: extreme persisted `UnixMillis` values
+  keep the original included-window timestamp formatting verbatim with no
+  unreachability claim; the schema-size row is answered by exact member-wise
+  depth and byte checks compared against the real envelope construction and
+  pinned by the C1 component evidence rather than approximate arithmetic;
+  and the selected-readback validation remains inside the shared Stage 4
+  projection derive the facts operation reuses.
 - Non-scope inventory (unchanged by READS): `WorkspaceShow`, doctor deep
   scans, outcome lookup and the non-preflight CLI status consumers retain
   their existing paths; omissions from the scoped counters are not
@@ -354,13 +356,16 @@ window); per-variant data and validation beyond that boundary:
 | `delegation.receipt` | one receipt row (current or archived view) | Receipt decode and identity/workspace match against its graph |
 | `delegation.package` | none beyond the eager view | Projects the delegation package from decoded state |
 
-The single CLI preflight read is `session.status` at Standard tier with
-`history_before: None` through `invocation.execute` in `preflight::prepare`;
-its reachable failures arrive as engine `Failure` envelopes mapped by
-`preflight_error` (corrupt state, Busy/maintenance/deadline), followed by
-the crafted-map-only parser surface recorded above, then the
-prepared-lifecycle rejection ordering (key validation, automation
-`--idempotency-key` requirement, revision conflict, `SESSION_NOT_RUNNING`).
+The single CLI preflight read, as READS-001 registered it against the
+unchanged implementation, is `session.status` at Standard tier with
+`history_before: None` through `invocation.execute` in `preflight::prepare`.
+READS-004 has since replaced that boundary with the typed Engine facts
+operation carrying the same failure mapping (`preflight_error` for corrupt
+state, Busy/maintenance/deadline) and the unchanged prepared-lifecycle
+rejection ordering (key validation, automation `--idempotency-key`
+requirement, revision conflict, `SESSION_NOT_RUNNING`); the crafted-map
+parser surface above now characterizes only the retained interactive-start
+consumer.
 
 ### READS-002: Bulk-load attempt data without reducing validation
 

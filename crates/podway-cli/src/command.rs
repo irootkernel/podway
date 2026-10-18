@@ -440,10 +440,22 @@ pub fn run() -> i32 {
             let route = cli.command.canonical_route();
             let json_output = cli.json;
             let quiet = cli.quiet;
-            match execute(cli) {
+            let exit = match execute(cli) {
                 Ok(result) => render_result(&result, json_output, quiet),
                 Err(failure) => render_local_failure(failure.with_command(route), json_output),
+            };
+            #[cfg(debug_assertions)]
+            if env::var_os("PODWAY_TEST_PREFLIGHT_COUNT").as_deref()
+                == Some(OsStr::new("podway-direct-preflight-test-v1"))
+            {
+                let (facts, status) =
+                    podway_engine::direct_api::reads004_debug_preflight_counters_v1();
+                let _ = writeln!(
+                    io::stderr().lock(),
+                    "podway-test-preflight-count:{facts}:{status}"
+                );
             }
+            exit
         }
         Err(_) => {
             let failure = LocalFailure::request_invalid("invalid command syntax");

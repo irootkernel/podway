@@ -185,15 +185,43 @@ impl Fixture {
     }
 
     pub(super) fn output_with_stdin(&self, arguments: &[&str], input: &[u8]) -> Output {
+        self.stdin_run(&podway_binary(), arguments, input, &[])
+    }
+
+    /// Stdin child run against an explicitly supplied binary with additional
+    /// child environment. Used by the READS-004 counter helper to pass the
+    /// private instrumentation token alongside the selected candidate binary.
+    pub(super) fn output_with_stdin_explicit(
+        &self,
+        binary: &std::path::Path,
+        arguments: &[&str],
+        input: &[u8],
+        envs: &[(String, String)],
+    ) -> Output {
+        self.stdin_run(binary, arguments, input, envs)
+    }
+
+    fn stdin_run(
+        &self,
+        binary: &std::path::Path,
+        arguments: &[&str],
+        input: &[u8],
+        envs: &[(String, String)],
+    ) -> Output {
         assert_packaged_fixture(&self.0);
-        let child = Command::new(podway_binary())
+        let mut command = Command::new(binary);
+        command
             .arg("--worktree")
             .arg(&self.0)
             .arg("--json")
             .args(arguments)
             .current_dir(&self.0)
             .env_remove("HOME")
-            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("XDG_CONFIG_HOME");
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+        let child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -547,5 +575,61 @@ pub(super) fn bounded_output(mut guard: GuardedChild, arguments: &[&str]) -> Out
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// READS-004 preflight-counter instrumentation constants: the private child
+/// token and the emitted counter line prefix.
+pub(super) const READS004_PREFLIGHT_TOKEN: &str = "podway-direct-preflight-test-v1";
+pub(super) const READS004_COUNTER_LINE: &str = "podway-test-preflight-count:";
+
+/// The counter pair a token-instrumented child reported, or `None` when the
+/// child emitted no counter line (a genuinely uninstrumented candidate).
+pub(super) fn reads004_preflight_counters(output: &Output) -> Option<(u64, u64)> {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let Some(line) = stderr
+        .lines()
+        .find(|line| line.starts_with(READS004_COUNTER_LINE))
+    else {
+        return None;
+    };
+    let counts: Vec<&str> = line[READS004_COUNTER_LINE.len()..].split(':').collect();
+    assert_eq!(counts.len(), 2, "{line:?}");
+    Some((counts[0].parse().unwrap(), counts[1].parse().unwrap()))
+}
+
+/// Whether this test executable is the instrumented debug harness with no
+/// external candidate selected: the only configuration in which the
+/// process-local READS-004 counter assertions are meaningful. An external
+/// candidate may itself be a debug build, so selection alone proves nothing
+/// about instrumentation; release-built harnesses compile the counters away.
+pub(super) fn reads004_counter_harness() -> bool {
+    std::env::var_os("PODWAY_TEST_CLI_BINARY").is_none() && cfg!(debug_assertions)
+}
+
+/// Runs a stdin child on the selected binary with the private READS-004
+/// counter token. Behavior is identical to [`Fixture::output_with_stdin`];
+/// the token only lets an instrumented debug child report its counters.
+pub(super) fn output_with_stdin_counted(
+    fixture: &Fixture,
+    arguments: &[&str],
+    input: &[u8],
+) -> Output {
+    fixture.output_with_stdin_explicit(
+        &podway_binary(),
+        arguments,
+        input,
+        &[(
+            "PODWAY_TEST_PREFLIGHT_COUNT".to_owned(),
+            READS004_PREFLIGHT_TOKEN.to_owned(),
+        )],
+    )
+}
+
+/// Asserts the expected counter pair only in the instrumented debug harness;
+/// external-candidate and release-harness runs assert behavior alone.
+pub(super) fn assert_read004_counters(output: &Output, expected: (u64, u64)) {
+    if reads004_counter_harness() {
+        assert_eq!(reads004_preflight_counters(output), Some(expected));
     }
 }
