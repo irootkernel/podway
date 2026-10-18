@@ -13,6 +13,7 @@ use podway_core::{Revision, SessionId, Sha256Digest, UnixMillis, WorkspaceId};
 
 pub mod direct_store;
 mod query_accounting;
+mod read_family;
 #[doc(hidden)]
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

@@ -272,7 +272,9 @@ OPTIM baseline. The counters live in `podway-store` `query_accounting`
 behind the `test-support` feature: one prepare per statement compilation
 (including the implicit prepare inside `Connection::query_row`), one execute
 per `query_row`/`query_map`/statement `query` initiation, and one delivered
-row per row-mapper invocation including rows whose conversion fails. Each
+row per row-mapper invocation or successful streaming advance, including
+rows whose conversion subsequently fails. A pending boundary row is counted
+once when delivered, even though its TEXT conversion waits for its owner. Each
 delivered row also counts its variable-length column bytes (TEXT/BLOB bytes
 only; scalars and NULLs count zero). These are scoped measurements over the
 registered read, preflight and prepared-admission call sites in `v2_state`,
@@ -339,6 +341,115 @@ reload executions ≤ ceil(changed/128), strict execution decrease against the
 registered baselines on repeated-family fixtures, small/empty/single
 controls with no unnecessary increase under a three-pair no-worse policy,
 and prepare counts asserted separately.
+
+### READS cold family acquisition
+
+The Store acquires slots, blockers, evidence references, goal criteria and
+criterion citations with one lazy statement and execution per family when its
+parent collection is nonempty. Statement and cursor ownership remains local to
+one reconstruction. Each existing validator consumes its owner's rows in the
+original order; boundary lookahead converts integer routing keys only. Criteria
+are restricted to existing parent revisions, while the terminal cross-count
+still detects orphans after assessment validation. Results and citations share
+the full `(trace_sequence, criterion_ordinal, result rowid)` key so corrupt ties
+cannot merge citation groups.
+
+The registered cold fixtures now measure these prepare/execute pairs:
+
+| Fixture | Original | Bulk | Delivered rows | Combined payload peak |
+|---|---:|---:|---:|---:|
+| S | 43 / 43 | 24 / 24 | 65 | 858 |
+| M | 140 / 140 | 24 / 24 | 438 | 206,226 |
+| grown-L | 201 / 201 | 24 / 24 | 995 | 36,152,082 |
+| maximum | 4,118 / 4,118 | 24 / 24 | 8,215 | 51,300 |
+| empty | 23 / 23 | 23 / 23 | 16 | 0 |
+| single | 23 / 23 | 23 / 23 | 17 | 108 |
+
+Fresh payload bytes and raw peaks match the original table exactly. Variable
+column bytes also match for equal inputs: the original hex-encoded fixture root
+occupied 154 bytes; tests add the current root field's exact length to the
+remaining original bytes. For example, moving fixtures to the owned temporary
+directory added 44 root bytes, yielding 6,863 total bytes on S. The observer
+reports those actual bytes without subtraction or normalization.
+
+`SQLITE_TOOBIG` can arise inside a bulk step before the failing row has an
+identifiable owner, including when a sorter scans a later owner's oversized
+cell. That family retires its cursor, discards the current unconfirmed
+collection and uses the original owner selectors through the same validation
+callbacks. The original error winner and validator stages stay intact; extra
+corrupt-input executions and reacquired rows remain counted. No length limit,
+error mapper, transaction or deadline changes. The real Store EXPLAIN check
+pins cold slots to a plan without payload repacking; the other four families'
+compatible-writer field bounds remain well below the configured row limit.
+
+Additional tied-result multi-fault characterization used the original per-owner
+loaders and then the byte-exact bulk implementation with identical fixtures.
+These additional baselines were captured retrospectively after the first cold
+candidate; they do not satisfy the planned pre-change capture timing. The
+comparison preserves defined validation stages and routing without making
+SQLite's undefined relative order among corrupt ties a contract. Both loaders
+collect two citation rows before an ordinal-gap check when the second row has
+invalid UTF-8. With valid citations, a tied result's postcheck still precedes the
+next group's conversion; a strictly earlier postcheck also precedes invalid
+first-row TEXT in future tied groups. Bulk scalar lookahead honestly adds one
+acquired row in the latter cases, without changing the validator's pull/post
+entries.
+
+### READS prepared reload acquisition
+
+A mixed reload discovers slot headers once for the session. Valid owners retain
+scalar stamps; changed cached slots queue pairs in specification order, and new
+owners queue all rows in collection order. Unchanged cached values keep their
+prepared payload pointers. One global pair list packs identities across owners
+into fixed 128-pair statements, with exactly 256 identity binds, zero other binds
+and NULL tail padding. Prepares and executions are asserted separately.
+
+| Registered reload | Original headers / cold / points | Current headers / chunks / points |
+|---|---:|---:|
+| 128 revised + 128 new | 2 / 1 / 128 | 1 / 2 / 0 |
+| 2 revised + 4 new | 2 / 1 / 2 | 1 / 1 / 0 |
+| Larger-first encoded values (100, 40) | 2 / 0 / 2 | 1 / 1 / 0 |
+
+Fresh payloads, container copies, pointer reuse and logical raw/combined peaks
+retain their registered oracles. The heterogeneous combined peak remains
+exactly cached-input bytes plus 200. The small nonaligned case proves a single
+chunk spans two owners. Pure unchanged prepared reuse still executes neither
+header discovery nor payload chunks.
+
+The chunk statement orders `(ordinal, attempt UUID, rowid)` metadata in a
+`LIMIT -1` subquery, then uses a `CROSS JOIN` with both rowid and attempt equality
+to seek each slot. Explicit outer ordering preserves requested positions. On
+pinned SQLite 3.51.3, the real Store EXPLAIN test pins one four-field metadata
+record, ordering before rowid seek, payload columns after that seek, and no
+payload sorter or automatic index. The same connection proves query-only mode,
+the unchanged 1,064,960-byte length limit and 256 parameters. A compatible list
+is grown from empty by 125 acknowledged `Add` operations to a single
+1,000,000-scalar value, then reloaded cold and mixed. This complements bounded
+large-payload fixtures without substituting an oversized text-domain value.
+
+Metadata remains separate from payload retention measurements. On the pinned
+64-bit target, each production row stamp is 32 bytes and each pair is 16 bytes.
+For N valid headers and M queued pairs, routing retains N stamps, M pairs,
+ceil(M/128) lazy statement cells, at most that many prepared handles and one live
+chunk cursor. Per-owner header staging/classification maps and duplicate guards
+are transient; only the first failing owner's raw header prefix remains for
+exact-position replay. Discovery scratch has its own balance, and the combined
+identity-text peak includes scratch retained across older owners' scope exits.
+These logical units exclude collection capacity, allocator overhead and SQLite
+native metadata buffers; they are not heap or RSS measurements. A SQL-only
+allocator diagnostic found bounded metadata staging instead of the rejected
+payload-sorter proposal; it does not establish total Store memory equivalence.
+
+Any chunk-step TooBig retires the entire remaining stream. Cached owners keep
+already validated slots and use original point selectors at remaining changed
+positions. A new owner drops its partial raw collection and repeats its original
+whole-owner collection before specification checks. Real Store faults before
+and after the 128-pair boundary assert delivered prefixes, conversion stages,
+no later chunk, unchanged database/WAL bytes and no rejected outcome. Missing
+rows visible during discovery refuse at the original specification position;
+that test does not pretend a queued row can disappear inside one snapshot.
+Deferred header faults and early errors release retained discovery scratch on
+unwind, including when an earlier owner's payload is the winning fault.
 
 ### READS registered latency comparison protocol
 

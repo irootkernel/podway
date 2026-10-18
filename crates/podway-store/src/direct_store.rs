@@ -184,3 +184,38 @@ fn sidecar(path: &Path, suffix: &str) -> PathBuf {
     name.push(suffix);
     name.into()
 }
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn explain_read_query(
+    snapshot: &DirectReadSnapshotV1<'_>,
+    sql: &str,
+) -> Result<Vec<crate::test_support::ReadQueryOpcode>, DirectStoreErrorV1> {
+    let mut statement = snapshot.connection.prepare(&format!("EXPLAIN {sql}"))?;
+    let mut rows = statement.raw_query();
+    let mut opcodes = Vec::new();
+    while let Some(row) = rows.next()? {
+        opcodes.push(crate::test_support::ReadQueryOpcode {
+            opcode: row.get(1)?,
+            p1: row.get(2)?,
+            p2: row.get(3)?,
+            p3: row.get(4)?,
+            p4: row.get(5)?,
+        });
+    }
+    Ok(opcodes)
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn read_query_settings(
+    snapshot: &DirectReadSnapshotV1<'_>,
+    sql: &str,
+) -> Result<(usize, bool, i32), DirectStoreErrorV1> {
+    let count = snapshot.connection.prepare(sql)?.parameter_count();
+    let query_only = snapshot
+        .connection
+        .query_row("PRAGMA query_only", [], |row| row.get(0))?;
+    let length_limit = snapshot
+        .connection
+        .limit(rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH)?;
+    Ok((count, query_only, length_limit))
+}

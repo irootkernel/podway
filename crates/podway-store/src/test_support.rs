@@ -14,6 +14,50 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
+/// Native EXPLAIN output from the real, configured Store snapshot connection.
+#[derive(Debug)]
+pub struct ReadQueryOpcode {
+    pub opcode: String,
+    pub p1: i64,
+    pub p2: i64,
+    pub p3: i64,
+    pub p4: Option<String>,
+}
+
+pub fn explain_read_query(
+    snapshot: &crate::direct_store::DirectReadSnapshotV1<'_>,
+    sql: &str,
+) -> Result<Vec<ReadQueryOpcode>, crate::direct_store::DirectStoreErrorV1> {
+    crate::direct_store::explain_read_query(snapshot, sql)
+}
+
+/// Parameter count and unchanged read settings on the real snapshot connection.
+pub fn read_query_settings(
+    snapshot: &crate::direct_store::DirectReadSnapshotV1<'_>,
+    sql: &str,
+) -> Result<(usize, bool, i32), crate::direct_store::DirectStoreErrorV1> {
+    crate::direct_store::read_query_settings(snapshot, sql)
+}
+
+/// The production mixed-path session header statement text.
+pub fn mixed_header_sql() -> &'static str {
+    crate::v2_memory::SLOTS_HEADER_BULK_SQL
+}
+
+/// The production fixed-arity changed-slot chunk statement text.
+pub fn mixed_chunk_sql() -> &'static str {
+    crate::read_family::CHUNK_SQL
+}
+
+/// Actual production sizes of the compact mixed-routing records: the
+/// per-row header stamp and the global pair entry.
+pub fn mixed_routing_type_sizes() -> (usize, usize) {
+    (
+        std::mem::size_of::<crate::v2_memory::RowStamp>(),
+        std::mem::size_of::<crate::v2_memory::PairEntry>(),
+    )
+}
+
 /// Creates an impossible current-session cursor for read-only recovery-path tests.
 pub fn corrupt_current_session_cursor(database_path: &Path) -> Result<(), String> {
     let connection = Connection::open(database_path).map_err(|error| error.to_string())?;
@@ -207,6 +251,27 @@ pub mod query_account {
         pub container_copies: u64,
         pub cached_input_bytes: u64,
         pub combined_peak: u64,
+        /// Identity-text retention units (item id + item type String bytes
+        /// materialized by the slot-family loaders); logical bytes and row
+        /// counts, excluded from the combined payload peak.
+        pub identity_rows: u64,
+        pub identity_current: u64,
+        pub identity_scope_peak: u64,
+        pub identity_window_peak: u64,
+        pub identity_released_at_scope_end: u64,
+        /// Validator-stage entries in the criterion-assessment result loop:
+        /// (a) citation-pull entries (prechecks done, pull beginning) and
+        /// (b) post-citation-check entries (citations returned, reason/
+        /// result/actor/time construction not yet begun).
+        pub citation_pull_entries: u64,
+        pub citation_post_check_entries: u64,
+        /// Discovery-phase raw header scratch bytes (one owner at a time),
+        /// held separately from the scope-owned identity balance so
+        /// slot-scope exits never release a future failing owner's bytes.
+        pub discovery_scratch_current: u64,
+        pub discovery_scratch_peak: u64,
+        /// Scratch never consumed by a validation turn (error unwind).
+        pub discovery_scratch_released_at_abort: u64,
     }
 
     #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -265,6 +330,17 @@ pub mod query_account {
                     container_copies: retention.container_copies,
                     cached_input_bytes: retention.cached_input_bytes,
                     combined_peak: retention.combined_peak,
+                    identity_rows: retention.identity_rows,
+                    identity_current: retention.identity_current,
+                    identity_scope_peak: retention.identity_scope_peak,
+                    identity_window_peak: retention.identity_window_peak,
+                    identity_released_at_scope_end: retention.identity_released_at_scope_end,
+                    citation_pull_entries: retention.citation_pull_entries,
+                    citation_post_check_entries: retention.citation_post_check_entries,
+                    discovery_scratch_current: retention.discovery_scratch_current,
+                    discovery_scratch_peak: retention.discovery_scratch_peak,
+                    discovery_scratch_released_at_abort: retention
+                        .discovery_scratch_released_at_abort,
                 },
             }
         }

@@ -1,5 +1,6 @@
 //! Procedure v2 session-goal persistence and immutable assessment history.
 
+use std::cell::LazyCell;
 use std::collections::BTreeSet;
 use std::str::FromStr;
 
@@ -15,8 +16,9 @@ use serde_json::json;
 use sha2::{Digest as _, Sha256};
 
 use crate::query_accounting::{
-    accounted_prepare, accounted_query_map_prepared, accounted_query_row,
+    accounted_prepare, accounted_query_map_prepared, accounted_query_prepared, accounted_query_row,
 };
+use crate::read_family::{FamilyCursor, ReadFamily, collect_owner};
 use crate::{
     RusqliteErrorContextV1, StoreErrorV1, StoreRecordKindV1, StoreValueErrorV1,
     map_rusqlite_error_v1,
@@ -312,6 +314,19 @@ pub(crate) fn load_goal_state_v2(
     .map_err(|_| corrupt())
 }
 
+const CRITERIA_BULK_SQL: &str = "SELECT criterion_id, goal_revision, criterion_ordinal, statement FROM v2_goal_criteria \
+     WHERE session_id=?1 AND EXISTS (SELECT 1 FROM v2_goal_revisions parent_revision \
+       WHERE parent_revision.session_id=v2_goal_criteria.session_id \
+         AND parent_revision.goal_revision=v2_goal_criteria.goal_revision) \
+     ORDER BY goal_revision, criterion_ordinal";
+const CITATIONS_BULK_SQL: &str = "SELECT citation_ordinal, citation_kind, source_graph_node_id, item_id, a.trace_sequence, c.criterion_ordinal, r.rowid \
+     FROM v2_criterion_citations cc \
+     JOIN v2_criterion_assessment_results r ON r.attempt_id=cc.attempt_id AND r.criterion_id=cc.criterion_id \
+     JOIN v2_attempts a ON a.attempt_id=r.attempt_id \
+     JOIN v2_goal_criteria c ON c.session_id=r.session_id AND c.goal_revision=r.goal_revision \
+       AND c.criterion_id=r.criterion_id WHERE r.session_id=?1 \
+     ORDER BY a.trace_sequence, c.criterion_ordinal, r.rowid, cc.citation_ordinal";
+
 fn load_goal_revisions_v2(
     connection: &Connection,
     session_id: &SessionId,
@@ -352,28 +367,51 @@ fn load_goal_revisions_v2(
     .map_err(record_error)?
     .collect::<Result<Vec<RevisionRow>, _>>()
     .map_err(record_error)?;
+    let mut criteria_statement =
+        LazyCell::new(|| accounted_prepare(connection, CRITERIA_BULK_SQL).map_err(record_error));
+    let mut criteria_family = LazyCell::new(|| {
+        let statement = LazyCell::force_mut(&mut criteria_statement)
+            .as_mut()
+            .map_err(|error| error.clone())?;
+        accounted_query_prepared(statement, CRITERIA_BULK_SQL, [session_id.as_str()])
+            .map(|rows| {
+                FamilyCursor::new(
+                    rows,
+                    CRITERIA_BULK_SQL,
+                    |row| row.get(1),
+                    StoreRecordKindV1::Session,
+                )
+            })
+            .map_err(record_error)
+    });
     let mut revisions = Vec::with_capacity(rows.len());
     for row in rows {
         let number = GoalRevisionNumberV2::new(persisted_u64(row.0)?);
         let criteria_sql = "SELECT criterion_id, criterion_ordinal, statement FROM v2_goal_criteria \
              WHERE session_id = ?1 AND goal_revision = ?2 ORDER BY criterion_ordinal";
-        let mut criteria_statement =
-            accounted_prepare(connection, criteria_sql).map_err(record_error)?;
-        let criteria_rows = accounted_query_map_prepared(
-            &mut criteria_statement,
-            criteria_sql,
-            params![session_id.as_str(), row.0],
-            |value| {
-                Ok((
-                    value.get::<_, String>(0)?,
-                    value.get::<_, i64>(1)?,
-                    value.get::<_, String>(2)?,
-                ))
-            },
-        )
-        .map_err(record_error)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(record_error)?;
+        let criteria_rows = if let Some(values) = criteria_family.collect(row.0, |value| {
+            Ok((
+                value.get::<_, String>(0).map_err(record_error)?,
+                value.get::<_, i64>(2).map_err(record_error)?,
+                value.get::<_, String>(3).map_err(record_error)?,
+            ))
+        })? {
+            values
+        } else {
+            collect_owner(
+                connection,
+                criteria_sql,
+                params![session_id.as_str(), row.0],
+                StoreRecordKindV1::Session,
+                |value| {
+                    Ok((
+                        value.get::<_, String>(0).map_err(record_error)?,
+                        value.get::<_, i64>(1).map_err(record_error)?,
+                        value.get::<_, String>(2).map_err(record_error)?,
+                    ))
+                },
+            )?
+        };
         let mut criteria = Vec::with_capacity(criteria_rows.len());
         for (index, (id, ordinal, statement)) in criteria_rows.into_iter().enumerate() {
             if ordinal != i64::try_from(index).map_err(|_| corrupt())? {
@@ -432,12 +470,15 @@ fn load_criterion_assessments_v2(
         String,
         Option<String>,
         i64,
+        i64,
+        i64,
+        i64,
     );
-    let assessments_sql = "SELECT r.attempt_id, r.goal_revision, r.criterion_id, r.status, r.mode, r.reason, r.actor, r.recorded_at_ms \
+    let assessments_sql = "SELECT r.attempt_id, r.goal_revision, r.criterion_id, r.status, r.mode, r.reason, r.actor, r.recorded_at_ms, a.trace_sequence, c.criterion_ordinal, r.rowid \
          FROM v2_criterion_assessment_results r JOIN v2_attempts a ON a.attempt_id = r.attempt_id \
          JOIN v2_goal_criteria c ON c.session_id = r.session_id AND c.goal_revision = r.goal_revision \
            AND c.criterion_id = r.criterion_id WHERE r.session_id = ?1 \
-         ORDER BY a.trace_sequence, c.criterion_ordinal";
+         ORDER BY a.trace_sequence, c.criterion_ordinal, r.rowid";
     let mut statement = accounted_prepare(connection, assessments_sql).map_err(record_error)?;
     let rows = accounted_query_map_prepared(
         &mut statement,
@@ -453,12 +494,32 @@ fn load_criterion_assessments_v2(
                 row.get(5)?,
                 row.get(6)?,
                 row.get(7)?,
+                row.get(8)?,
+                row.get(9)?,
+                row.get(10)?,
             ))
         },
     )
     .map_err(record_error)?
     .collect::<Result<Vec<ResultRow>, _>>()
     .map_err(record_error)?;
+    let mut citation_statement =
+        LazyCell::new(|| accounted_prepare(connection, CITATIONS_BULK_SQL).map_err(record_error));
+    let mut citation_family = LazyCell::new(|| {
+        let statement = LazyCell::force_mut(&mut citation_statement)
+            .as_mut()
+            .map_err(|error| error.clone())?;
+        accounted_query_prepared(statement, CITATIONS_BULK_SQL, [session_id.as_str()])
+            .map(|rows| {
+                FamilyCursor::new(
+                    rows,
+                    CITATIONS_BULK_SQL,
+                    |row| Ok((row.get(4)?, row.get(5)?, row.get(6)?)),
+                    StoreRecordKindV1::Session,
+                )
+            })
+            .map_err(record_error)
+    });
     let mut grouped: Vec<(
         AttemptId,
         GoalRevisionNumberV2,
@@ -472,7 +533,21 @@ fn load_criterion_assessments_v2(
         if row.4 != CriterionAssessmentModeV2::from_status(status).as_str() {
             return Err(corrupt());
         }
-        let citations = load_citations_v2(connection, &attempt_id, &criterion_id)?;
+        // READS-002 validator-stage counters (test-support only): entry (a)
+        // immediately before the citation pull, after this result's
+        // prechecks; entry (b) immediately after the citations return, in
+        // load_citations_v2's caller below. No SQL or ordering change.
+        #[cfg(any(test, feature = "test-support"))]
+        crate::query_accounting::ledger::record_citation_pull_entry();
+        let citations = load_citations_v2(
+            connection,
+            &attempt_id,
+            &criterion_id,
+            (row.8, row.9, row.10),
+            &mut citation_family,
+        )?;
+        #[cfg(any(test, feature = "test-support"))]
+        crate::query_accounting::ledger::record_citation_post_check_entry();
         let result = CriterionAssessmentResultV2::new(
             criterion_id,
             status,
@@ -512,26 +587,30 @@ fn load_citations_v2(
     connection: &Connection,
     attempt_id: &AttemptId,
     criterion_id: &CriterionId,
+    key: (i64, i64, i64),
+    family: &mut impl ReadFamily<(i64, i64, i64)>,
 ) -> Result<Vec<CriterionCitationV2>, StoreErrorV1> {
     let citations_sql = "SELECT citation_ordinal, citation_kind, source_graph_node_id, item_id FROM v2_criterion_citations \
          WHERE attempt_id = ?1 AND criterion_id = ?2 ORDER BY citation_ordinal";
-    let mut statement = accounted_prepare(connection, citations_sql).map_err(record_error)?;
-    let rows = accounted_query_map_prepared(
-        &mut statement,
-        citations_sql,
-        params![attempt_id.as_str(), criterion_id.as_str()],
-        |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<String>>(3)?,
-            ))
-        },
-    )
-    .map_err(record_error)?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(record_error)?;
+    let read = |row: &rusqlite::Row<'_>| {
+        Ok((
+            row.get::<_, i64>(0).map_err(record_error)?,
+            row.get::<_, String>(1).map_err(record_error)?,
+            row.get::<_, Option<String>>(2).map_err(record_error)?,
+            row.get::<_, Option<String>>(3).map_err(record_error)?,
+        ))
+    };
+    let rows = if let Some(values) = family.collect(key, &read)? {
+        values
+    } else {
+        collect_owner(
+            connection,
+            citations_sql,
+            params![attempt_id.as_str(), criterion_id.as_str()],
+            StoreRecordKindV1::Session,
+            read,
+        )?
+    };
     rows.into_iter()
         .enumerate()
         .map(|(index, (ordinal, kind, source, item))| {

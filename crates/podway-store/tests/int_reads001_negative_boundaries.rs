@@ -261,12 +261,12 @@ fn multi_fault_loading_precedence_is_pinned_by_probe_order() {
         .filter(|(key, _)| key.contains("criterion_ordinal, statement FROM v2_goal_criteria"))
         .map(|(_, counts)| counts.executes)
         .sum();
-    // Probe-order evidence (intentionally changes under later bulk
-    // acquisition): attempts 0-2 slots and blockers ran and the attempt-2
-    // blocker fault stopped loading before attempt 4's slot fault could
-    // matter; goal statements never started.
-    assert_eq!(slot_executes, 3);
-    assert_eq!(blocker_executes, 3);
+    // One bulk cursor per family; three slot validation scopes prove
+    // attempts 0-2 reached their original turns. The attempt-2 blocker
+    // fault still wins before attempt 4's slot fault; goals never start.
+    assert_eq!(slot_executes, 1);
+    assert_eq!(report.retention.slot_scopes, 3);
+    assert_eq!(blocker_executes, 1);
     assert_eq!(goal_criteria_executes, 0);
     drop(root);
 
@@ -317,7 +317,8 @@ fn multi_fault_loading_precedence_is_pinned_by_probe_order() {
         .filter(|(key, _)| key.contains("criterion_ordinal, statement FROM v2_goal_criteria"))
         .map(|(_, counts)| counts.executes)
         .sum();
-    assert_eq!(slot_executes, 2);
+    assert_eq!(slot_executes, 1);
+    assert_eq!(report.retention.slot_scopes, 2);
     assert_eq!(goal_criteria_executes, 0);
 
     // Goal-stage fault alone: `v2_goal` corrupt() classifies as Session
@@ -362,7 +363,11 @@ fn multi_fault_loading_precedence_is_pinned_by_probe_order() {
         .sum();
     // Workflow memory completed fully; the goal stage started and failed on
     // its first criteria statement.
-    assert_eq!(slot_executes, attempt_total(&recipe_medium()));
+    assert_eq!(slot_executes, 1);
+    assert_eq!(
+        report.retention.slot_scopes,
+        attempt_total(&recipe_medium())
+    );
     assert_eq!(goal_criteria_executes, 1);
 }
 

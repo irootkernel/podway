@@ -82,6 +82,26 @@ where
     statement.query_map(params, counting)
 }
 
+/// Streaming cursors account delivered rows at each successful advance.
+#[inline(always)]
+#[cfg_attr(not(any(test, feature = "test-support")), allow(unused_variables))]
+pub(crate) fn accounted_query_prepared<'stmt>(
+    statement: &'stmt mut rusqlite::Statement<'_>,
+    sql: &str,
+    params: impl rusqlite::Params,
+) -> rusqlite::Result<rusqlite::Rows<'stmt>> {
+    #[cfg(any(test, feature = "test-support"))]
+    ledger::record_execute(sql);
+    statement.query(params)
+}
+
+#[inline(always)]
+#[cfg_attr(not(any(test, feature = "test-support")), allow(unused_variables))]
+pub(crate) fn accounted_delivered_row(sql: &str, row: &rusqlite::Row<'_>) {
+    #[cfg(any(test, feature = "test-support"))]
+    ledger::observe_delivered_row(sql, row);
+}
+
 /// Guards one slot-family loader invocation. Closing the window is exact even
 /// on error paths: raw slot payload strings are local to the loader call, so
 /// any bytes not yet released are released at scope end, and decoded payloads
@@ -206,6 +226,45 @@ pub(crate) mod ledger {
         /// declared by the test before the measured call.
         pub cached_input_bytes: u64,
         pub combined_peak: u64,
+        /// Identity-text retention units: owned `item_id`/`item_type`
+        /// String bytes materialized by the slot-family loaders (the
+        /// collection map's key clone is booked as an additional id copy),
+        /// tracked separately from raw serialized payload bytes and
+        /// excluded from the combined payload peak. Rows materialized in
+        /// this window.
+        pub identity_rows: u64,
+        /// Identity bytes currently held. Booked at mapper materialization
+        /// (so rows whose later column conversion fails stay accounted) and
+        /// at the collection-map key clone; released at each spec-position
+        /// consumption, with leftovers booked at slot-scope end.
+        pub identity_current: u64,
+        /// Peak identity bytes within one slot scope; reset when a scope
+        /// opens.
+        pub identity_scope_peak: u64,
+        /// Peak identity bytes across the whole window.
+        pub identity_window_peak: u64,
+        /// Identity bytes still held when a slot scope ended; nonzero only
+        /// on error/early-return paths (rows never consumed by the spec
+        /// loop), mirroring the raw release discipline.
+        pub identity_released_at_scope_end: u64,
+        /// Validator-stage entries in the criterion-assessment result loop
+        /// (not SQL acquisition attempts): entry (a) fires immediately
+        /// before a result's citation pull, after its prechecks.
+        pub citation_pull_entries: u64,
+        /// Validator-stage entry (b): fires immediately after a result's
+        /// citations return, before its reason/result/actor/time
+        /// construction. A fallback must not hide validator replay.
+        pub citation_post_check_entries: u64,
+        /// Discovery-phase raw header scratch (item id + item type bytes of
+        /// one owner's staged rows), held separately from the scope-owned
+        /// identity balance so slot-scope exits never release a future
+        /// failing owner's retained bytes. Bytes currently held.
+        pub discovery_scratch_current: u64,
+        pub discovery_scratch_peak: u64,
+        /// Scratch still held when the load ended without reaching the
+        /// owning attempt's validation turn (error unwind); nonzero only on
+        /// the error path.
+        pub discovery_scratch_released_at_abort: u64,
     }
 
     impl Default for RetentionState {
@@ -233,6 +292,16 @@ pub(crate) mod ledger {
                 container_copies: 0,
                 cached_input_bytes: 0,
                 combined_peak: 0,
+                identity_rows: 0,
+                identity_current: 0,
+                identity_scope_peak: 0,
+                identity_window_peak: 0,
+                identity_released_at_scope_end: 0,
+                citation_pull_entries: 0,
+                citation_post_check_entries: 0,
+                discovery_scratch_current: 0,
+                discovery_scratch_peak: 0,
+                discovery_scratch_released_at_abort: 0,
             }
         }
     }
@@ -267,6 +336,25 @@ pub(crate) mod ledger {
             let mut borrow = ledger.borrow_mut();
             borrow.as_mut().map(visit)
         })
+    }
+
+    /// Books identity bytes into the live balance and both peaks without
+    /// counting a row. The window peak observes the honest combined
+    /// identity window: scope-owned identity bytes plus any still-live
+    /// discovery scratch held for a future failing owner.
+    fn book_identity_bytes(retention: &mut RetentionState, len: usize) {
+        retention.identity_current = retention.identity_current.saturating_add(len as u64);
+        retention.identity_scope_peak = retention
+            .identity_scope_peak
+            .max(retention.identity_current);
+        probe_combined_identity(retention);
+    }
+
+    fn probe_combined_identity(retention: &mut RetentionState) {
+        let combined = retention
+            .identity_current
+            .saturating_add(retention.discovery_scratch_current);
+        retention.identity_window_peak = retention.identity_window_peak.max(combined);
     }
 
     pub(crate) fn record_prepare(sql: &str) {
@@ -314,6 +402,7 @@ pub(crate) mod ledger {
             retention.slot_scopes += 1;
             retention.scope_fresh_bytes = 0;
             retention.scope_committed = false;
+            retention.identity_scope_peak = 0;
         });
     }
 
@@ -370,6 +459,10 @@ pub(crate) mod ledger {
                 .raw_released_at_scope_end
                 .saturating_add(retention.raw_current);
             retention.raw_current = 0;
+            retention.identity_released_at_scope_end = retention
+                .identity_released_at_scope_end
+                .saturating_add(retention.identity_current);
+            retention.identity_current = 0;
             if !retention.scope_committed {
                 let dropped = retention.scope_fresh_bytes;
                 retention.decoded_live = retention.decoded_live.saturating_sub(dropped);
@@ -398,6 +491,89 @@ pub(crate) mod ledger {
             let retention = &mut ledger.retention;
             retention.raw_current = retention.raw_current.saturating_sub(len as u64);
             retention.probe_combined();
+        });
+    }
+
+    /// Accounts one materialized slot header row's identity text (item id
+    /// plus item type String bytes). Identity retention is a separate
+    /// logical unit: it never feeds the combined payload peak.
+    pub(crate) fn acquire_identity(len: usize) {
+        with_ledger(|ledger| {
+            let retention = &mut ledger.retention;
+            retention.identity_rows = retention.identity_rows.saturating_add(1);
+            book_identity_bytes(retention, len);
+        });
+    }
+
+    /// Accounts an additional owned identity copy (the collection map's id
+    /// key clone) without counting a new row.
+    pub(crate) fn acquire_identity_copy(len: usize) {
+        with_ledger(|ledger| book_identity_bytes(&mut ledger.retention, len));
+    }
+
+    /// Releases one consumed row's identity bytes at its spec-position
+    /// consumption point; unconsumed rows are booked at slot-scope end.
+    pub(crate) fn release_identity(len: usize) {
+        with_ledger(|ledger| {
+            let retention = &mut ledger.retention;
+            retention.identity_current = retention.identity_current.saturating_sub(len as u64);
+        });
+    }
+
+    /// Validator-stage entry (a): one result's citation pull begins (after
+    /// its prechecks). Not a SQL acquisition attempt.
+    pub(crate) fn record_citation_pull_entry() {
+        with_ledger(|ledger| {
+            ledger.retention.citation_pull_entries += 1;
+        });
+    }
+
+    /// Validator-stage entry (b): one result's citations returned; its
+    /// reason/result/actor/time construction has not begun.
+    pub(crate) fn record_citation_post_check_entry() {
+        with_ledger(|ledger| {
+            ledger.retention.citation_post_check_entries += 1;
+        });
+    }
+
+    /// Books raw header scratch bytes staged for one discovery owner.
+    /// Separate from the scope-owned identity balance: slot-scope exits
+    /// never touch it.
+    pub(crate) fn acquire_discovery_scratch(len: usize) {
+        with_ledger(|ledger| {
+            let retention = &mut ledger.retention;
+            retention.discovery_scratch_current = retention
+                .discovery_scratch_current
+                .saturating_add(len as u64);
+            retention.discovery_scratch_peak = retention
+                .discovery_scratch_peak
+                .max(retention.discovery_scratch_current);
+            probe_combined_identity(retention);
+        });
+    }
+
+    /// Releases scratch bytes at their real drop point: a fully validated
+    /// owner's conversion to stamps, or row-by-row during a failing owner's
+    /// validation-turn replay.
+    pub(crate) fn release_discovery_scratch(len: usize) {
+        with_ledger(|ledger| {
+            let retention = &mut ledger.retention;
+            retention.discovery_scratch_current = retention
+                .discovery_scratch_current
+                .saturating_sub(len as u64);
+            probe_combined_identity(retention);
+        });
+    }
+
+    /// Error-unwind mirror: books scratch never consumed by a validation
+    /// turn. No-op on success paths, where the balance is already zero.
+    pub(crate) fn abort_discovery_scratch() {
+        with_ledger(|ledger| {
+            let retention = &mut ledger.retention;
+            retention.discovery_scratch_released_at_abort = retention
+                .discovery_scratch_released_at_abort
+                .saturating_add(retention.discovery_scratch_current);
+            retention.discovery_scratch_current = 0;
         });
     }
 

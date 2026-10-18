@@ -1,13 +1,10 @@
-//! READS-001 registered query/retention inventory over unchanged queries.
+//! READS-001 frozen recipes with READS-002 acquisition/retention assertions.
 //!
-//! These tests characterize the accepted baseline: exact per-SQL
-//! prepare/execute/row counts and scoped retention units for the five
-//! repeated table families, session-scoped statements and the cached
-//! selective-reload path, on frozen fixture recipes (S, M, grown-L and the
-//! 1,024-node chain) plus empty/single controls. Counts are scoped
-//! measurements over the registered call sites, not a total SQL counter.
-//! Strict-decrease assertions against these registered actuals belong to
-//! later READS tasks; this file freezes today's unchanged-query behavior.
+//! The qualification guide retains the original per-owner query counts.
+//! Candidate cold loads assert the predeclared family bounds, identical
+//! delivered rows and payload retention, and exact variable-length bytes
+//! with the fixture-root input accounted separately. Prepared reloads keep
+//! independent header, changed-payload and pointer-reuse measurements.
 
 use podway_core::{
     ActorAttributionV2, AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptValidityV2, BlockerId,
@@ -782,22 +779,12 @@ fn expected_cold_inventory(recipe: &Recipe) -> (Vec<Expected>, Vec<&'static str>
     let assessed = assessed_owner_attempts(recipe);
     let _citations = recipe.citations as u64;
     let mut all = vec![
-        expected(
-            "value_json IS NOT NULL",
-            attempts,
-            attempts,
-            attempts * items,
-        ),
-        expected(
-            "FROM v2_blockers",
-            attempts,
-            attempts,
-            recipe.blocker_attempts as u64,
-        ),
+        expected("value_json IS NOT NULL", 1, 1, attempts * items),
+        expected("FROM v2_blockers", 1, 1, recipe.blocker_attempts as u64),
         expected(
             "FROM v2_resolved_evidence_references",
-            attempts,
-            attempts,
+            1,
+            1,
             evidence_rows(recipe),
         ),
         expected(
@@ -810,8 +797,8 @@ fn expected_cold_inventory(recipe: &Recipe) -> (Vec<Expected>, Vec<&'static str>
         expected("predecessor_revision", 1, 1, revisions),
         expected(
             "criterion_ordinal, statement FROM v2_goal_criteria",
-            revisions,
-            revisions,
+            1,
+            1,
             revisions * criteria,
         ),
         expected(
@@ -859,8 +846,8 @@ fn expected_cold_inventory(recipe: &Recipe) -> (Vec<Expected>, Vec<&'static str>
         };
         all.push(expected(
             "citation_ordinal, citation_kind",
-            assessed * criteria,
-            assessed * criteria,
+            1,
+            1,
             assessed * criteria + evidence_bonus,
         ));
     }
@@ -982,6 +969,42 @@ fn measure_cold(recipe: &Recipe, tag: &str, session_number: u64, snapshot_number
     let report = accountant.finish();
     assert_eq!(loaded.as_ref(), Some(&state));
     assert_inventory(recipe, &report.sql);
+    // Frozen READS-001 actuals, before any query rewrite. These fixtures
+    // keep identical rows, variable-length columns and payload retention.
+    let (old_statements, old_rows, old_column_bytes, old_combined_peak) = match tag {
+        "S" => (43, 65, 6_819, 858),
+        "M" => (140, 438, 231_250, 206_226),
+        "grown-L" => (201, 995, 36_141_030, 36_152_082),
+        "N1024" => (4_118, 8_215, 822_518, 51_300),
+        "empty" => (23, 16, 2_089, 0),
+        "single" => (23, 17, 2_421, 108),
+        _ => unreachable!("registered cold fixture"),
+    };
+    let target = if assessed_owner_attempts(recipe) > 0 {
+        24
+    } else {
+        23
+    };
+    assert_eq!(
+        (report.totals.prepares, report.totals.executes),
+        (target, target)
+    );
+    if old_statements > 23 {
+        assert!(report.totals.executes < old_statements);
+    } else {
+        assert!(report.totals.executes <= old_statements);
+    }
+    assert_eq!(report.totals.rows, old_rows);
+    // The frozen run's hex-encoded fixture root occupied 154 bytes. The
+    // owned TMPDIR changes this input, not table-family acquisition. Keep
+    // the observer's actual bytes and account for the exact root field in
+    // the expected total instead of hiding it in the measurement.
+    let current_root_bytes = cold.layout().root().as_encoded().len() as u64;
+    assert_eq!(
+        report.totals.column_bytes,
+        old_column_bytes - 154 + current_root_bytes
+    );
+    assert_eq!(report.retention.combined_peak, old_combined_peak);
     let filled = filled_slot_values(&state);
     let expected_bytes = encoded_payload_bytes(&state);
     assert_eq!(report.retention.fresh_payloads, filled);
@@ -1001,7 +1024,7 @@ fn measure_cold(recipe: &Recipe, tag: &str, session_number: u64, snapshot_number
         .unwrap();
     assert!(slots.column_bytes >= expected_bytes);
     println!(
-        "READS001_BASELINE|store-cold|fixture={tag}|prepares={}|executes={}|rows={}|column_bytes={}|slot_payload_fresh_bytes={}|raw_window_peak={}|combined_peak={}",
+        "READS002_CANDIDATE|store-cold|fixture={tag}|prepares={}|executes={}|rows={}|column_bytes={}|slot_payload_fresh_bytes={}|raw_window_peak={}|combined_peak={}",
         report.totals.prepares,
         report.totals.executes,
         report.totals.rows,
@@ -1202,8 +1225,10 @@ fn prepared_reload_counts_unchanged_sparse_and_dense_selective_misses() {
             assert_eq!(header_counts.executes, 0);
             assert_eq!(header_counts.rows, 0);
         } else {
-            assert_eq!(header_counts.prepares, attempt_total(&recipe));
-            assert_eq!(header_counts.executes, attempt_total(&recipe));
+            // READS-002 mixed path: one session-wide header execution
+            // replaces the per-attempt header statements.
+            assert_eq!(header_counts.prepares, 1);
+            assert_eq!(header_counts.executes, 1);
             assert_eq!(header_counts.rows, total_slots);
         }
         let reloads: Vec<&String> = report
@@ -1215,7 +1240,25 @@ fn prepared_reload_counts_unchanged_sparse_and_dense_selective_misses() {
             .first()
             .map(|key| report.sql[*key].executes)
             .unwrap_or(0);
-        assert_eq!(reload_executes, changed as u64);
+        // READS-002 mixed path: changed payloads arrive through bounded
+        // global chunks (ceil(changed/128) executions, prepares asserted
+        // separately) instead of one point reload per changed slot.
+        assert_eq!(reload_executes, 0);
+        let chunk_executes: u64 = report
+            .sql
+            .iter()
+            .filter(|(key, _)| key.contains("WITH wanted"))
+            .map(|(_, counts)| counts.executes)
+            .sum();
+        let chunk_prepares: u64 = report
+            .sql
+            .iter()
+            .filter(|(key, _)| key.contains("WITH wanted"))
+            .map(|(_, counts)| counts.prepares)
+            .sum();
+        let expected_chunks = u64::try_from(changed.div_ceil(128)).unwrap();
+        assert_eq!(chunk_executes, expected_chunks);
+        assert_eq!(chunk_prepares, expected_chunks);
         assert_eq!(report.retention.fresh_payloads, changed as u64);
         assert_eq!(report.retention.unknown_reuse_payloads, 0);
         let expected_copies = if changed == 0 {
