@@ -26,20 +26,24 @@ write-free snapshot reads are the current product boundaries.
 Current adopted work is tracked by the [active roadmap](roadmap/).
 The [internal-improvement sequence](roadmap/README.md#current-internal-improvements)
 is OPTIM, then BOUND, then READS. OPTIM and BOUND are completed and owner-accepted
-on 2026-10-17. READS is In Progress, with
-[one adopted design dossier](todo/README.md#current-adopted-dossiers).
+on 2026-10-17. READS is completed and owner-accepted on 2026-10-19; its
+[delivered behavior and correctness scope](implementation-tips/direct-cli-performance-qualification.md#reads-005-functional-closeout)
+replace the retired design dossier.
 On 2026-10-16 the owner withdrew OPTIM latency, count, and memory measurement,
 including any baseline that would have blocked implementation. Completed OPTIM
 behavior is one validated request-scoped read projection and one unpublished
 batch draft. BOUND separates pure domain rules, persisted admission, typed
-mutation failures and CLI responsibilities. READS retains its own acceptance.
+mutation failures and CLI responsibilities. READS delivers session-scoped
+family acquisition, bounded changed-slot reloads, owned read projections and
+typed fence-preflight facts while preserving eager validation. The owner
+excluded all READS performance measurement from acceptance.
 External/storage contracts and existing command-specific validation stay
 preserved, including summary-only archive-list. These improvements are not a
 selected release program.
 
 The implemented direct model is specified by [ADR-0038](architecture-decision-records/0038-remove-the-daemon.md)
 and the [direct execution requirements](specs/quality/requirements-traceability.md#direct-execution-requirements).
-Historical feasibility baselines and the current matching protocol remain in the
+Historical feasibility baselines and withdrawn comparison registrations remain in the
 [performance qualification guide](implementation-tips/direct-cli-performance-qualification.md).
 
 ## Canonical assets

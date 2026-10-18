@@ -89,14 +89,18 @@ The owner adopted three sequential internal-improvement epics on 2026-10-14
 with one shared goal and a fixed order, not parallel work. OPTIM and BOUND were
 accepted on 2026-10-17 and their dossiers are removed. The
 [roadmap](../roadmap/README.md#current-internal-improvements) alone owns order and
-status. Only the READS dossier remains. These epics are not a release program
+status. READS was accepted on 2026-10-19 and its dossier is also retired; no
+adopted dossier remains for this sequence. These epics are not a release program
 and do not select a release version. Existing external/storage contracts
 and cold-read validation remain unchanged; archive-list retains its summary-only
-boundary. On 2026-10-16 the owner withdrew OPTIM performance measurement.
+boundary. The owner withdrew OPTIM performance measurement on 2026-10-16
+and reaffirmed the exclusion of all READS performance measurement on 2026-10-19.
 Roadmap status is authoritative; a missing OPTIM baseline is not implementation
 evidence.
 
-- [Read models and data access](TODO-podway-read-models-data-access.md): bulk history/goal/citation queries, selective changed-slot reload, hidden-value corruption proof and typed preflight preserving status-only failures.
+READS behavior and correctness boundaries now live in the
+[system architecture](../architecture/system.md#request-scoped-read-composition)
+and [functional closeout guidance](../implementation-tips/direct-cli-performance-qualification.md#reads-005-functional-closeout).
 
 Each dossier is retired independently after its owning epic is accepted and its
 lasting information is promoted. References to a completed prerequisite use the

@@ -153,7 +153,8 @@ meaningful success, failure and compatibility tests together.
 The [OPTIM, BOUND and READS sequence](../roadmap/README.md#current-internal-improvements)
 is the adopted internal-improvement order. OPTIM and BOUND are completed and
 owner-accepted; the roadmap records qualification and acceptance separately.
-READS remains planned.
+READS is also completed and owner-accepted; its implemented data-access and
+preflight boundaries are described below.
 Current read composition, procedure-identity boundaries and the unpublished
 batch draft are in [System Architecture](system.md#request-scoped-read-composition).
 
@@ -168,25 +169,52 @@ Private CLI modules separate grammar, authoring, file access, start, rendering
 and fence preflight without adding a crate or changing dependency direction.
 The Engine read context still retains Config's validated Procedure independently
 of Store's cached memory model; accepted OPTIM sharing and draft behavior remain.
-READS then changes data access and internal facts/view construction, including
-goal/citation loops and selective changed-slot reloads, while preserving current
-cold-read validation. Archive-list remains summary-only; graph windows still
-validate their required hidden historical values.
+READS acquires slots, blockers, evidence references, goal criteria and citations
+through session-scoped lazy family cursors while preserving reconstruction and
+validation order. Prepared reloads retain header-only unchanged-value reuse and
+fetch changed values in bounded 128-pair chunks. Existing TooBig fallbacks keep
+the original error winner and conversion stages.
+
+Engine projections move owned archive views and maps and borrow history-window
+accounting without cloning the validated graph. Cold graph reads remain eager;
+archive-list remains summary-only even when an archived hidden value is corrupt,
+while archive-show and graph windows still refuse required hidden historical
+corruption. One request-scoped committed snapshot remains authoritative.
+
+Ordinary read dispatch validates the current view before archive selection or
+listing. A corrupt current graph therefore precedes archive-not-found or
+archive-list results. Archive-show decodes only its selected archived graph
+before checking the expected-session fence; an unrelated corrupt archive does
+not affect that selection. The
+[archive ordering regression](../../crates/podway-engine/tests/int_reads001_readback_ports.rs)
+(`archive_read_ordering_pins_current_corruption_archived_corruption_notfound_and_mismatch`)
+retains these failure priorities alongside the same-corrupted-archive
+list/show isolation test.
 
 BOUND's CLI move gives fence-preflight fetching/parsing one internal owner.
-READS replaces that boundary, not completion status, start/reset dry-run or later
-interactive-start retry reads. Preserving preflight means preserving failures
-from the former status projection/schema/envelope as well as Store admission.
+READS replaces that boundary with owned typed Engine facts while retaining
+completion status, start/reset dry-run and later interactive-start observations.
+The Engine shares eager Standard projection and schema validation plus exact
+clock, workspace, depth and byte checks; it discards that validation-only map
+before returning facts and constructs no public status envelope on this path.
+Facts retain the original deadline and failure attribution and hold no transaction,
+connection gate or maintenance lease after return. Mutation admission revalidates
+the original fences; deterministic Shared/Cold-lease races and process-local
+stdin-zero-preflight tests cover the gap and independent document identity.
 The [performance protocol](../implementation-tips/direct-cli-performance-qualification.md#internal-improvement-comparisons)
-records the withdrawn OPTIM measurements, BOUND's completed native qualification
-scope and future READS scope. Ordinary `make test` omits the ignored native cases.
+records the withdrawn OPTIM and READS measurements and BOUND's historical native
+qualification. No performance result or latency, peak-memory, constant-time or
+zero-copy claim is made for READS. Its
+[functional closeout](../implementation-tips/direct-cli-performance-qualification.md#reads-005-functional-closeout)
+identifies the retained correctness basis; ordinary `make test` omits ignored
+native cases and is not evidence that those scenarios ran.
 
-The [remaining adopted dossier](../todo/README.md#current-adopted-dossiers) owns
-READS target interfaces, task boundaries, and acceptance until that epic is complete.
-Do not weaken Store admission, move required read checks to doctor, introduce
-persistent caching or change public/storage identity to simplify this work.
-Update this architecture with the actual accepted implementation at READS
-closeout; do not present planned read-model changes as current behavior.
+The READS dossier is retired. Durable acquisition, projection and typed-facts
+requirements are recorded here, in [System Architecture](system.md), and in the
+linked qualification guidance. Store admission, eager graph validation, existing
+public/storage identity and request-scoped ownership remain unchanged. No
+persistent cache, doctor-only validation policy, new public route or schema
+change was introduced.
 
 ## Testability requirements
 
