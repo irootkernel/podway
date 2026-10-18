@@ -174,6 +174,15 @@ with `--locked`. The fixture-only helper test is
 `int_v2dfc007_cli_qualification::qualified_reader_and_output_validator`; its
 historical work ID does not restrict measurement to an older executable.
 
+This retained general recipe is excluded from READS acceptance and is not an
+instruction to run it. The retained tool also carries a pre-existing lifecycle
+limitation: its bounded invocation helper calls `communicate()` — which
+collects the child — before an unconditional process-group kill in its
+cleanup, so an exited leader's group is addressed only after collection. Any
+future reuse requires an explicitly authorized owned-group lifecycle
+correction first. The historical BOUND and V2DFC runs described above remain
+genuine history.
+
 ```bash
 cargo build --release --locked -p podway-cli --bin podway
 cargo test --release --locked -p podway-engine --test int_suite --no-run
@@ -223,7 +232,10 @@ owner withdrew OPTIM latency, count, and memory measurement. OPTIM does not
 freeze a current-Direct baseline, comparator, work-count ceiling, or memory
 gate. Established G1-G10 qualification thresholds are unchanged historical
 release evidence. A missing OPTIM baseline does not block OPTIM implementation
-and is not inherited evidence for a later epic.
+and is not inherited evidence for a later epic. On 2026-10-19 the owner
+reaffirmed that performance measurement is excluded from the whole READS
+epic's acceptance; see
+[READS-005 functional closeout](#reads-005-functional-closeout).
 
 Accepted OPTIM evidence is the recorded implementation and functional
 characterization: request-scoped read sharing, single-draft batch application,
@@ -239,12 +251,18 @@ Accepted OPTIM evidence is not that registration.
 BOUND-006 completed the existing complete native matrix below for boundary
 qualification. That selection adds no OPTIM baseline, comparator or count ceiling.
 Its accepted outcome is recorded in the
-[BOUND delivery record](../roadmap/README.md#bound-delivery-record); READS scope remains planned.
+[BOUND delivery record](../roadmap/README.md#bound-delivery-record). Performance
+measurement is excluded from READS acceptance under owner direction; see
+[READS-005 functional closeout](#reads-005-functional-closeout).
 
 ### Native scale execution
 
-A later epic that registers native qualification uses the existing Make entry
-point, under AGENTS.md Gaori routing, with an absolute owned evidence directory:
+The registered native route below is preserved as the general recipe that
+BOUND-006 completed for boundary qualification. The route is excluded from
+READS acceptance, and no READS performance result from it is promoted.
+It remains available to a separately authorized future user through the
+existing Make entry point, under AGENTS.md Gaori routing, with an absolute
+owned evidence directory:
 
 ```bash
 make test-native-qualification NATIVE_EVIDENCE_PARENT=<absolute-owned-directory>
@@ -519,8 +537,10 @@ controls, and a release-profile candidate emits no instrumentation.
 
 Honest residual cost: the eager Standard projection and its schema validation,
 plus the component serializations feeding the exact byte check, remain on the
-preflight path. No latency, RSS or zero-copy claim is made here; READS-005
-owns matched comparison. The other status consumers keep their existing paths
+preflight path. No latency, RSS or zero-copy claim is made here; the planned
+matched comparison was withdrawn from READS acceptance before completion (see
+[READS-005 functional closeout](#reads-005-functional-closeout)). The other
+status consumers keep their existing paths
 unchanged: dynamic completion's separate best-effort query, the later
 interactive-start status read after `SESSION_START_DECISION_REQUIRED`, and
 the stateful replacement/reset disposition observations that do read status —
@@ -529,18 +549,48 @@ while the offline fresh-start preview makes no status read at all, as
 
 ### READS registered latency comparison protocol
 
-READS freezes its matched comparison before any optimization. Comparisons
-run on the same host and fixtures; 20 warm-up plus 220 measured calls per
+This withdrawn registration is retained as history only. It is excluded from
+READS acceptance and is not an instruction to execute measurements.
+
+The registration specified matched comparisons on the same host and fixtures;
+20 warm-up plus 220 measured calls per
 cell; three predetermined paired blocks alternating candidate/BOUND order;
 per-cell median-block p50 and, separately, p99 candidate ≤ BOUND; the
 original historical G7/G8 thresholds and failure/stop policies apply
 independently to every applicable block; no +10% margin, pooling, posthoc
 tolerance or selected reruns; explicit and automatic-fence diagnostic cells
-are both required because G7 explicit fences alone cannot prove preflight
+were both registered because G7 explicit fences alone cannot prove preflight
 gains; G7 retains its history-growth recipe and G8 its exact mode-tuple
-restoration and replay/upper-bound classifications. READS-001 registers the
-protocol and the frozen baseline CLI; READS-005 executes it. Nothing is
-measured as latency in READS-001.
+restoration and replay/upper-bound classifications. READS-001 registered the
+protocol and the frozen baseline CLI. This registered comparison was
+withdrawn from READS acceptance by owner direction before any complete
+comparison ran: unauthorized incomplete attempts occurred and were cancelled,
+and no accepted comparison or performance result exists. The registration is
+preserved as history only and is not an instruction to execute it.
+
+### READS-005 functional closeout
+
+On 2026-10-19 the owner reaffirmed that performance measurement is excluded
+from READS acceptance. This direction supersedes the earlier latency,
+memory, G7/G8 matched comparison and native-scale measurement obligations.
+Unauthorized incomplete attempts
+occurred and were cancelled; no accepted complete comparison or performance
+value exists, and no such value is promoted here. The delivered READS
+improvement is functional: READS-002's session-scoped cold family acquisition
+and bounded changed-slot prepared reloads, READS-003's projection copy
+elimination without contract changes, and READS-004's typed Engine preflight
+facts replacing the CLI's status-envelope fetch, all implemented at source
+`d8d145a2be77beeb31ea28daa41e0d77bd96d74e` with their deterministic
+correctness, query-count, copy, bounds and error assertions committed in the
+registered Store/Engine/CLI suites. Correctness evidence for closeout is the
+complete development gate that passed at that unchanged production
+source before the obsolete READS-005 measurement tools were removed;
+applicability rests on unchanged production and test components with a
+docs-only final delta, not on a same-whole-snapshot claim or any benchmark
+pass. The obsolete READS-005 measurement tooling was removed; the historical
+registrations above remain as history, and the retained general qualification
+recipe keeps the lifecycle limitation recorded in
+[Running current qualification](#running-current-qualification).
 
 ### Evidence and completion boundaries
 

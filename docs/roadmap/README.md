@@ -188,8 +188,9 @@ Master explicitly accepted the complete BOUND epic on 2026-10-17 at
 implementation, verification and six local Task commits. This is user Epic
 acceptance, distinct from Main's delegated Task acceptance. Durable requirements,
 ownership and verification guidance replace the retired BOUND dossier under the
-[TODO lifecycle](../todo/README.md#lifecycle). READS remains Planned and has not
-started. No release, installation or remote publication is included.
+[TODO lifecycle](../todo/README.md#lifecycle). READS delivery follows in the
+[current section](#reads-read-models-and-data-access). No release, installation
+or remote publication is included.
 
 ## READS — Read Models and Data Access
 
@@ -200,13 +201,19 @@ Main's delegated Task acceptance, lifecycle decisions and local Task commits.
 Whole-Epic acceptance remains Master-owned. No Aquarium handler or Podway
 session is required for this delivery.
 
+Master reaffirmed on 2026-10-19 that performance measurement is excluded from
+READS acceptance. No latency, memory, native-scale or matched G7/G8 benchmark
+is required or authorized for this closeout. Existing deterministic query,
+copy, bounds and behavior assertions remain correctness evidence; historical
+comparison registrations create no instruction to execute measurements.
+
 | id | title | status | goal | references |
 |---|---|---|---|---|
 | `READS-001` | Freeze data requirements and validation equivalence | Completed | Map queries, decode/validation scope, error ordering and cost measurements before reducing data-access work. | [Task design](../todo/TODO-podway-read-models-data-access.md#reads-001-freeze-data-requirements-and-validation-equivalence) |
 | `READS-002` | Bulk-load attempt data without reducing validation | Completed | Bulk-load slots/blockers/evidence, goal criteria and citations; batch changed-slot reloads while preserving header-only reuse, validation order and bounded memory. | [Task design](../todo/TODO-podway-read-models-data-access.md#reads-002-bulk-load-attempt-data-without-reducing-validation) |
 | `READS-003` | Build purpose-specific views over validated state | Completed | Build typed views over shared validation, prove hidden historical-value refusal and keep archive-list summary-only without reintroducing OPTIM's eliminated copies. | [Task design](../todo/TODO-podway-read-models-data-access.md#reads-003-build-purpose-specific-views-over-validated-state) |
 | `READS-004` | Replace CLI status-JSON preflight with typed facts | Completed | Replace the named fence-preflight module with typed Engine facts, preserving status-only failures; prove zero stdin preflight and the post-facts competing-writer gap. | [Task design](../todo/TODO-podway-read-models-data-access.md#reads-004-replace-cli-status-json-preflight-with-typed-facts) |
-| `READS-005` | Qualify and close validated data-access improvements | Planned | Verify SQL/copy reductions, cold-read validation, native concurrency and matched performance, then complete review and durable promotion. | [Task design](../todo/TODO-podway-read-models-data-access.md#reads-005-qualify-and-close-validated-data-access-improvements) |
+| `READS-005` | Qualify and close validated data-access improvements | Completed | Confirm behavioral, storage, validation and typed-facts preservation with existing correctness evidence, then complete independent review and durable documentation without performance measurement. | [Task design](../todo/TODO-podway-read-models-data-access.md#reads-005-qualify-and-close-validated-data-access-improvements) |
 
 ## REL12 — Podway v0.1.2 Contract Recovery and Release
 

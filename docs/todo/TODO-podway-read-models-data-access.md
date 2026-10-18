@@ -42,8 +42,10 @@ a request-owned prepared graph. Preserve both optimizations.
 
 The [transaction specification](../specs/storage/transactions-concurrency-and-idempotency.md#request-owned-prepared-value-reuse)
 requires normal cold reads and integrity checks to decode persistent values.
-This epic does not replace that with a doctor-only policy. The measured share of
-these costs remains unknown until the accepted comparison baseline is captured.
+This epic does not replace that with a doctor-only policy. Owner direction
+excludes performance measurement from READS acceptance, so
+the measured share of these costs remains undetermined rather than awaiting
+any comparison baseline.
 
 ## 3. Goals, non-goals, and scope
 
@@ -52,9 +54,10 @@ internal JSON projection while preserving current validation coverage. Expose
 small typed facts and read views through the existing Engine/Store boundary.
 
 Do not promise constant-time cold reads independent of all retained data: the
-preserved validation guarantee may require reading that data. Distinguish SQL
-statement count, decoded row/byte count, allocated objects, public projection
-cost, memory peak and invocation latency when reporting improvements.
+preserved validation guarantee may require reading that data. Distinguish
+deterministic query counts, decoded row/byte assertions, data ownership and
+public projection contracts. READS makes no measured latency or peak-memory
+claim.
 
 No new Store table/index/column, schema or writer-generation change, lazy
 corruption detection, persisted cache, new public read route, daemon, pooled
@@ -112,12 +115,15 @@ the decoding order.
 Reuse decoded immutable payloads and borrowed/shared containers rather than
 retaining both a complete raw payload copy and a second full aggregate. Any
 staging required for grouping must obey the existing per-row/collection bounds
-and the frozen memory comparison. In test/test-support builds, count both
-prepare and execute at the real production connection boundary, excluding
-fixture setup. Observers must not add, drop, reorder or rewrite SQL/results/errors,
-or replace SQLite with a test double. Keep observers out of the release CLI
-used for timing; follow the shared instrumentation protocol. Required
-shared-payload/copied-container evidence is separate from optional peak RSS.
+and the deterministic retention assertions registered in the qualification
+guide; the planned frozen memory comparison was withdrawn from acceptance
+together with all READS performance measurement. In test/test-support builds,
+count both prepare and execute at the real production connection boundary,
+excluding fixture setup. Observers must not add, drop, reorder or rewrite
+SQL/results/errors, or replace SQLite with a test double. Observers stay out
+of the release CLI; no READS timing use remains after the performance
+withdrawal. Required shared-payload/copied-container evidence is deterministic
+and separate from peak RSS, for which READS makes no claim.
 
 ### Typed views over validated state
 
@@ -263,8 +269,10 @@ changed source/test ownership references.
   schema and envelope failures. Distinguish graph reads from archive-list and
   ordinary opens before specifying load reductions. Use BOUND's actual preflight
   module/caller inventory rather than recreating it from function names.
-- Freeze SQL-count, row/byte, memory and latency comparisons using the
-  [internal comparison protocol](../implementation-tips/direct-cli-performance-qualification.md#internal-improvement-comparisons).
+- Freeze SQL-count and row/byte comparisons using the
+  [internal comparison protocol](../implementation-tips/direct-cli-performance-qualification.md#internal-improvement-comparisons);
+  the registered memory and latency comparisons were later withdrawn from
+  READS acceptance by owner direction and never produced accepted results.
 - Acceptance: every proposed omitted load has an equivalent validation proof or
   is excluded; normal cold-read validation has not been reassigned to doctor.
   The five-table query families, selective cache-miss reload, goal/revision and
@@ -419,21 +427,25 @@ consumer.
 
 ### READS-005: Qualify and close validated data-access improvements
 
-- Run full development, applicable native read/write/maintenance/crash checks,
-  Store/Engine L and 1,024-node scale checks and matched current-Direct G7/G8
-  comparisons against BOUND. Execute the
-  [native qualification route](../implementation-tips/direct-cli-performance-qualification.md#native-scale-execution)
-  for the three ignored scale cases; `make test` does not execute them. Include
-  explicit versus automatic-fence diagnostic cells because G7's explicit fences
-  alone cannot prove preflight gains.
-- Acceptance: original thresholds, matched latency/memory criteria and
-  deterministic SQL/facts count rules all pass independently. Repeated-query
-  fixtures must improve; small controls need not improve an already minimal
-  count. No cold-read, status-failure, archive-list, storage-contract or
-  side-effect guarantee changes.
-- Promote actual design, query requirements and measurement summaries to durable
-  authorities. Complete independent Epic audit/review and owner acceptance before
-  marking completion or retiring the dossier. No release is implied.
+- Owner direction withdrew all READS performance measurement from acceptance
+  before any complete comparison ran: unauthorized incomplete attempts
+  occurred and were cancelled, and no accepted comparison, threshold verdict
+  or performance value exists. The registered latency protocol in the
+  [qualification guide](../implementation-tips/direct-cli-performance-qualification.md#reads-registered-latency-comparison-protocol)
+  is preserved as history and is not an instruction to execute it.
+- Closeout scope: remove the obsolete READS-005 measurement tooling, record
+  the functional outcome of READS-001 through READS-004, and complete
+  documentation and review without measurement. The deterministic
+  correctness, query-count, copy, bounds and error contracts committed in
+  the registered suites are unchanged and remain the delivery's verification
+  owners; the complete development gate passed at the unchanged
+  production source (see the guide's
+  [READS-005 functional closeout](../implementation-tips/direct-cli-performance-qualification.md#reads-005-functional-closeout)
+  for the component applicability statement).
+- Acceptance: documentation and tool removal reviewed independently; no
+  performance criterion applies. Roadmap status is owner-applied only after
+  reviews; the Epic remains In Progress with this dossier retained until
+  actual owner overall acceptance. No release is implied.
 
 ## 7. Verification and release acceptance
 
