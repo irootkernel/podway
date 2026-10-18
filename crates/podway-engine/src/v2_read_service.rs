@@ -375,10 +375,7 @@ pub(crate) fn project_delegation_package_result_in(
             "delegation package result exceeds its byte allocation",
         ));
     }
-    Ok(result
-        .as_object()
-        .expect("package result is an object")
-        .clone())
+    Ok(into_object(result))
 }
 
 pub fn project_delegation_receipt_result_v1(
@@ -441,10 +438,7 @@ pub(crate) fn project_delegation_receipt_result_in(
             "delegation receipt result exceeds its byte allocation",
         ));
     }
-    Ok(result
-        .as_object()
-        .expect("receipt result is an object")
-        .clone())
+    Ok(into_object(result))
 }
 
 pub fn project_delegation_receipt_read_result_v1(
@@ -637,12 +631,12 @@ pub fn project_graph_archive_show_result_v2(
     archive: Value,
     terminal_disposition: Value,
 ) -> Result<Value, GraphViewErrorV2> {
-    project_graph_archive_show_in(
+    Ok(Value::Object(project_graph_archive_show_in(
         &ReadScope::from_graph(view),
         status,
         archive,
         terminal_disposition,
-    )
+    )?))
 }
 
 pub(crate) fn project_graph_archive_show_in(
@@ -650,21 +644,32 @@ pub(crate) fn project_graph_archive_show_in(
     status: Map<String, Value>,
     archive: Value,
     terminal_disposition: Value,
-) -> Result<Value, GraphViewErrorV2> {
+) -> Result<Map<String, Value>, GraphViewErrorV2> {
     let procedure = scope.procedure()?;
     let delegated = delegated_placement_count(&procedure) != 0;
-    let mut result = json!({
-        "schema": "podway.session-archive-show-result/v3",
-        "activity": "inactive",
-        "archive": archive,
-        "terminal_disposition": terminal_disposition,
-        "state": status,
-    });
+    // The owned archive, disposition and status members move into the result: the `json!`
+    // macro finalizes every expression through `to_value`, which would reserialize each of
+    // them into a fresh copy before the result reached this function's callers.
+    let mut result = Map::with_capacity(if delegated { 8 } else { 5 });
+    result.insert(
+        "schema".to_owned(),
+        json!("podway.session-archive-show-result/v3"),
+    );
+    result.insert("activity".to_owned(), json!("inactive"));
+    result.insert("archive".to_owned(), archive);
+    result.insert("terminal_disposition".to_owned(), terminal_disposition);
+    result.insert("state".to_owned(), Value::Object(status));
     if delegated {
         let receipts = scope.receipts();
-        result["receipt_summaries"] = json!(receipts.summaries());
-        result["receipt_summaries_total"] = json!(receipts.total());
-        result["receipt_summaries_truncated"] = json!(receipts.truncated());
+        result.insert("receipt_summaries".to_owned(), json!(receipts.summaries()));
+        result.insert(
+            "receipt_summaries_total".to_owned(),
+            json!(receipts.total()),
+        );
+        result.insert(
+            "receipt_summaries_truncated".to_owned(),
+            json!(receipts.truncated()),
+        );
     }
     Ok(result)
 }
@@ -937,7 +942,7 @@ pub(crate) fn project_evidence_read_in(
     // test asserts the encoded envelope on a maximal page. A page is built to fit, so exceeding
     // this is an inconsistency rather than something to trim: trimming would contradict the size
     // and offset the same response publishes.
-    if serialized_bytes_v1(&Value::Object(result.clone())) > MAX_EVIDENCE_RESPONSE_BYTES_V2 {
+    if serialized_object_bytes_v1(&result) > MAX_EVIDENCE_RESPONSE_BYTES_V2 {
         return Err(EvidenceReadErrorV2::View(
             GraphViewErrorV2::InconsistentState(
                 "an evidence read response exceeded its published byte bound",
@@ -1442,6 +1447,34 @@ fn serialized_bytes_v1(value: &Value) -> usize {
         .saturating_add(EVIDENCE_ENTRY_OVERHEAD_BYTES)
 }
 
+/// The bytes one projected result map serializes to, plus the same entry overhead
+/// [`serialized_bytes_v1`] charges, measured without wrapping the map in an owned `Value`.
+///
+/// `Value::Object` serializes by delegating to the map's own `Serialize` implementation, so the
+/// measured bytes are identical to the wrapped form this replaces; the difference is that the
+/// measured map is no longer cloned once just to carry it into the measurement.
+fn serialized_object_bytes_v1(result: &Map<String, Value>) -> usize {
+    serde_json::to_vec(result)
+        .map(|encoded| encoded.len())
+        .unwrap_or(usize::MAX)
+        .saturating_add(EVIDENCE_ENTRY_OVERHEAD_BYTES)
+}
+
+/// Extracts the object map from an owned projection `Value` without copying it.
+///
+/// The `json!` macro finalizes every expression through `to_value`, and the extraction sites
+/// this replaces cloned the resulting map back out of the value. Moving the map out removes
+/// that copy while keeping the unreachable non-object miss explicit, exactly as the previous
+/// `expect` messages did.
+fn into_object(value: Value) -> Map<String, Value> {
+    match value {
+        Value::Object(map) => map,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            panic!("projection result is not an object")
+        }
+    }
+}
+
 /// The observation-scoped compact status projection.
 ///
 /// It is embedded structured status and carries the item window's exact total and truncation state.
@@ -1509,7 +1542,7 @@ fn project_prepared_next_v1(
     procedure: &ParsedProcedureV2,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
     let delegated_placement_count = delegated_placement_count(procedure);
-    let mut result = json!({
+    let mut result = into_object(json!({
         "schema": "podway.prepared-next-result/v3",
         "procedure_schema": "podway.procedure/v2",
         "procedure_digest": state.snapshot().digest().as_str(),
@@ -1525,10 +1558,7 @@ fn project_prepared_next_v1(
             {"command":"session.reset","argv":["podway","reset"]},
             {"command":"session.start_replace","argv":["podway","start","--on-existing","delete"]},
         ],
-    })
-    .as_object()
-    .expect("prepared next is an object")
-    .clone();
+    }));
     if delegated_placement_count != 0 {
         result.insert(
             "delegated_placement_count".to_owned(),
@@ -2875,23 +2905,25 @@ fn project_observation_item_value(value: &RecordedItemValueV2) -> (Value, bool) 
         return (json!(value), false);
     }
     if let Some(value) = value.as_list() {
-        let mut projected = Vec::new();
+        let mut projected: Vec<String> = Vec::new();
         let mut truncated = false;
         for entry in value {
             let (entry, entry_truncated) = truncate_chars(entry, OBSERVATION_ITEM_VALUE_CHARS_MAX);
-            let mut candidate = projected.clone();
-            candidate.push(entry);
-            if serde_json::to_vec(&candidate).map_or(true, |encoded| {
+            projected.push(entry);
+            // The candidate window is measured in place. The previous per-entry clone of the
+            // growing vector made the eliminated clone work grow with every admitted entry;
+            // each trial still serializes the whole candidate prefix to charge its bytes.
+            if serde_json::to_vec(&projected).map_or(true, |encoded| {
                 encoded.len() > OBSERVATION_ITEM_VALUE_BYTES_MAX
             }) {
+                projected.pop();
                 truncated = true;
                 break;
             }
-            projected = candidate;
             truncated |= entry_truncated;
         }
         truncated |= projected.len() < value.len();
-        return (json!(projected), truncated);
+        return (Value::from(projected), truncated);
     }
     if value.item_type() == ItemTypeV1::CheckResult {
         return (check_result_preview_v1(value), false);
@@ -3667,6 +3699,38 @@ fn before_cursor(sequence: TraceSequenceV2, cursor: Option<TraceSequenceV2>) -> 
     cursor.is_none_or(|cursor| sequence < cursor)
 }
 
+/// The min/max `trace_sequence` bounds of a history window, or `None` when no entry carries one.
+fn trace_bounds(entries: &[Value]) -> Option<(u64, u64)> {
+    entries
+        .iter()
+        .filter_map(|entry| entry.get("trace_sequence").and_then(Value::as_u64))
+        .fold(None, |bounds: Option<(u64, u64)>, sequence| {
+            Some(match bounds {
+                None => (sequence, sequence),
+                Some((first, last)) => (first.min(sequence), last.max(sequence)),
+            })
+        })
+}
+
+/// A borrowed trace window whose serialized shape matches the owned projection's member.
+#[derive(serde::Serialize)]
+struct HistoryTraceWindowMeasure {
+    first_sequence: u64,
+    last_sequence: u64,
+}
+
+/// A borrowed history window used only to measure one trial candidate's encoded size.
+///
+/// Field order matches the owned construction's serialized key order, and serializing the
+/// borrowed slice charges the same entry bytes without building an owned trial copy. The
+/// marker is fixed to `false`, keeping the longer spelling budgeted exactly as before.
+#[derive(serde::Serialize)]
+struct HistoryWindowMeasure<'a> {
+    entries: &'a [Value],
+    trace_truncated: bool,
+    trace_window: Option<HistoryTraceWindowMeasure>,
+}
+
 fn history_window(
     entries: impl Iterator<Item = Result<Value, GraphViewErrorV2>>,
     maximum: usize,
@@ -3679,19 +3743,18 @@ fn history_window(
             break;
         };
         let entry = entry?;
-        let mut candidate = bounded.clone();
-        candidate.push(entry);
+        bounded.push(entry);
         // Budget with the longer `false` spelling so the final marker cannot add one byte when
-        // this candidate happens to consume the iterator exactly.
-        let candidate_window = history_window_value(candidate.clone(), false);
-        let encoded_len = serde_json::to_vec(&candidate_window)
-            .map_err(|_| GraphViewErrorV2::InconsistentState("history view is not JSON"))?
-            .len();
+        // this candidate happens to consume the iterator exactly. The trial candidate is
+        // measured through a borrowed view: the eliminated work is the per-candidate clone of
+        // the admitted prefix and of the trial window; every trial still serializes the whole
+        // growing prefix to charge its bytes.
+        let encoded_len = history_window_measure_bytes(&bounded)?;
         if encoded_len > HISTORY_WINDOW_BYTES_MAX {
+            bounded.pop();
             truncated = true;
             break;
         }
-        bounded = candidate;
     }
     if !truncated && entries.next().is_some() {
         truncated = true;
@@ -3699,24 +3762,39 @@ fn history_window(
     Ok(history_window_value(bounded, truncated))
 }
 
-fn history_window_value(entries: Vec<Value>, trace_truncated: bool) -> Value {
-    let sequences = entries
-        .iter()
-        .filter_map(|entry| entry.get("trace_sequence").and_then(Value::as_u64))
-        .collect::<Vec<_>>();
-    let trace_window = if sequences.is_empty() {
-        Value::Null
-    } else {
-        json!({
-            "first_sequence": sequences.iter().copied().min().unwrap_or(1),
-            "last_sequence": sequences.iter().copied().max().unwrap_or(1),
-        })
+fn history_window_measure_bytes(entries: &[Value]) -> Result<usize, GraphViewErrorV2> {
+    let window = HistoryWindowMeasure {
+        entries,
+        trace_truncated: false,
+        trace_window: trace_bounds(entries).map(|(first_sequence, last_sequence)| {
+            HistoryTraceWindowMeasure {
+                first_sequence,
+                last_sequence,
+            }
+        }),
     };
-    json!({
-        "entries": entries,
-        "trace_truncated": trace_truncated,
-        "trace_window": trace_window,
-    })
+    serde_json::to_vec(&window)
+        .map(|encoded| encoded.len())
+        .map_err(|_| GraphViewErrorV2::InconsistentState("history view is not JSON"))
+}
+
+fn history_window_value(entries: Vec<Value>, trace_truncated: bool) -> Value {
+    let trace_window = trace_bounds(&entries).map(|(first_sequence, last_sequence)| {
+        let mut bounds = Map::with_capacity(2);
+        bounds.insert("first_sequence".to_owned(), json!(first_sequence));
+        bounds.insert("last_sequence".to_owned(), json!(last_sequence));
+        Value::Object(bounds)
+    });
+    // The admitted entries move straight into the result: the `json!` macro finalizes owned
+    // expressions through `to_value`, which would reserialize every entry once more.
+    let mut result = Map::with_capacity(3);
+    result.insert("entries".to_owned(), Value::Array(entries));
+    result.insert("trace_truncated".to_owned(), Value::Bool(trace_truncated));
+    result.insert(
+        "trace_window".to_owned(),
+        trace_window.unwrap_or(Value::Null),
+    );
+    Value::Object(result)
 }
 
 fn trace_entry(
@@ -4389,5 +4467,207 @@ mod tests {
             admit_templates_within_bytes_v1(templates, budget, 64),
             Err(GraphViewErrorV2::InconsistentState(_))
         ));
+    }
+
+    fn measure_carrier(entries: &[Value]) -> HistoryWindowMeasure<'_> {
+        HistoryWindowMeasure {
+            entries,
+            trace_truncated: false,
+            trace_window: trace_bounds(entries).map(|(first_sequence, last_sequence)| {
+                HistoryTraceWindowMeasure {
+                    first_sequence,
+                    last_sequence,
+                }
+            }),
+        }
+    }
+
+    #[test]
+    fn reads003_borrowed_history_measurement_matches_owned_construction_bytes() {
+        let payload = "escape heavy \" \u{5c}\"\\\\ \u{2028}é   ".to_owned();
+        let windows: [Vec<Value>; 5] = [
+            Vec::new(),
+            vec![json!({"trace_sequence": 0, "payload": payload.clone()})],
+            vec![
+                json!({"trace_sequence": u64::MAX, "payload": payload.clone()}),
+                json!({"trace_sequence": u64::MIN, "payload": payload.clone()}),
+                json!({"trace_sequence": 7, "payload": payload.clone()}),
+            ],
+            vec![json!({"payload": payload.clone()}), json!({"other": 1})],
+            vec![json!({"trace_sequence": u64::MAX})],
+        ];
+        for entries in windows {
+            let borrowed = serde_json::to_vec(&measure_carrier(&entries)).unwrap();
+            let owned = serde_json::to_vec(&history_window_value(entries.clone(), false)).unwrap();
+            assert_eq!(borrowed, owned, "window {entries:?}");
+            assert_eq!(
+                history_window_measure_bytes(&entries).unwrap(),
+                owned.len(),
+                "measured length {entries:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn reads003_history_window_exact_fit_admits_and_one_byte_over_truncates() {
+        // Three no-padding entries fix the fixed overhead; every padding character adds exactly
+        // one byte to the serialized window, so an exact fit and a one-byte miss are both exact.
+        let bare = vec![json!({"payload": ""}); 3];
+        let overhead = history_window_measure_bytes(&bare).unwrap();
+        let padding = HISTORY_WINDOW_BYTES_MAX - overhead;
+        let exact = vec![
+            json!({ "payload": "x".repeat(padding - 2) }),
+            json!({ "payload": "x" }),
+            json!({ "payload": "x" }),
+        ];
+        assert_eq!(
+            history_window_measure_bytes(&exact).unwrap(),
+            HISTORY_WINDOW_BYTES_MAX
+        );
+        let window = history_window(exact.clone().into_iter().map(Ok), 8).unwrap();
+        assert_eq!(window["entries"].as_array().unwrap().len(), 3);
+        assert_eq!(window["trace_truncated"], false, "equality must admit");
+        assert_eq!(window["trace_window"], Value::Null);
+
+        let one_over = vec![
+            json!({ "payload": "x".repeat(padding - 1) }),
+            json!({ "payload": "x" }),
+            json!({ "payload": "x" }),
+        ];
+        let window = history_window(one_over.into_iter().map(Ok), 8).unwrap();
+        let admitted = window["entries"].as_array().unwrap();
+        assert_eq!(admitted.len(), 2, "the admitted prefix is retained");
+        assert_eq!(window["trace_truncated"], true);
+        assert_eq!(admitted[0], json!({ "payload": "x".repeat(padding - 1) }));
+    }
+
+    #[test]
+    fn reads003_history_window_swallows_trailing_error_after_a_full_window() {
+        let entries = vec![json!({"trace_sequence": 3}), json!({"trace_sequence": 5})];
+        let late = || {
+            Err(GraphViewErrorV2::InconsistentState(
+                "an error behind a full window is only a truncation fact",
+            ))
+        };
+        let window = history_window(
+            vec![
+                Ok(entries[0].clone()),
+                Ok(entries[1].clone()),
+                late(),
+                Ok(json!({"trace_sequence": 9})),
+            ]
+            .into_iter(),
+            2,
+        )
+        .unwrap();
+        assert_eq!(window["entries"].as_array().unwrap().len(), 2);
+        assert_eq!(window["trace_truncated"], true);
+
+        let propagated = history_window(vec![Ok(entries[0].clone()), late()].into_iter(), 4);
+        assert!(matches!(
+            propagated,
+            Err(GraphViewErrorV2::InconsistentState(
+                "an error behind a full window is only a truncation fact"
+            ))
+        ));
+    }
+
+    #[test]
+    fn reads003_observation_list_projection_measures_in_place() {
+        let fits = RecordedItemValueV2::list(vec!["short".to_owned(); 3]).unwrap();
+        let (value, truncated) = project_observation_item_value(&fits);
+        assert_eq!(truncated, false);
+        assert_eq!(value, json!(["short", "short", "short"]));
+
+        // One entry over the per-entry character maximum marks truncation even though the
+        // whole list is admitted: the flag carries entry truncation, not just window cuts.
+        let long_entry = RecordedItemValueV2::list(vec!["y".repeat(200)]).unwrap();
+        let (value, truncated) = project_observation_item_value(&long_entry);
+        assert_eq!(truncated, true);
+        assert_eq!(value, json!(["y".repeat(OBSERVATION_ITEM_VALUE_CHARS_MAX)]));
+
+        // Entries of the maximum admitted length overflow the byte allocation mid-list. The
+        // admitted prefix must be maximal: it fits, and appending the next entry would not.
+        let wide = RecordedItemValueV2::list(vec!["z".repeat(200); 8]).unwrap();
+        let (value, truncated) = project_observation_item_value(&wide);
+        let admitted = value.as_array().unwrap();
+        assert_eq!(truncated, true);
+        assert!(admitted.len() >= 1 && admitted.len() < 8);
+        let admitted_strings: Vec<&str> = admitted
+            .iter()
+            .map(|entry| entry.as_str().unwrap())
+            .collect();
+        let fits_bytes = serde_json::to_vec(&admitted_strings).unwrap().len();
+        let next_entry = "z".repeat(OBSERVATION_ITEM_VALUE_CHARS_MAX);
+        let mut next = admitted_strings.clone();
+        next.push(next_entry.as_str());
+        let with_next = serde_json::to_vec(&next).unwrap().len();
+        assert!(fits_bytes <= OBSERVATION_ITEM_VALUE_BYTES_MAX);
+        assert!(with_next > OBSERVATION_ITEM_VALUE_BYTES_MAX);
+    }
+
+    #[test]
+    fn reads003_serialized_object_bytes_match_wrapped_value_serialization() {
+        let mut result = Map::new();
+        result.insert("text".to_owned(), json!("escape heavy \" \u{5c}\"\\\\ é"));
+        result.insert("limit".to_owned(), json!(u64::MAX));
+        result.insert(
+            "nested".to_owned(),
+            json!({"inner": [1, 2, {"deep": null}]}),
+        );
+        assert_eq!(
+            serialized_object_bytes_v1(&result),
+            serialized_bytes_v1(&Value::Object(result.clone()))
+        );
+
+        // Deep nesting serializes normally on the write path: serde_json's Serializer applies
+        // no recursion refusal, so the pinned invariant is that both helpers charge the same
+        // real encoded bytes plus the entry overhead, whatever the content shape.
+        let mut deep = Value::Null;
+        for _ in 0..200 {
+            deep = Value::Array(vec![deep]);
+        }
+        let mut result = Map::new();
+        result.insert("deep".to_owned(), deep);
+        let encoded = serde_json::to_vec(&Value::Object(result.clone()))
+            .unwrap()
+            .len();
+        assert_eq!(
+            serialized_object_bytes_v1(&result),
+            encoded.saturating_add(EVIDENCE_ENTRY_OVERHEAD_BYTES)
+        );
+        assert_eq!(
+            serialized_object_bytes_v1(&result),
+            serialized_bytes_v1(&Value::Object(result.clone()))
+        );
+    }
+
+    #[test]
+    fn reads003_owned_members_move_rather_than_reserialize() {
+        // String heap storage is stable across moves, so pointer identity distinguishes a real
+        // move from a to_value copy that would allocate a fresh string.
+        let value = json!({"member": "m".repeat(64)});
+        let pointer = value["member"].as_str().unwrap().as_ptr();
+        let map = into_object(value);
+        assert_eq!(map["member"].as_str().unwrap().as_ptr(), pointer);
+
+        let entries = vec![
+            json!({"payload": "a".repeat(64)}),
+            json!({"payload": "b".repeat(64)}),
+        ];
+        let pointers: Vec<*const u8> = entries
+            .iter()
+            .map(|entry| entry["payload"].as_str().unwrap().as_ptr())
+            .collect();
+        let window = history_window(entries.into_iter().map(Ok), 8).unwrap();
+        for (index, pointer) in pointers.iter().enumerate() {
+            assert_eq!(
+                window["entries"][index]["payload"]
+                    .as_str()
+                    .unwrap()
+                    .as_ptr(),
+                *pointer
+            );
+        }
     }
 }

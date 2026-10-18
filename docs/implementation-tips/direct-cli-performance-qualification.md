@@ -451,6 +451,38 @@ that test does not pretend a queued row can disappear inside one snapshot.
 Deferred header faults and early errors release retained discovery scratch on
 unwind, including when an earlier owner's payload is the winning fault.
 
+### READS projection copy elimination
+
+READS-003 removes the surviving owned copies inside Engine read projections
+without touching validation or output contracts. Extraction sites that cloned
+an object map back out of a constructed `Value` (delegation package and
+receipt results, prepared-next, the direct archive-show result, the
+archive-list result) now move the map out or build it directly, and the
+owned archive/disposition/status members, history entries, archive-list
+summaries and observation list strings move into their final results instead
+of being reserialized: the `json!` macro finalizes every expression through
+`to_value`, which allocates a fresh copy even for owned inputs. The evidence
+response bound measures the result map directly with the same
+length, `usize::MAX` fallback and saturating entry-overhead arithmetic; a
+borrowed `HistoryWindowMeasure` carrier charges trial history windows the
+same bytes the owned construction produces. Observation list projection and
+the history window measure each candidate in place (push, measure, pop),
+keeping the admitted prefix, `false`-spelling budget and the trailing-error
+lookahead that only flags truncation.
+
+These changes eliminate the per-candidate and per-entry clone work and the
+extraction copies; they do not make projection linear-time, because every
+trial still serializes the whole growing prefix and the encoded byte buffers
+still allocate. Borrowed members (delegation package and receipt values,
+receipt summaries) are still reserialized once under the present interfaces,
+and the outcome-lookup envelope plus cursor/begin mutation result builders
+are outside the eight read variants and unchanged. Store graph
+reconstruction stays eager; `ReadScope` still admits and memoizes the
+validated Procedure lazily over that Store-validated state. In-crate unit
+tests pin borrowed-versus-owned byte identity, exact-fit and one-byte-over
+budget boundaries, the swallowed trailing error after a full window, and
+pointer identity of the moved owned strings and entries.
+
 ### READS registered latency comparison protocol
 
 READS freezes its matched comparison before any optimization. Comparisons

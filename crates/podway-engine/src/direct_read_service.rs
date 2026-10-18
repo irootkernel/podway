@@ -65,18 +65,12 @@ pub fn project_direct_archive_show_v1(
             .ok_or(GraphViewErrorV2::InconsistentState(
                 "archive has no disposition",
             ))?;
-    let result = project_graph_archive_show_in(
+    let mut result = project_graph_archive_show_in(
         &scope,
         status,
         archive_summary(summary),
         terminal_disposition(disposition)?,
     )?;
-    let mut result = result
-        .as_object()
-        .ok_or(GraphViewErrorV2::InconsistentState(
-            "archive projection is not an object",
-        ))?
-        .clone();
     result.insert(
         "schema".into(),
         Value::String("podway.session-archive-show-result/v3".into()),

@@ -492,28 +492,49 @@ pub fn execute_read_v1<R: GitResolverContractV1>(
             let now = clock.now();
             let current = snapshot.view(now)?;
             let view = match &request.command {
-                DirectReadCommandV1::ArchiveShow { session_id, .. } => snapshot.archived_view(session_id, now)?
-                    .ok_or_else(|| DirectStoreErrorV1::State(podway_store::StoreErrorV1::SessionArchiveNotFoundV1 { session_id: session_id.clone() }))?,
+                DirectReadCommandV1::ArchiveShow { session_id, .. } => {
+                    snapshot.archived_view(session_id, now)?.ok_or_else(|| {
+                        DirectStoreErrorV1::State(
+                            podway_store::StoreErrorV1::SessionArchiveNotFoundV1 {
+                                session_id: session_id.clone(),
+                            },
+                        )
+                    })?
+                }
                 DirectReadCommandV1::DelegationReceipt { session_id, .. }
-                    if !current.graph().is_some_and(|graph| graph.trace().session_id() == session_id) =>
-                    snapshot.archived_view(session_id, now)?.ok_or(GraphViewErrorV2::MissingGraphSession)?,
+                    if !current
+                        .graph()
+                        .is_some_and(|graph| graph.trace().session_id() == session_id) =>
+                {
+                    snapshot
+                        .archived_view(session_id, now)?
+                        .ok_or(GraphViewErrorV2::MissingGraphSession)?
+                }
                 _ => current,
             };
             if let DirectReadCommandV1::Evidence { item_id, token, .. } = &request.command {
                 crate::v2_read_service::check_evidence_token_binding_v1(
-                    view.graph().map(|graph| graph.trace().session_id()), item_id, token.as_ref(),
+                    view.graph().map(|graph| graph.trace().session_id()),
+                    item_id,
+                    token.as_ref(),
                 )?;
             }
-            if token_read && let Some(expected) = &request.expected_workspace_id
+            if token_read
+                && let Some(expected) = &request.expected_workspace_id
                 && expected != snapshot.binding().identity().workspace_uuid()
             {
-                return Err(crate::workspace::WorkspaceResolutionErrorV1::ExpectedWorkspaceUuidMismatch {
-                    expected: expected.clone(),
-                    actual: snapshot.binding().identity().workspace_uuid().clone(),
-                }.into());
+                return Err(
+                    crate::workspace::WorkspaceResolutionErrorV1::ExpectedWorkspaceUuidMismatch {
+                        expected: expected.clone(),
+                        actual: snapshot.binding().identity().workspace_uuid().clone(),
+                    }
+                    .into(),
+                );
             }
             if let Some(expected) = request.expected_session_id
-                && !view.graph().is_some_and(|graph| graph.trace().session_id() == &expected)
+                && !view
+                    .graph()
+                    .is_some_and(|graph| graph.trace().session_id() == &expected)
             {
                 return Err(DirectExecutionErrorV1::Domain(
                     DomainError::SessionIdentityMismatch {
@@ -525,19 +546,62 @@ pub fn execute_read_v1<R: GitResolverContractV1>(
             let result = match &request.command {
                 DirectReadCommandV1::ArchiveList => {
                     use crate::direct_read_service::archive_summary;
-                    let page = snapshot.archives(podway_protocol::SESSION_ARCHIVE_LIST_WINDOW_V2)?;
-                    serde_json::json!({"schema":"podway.session-archive-list-result/v2", "count":page.count(),
-                        "truncated":page.count() > podway_protocol::SESSION_ARCHIVE_LIST_WINDOW_V2 as u64,
-                        "oldest":page.oldest().map(archive_summary), "sessions":page.sessions().iter().map(archive_summary).collect::<Vec<_>>()})
-                        .as_object().expect("archive list is an object").clone()
+                    let page =
+                        snapshot.archives(podway_protocol::SESSION_ARCHIVE_LIST_WINDOW_V2)?;
+                    // The summaries are built once and move into the result: the `json!` macro
+                    // finalizes owned expressions through `to_value`, which would build a second
+                    // copy of every summary before the extraction cloned the finished map again.
+                    let mut result = serde_json::Map::with_capacity(5);
+                    result.insert(
+                        "schema".to_owned(),
+                        serde_json::json!("podway.session-archive-list-result/v2"),
+                    );
+                    result.insert("count".to_owned(), serde_json::json!(page.count()));
+                    result.insert(
+                        "truncated".to_owned(),
+                        serde_json::json!(
+                            page.count() > podway_protocol::SESSION_ARCHIVE_LIST_WINDOW_V2 as u64
+                        ),
+                    );
+                    result.insert(
+                        "oldest".to_owned(),
+                        page.oldest()
+                            .map(archive_summary)
+                            .unwrap_or(serde_json::Value::Null),
+                    );
+                    result.insert(
+                        "sessions".to_owned(),
+                        serde_json::Value::Array(
+                            page.sessions().iter().map(archive_summary).collect(),
+                        ),
+                    );
+                    result
                 }
-                DirectReadCommandV1::ArchiveShow { session_id, tier, history_before } => {
-                    let summary = snapshot.archive_summary(session_id)?.ok_or(DirectStoreErrorV1::Unreadable)?;
-                    crate::direct_read_service::project_direct_archive_show_v1(&view, &summary, *tier, *history_before)?
+                DirectReadCommandV1::ArchiveShow {
+                    session_id,
+                    tier,
+                    history_before,
+                } => {
+                    let summary = snapshot
+                        .archive_summary(session_id)?
+                        .ok_or(DirectStoreErrorV1::Unreadable)?;
+                    crate::direct_read_service::project_direct_archive_show_v1(
+                        &view,
+                        &summary,
+                        *tier,
+                        *history_before,
+                    )?
                 }
-                DirectReadCommandV1::DelegationReceipt { session_id, attempt_id } => {
+                DirectReadCommandV1::DelegationReceipt {
+                    session_id,
+                    attempt_id,
+                } => {
                     let receipt = snapshot.delegation_receipt(session_id, attempt_id)?;
-                    crate::direct_read_service::project_direct_receipt_v1(&view, attempt_id, receipt.as_ref())?
+                    crate::direct_read_service::project_direct_receipt_v1(
+                        &view,
+                        attempt_id,
+                        receipt.as_ref(),
+                    )?
                 }
                 DirectReadCommandV1::Status {
                     tier,
@@ -552,16 +616,21 @@ pub fn execute_read_v1<R: GitResolverContractV1>(
                     expected_consumer_attempt_id,
                 } => {
                     if let Some(expected) = expected_consumer_attempt_id {
-                        let actual = view.graph().and_then(|graph| graph.trace().active_attempt())
+                        let actual = view
+                            .graph()
+                            .and_then(|graph| graph.trace().active_attempt())
                             .map(|attempt| attempt.attempt_id().clone());
                         if actual.as_ref() != Some(expected) {
-                            return Err(DirectExecutionErrorV1::Domain(DomainError::AttemptNotCurrent {
-                                expected: expected.clone(), actual,
-                            }));
+                            return Err(DirectExecutionErrorV1::Domain(
+                                DomainError::AttemptNotCurrent {
+                                    expected: expected.clone(),
+                                    actual,
+                                },
+                            ));
                         }
                     }
                     project_direct_evidence_v1(&view, source, item_id, token.as_ref())?
-                },
+                }
                 DirectReadCommandV1::DelegationPackage => {
                     project_direct_delegation_package_v1(&view)?
                 }
