@@ -60,7 +60,9 @@ use podway_core::{
     UnixMillis,
     canonicalize_json_v1,
 };
-use podway_protocol::{EVIDENCE_PAGE_TOKEN_VERSION_V1, EvidencePageTokenV1};
+use podway_protocol::{
+    EVIDENCE_PAGE_TOKEN_VERSION_V1, EvidencePageTokenV1, serialized_json_len_v1,
+};
 use podway_store::direct_store::DirectWorkspaceViewV1;
 use podway_store::v2_delegation::{
     DelegationReadinessV1, DelegationReceiptSnapshotV1, DelegationReceiptV1,
@@ -2907,19 +2909,32 @@ fn project_observation_item_value(value: &RecordedItemValueV2) -> (Value, bool) 
     if let Some(value) = value.as_list() {
         let mut projected: Vec<String> = Vec::new();
         let mut truncated = false;
+        // Each candidate's JSON bytes are measured once and the admitted prefix is charged
+        // incrementally: the array brackets cost two bytes, every further entry one
+        // separator byte, so no admitted entry is ever serialized again.
+        let mut admitted_bytes = 0usize;
         for entry in value {
             let (entry, entry_truncated) = truncate_chars(entry, OBSERVATION_ITEM_VALUE_CHARS_MAX);
-            projected.push(entry);
-            // The candidate window is measured in place. The previous per-entry clone of the
-            // growing vector made the eliminated clone work grow with every admitted entry;
-            // each trial still serializes the whole candidate prefix to charge its bytes.
-            if serde_json::to_vec(&projected).map_or(true, |encoded| {
-                encoded.len() > OBSERVATION_ITEM_VALUE_BYTES_MAX
-            }) {
-                projected.pop();
+            let entry_bytes = match serialized_json_len_v1(&entry) {
+                Ok(bytes) => bytes,
+                // A measurement failure keeps the former whole-prefix fail-closed shape:
+                // the candidate is refused and the window is cut.
+                Err(_) => {
+                    truncated = true;
+                    break;
+                }
+            };
+            let over_budget = 2usize
+                .checked_add(admitted_bytes)
+                .and_then(|bytes| bytes.checked_add(entry_bytes))
+                .and_then(|bytes| bytes.checked_add(projected.len()))
+                .is_none_or(|total| total > OBSERVATION_ITEM_VALUE_BYTES_MAX);
+            if over_budget {
                 truncated = true;
                 break;
             }
+            admitted_bytes += entry_bytes;
+            projected.push(entry);
             truncated |= entry_truncated;
         }
         truncated |= projected.len() < value.len();
@@ -3607,22 +3622,28 @@ fn add_histories(
         .iter()
         .rev()
         .filter(|attempt| attempt.validity() == AttemptValidityV2::Valid)
-        .filter(|attempt| before_cursor(attempt.trace(), cursor))
-        .map(|attempt| trace_entry(state, procedure, attempt));
+        .filter(|attempt| before_cursor(attempt.trace(), cursor));
     result.insert(
         "current_trace_history".to_owned(),
-        history_window(entries, 32)?,
+        history_window(
+            entries,
+            |attempt| trace_entry(state, procedure, attempt),
+            32,
+        )?,
     );
 
     let entries = trace
         .iter()
         .rev()
         .filter(|attempt| attempt.validity() == AttemptValidityV2::Stale)
-        .filter(|attempt| before_cursor(attempt.trace(), cursor))
-        .map(|attempt| stale_attempt_value(state, procedure, attempt));
+        .filter(|attempt| before_cursor(attempt.trace(), cursor));
     result.insert(
         "stale_attempt_history".to_owned(),
-        history_window(entries, 1)?,
+        history_window(
+            entries,
+            |attempt| stale_attempt_value(state, procedure, attempt),
+            1,
+        )?,
     );
 
     let entries = state
@@ -3630,35 +3651,43 @@ fn add_histories(
         .decisions()
         .iter()
         .rev()
-        .filter(|record| before_cursor(record.trace(), cursor))
-        .map(decision_value);
-    result.insert("decision_history".to_owned(), history_window(entries, 1)?);
+        .filter(|record| before_cursor(record.trace(), cursor));
+    result.insert(
+        "decision_history".to_owned(),
+        history_window(entries, decision_value, 1)?,
+    );
 
     let entries = state
         .workflow_memory()
         .reworks()
         .iter()
         .rev()
-        .filter(|record| before_cursor(record.trace(), cursor))
-        .map(|record| {
-            let mut value = json!({
-                "trace_sequence": record.trace().get(),
-                "kind": record.kind().as_str(),
-                "from_graph_node_id": record.from_node().as_str(),
-                "to_graph_node_id": record.to_node().as_str(),
-                "target_attempt_id": record.target_attempt_id().as_str(),
-                "reason": record.reason().as_str(),
-                "reactivated": record.reactivated(),
-                "recorded_at": timestamp(record.recorded_at())?,
-            });
-            if let Some(actor) = record.actor()
-                && let Some(object) = value.as_object_mut()
-            {
-                object.insert("actor".to_owned(), json!(actor.as_str()));
-            }
-            Ok(value)
-        });
-    result.insert("rework_history".to_owned(), history_window(entries, 6)?);
+        .filter(|record| before_cursor(record.trace(), cursor));
+    result.insert(
+        "rework_history".to_owned(),
+        history_window(
+            entries,
+            |record| {
+                let mut value = json!({
+                    "trace_sequence": record.trace().get(),
+                    "kind": record.kind().as_str(),
+                    "from_graph_node_id": record.from_node().as_str(),
+                    "to_graph_node_id": record.to_node().as_str(),
+                    "target_attempt_id": record.target_attempt_id().as_str(),
+                    "reason": record.reason().as_str(),
+                    "reactivated": record.reactivated(),
+                    "recorded_at": timestamp(record.recorded_at())?,
+                });
+                if let Some(actor) = record.actor()
+                    && let Some(object) = value.as_object_mut()
+                {
+                    object.insert("actor".to_owned(), json!(actor.as_str()));
+                }
+                Ok(value)
+            },
+            6,
+        )?,
+    );
 
     let current_revision = state.goal_state().current_revision();
     let entries = state
@@ -3667,11 +3696,14 @@ fn add_histories(
         .iter()
         .rev()
         .filter(|record| Some(record.revision()) != current_revision)
-        .filter(|record| before_cursor(record.binding_trace(), cursor))
-        .map(|record| stale_goal_revision_value(state, record));
+        .filter(|record| before_cursor(record.binding_trace(), cursor));
     result.insert(
         "stale_goal_revision_history".to_owned(),
-        history_window(entries, 1)?,
+        history_window(
+            entries,
+            |record| stale_goal_revision_value(state, record),
+            1,
+        )?,
     );
 
     let entries = state
@@ -3686,11 +3718,14 @@ fn add_histories(
                         && attempt.validity() == AttemptValidityV2::Valid
                 })
         })
-        .filter(|assessment| before_cursor(assessment.decision_trace(), cursor))
-        .map(|assessment| stale_goal_assessment_value(state, assessment));
+        .filter(|assessment| before_cursor(assessment.decision_trace(), cursor));
     result.insert(
         "stale_goal_assessment_history".to_owned(),
-        history_window(entries, 1)?,
+        history_window(
+            entries,
+            |assessment| stale_goal_assessment_value(state, assessment),
+            1,
+        )?,
     );
     Ok(())
 }
@@ -3701,15 +3736,24 @@ fn before_cursor(sequence: TraceSequenceV2, cursor: Option<TraceSequenceV2>) -> 
 
 /// The min/max `trace_sequence` bounds of a history window, or `None` when no entry carries one.
 fn trace_bounds(entries: &[Value]) -> Option<(u64, u64)> {
-    entries
-        .iter()
-        .filter_map(|entry| entry.get("trace_sequence").and_then(Value::as_u64))
-        .fold(None, |bounds: Option<(u64, u64)>, sequence| {
-            Some(match bounds {
-                None => (sequence, sequence),
-                Some((first, last)) => (first.min(sequence), last.max(sequence)),
-            })
-        })
+    entries.iter().fold(None, |bounds, entry| {
+        fold_trace_bounds(bounds, entry.get("trace_sequence"))
+    })
+}
+
+/// Folds one candidate's `trace_sequence` into the running min/max bounds.
+///
+/// Entries without a `trace_sequence` member, including an explicit `null`, never
+/// contribute: the bounds are the extremes among participating entries, not assumed
+/// first and last positions.
+fn fold_trace_bounds(bounds: Option<(u64, u64)>, sequence: Option<&Value>) -> Option<(u64, u64)> {
+    let Some(sequence) = sequence.and_then(Value::as_u64) else {
+        return bounds;
+    };
+    Some(match bounds {
+        None => (sequence, sequence),
+        Some((first, last)) => (first.min(sequence), last.max(sequence)),
+    })
 }
 
 /// A borrowed trace window whose serialized shape matches the owned projection's member.
@@ -3719,11 +3763,15 @@ struct HistoryTraceWindowMeasure {
     last_sequence: u64,
 }
 
-/// A borrowed history window used only to measure one trial candidate's encoded size.
+/// The fixed wrapper shape for history-window byte budgeting.
 ///
-/// Field order matches the owned construction's serialized key order, and serializing the
-/// borrowed slice charges the same entry bytes without building an owned trial copy. The
-/// marker is fixed to `false`, keeping the longer spelling budgeted exactly as before.
+/// Field order matches the owned construction's serialized key order. The empty `entries`
+/// slice keeps the real array's bracket pair charged, and the marker is fixed to `false`,
+/// keeping the longer spelling budgeted exactly as before so the final marker cannot add a
+/// byte when a candidate happens to consume the iterator exactly. Production budgeting
+/// serializes this shape once per window as its fixed skeleton and measures each entry
+/// separately; the test-only `history_window_measure_bytes` oracle serializes whole
+/// windows through it.
 #[derive(serde::Serialize)]
 struct HistoryWindowMeasure<'a> {
     entries: &'a [Value],
@@ -3731,37 +3779,99 @@ struct HistoryWindowMeasure<'a> {
     trace_window: Option<HistoryTraceWindowMeasure>,
 }
 
-fn history_window(
-    entries: impl Iterator<Item = Result<Value, GraphViewErrorV2>>,
+/// Maps any serialization failure to the history view's existing inconsistent-state error.
+fn history_measurement_error(_: serde_json::Error) -> GraphViewErrorV2 {
+    GraphViewErrorV2::InconsistentState("history view is not JSON")
+}
+
+/// Fixed wrapper bytes for incremental history-window budgeting, plus the null window length.
+///
+/// The wrapper is measured once per window through the same serializer that produces the
+/// final bytes: the `entries` bracket pair and the longer `false` marker stay charged, and
+/// only the `null` trace-window placeholder is removed because every candidate replaces it
+/// with its own measured window bytes.
+fn history_window_wrapper_bytes() -> Result<(usize, usize), GraphViewErrorV2> {
+    let wrapper = serialized_json_len_v1(&HistoryWindowMeasure {
+        entries: &[],
+        trace_truncated: false,
+        trace_window: None,
+    })
+    .map_err(history_measurement_error)?;
+    let null_window = serialized_json_len_v1(&Value::Null).map_err(history_measurement_error)?;
+    let skeleton = wrapper
+        .checked_sub(null_window)
+        .ok_or(GraphViewErrorV2::InconsistentState(
+            "history view is not JSON",
+        ))?;
+    Ok((skeleton, null_window))
+}
+
+fn history_window<T>(
+    entries: impl Iterator<Item = T>,
+    mut render: impl FnMut(T) -> Result<Value, GraphViewErrorV2>,
     maximum: usize,
 ) -> Result<Value, GraphViewErrorV2> {
     let mut entries = entries;
-    let mut bounded = Vec::new();
+    let mut bounded: Vec<Value> = Vec::new();
+    let mut admitted_bytes = 0usize;
+    let mut admitted_bounds: Option<(u64, u64)> = None;
     let mut truncated = false;
+    let (skeleton_bytes, null_window_bytes) = history_window_wrapper_bytes()?;
     while bounded.len() < maximum {
-        let Some(entry) = entries.next() else {
+        let Some(item) = entries.next() else {
             break;
         };
-        let entry = entry?;
-        bounded.push(entry);
-        // Budget with the longer `false` spelling so the final marker cannot add one byte when
-        // this candidate happens to consume the iterator exactly. The trial candidate is
-        // measured through a borrowed view: the eliminated work is the per-candidate clone of
-        // the admitted prefix and of the trial window; every trial still serializes the whole
-        // growing prefix to charge its bytes.
-        let encoded_len = history_window_measure_bytes(&bounded)?;
-        if encoded_len > HISTORY_WINDOW_BYTES_MAX {
-            bounded.pop();
+        let entry = render(item)?;
+        let entry_bytes = serialized_json_len_v1(&entry).map_err(history_measurement_error)?;
+        // Trial bounds fold the candidate in before it is measured, so the trace-window
+        // charge already reflects a shrinking minimum or widening maximum, including one
+        // further digit such as 9999 -> 10000.
+        let trial_bounds = fold_trace_bounds(admitted_bounds, entry.get("trace_sequence"));
+        let window_bytes = match trial_bounds {
+            None => null_window_bytes,
+            Some((first_sequence, last_sequence)) => {
+                serialized_json_len_v1(&HistoryTraceWindowMeasure {
+                    first_sequence,
+                    last_sequence,
+                })
+                .map_err(history_measurement_error)?
+            }
+        };
+        // The admitted prefix is charged incrementally: skeleton (which budgets the longer
+        // `false` spelling), each entry's own bytes, one separator per further entry, and
+        // the trial trace window. Nothing admitted is ever reserialized. A checked-size
+        // failure is the history view's existing inconsistent-state error, kept distinct
+        // from an ordinary over-budget refusal.
+        let total = skeleton_bytes
+            .checked_add(admitted_bytes)
+            .and_then(|bytes| bytes.checked_add(entry_bytes))
+            .and_then(|bytes| bytes.checked_add(bounded.len()))
+            .and_then(|bytes| bytes.checked_add(window_bytes))
+            .ok_or(GraphViewErrorV2::InconsistentState(
+                "history view is not JSON",
+            ))?;
+        if total > HISTORY_WINDOW_BYTES_MAX {
+            // The refused candidate leaves the admitted accounting unchanged, and no
+            // further source entry is pulled after a byte-overflow cut.
             truncated = true;
             break;
         }
+        admitted_bytes += entry_bytes;
+        admitted_bounds = trial_bounds;
+        bounded.push(entry);
     }
     if !truncated && entries.next().is_some() {
+        // A full window only asks whether another filtered source entry exists; that
+        // lookahead payload is never rendered, so even a failing render there is only a
+        // truncation fact.
         truncated = true;
     }
     Ok(history_window_value(bounded, truncated))
 }
 
+/// Whole-window serialization oracle for tests: measures an admitted window in one serde
+/// pass, the way the budget was computed before incremental accounting.
+#[cfg(test)]
 fn history_window_measure_bytes(entries: &[Value]) -> Result<usize, GraphViewErrorV2> {
     let window = HistoryWindowMeasure {
         entries,
@@ -4482,6 +4592,11 @@ mod tests {
         }
     }
 
+    /// The identity render used by value-backed test windows.
+    fn ok_value(entry: Value) -> Result<Value, GraphViewErrorV2> {
+        Ok(entry)
+    }
+
     #[test]
     fn reads003_borrowed_history_measurement_matches_owned_construction_bytes() {
         let payload = "escape heavy \" \u{5c}\"\\\\ \u{2028}é   ".to_owned();
@@ -4524,7 +4639,7 @@ mod tests {
             history_window_measure_bytes(&exact).unwrap(),
             HISTORY_WINDOW_BYTES_MAX
         );
-        let window = history_window(exact.clone().into_iter().map(Ok), 8).unwrap();
+        let window = history_window(exact.clone().into_iter(), ok_value, 8).unwrap();
         assert_eq!(window["entries"].as_array().unwrap().len(), 3);
         assert_eq!(window["trace_truncated"], false, "equality must admit");
         assert_eq!(window["trace_window"], Value::Null);
@@ -4534,7 +4649,7 @@ mod tests {
             json!({ "payload": "x" }),
             json!({ "payload": "x" }),
         ];
-        let window = history_window(one_over.into_iter().map(Ok), 8).unwrap();
+        let window = history_window(one_over.into_iter(), ok_value, 8).unwrap();
         let admitted = window["entries"].as_array().unwrap();
         assert_eq!(admitted.len(), 2, "the admitted prefix is retained");
         assert_eq!(window["trace_truncated"], true);
@@ -4544,32 +4659,371 @@ mod tests {
     #[test]
     fn reads003_history_window_swallows_trailing_error_after_a_full_window() {
         let entries = vec![json!({"trace_sequence": 3}), json!({"trace_sequence": 5})];
-        let late = || {
-            Err(GraphViewErrorV2::InconsistentState(
-                "an error behind a full window is only a truncation fact",
-            ))
+        let late = |entry: Value| {
+            if entry["late"] == json!(true) {
+                Err(GraphViewErrorV2::InconsistentState(
+                    "an error behind a full window is only a truncation fact",
+                ))
+            } else {
+                Ok(entry)
+            }
         };
         let window = history_window(
             vec![
-                Ok(entries[0].clone()),
-                Ok(entries[1].clone()),
-                late(),
-                Ok(json!({"trace_sequence": 9})),
+                entries[0].clone(),
+                entries[1].clone(),
+                json!({"late": true}),
+                json!({"trace_sequence": 9}),
             ]
             .into_iter(),
+            late,
             2,
         )
         .unwrap();
         assert_eq!(window["entries"].as_array().unwrap().len(), 2);
         assert_eq!(window["trace_truncated"], true);
 
-        let propagated = history_window(vec![Ok(entries[0].clone()), late()].into_iter(), 4);
+        let propagated = history_window(
+            vec![entries[0].clone(), json!({"late": true})].into_iter(),
+            late,
+            4,
+        );
         assert!(matches!(
             propagated,
             Err(GraphViewErrorV2::InconsistentState(
                 "an error behind a full window is only a truncation fact"
             ))
         ));
+    }
+
+    #[test]
+    fn views002_history_window_incremental_total_matches_serialized_windows() {
+        // The two plan fixtures pin the corrected wrapper accounting against real serde:
+        // the skeleton keeps the entries bracket pair, and only the null trace-window
+        // placeholder is replaced by each candidate's measured window bytes.
+        let null_window = vec![Value::Null];
+        assert_eq!(history_window_measure_bytes(&null_window).unwrap(), 62);
+        let traced = vec![json!({"trace_sequence": 10_000, "payload": "x"})];
+        assert_eq!(history_window_measure_bytes(&traced).unwrap(), 138);
+
+        // The former whole-window algorithm as a reference: admit while the serialized
+        // window fits, cut on the first refusal, and mark truncation whenever more
+        // filtered entries exist.
+        fn reference_window(entries: &[Value], maximum: usize) -> (usize, bool) {
+            let mut admitted = 0usize;
+            let mut truncated = false;
+            while admitted < maximum && admitted < entries.len() {
+                if history_window_measure_bytes(&entries[..admitted + 1]).unwrap()
+                    > HISTORY_WINDOW_BYTES_MAX
+                {
+                    truncated = true;
+                    break;
+                }
+                admitted += 1;
+            }
+            if !truncated && admitted < entries.len() {
+                truncated = true;
+            }
+            (admitted, truncated)
+        }
+
+        let escape_heavy = "escape heavy \" \\ \u{2028} é \u{0007}";
+        let entry =
+            |trace: u64, payload: String| json!({"trace_sequence": trace, "payload": payload});
+        let untraced = |payload: String| json!({"payload": payload});
+        let null_traced = |payload: String| json!({"trace_sequence": null, "payload": payload});
+
+        // Padding is derived from the oracle, never hand-counted: three traced 4-digit
+        // entries fix the overhead and every payload byte adds exactly one byte.
+        let bare: Vec<Value> = (0..3).map(|_| entry(9_999, String::new())).collect();
+        let overhead = history_window_measure_bytes(&bare).unwrap();
+        let padding = HISTORY_WINDOW_BYTES_MAX - overhead;
+        let exact_fit = vec![
+            entry(9_999, "x".repeat(padding - 2)),
+            entry(9_999, "x".to_owned()),
+            entry(9_999, "x".to_owned()),
+        ];
+        assert_eq!(
+            history_window_measure_bytes(&exact_fit).unwrap(),
+            HISTORY_WINDOW_BYTES_MAX,
+            "exact-fit fixture must serialize to exactly the budget"
+        );
+        let one_byte_over = vec![
+            entry(9_999, "x".repeat(padding - 1)),
+            entry(9_999, "x".to_owned()),
+            entry(9_999, "x".to_owned()),
+        ];
+
+        // A widened maximum digit must be charged in both places it appears: the entry's
+        // own `trace_sequence` member and the window bound. The pair is padded so the
+        // all-4-digit window hits the budget exactly; one further digit on the last
+        // sequence adds two bytes and refuses the second entry.
+        let pair_bare = vec![entry(9_999, String::new()), entry(9_999, String::new())];
+        let pair_padding =
+            HISTORY_WINDOW_BYTES_MAX - history_window_measure_bytes(&pair_bare).unwrap();
+        let digits_admit = vec![
+            entry(9_999, "x".repeat(pair_padding - 1)),
+            entry(9_999, "x".to_owned()),
+        ];
+        assert_eq!(
+            history_window_measure_bytes(&digits_admit).unwrap(),
+            HISTORY_WINDOW_BYTES_MAX
+        );
+        let digits_refuse = vec![
+            entry(9_999, "x".repeat(pair_padding - 1)),
+            entry(10_000, "x".to_owned()),
+        ];
+        assert_eq!(
+            history_window_measure_bytes(&digits_refuse).unwrap(),
+            HISTORY_WINDOW_BYTES_MAX + 2
+        );
+
+        // A shrinking minimum is charged the same way: padding fits when the fold narrows
+        // the first sequence to 4 digits (entry member and window bound each lose one
+        // byte) and refuses when both entries keep 5 digits.
+        let shrink_bare = vec![entry(10_000, String::new()), entry(10_000, String::new())];
+        let shrink_padding =
+            HISTORY_WINDOW_BYTES_MAX - history_window_measure_bytes(&shrink_bare).unwrap() + 2;
+        let min_shrinks = vec![
+            entry(10_000, "x".repeat(shrink_padding - 1)),
+            entry(9_999, "x".to_owned()),
+        ];
+        assert_eq!(
+            history_window_measure_bytes(&min_shrinks).unwrap(),
+            HISTORY_WINDOW_BYTES_MAX
+        );
+        let min_stays = vec![
+            entry(10_000, "x".repeat(shrink_padding - 1)),
+            entry(10_000, "x".to_owned()),
+        ];
+        assert_eq!(
+            history_window_measure_bytes(&min_stays).unwrap(),
+            HISTORY_WINDOW_BYTES_MAX + 2
+        );
+
+        // Discriminating max-widen edge: the 4-digit window sits one byte under the budget
+        // (65535) and the widened-max window measures 65537. An implementation that
+        // charges the candidate entry's extra digit but forgets only the max-bound digit
+        // would measure 65536 and wrongly admit, so the reference refusal exposes it.
+        let edge_padding =
+            HISTORY_WINDOW_BYTES_MAX - 1 - history_window_measure_bytes(&pair_bare).unwrap();
+        let digits_edge_admit = vec![
+            entry(9_999, "x".repeat(edge_padding - 1)),
+            entry(9_999, "x".to_owned()),
+        ];
+        assert_eq!(
+            history_window_measure_bytes(&digits_edge_admit).unwrap(),
+            HISTORY_WINDOW_BYTES_MAX - 1
+        );
+        let digits_edge_refuse = vec![
+            entry(9_999, "x".repeat(edge_padding - 1)),
+            entry(10_000, "x".to_owned()),
+        ];
+        assert_eq!(
+            history_window_measure_bytes(&digits_edge_refuse).unwrap(),
+            HISTORY_WINDOW_BYTES_MAX + 1
+        );
+
+        // Byte-boundary None -> Some trace-window transition: an untraced admitted prefix
+        // followed by the first traced candidate measures exactly one byte over, so
+        // omitting the newly introduced trace object from the trial charge is observable.
+        let transition_bare = vec![untraced(String::new()), entry(7, "x".to_owned())];
+        let transition_padding =
+            HISTORY_WINDOW_BYTES_MAX + 1 - history_window_measure_bytes(&transition_bare).unwrap();
+        let trace_transition = vec![
+            untraced("x".repeat(transition_padding)),
+            entry(7, "x".to_owned()),
+        ];
+        assert_eq!(
+            history_window_measure_bytes(&trace_transition).unwrap(),
+            HISTORY_WINDOW_BYTES_MAX + 1
+        );
+        assert!(
+            history_window_measure_bytes(&trace_transition[..1]).unwrap()
+                <= HISTORY_WINDOW_BYTES_MAX,
+            "the untraced prefix must itself be admissible"
+        );
+
+        // Trace gaps: absent, null and escaped or nested entries never contribute to the
+        // bounds; the extremes come from the participating entries alone.
+        let gaps = vec![
+            entry(5, escape_heavy.to_owned()),
+            untraced(r#"{"nested": ["a\"", 1, null]}"#.to_owned()),
+            json!({"trace_sequence": 7, "payload": {"nested": ["a\"", 1, null]}}),
+            null_traced("gap".to_owned()),
+            entry(9_999, "tail".to_owned()),
+        ];
+        let untraced_window = vec![
+            untraced(escape_heavy.to_owned()),
+            null_traced("gap".to_owned()),
+        ];
+
+        let corpora: Vec<(Vec<Value>, usize)> = vec![
+            (null_window, 8),
+            (traced, 8),
+            (exact_fit, 8),
+            (one_byte_over, 8),
+            (digits_admit, 8),
+            (digits_refuse, 8),
+            (digits_edge_admit, 8),
+            (digits_edge_refuse, 8),
+            (trace_transition, 8),
+            (min_shrinks, 8),
+            (min_stays, 8),
+            (gaps.clone(), 8),
+            (untraced_window.clone(), 8),
+            (vec![entry(u64::MAX, String::new()); 32], 32),
+            (vec![entry(u64::MAX, String::new()); 33], 32),
+        ];
+        for (entries, maximum) in corpora {
+            let (expected_admitted, expected_truncated) = reference_window(&entries, maximum);
+            let window = history_window(entries.clone().into_iter(), ok_value, maximum).unwrap();
+            assert_eq!(
+                window["entries"].as_array().unwrap().len(),
+                expected_admitted,
+                "admitted prefix for {entries:?}"
+            );
+            assert_eq!(
+                window["trace_truncated"],
+                json!(expected_truncated),
+                "truncation for {entries:?}"
+            );
+        }
+
+        let window = history_window(gaps.into_iter(), ok_value, 8).unwrap();
+        assert_eq!(
+            window["trace_window"],
+            json!({"first_sequence": 5, "last_sequence": 9_999})
+        );
+        let window = history_window(untraced_window.into_iter(), ok_value, 8).unwrap();
+        assert_eq!(window["trace_window"], Value::Null);
+    }
+
+    #[test]
+    fn views002_history_window_full_window_lookahead_does_not_render() {
+        use std::{cell::Cell, rc::Rc};
+
+        let render_calls = Rc::new(Cell::new(0usize));
+        let counter = Rc::clone(&render_calls);
+        let render = move |entry: Value| {
+            counter.set(counter.get() + 1);
+            Ok(entry)
+        };
+        let raw: Vec<Value> = (0..5)
+            .map(|index| json!({"trace_sequence": index}))
+            .collect();
+        let window = history_window(raw.into_iter(), render, 2).unwrap();
+        // Exactly the admitted entries are rendered; the discarded lookahead entry behind
+        // the full window never reaches its render.
+        assert_eq!(render_calls.get(), 2);
+        assert_eq!(window["entries"].as_array().unwrap().len(), 2);
+        assert_eq!(window["trace_truncated"], true);
+    }
+
+    #[test]
+    fn views002_history_window_byte_overflow_stops_all_lookahead() {
+        use std::{cell::Cell, rc::Rc};
+
+        struct CountingIter<I> {
+            inner: I,
+            pulls: Rc<Cell<usize>>,
+        }
+        impl<I: Iterator> Iterator for CountingIter<I> {
+            type Item = I::Item;
+            fn next(&mut self) -> Option<Self::Item> {
+                self.pulls.set(self.pulls.get() + 1);
+                self.inner.next()
+            }
+        }
+
+        let pulls = Rc::new(Cell::new(0usize));
+        let counting = CountingIter {
+            inner: vec![
+                json!({"trace_sequence": 1, "payload": "x".repeat(40_000)}),
+                json!({"trace_sequence": 2, "payload": "y".repeat(40_000)}),
+                json!({"trace_sequence": 3, "payload": "z"}),
+            ]
+            .into_iter(),
+            pulls: Rc::clone(&pulls),
+        };
+        let render_calls = Rc::new(Cell::new(0usize));
+        let counter = Rc::clone(&render_calls);
+        let render = move |entry: Value| {
+            counter.set(counter.get() + 1);
+            Ok(entry)
+        };
+        let window = history_window(counting, render, 8).unwrap();
+        let admitted = window["entries"].as_array().unwrap();
+        assert_eq!(
+            admitted.len(),
+            1,
+            "the second 40k entry overflows the budget"
+        );
+        assert_eq!(window["trace_truncated"], true);
+        // The refused candidate is rendered and pulled once to establish the overflow;
+        // nothing behind the cut is rendered or pulled.
+        assert_eq!(render_calls.get(), 2);
+        assert_eq!(
+            pulls.get(),
+            2,
+            "no raw lookahead pull after a byte overflow"
+        );
+    }
+
+    #[test]
+    fn views002_observation_list_incremental_admission_matches_serialized_prefixes() {
+        // The former whole-prefix algorithm as a reference, driven by real serde
+        // serialization of every candidate prefix.
+        fn reference(entries: &[String]) -> (Vec<String>, bool) {
+            let mut projected: Vec<String> = Vec::new();
+            let mut truncated = false;
+            for entry in entries {
+                let (entry, entry_truncated) =
+                    truncate_chars(entry, OBSERVATION_ITEM_VALUE_CHARS_MAX);
+                projected.push(entry);
+                if serde_json::to_vec(&projected).map_or(true, |encoded| {
+                    encoded.len() > OBSERVATION_ITEM_VALUE_BYTES_MAX
+                }) {
+                    projected.pop();
+                    truncated = true;
+                    break;
+                }
+                truncated |= entry_truncated;
+            }
+            truncated |= projected.len() < entries.len();
+            (projected, truncated)
+        }
+
+        let corpora: Vec<Vec<String>> = vec![
+            Vec::new(),
+            vec!["x".to_owned()],
+            vec!["short".to_owned(); 3],
+            // Per-entry character caps in the three byte-cost regimes: one scalar per
+            // byte, two bytes per scalar, and one escaped scalar per two bytes.
+            vec!["a".repeat(128); 8],
+            vec!["é".repeat(64); 8],
+            vec!["\"".repeat(64); 8],
+            vec![
+                "a".repeat(128),
+                "é".repeat(64),
+                "\"".repeat(64),
+                "mixed \"é\" a".repeat(12),
+                "x".repeat(200),
+                "gap entry".to_owned(),
+                "tail".to_owned(),
+            ],
+            vec!["z".repeat(128); 7]
+                .into_iter()
+                .chain(["z".repeat(104)])
+                .collect(),
+        ];
+        for entries in &corpora {
+            let value = RecordedItemValueV2::list(entries.clone()).unwrap();
+            let (projected, truncated) = project_observation_item_value(&value);
+            let (expected, expected_truncated) = reference(entries);
+            assert_eq!(projected, Value::from(expected.clone()), "{entries:?}");
+            assert_eq!(truncated, expected_truncated, "{entries:?}");
+        }
     }
 
     #[test]
@@ -4764,7 +5218,7 @@ mod tests {
             .iter()
             .map(|entry| entry["payload"].as_str().unwrap().as_ptr())
             .collect();
-        let window = history_window(entries.into_iter().map(Ok), 8).unwrap();
+        let window = history_window(entries.into_iter(), ok_value, 8).unwrap();
         for (index, pointer) in pointers.iter().enumerate() {
             assert_eq!(
                 window["entries"][index]["payload"]

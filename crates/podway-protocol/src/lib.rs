@@ -7,6 +7,7 @@ use std::fmt;
 mod direct_envelope;
 mod evidence_page;
 mod identity;
+mod json_len;
 #[cfg(feature = "release-contract-verifier")]
 mod release_contract;
 mod result_contract;
@@ -20,6 +21,7 @@ pub use evidence_page::{
     EVIDENCE_PAGE_TOKEN_VERSION_V1, EvidencePageTokenV1, MAX_EVIDENCE_PAGE_TOKEN_CHARS_V1,
 };
 pub use identity::{BuildIdentityV1, build_identity_v1};
+pub use json_len::serialized_json_len_v1;
 #[cfg(feature = "release-contract-verifier")]
 pub use release_contract::{
     ReleaseContractErrorV1, ReleaseContractVerifierConfigV1, VerificationReceiptV1,
