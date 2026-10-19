@@ -203,9 +203,10 @@ pub(crate) fn delegation_work_package_in(
     if action.delegation().is_none() {
         return Err(GraphViewErrorV2::DelegationNotApplicable);
     }
-    let readback = state
-        .selected_evidence_readback(current.attempt.attempt_id())
-        .map_err(|_| GraphViewErrorV2::InconsistentState("delegation evidence is invalid"))?;
+    // `CurrentProjection::derive` already selected this attempt's evidence and fails closed when
+    // that selection is invalid, so the package reuses the projection's admitted selection;
+    // repeating the selection here could only fail on state the projection already rejected.
+    let readback = &current.evidence_readback;
     let selectors = action
         .evidence_from()
         .map(|references| references.entries());
@@ -215,7 +216,7 @@ pub(crate) fn delegation_work_package_in(
         ));
     }
     let mut evidence = Vec::with_capacity(readback.len());
-    for (selector, entry) in selectors.into_iter().flatten().zip(&readback) {
+    for (selector, entry) in selectors.into_iter().flatten().zip(readback.iter()) {
         if entry.stale() || selector.source_node() != entry.reference().resolution().source_node() {
             return Err(GraphViewErrorV2::InconsistentState(
                 "delegation evidence selector is stale or inconsistent",
@@ -1091,14 +1092,26 @@ pub(crate) fn project_graph_next_in(
     let procedure = scope.procedure()?;
     let current = CurrentProjection::derive(scope, state, &procedure)?
         .ok_or(GraphViewErrorV2::TerminalSessionHasNoNext)?;
-    project_running_next(scope, state, &procedure, &current)
+    project_running_next(
+        scope,
+        state,
+        &procedure,
+        &current,
+        EvidencePreviewDisplay::Publish,
+    )
 }
 
+/// Builds the running-session `next` projection.
+///
+/// `display` decides what happens to a preview the slot gate admits: `Publish` materializes its
+/// payload for `session.next`, while `Suppress` evaluates the same admission and its gated
+/// checks for observation guidance without constructing the preview text it must not carry.
 fn project_running_next(
     scope: &ReadScope<'_>,
     state: &GraphSessionStateV2,
     procedure: &ParsedProcedureV2,
     current: &CurrentProjection<'_>,
+    display: EvidencePreviewDisplay,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
     let delegated = delegated_placement_count(procedure) != 0;
     let mut result = Map::new();
@@ -1160,7 +1173,7 @@ fn project_running_next(
         "references".to_owned(),
         Value::Array(current.reference_metadata(procedure)?),
     );
-    let (readback_values, readback_items_total) = readback(state, current, procedure)?;
+    let (readback_values, readback_items_total) = readback(state, current, procedure, display)?;
     result.insert("readback".to_owned(), Value::Array(readback_values));
     result.insert(
         "readback_items_total".to_owned(),
@@ -1272,12 +1285,20 @@ pub(crate) fn project_graph_observation_in(
         );
     }
     let guidance = if current.is_some() || state.trace().lifecycle() == SessionLifecycle::Prepared {
-        let mut next = if state.trace().lifecycle() == SessionLifecycle::Prepared {
+        let next = if state.trace().lifecycle() == SessionLifecycle::Prepared {
             project_prepared_next_v1(state, &procedure)?
         } else {
-            project_running_next(scope, state, &procedure, current.as_ref().unwrap())?
+            // Suppressed guidance admits previews through the same slot and truncation gates as
+            // `session.next` — including the snapshot, consumer, and token-constructibility
+            // checks — without materializing the preview payloads ADR-0024 removes here.
+            project_running_next(
+                scope,
+                state,
+                &procedure,
+                current.as_ref().unwrap(),
+                EvidencePreviewDisplay::Suppress,
+            )?
         };
-        strip_evidence_previews_v1(&mut next);
         Value::Object(next)
     } else {
         Value::Null
@@ -1528,29 +1549,6 @@ fn observation_status_v1(
     status.insert("items_truncated".to_owned(), json!(false));
     status.insert("items".to_owned(), Value::Array(items));
     Ok(status)
-}
-
-/// Removes preview data and continuation tokens from an embedded next projection.
-///
-/// ADR-0024 makes observation guidance metadata-only: a caller that wants content pages it through
-/// `evidence.read`, so observation never spends its budget carrying value bytes.
-fn strip_evidence_previews_v1(next: &mut Map<String, Value>) {
-    let Some(readback) = next.get_mut("readback").and_then(Value::as_array_mut) else {
-        return;
-    };
-    for reference in readback {
-        let Some(items) = reference.get_mut("items").and_then(Value::as_array_mut) else {
-            continue;
-        };
-        for item in items {
-            let Some(item) = item.as_object_mut() else {
-                continue;
-            };
-            item.remove("preview");
-            item.remove("preview_truncated");
-            item.remove("next_page_token");
-        }
-    }
 }
 
 fn project_prepared_next_v1(
@@ -3353,17 +3351,17 @@ fn readback(
     state: &GraphSessionStateV2,
     current: &CurrentProjection<'_>,
     procedure: &ParsedProcedureV2,
+    display: EvidencePreviewDisplay,
 ) -> Result<(Vec<Value>, u64), GraphViewErrorV2> {
-    let entries = state
-        .selected_evidence_readback(current.attempt.attempt_id())
-        .map_err(|_| {
-            GraphViewErrorV2::InconsistentState("selected evidence readback is invalid")
-        })?;
+    // `CurrentProjection::derive` already selected this attempt's evidence and fails closed when
+    // that selection is invalid, so guidance reuses the projection's admitted selection instead
+    // of repeating it; the former recompute's error mapping was unreachable after derive.
     let mut previews_remaining = MAX_EVIDENCE_PREVIEW_SLOTS_V2;
     let mut items_total = 0u64;
-    let mut values = Vec::with_capacity(entries.len());
-    for entry in &entries {
-        let (value, count) = readback_value(state, entry, procedure, &mut previews_remaining)?;
+    let mut values = Vec::with_capacity(current.evidence_readback.len());
+    for entry in &current.evidence_readback {
+        let (value, count) =
+            readback_value(state, entry, procedure, &mut previews_remaining, display)?;
         items_total += count;
         values.push(value);
     }
@@ -3374,12 +3372,16 @@ fn readback(
 /// items while preview slots remain.
 ///
 /// Returns the projection and the number of item metadata records it contributed, so the caller can
-/// report the exact response-wide total.
+/// report the exact response-wide total. `display` only decides whether an admitted preview's
+/// payload is materialized: admission, slot consumption, and the truncation-bound snapshot,
+/// consumer, and token-constructibility checks run identically in both modes, at this same stage,
+/// for exactly these items.
 fn readback_value(
     state: &GraphSessionStateV2,
     readback: &EvidenceReadbackV2,
     procedure: &ParsedProcedureV2,
     previews_remaining: &mut usize,
+    display: EvidencePreviewDisplay,
 ) -> Result<(Value, u64), GraphViewErrorV2> {
     let resolution = readback.reference().resolution();
     let source = resolution.source_node();
@@ -3448,19 +3450,26 @@ fn readback_value(
 
         if explicit_selector
             && *previews_remaining > 0
-            && let Some(preview) = evidence_preview_v1(item.value(), total_size)
+            && let Some(plan) = evidence_preview_plan_v1(item.value(), total_size)
         {
             *previews_remaining -= 1;
-            metadata.insert("preview".to_owned(), preview.data);
-            metadata.insert("preview_truncated".to_owned(), json!(preview.truncated));
-            if preview.truncated {
+            if display == EvidencePreviewDisplay::Publish {
+                metadata.insert(
+                    "preview".to_owned(),
+                    evidence_preview_payload_v1(item.value(), &plan),
+                );
+                metadata.insert("preview_truncated".to_owned(), json!(plan.truncated));
+            }
+            if plan.truncated {
                 let snapshot = resolution
                     .snapshot()
                     .ok_or(GraphViewErrorV2::InconsistentState(
                         "a resolved reference must carry its snapshot",
                     ))?;
                 // The consumer attempt binds the token, not the source node: a continuation is
-                // only valid for the attempt that may currently read this evidence.
+                // only valid for the attempt that may currently read this evidence. The token is
+                // still constructed under suppression so an unconstructible one fails here for
+                // exactly the same items; only its encoding is bound to publication.
                 let consumer = state
                     .trace()
                     .active_attempt()
@@ -3471,12 +3480,14 @@ fn readback_value(
                     snapshot.source_attempt_id().as_str(),
                     item.id().as_str(),
                     digest.as_str(),
-                    preview.size,
+                    plan.size,
                 )
                 .map_err(|_| {
                     GraphViewErrorV2::InconsistentState("a page token is not constructible")
                 })?;
-                metadata.insert("next_page_token".to_owned(), json!(token.encode()));
+                if display == EvidencePreviewDisplay::Publish {
+                    metadata.insert("next_page_token".to_owned(), json!(token.encode()));
+                }
             }
         }
         items.push(Value::Object(metadata));
@@ -3510,13 +3521,166 @@ fn readback_value(
     Ok((Value::Object(value), items_total))
 }
 
-/// One bounded preview of a recorded value for `next-result/v3`.
+/// How `readback_value` treats a preview its gates admitted.
+///
+/// `Publish` is `session.next`: the admitted preview's payload is materialized. `Suppress` is
+/// observation guidance: the same admission consumes the same slot and runs the same
+/// truncation-bound checks, but the payload text ADR-0024 removes is never constructed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EvidencePreviewDisplay {
+    Publish,
+    Suppress,
+}
+
+/// The admission decision for one preview: how much it would carry and whether it truncates.
+///
+/// This is the single owner of preview presence, size, and truncation. Publishing materializes
+/// exactly this plan; suppression evaluates it without building the payload it would drop.
+struct EvidencePreviewPlanV1 {
+    size: u64,
+    truncated: bool,
+}
+
+/// Decides whether one recorded value earns a preview slot, and what that preview would carry.
 ///
 /// The preview is deliberately small: it exists so a caller can recognise a value, not consume it.
-/// When it truncates, the accompanying token names exactly where a page read should resume.
-/// `total` is the caller's logical size of the same admitted value, so the text arm allocates only
-/// the previewed text rather than materializing the whole value as scalars.
-fn evidence_preview_v1(value: &RecordedItemValueV2, total: u64) -> Option<EvidencePageV1> {
+/// `total` is the caller's logical size of the same admitted value, so the text arm decides
+/// without touching the value's scalars. A preview that would carry nothing — an empty value or a
+/// list whose first entry alone exceeds the slot — is no preview at all and spends no slot.
+fn evidence_preview_plan_v1(
+    value: &RecordedItemValueV2,
+    total: u64,
+) -> Option<EvidencePreviewPlanV1> {
+    if value.as_text().is_some() {
+        if total == 0 {
+            return None;
+        }
+        let end = total.min(MAX_EVIDENCE_PREVIEW_SCALARS_V2 as u64);
+        return Some(EvidencePreviewPlanV1 {
+            size: end,
+            truncated: end < total,
+        });
+    }
+    if let Some(entries) = value.as_list() {
+        // A list preview carries whole entries only, and charges the bytes each one encodes to
+        // rather than its scalars alone: many one-scalar entries cost mostly structure. Every
+        // entry is budget-tested, the first included — unlike a page, a preview never admits an
+        // entry that alone overflows its slot — so admitting nothing is a real outcome, and an
+        // empty preview is worth no slot, so it is published as no preview at all.
+        let mut charged = 0usize;
+        let mut end = 0usize;
+        while end < entries.len() {
+            let cost = EVIDENCE_ENTRY_OVERHEAD_BYTES
+                + entries[end].chars().count() * EVIDENCE_SCALAR_BYTES;
+            if charged + cost > MAX_EVIDENCE_PREVIEW_BYTES_V2 {
+                break;
+            }
+            charged += cost;
+            end += 1;
+        }
+        if end == 0 {
+            return None;
+        }
+        return Some(EvidencePreviewPlanV1 {
+            size: end as u64,
+            truncated: end < entries.len(),
+        });
+    }
+    if value.item_type() == ItemTypeV1::CheckResult {
+        // The logical size of a check result is its encoded byte count, already measured once
+        // for this value; the preview reports that same total as its size.
+        return Some(EvidencePreviewPlanV1 {
+            size: total,
+            truncated: false,
+        });
+    }
+    // Confirm, choice, integer, and artifact values are indivisible, so a preview of one is either
+    // complete or absent. An artifact projection can exceed a preview slot on its own, and its
+    // metadata already describes it, so it is left to `evidence.read` rather than truncated.
+    if indivisible_preview_charge_v1(value) > MAX_EVIDENCE_PREVIEW_BYTES_V2 {
+        return None;
+    }
+    Some(EvidencePreviewPlanV1 {
+        size: 1,
+        truncated: false,
+    })
+}
+
+/// Materializes the payload of an already admitted preview plan.
+///
+/// This performs no admission arithmetic: it renders exactly the scalars, entries, or typed
+/// projection the plan admitted, so publishing and suppressing cannot disagree about presence,
+/// size, or truncation.
+fn evidence_preview_payload_v1(value: &RecordedItemValueV2, plan: &EvidencePreviewPlanV1) -> Value {
+    if let Some(text) = value.as_text() {
+        return Value::String(text.chars().take(plan.size as usize).collect());
+    }
+    if let Some(entries) = value.as_list() {
+        return Value::Array(
+            entries[..plan.size as usize]
+                .iter()
+                .map(|entry| json!(entry))
+                .collect(),
+        );
+    }
+    if value.item_type() == ItemTypeV1::CheckResult {
+        return check_result_preview_v1(value);
+    }
+    typed_item_value(value)
+}
+
+/// The encoded bytes an indivisible projected value would contribute to a preview, charged from
+/// the typed value without materializing its JSON projection.
+///
+/// Keys, quoting, and the widest decimal a number can render to are all charged: a preview slot
+/// bounds what the response actually serializes, not what its content alone would measure. This
+/// is the same charge the retained test-only recursive charger applies to `typed_item_value`,
+/// which the unit oracles keep equal to this typed charge.
+fn indivisible_preview_charge_v1(value: &RecordedItemValueV2) -> usize {
+    /// The bytes the widest `i64` renders to, sign included.
+    const NUMBER_BYTES: usize = 20;
+    /// Quotes, a separator, and slack for one member or element.
+    const MEMBER_OVERHEAD_BYTES: usize = EVIDENCE_ENTRY_OVERHEAD_BYTES;
+    fn charged_scalars(text: &str) -> usize {
+        text.chars().count() * EVIDENCE_SCALAR_BYTES
+    }
+    match value.item_type() {
+        ItemTypeV1::Confirm | ItemTypeV1::Integer => NUMBER_BYTES,
+        ItemTypeV1::Choice => charged_scalars(value.as_choice().unwrap_or_default()),
+        ItemTypeV1::Artifact => {
+            let artifact = value
+                .as_artifact()
+                .expect("artifact type has an artifact value");
+            let location_type = match artifact.location_kind() {
+                podway_core::ArtifactLocationKindV1::LocalPath => "path",
+                podway_core::ArtifactLocationKindV1::ExternalReference => "reference",
+            };
+            MEMBER_OVERHEAD_BYTES * 5
+                + charged_scalars("location_type")
+                + charged_scalars(location_type)
+                + charged_scalars("location")
+                + charged_scalars(artifact.location())
+                + charged_scalars("sha256_digest")
+                + charged_scalars(artifact.digest().as_str())
+                + charged_scalars("size_bytes")
+                + NUMBER_BYTES
+                + charged_scalars("media_type")
+                + charged_scalars(artifact.media_type())
+        }
+        // Text, list, and check-result values admit previews through their own arms above.
+        ItemTypeV1::Text | ItemTypeV1::List | ItemTypeV1::CheckResult => {
+            unreachable!("divisible values never charge as indivisible")
+        }
+    }
+}
+
+/// The retained pre-VIEWS-004 construction of one bounded preview, test oracle only.
+///
+/// Publishing must equal this legacy output for every value; the unit oracles compare the
+/// plan-and-payload path against it so the new admission owner cannot drift from the published
+/// behavior this file shipped before preview suppression existed.
+#[cfg(test)]
+fn legacy_evidence_preview_v1(value: &RecordedItemValueV2, total: u64) -> Option<EvidencePageV1> {
     if let Some(text) = value.as_text() {
         if total == 0 {
             return None;
@@ -3530,10 +3694,6 @@ fn evidence_preview_v1(value: &RecordedItemValueV2, total: u64) -> Option<Eviden
         });
     }
     if let Some(entries) = value.as_list() {
-        // A list preview carries whole entries only, and charges the bytes each one encodes to
-        // rather than its scalars alone: many one-scalar entries cost mostly structure. One
-        // maximal entry is wider than a whole slot, so admitting nothing is a real outcome — and
-        // an empty preview is worth no slot, so it is published as no preview at all.
         let mut charged = 0usize;
         let mut end = 0usize;
         while end < entries.len() {
@@ -3555,19 +3715,14 @@ fn evidence_preview_v1(value: &RecordedItemValueV2, total: u64) -> Option<Eviden
         });
     }
     if value.item_type() == ItemTypeV1::CheckResult {
-        // The logical size of a check result is its encoded byte count, already measured once
-        // for this value; the preview reports that same total as its size.
         return Some(EvidencePageV1 {
             size: total,
             data: check_result_preview_v1(value),
             truncated: false,
         });
     }
-    // Confirm, choice, integer, and artifact values are indivisible, so a preview of one is either
-    // complete or absent. An artifact projection can exceed a preview slot on its own, and its
-    // metadata already describes it, so it is left to `evidence.read` rather than truncated.
     let projected = typed_item_value(value);
-    if projected_preview_bytes_v1(&projected) > MAX_EVIDENCE_PREVIEW_BYTES_V2 {
+    if legacy_projected_preview_bytes_v1(&projected) > MAX_EVIDENCE_PREVIEW_BYTES_V2 {
         return None;
     }
     Some(EvidencePageV1 {
@@ -3577,11 +3732,9 @@ fn evidence_preview_v1(value: &RecordedItemValueV2, total: u64) -> Option<Eviden
     })
 }
 
-/// The encoded bytes a projected indivisible value would contribute to a preview.
-///
-/// Keys, quoting, and the widest decimal a number can render to are all charged: a preview slot
-/// bounds what the response actually serializes, not what its content alone would measure.
-fn projected_preview_bytes_v1(value: &Value) -> usize {
+/// The retained pre-VIEWS-004 recursive charge over a materialized projection, test oracle only.
+#[cfg(test)]
+fn legacy_projected_preview_bytes_v1(value: &Value) -> usize {
     /// The bytes the widest `i64` renders to, sign included.
     const NUMBER_BYTES: usize = 20;
     /// Quotes, a separator, and slack for one member or element.
@@ -3593,12 +3746,12 @@ fn projected_preview_bytes_v1(value: &Value) -> usize {
             .map(|(key, member)| {
                 MEMBER_OVERHEAD_BYTES
                     + key.chars().count() * EVIDENCE_SCALAR_BYTES
-                    + projected_preview_bytes_v1(member)
+                    + legacy_projected_preview_bytes_v1(member)
             })
             .sum::<usize>(),
         Value::Array(members) => members
             .iter()
-            .map(|member| MEMBER_OVERHEAD_BYTES + projected_preview_bytes_v1(member))
+            .map(|member| MEMBER_OVERHEAD_BYTES + legacy_projected_preview_bytes_v1(member))
             .sum::<usize>(),
         _ => NUMBER_BYTES,
     }
@@ -5251,6 +5404,559 @@ mod tests {
                     .as_ptr(),
                 *pointer
             );
+        }
+    }
+
+    /// A legal boundary artifact for the indivisible charge: the media type a/a and a location
+    /// of `scalars` characters, whose exact-fit lengths are 796 (path) and 791 (reference).
+    fn views004_boundary_artifact(path: bool, scalars: usize) -> RecordedItemValueV2 {
+        let digest = podway_core::Sha256Digest::new(format!("sha256:{}", "f".repeat(64))).unwrap();
+        let artifact = if path {
+            podway_core::ArtifactValueV1::local_path("a".repeat(scalars), digest, u64::MAX, "a/a")
+        } else {
+            podway_core::ArtifactValueV1::external_reference(
+                "a".repeat(scalars),
+                digest,
+                u64::MAX,
+                "a/a",
+            )
+        }
+        .unwrap();
+        RecordedItemValueV2::artifact(artifact)
+    }
+
+    #[test]
+    fn views004_indivisible_charge_matches_the_legacy_value_charger() {
+        // The typed charger must reproduce the retained recursive charge over the actual
+        // materialized projection, so the indivisible admission policy cannot drift.
+        let values = vec![
+            RecordedItemValueV2::confirm(),
+            RecordedItemValueV2::integer(0),
+            RecordedItemValueV2::integer(i64::MAX),
+            RecordedItemValueV2::integer(i64::MIN),
+            RecordedItemValueV2::choice("c".repeat(120)).unwrap(),
+            RecordedItemValueV2::choice("c".to_owned()).unwrap(),
+            views004_boundary_artifact(true, 1),
+            views004_boundary_artifact(true, 796),
+            views004_boundary_artifact(true, 797),
+            views004_boundary_artifact(false, 791),
+            views004_boundary_artifact(false, 792),
+            views004_boundary_artifact(false, 4_000),
+        ];
+        for value in values {
+            assert_eq!(
+                indivisible_preview_charge_v1(&value),
+                legacy_projected_preview_bytes_v1(&typed_item_value(&value)),
+                "typed charge diverged from the legacy charger for {:?}",
+                value.item_type()
+            );
+        }
+    }
+
+    #[test]
+    fn views004_preview_plan_and_payload_match_legacy_construction() {
+        // The plan owner and its payload must reproduce the retained legacy construction for
+        // every arm: presence, size, truncation, and the published data itself.
+        let check_result = RecordedItemValueV2::check_result(
+            podway_core::CheckResultValueV2::new(
+                podway_core::OperationId::new("make-test").unwrap(),
+                podway_core::Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
+                podway_core::CheckResultInputBasisV2::new(
+                    "HEAD and dirty-tree snapshot",
+                    podway_core::Sha256Digest::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
+                )
+                .unwrap(),
+                podway_core::CheckResultExecutorV2::new("gaori", "1.0.0").unwrap(),
+                podway_core::CheckResultOutcomeV2::Pass,
+                "The external operation reported pass.",
+                podway_core::Sha256Digest::new(format!("sha256:{}", "c".repeat(64))).unwrap(),
+            )
+            .unwrap(),
+        );
+        // A check result's logical size is its encoded byte count; readback passes exactly
+        // `evidence_logical_size_v1` of the admitted value, so the oracle must too.
+        let check_result_total = evidence_logical_size_v1(&check_result).0;
+        let cases: Vec<(RecordedItemValueV2, u64)> = vec![
+            // Text: empty admits nothing; 938 is the untruncated maximum; one more truncates.
+            (RecordedItemValueV2::text("").unwrap(), 0),
+            (RecordedItemValueV2::text("a").unwrap(), 1),
+            (RecordedItemValueV2::text("a".repeat(938)).unwrap(), 938),
+            (RecordedItemValueV2::text("a".repeat(939)).unwrap(), 939),
+            (
+                RecordedItemValueV2::text("\u{1f600}".repeat(939)).unwrap(),
+                939,
+            ),
+            (
+                RecordedItemValueV2::text("e\u{0301}".repeat(939)).unwrap(),
+                1_878,
+            ),
+            // Lists: empty admits nothing; the first entry is budget-tested like every other;
+            // 936 scalars fit within the budget (8 + 936 * 6 = 5624 of 5628), 937 refuse alone,
+            // a later small entry can overflow the remainder, and a whole list can sum to the
+            // exact budget (6 entries, 930 scalars: 6 * 8 + 6 * 930 = 5628).
+            (RecordedItemValueV2::list(vec![]).unwrap(), 0),
+            (RecordedItemValueV2::list(vec!["a".repeat(937)]).unwrap(), 1),
+            (RecordedItemValueV2::list(vec!["a".repeat(936)]).unwrap(), 1),
+            (
+                RecordedItemValueV2::list(vec!["a".repeat(936), "b".to_owned()]).unwrap(),
+                2,
+            ),
+            (
+                RecordedItemValueV2::list(vec!["ab".to_owned(); 10]).unwrap(),
+                10,
+            ),
+            (
+                RecordedItemValueV2::list(vec![
+                    "a".repeat(925),
+                    "b".to_owned(),
+                    "b".to_owned(),
+                    "b".to_owned(),
+                    "b".to_owned(),
+                    "b".to_owned(),
+                ])
+                .unwrap(),
+                6,
+            ),
+            // Check results are always present and untruncated, sized by the same encoded byte
+            // count readback passes; maximal published coverage stays with v2ast006.
+            (check_result, check_result_total),
+            // Indivisible values: the declared legal choice c*120 always fits, and the artifact
+            // boundary flips presence by exactly one location scalar.
+            (RecordedItemValueV2::choice("c".repeat(120)).unwrap(), 1),
+            (RecordedItemValueV2::confirm(), 1),
+            (RecordedItemValueV2::integer(i64::MAX), 1),
+            (views004_boundary_artifact(true, 796), 1),
+            (views004_boundary_artifact(true, 797), 1),
+            (views004_boundary_artifact(false, 791), 1),
+            (views004_boundary_artifact(false, 792), 1),
+        ];
+        for (value, total) in cases {
+            let plan = evidence_preview_plan_v1(&value, total);
+            let legacy = legacy_evidence_preview_v1(&value, total);
+            match (plan, legacy) {
+                (Some(plan), Some(legacy)) => {
+                    assert_eq!(plan.size, legacy.size);
+                    assert_eq!(plan.truncated, legacy.truncated);
+                    assert_eq!(evidence_preview_payload_v1(&value, &plan), legacy.data);
+                }
+                (None, None) => {}
+                (plan, legacy) => panic!(
+                    "presence disagrees: plan_present {} legacy_present {}",
+                    plan.is_some(),
+                    legacy.is_some()
+                ),
+            }
+        }
+    }
+
+    /// An in-memory Procedure provider for the readback-mode fixture, mirroring the registered
+    /// suite's byte provider.
+    struct Views004ByteProcedureV2<'a> {
+        path: &'a str,
+        source: &'a [u8],
+    }
+
+    impl crate::execution::ProcedureProviderV1 for Views004ByteProcedureV2<'_> {
+        fn load_workspace_procedure_snapshot_v2(
+            &self,
+            _workspace: &podway_store::WorkspaceBindingV1,
+            procedure: &str,
+            snapshot_id: podway_core::ProcedureSnapshotId,
+            created_at: podway_core::UnixMillis,
+        ) -> Result<
+            podway_store::ProcedureSnapshotV2,
+            crate::execution::ProcedureV2SourceAdmissionErrorV1,
+        > {
+            assert_eq!(procedure, self.path);
+            crate::execution::workspace_procedure_snapshot_from_bytes_v2(
+                procedure,
+                self.source,
+                snapshot_id,
+                created_at,
+            )
+        }
+    }
+
+    fn views004_identity() -> podway_store::DurableWorktreeIdentityV1 {
+        let digest = podway_core::Sha256Digest::new(
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .unwrap();
+        podway_store::DurableWorktreeIdentityV1::new(
+            digest.clone(),
+            podway_core::WorkspaceId::new("00000000-0000-4000-8000-000000005001").unwrap(),
+            digest,
+        )
+    }
+
+    /// One reference per admission case — present, truncated, refused, empty — plus one reference
+    /// with no selector, which Store read-back resolves to every valued slot behind the
+    /// metadata-only gate.
+    fn views004_readback_modes_source() -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "schema": "podway.procedure/v2",
+            "id": "views004-readback-modes",
+            "version": "1",
+            "name": "Readback display modes",
+            "purpose": "Exercise per-reference preview admission in both display modes.",
+            "node_definitions": {
+                "source": {
+                    "type": "action",
+                    "title": "Record selection",
+                    "intent": "Record one value per admission case.",
+                    "items": [
+                        {"id": "present", "type": "text", "prompt": "Record text.", "required": true, "max_length": 64},
+                        {"id": "truncated", "type": "text", "prompt": "Record text.", "required": true, "max_length": 2048},
+                        {"id": "refused", "type": "artifact", "prompt": "Record artifact.", "required": true, "allowed_media_types": ["a/a"]},
+                        {"id": "empty", "type": "text", "prompt": "Record text.", "required": true, "max_length": 64}
+                    ]
+                },
+                "consume": {
+                    "type": "action",
+                    "title": "Consume selection",
+                    "intent": "Read each case through its own reference."
+                }
+            },
+            "graph": {
+                "entry": "source",
+                "nodes": [
+                    {"id": "source", "use": "source", "next": "consume"},
+                    {"id": "consume", "use": "consume", "terminal": true, "evidence_from": [
+                        {"node": "source", "required": true, "items": ["present"]},
+                        {"node": "source", "required": true, "items": ["truncated"]},
+                        {"node": "source", "required": true, "items": ["refused"]},
+                        {"node": "source", "required": true, "items": ["empty"]},
+                        {"node": "source", "required": true}
+                    ]}
+                ]
+            }
+        }))
+        .unwrap()
+    }
+
+    /// A coherent running session over the readback-modes procedure: one completed source attempt
+    /// carrying every case value, and the active consumer attempt holding the five references.
+    fn views004_readback_modes_state(source: &[u8]) -> podway_store::GraphSessionStateV2 {
+        let path = "views004-readback-modes.json";
+        let provider = Views004ByteProcedureV2 { path, source };
+        let binding = podway_store::WorkspaceBindingV1::new(
+            views004_identity(),
+            podway_store::ValidatedWorkspaceRootV1::from_encoded(
+                "podway.unix-path/v1:2f776f726b74726565",
+            )
+            .unwrap(),
+        );
+        let snapshot = crate::execution::workspace_procedure_snapshot_from_bytes_v2(
+            path,
+            source,
+            podway_core::ProcedureSnapshotId::new("00000000-0000-4000-8000-000000005002").unwrap(),
+            podway_core::UnixMillis::new(1_700_000_000_000),
+        )
+        .unwrap();
+        let base = crate::execution::prepare_custom_procedure_v2_start(
+            &provider,
+            &binding,
+            path,
+            Some(snapshot.digest()),
+            "Project both readback display modes",
+            podway_core::SessionId::new("00000000-0000-4000-8000-000000005003").unwrap(),
+            podway_core::AttemptId::new("00000000-0000-4000-8000-000000005004").unwrap(),
+            podway_core::ProcedureSnapshotId::new("00000000-0000-4000-8000-000000005002").unwrap(),
+            podway_core::UnixMillis::new(1_700_000_000_000),
+        )
+        .unwrap();
+
+        let source_attempt_id =
+            podway_core::AttemptId::new("00000000-0000-4000-8000-000000005004").unwrap();
+        let consumer_attempt_id =
+            podway_core::AttemptId::new("00000000-0000-4000-8000-000000005005").unwrap();
+        let created_at = podway_core::UnixMillis::new(1_700_000_000_000);
+        let values = base
+            .workflow_memory()
+            .attempts()
+            .first()
+            .unwrap()
+            .item_slots()
+            .iter()
+            .map(|slot| {
+                let value = match slot.item_id().as_str() {
+                    "present" => RecordedItemValueV2::text("p").unwrap(),
+                    "truncated" => RecordedItemValueV2::text("a".repeat(1_000)).unwrap(),
+                    "refused" => {
+                        let artifact = podway_core::ArtifactValueV1::local_path(
+                            "a".repeat(797),
+                            podway_core::Sha256Digest::new(format!("sha256:{}", "f".repeat(64)))
+                                .unwrap(),
+                            u64::MAX,
+                            "a/a",
+                        )
+                        .unwrap();
+                        RecordedItemValueV2::artifact(artifact)
+                    }
+                    "empty" => RecordedItemValueV2::text("").unwrap(),
+                    other => panic!("unexpected readback-modes fixture item {other}"),
+                };
+                podway_store::ItemSlotStateV2::new(
+                    source_attempt_id.clone(),
+                    slot.item_id().clone(),
+                    slot.item_type(),
+                    podway_core::Revision::new(1),
+                    Some(value),
+                    slot.created_at(),
+                    podway_core::UnixMillis::new(slot.created_at().get() + 1),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let source_memory = podway_store::AttemptWorkflowMemoryV2::new(
+            source_attempt_id.clone(),
+            values,
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let source_digest = source_memory.recorded_items_digest().unwrap();
+        let selected: [&[&str]; 5] = [&["present"], &["truncated"], &["refused"], &["empty"], &[]];
+        let references = selected
+            .iter()
+            .enumerate()
+            .map(|(order, ids)| {
+                podway_store::EvidenceResolutionStateV2::new(
+                    order as u32,
+                    true,
+                    ids.iter()
+                        .map(|id| podway_core::ItemId::new(id.to_string()).unwrap())
+                        .collect(),
+                    podway_core::ResolvedEvidenceReferenceV2::resolved(
+                        podway_core::EvidenceReferenceSnapshotV2::new(
+                            podway_core::GraphNodeId::new("source").unwrap(),
+                            source_attempt_id.clone(),
+                            podway_core::AttemptNumberV2::FIRST,
+                            source_digest.clone(),
+                            podway_core::UnixMillis::new(1_700_000_000_010),
+                        )
+                        .unwrap(),
+                    ),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let consumer_memory = podway_store::AttemptWorkflowMemoryV2::new(
+            consumer_attempt_id.clone(),
+            Vec::new(),
+            Vec::new(),
+            references,
+        )
+        .unwrap();
+        let trace = podway_core::SessionTraceV2::from_parts(
+            podway_core::SessionId::new("00000000-0000-4000-8000-000000005003").unwrap(),
+            podway_core::SessionLifecycle::Running,
+            podway_core::Revision::new(2),
+            vec![
+                podway_core::SessionAttemptV2::new(
+                    source_attempt_id,
+                    podway_core::GraphNodeId::new("source").unwrap(),
+                    podway_core::AttemptNumberV2::FIRST,
+                    podway_core::TraceSequenceV2::FIRST,
+                    podway_core::AttemptLifecycle::Completed,
+                    podway_core::AttemptValidityV2::Valid,
+                    None,
+                )
+                .unwrap(),
+                podway_core::SessionAttemptV2::new(
+                    consumer_attempt_id.clone(),
+                    podway_core::GraphNodeId::new("consume").unwrap(),
+                    podway_core::AttemptNumberV2::FIRST,
+                    podway_core::TraceSequenceV2::new(2),
+                    podway_core::AttemptLifecycle::Active,
+                    podway_core::AttemptValidityV2::Valid,
+                    None,
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap();
+        podway_store::GraphSessionStateV2::new_with_goal_state(
+            podway_core::Revision::new(2),
+            base.task_title(),
+            base.snapshot().clone(),
+            trace,
+            vec![
+                podway_store::GraphNodeCounterV2::new(
+                    podway_core::GraphNodeId::new("source").unwrap(),
+                    1,
+                    0,
+                ),
+                podway_store::GraphNodeCounterV2::new(
+                    podway_core::GraphNodeId::new("consume").unwrap(),
+                    1,
+                    0,
+                ),
+            ],
+            vec![
+                podway_store::AttemptMetadataV2::new(
+                    base.workflow_memory()
+                        .attempts()
+                        .first()
+                        .unwrap()
+                        .attempt_id()
+                        .clone(),
+                    created_at,
+                    Some(podway_core::UnixMillis::new(1_700_000_000_010)),
+                    None,
+                )
+                .unwrap(),
+                podway_store::AttemptMetadataV2::new(
+                    consumer_attempt_id,
+                    podway_core::UnixMillis::new(1_700_000_000_010),
+                    None,
+                    None,
+                )
+                .unwrap(),
+            ],
+            podway_store::WorkflowMemoryStateV2::new(
+                vec![source_memory, consumer_memory],
+                Vec::new(),
+                Vec::new(),
+            )
+            .unwrap(),
+            base.goal_state().clone(),
+            base.created_at(),
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn views004_readback_value_modes_share_slots_and_stripped_output() {
+        let source = views004_readback_modes_source();
+        let state = views004_readback_modes_state(&source);
+        let view = podway_store::GraphWorkspaceViewV2::new(
+            views004_identity(),
+            Some(state),
+            1,
+            podway_core::UnixMillis::new(1_700_000_000_100),
+        )
+        .with_current_terminal_disposition(false);
+        let scope = ReadScope::from_graph(&view);
+        let graph = view.graph_state().unwrap();
+        let ParsedProcedure::V2(procedure) =
+            parse_procedure_document(&source, ProcedureDocumentFormat::Json).unwrap();
+        // The real caller must admit this pairing before any readback projection runs.
+        let current = CurrentProjection::derive(&scope, graph, &procedure)
+            .unwrap()
+            .expect("a valid running session derives a current projection");
+        let entries = &current.evidence_readback;
+        assert_eq!(entries.len(), 5);
+        let single = |needle: &str| {
+            entries
+                .iter()
+                .find(|entry| {
+                    let items = entry.items().items();
+                    items.len() == 1 && items[0].id().as_str() == needle
+                })
+                .unwrap_or_else(|| panic!("no single-item entry for {needle}"))
+        };
+        let metadata_only = entries
+            .iter()
+            .find(|entry| entry.items().items().len() == 4)
+            .expect("the omitted selector includes every valued slot");
+
+        for (name, entry, expected_slots, expect_preview, expect_truncated, expected_items) in [
+            ("present", single("present"), 1usize, true, false, 1u64),
+            ("truncated", single("truncated"), 1, true, true, 1),
+            ("refused", single("refused"), 0, false, false, 1),
+            ("empty", single("empty"), 0, false, false, 1),
+            ("metadata-only", metadata_only, 0, false, false, 4),
+        ] {
+            for initial in [0usize, 1] {
+                let mut publish_remaining = initial;
+                let (publish_value, publish_count) = readback_value(
+                    graph,
+                    entry,
+                    &procedure,
+                    &mut publish_remaining,
+                    EvidencePreviewDisplay::Publish,
+                )
+                .unwrap();
+                let mut suppress_remaining = initial;
+                let (suppress_value, suppress_count) = readback_value(
+                    graph,
+                    entry,
+                    &procedure,
+                    &mut suppress_remaining,
+                    EvidencePreviewDisplay::Suppress,
+                )
+                .unwrap();
+                assert_eq!(publish_count, expected_items, "{name} items at {initial}");
+                assert_eq!(suppress_count, expected_items, "{name} items at {initial}");
+
+                // Absolute expected slot consumption per mode, not mere parity.
+                let expected_after = initial.saturating_sub(expected_slots);
+                assert_eq!(
+                    publish_remaining, expected_after,
+                    "{name} publish slots at {initial}"
+                );
+                assert_eq!(
+                    suppress_remaining, expected_after,
+                    "{name} suppress slots at {initial}"
+                );
+
+                let publish_items = publish_value["items"].as_array().cloned().unwrap();
+                if expect_preview && initial > 0 {
+                    assert_eq!(
+                        publish_items
+                            .iter()
+                            .filter(|item| item.get("preview").is_some())
+                            .count(),
+                        1,
+                        "{name} preview count at {initial}"
+                    );
+                    let item = publish_items
+                        .iter()
+                        .find(|item| item.get("preview").is_some())
+                        .unwrap();
+                    assert_eq!(item["preview_truncated"], json!(expect_truncated));
+                    assert_eq!(
+                        item.get("next_page_token").is_some(),
+                        expect_truncated,
+                        "{name} token presence at {initial}"
+                    );
+                    if name == "truncated" {
+                        assert_eq!(item["preview"], json!("a".repeat(938)));
+                    }
+                } else {
+                    for item in &publish_items {
+                        assert!(item.get("preview").is_none(), "{name} preview at {initial}");
+                        assert!(
+                            item.get("preview_truncated").is_none(),
+                            "{name} truncation flag at {initial}"
+                        );
+                        assert!(
+                            item.get("next_page_token").is_none(),
+                            "{name} token at {initial}"
+                        );
+                    }
+                }
+
+                // Suppressed output equals the published output with its preview members removed.
+                let mut stripped = publish_value;
+                for item in stripped
+                    .get_mut("items")
+                    .and_then(Value::as_array_mut)
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(item) = item.as_object_mut() {
+                        item.remove("preview");
+                        item.remove("preview_truncated");
+                        item.remove("next_page_token");
+                    }
+                }
+                assert_eq!(suppress_value, stripped, "{name} equality at {initial}");
+            }
         }
     }
 }

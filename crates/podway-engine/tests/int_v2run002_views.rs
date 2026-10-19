@@ -7286,3 +7286,567 @@ fn v2scl004_evidence_previews_admit_only_whole_entries_inside_the_slot() {
         );
     }
 }
+
+/// One explicitly selected artifact item, so its indivisible preview admission is observable.
+fn views004_artifact_readback_source() -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "schema": "podway.procedure/v2",
+        "id": "views004-artifact-boundary",
+        "version": "1",
+        "name": "Artifact preview boundary",
+        "purpose": "Pin indivisible preview admission at the exact slot budget.",
+        "node_definitions": {
+            "source": {
+                "type": "action",
+                "title": "Record artifact",
+                "intent": "Record one bounded artifact.",
+                "items": [{
+                    "id": "artifact",
+                    "type": "artifact",
+                    "prompt": "Record artifact.",
+                    "required": true,
+                    "allowed_media_types": ["a/a"]
+                }]
+            },
+            "consume": {
+                "type": "action",
+                "title": "Consume artifact",
+                "intent": "Read the selected artifact."
+            }
+        },
+        "graph": {
+            "entry": "source",
+            "nodes": [
+                {"id": "source", "use": "source", "next": "consume"},
+                {
+                    "id": "consume",
+                    "use": "consume",
+                    "evidence_from": [{"node": "source", "required": true, "items": ["artifact"]}],
+                    "terminal": true
+                }
+            ]
+        }
+    }))
+    .unwrap()
+}
+
+/// A path or reference artifact carrying the legal three-scalar media type `a/a`.
+fn views004_artifact_value(path: bool, location: &str) -> RecordedItemValueV2 {
+    let digest = Sha256Digest::new(format!("sha256:{}", "f".repeat(64))).unwrap();
+    let artifact = if path {
+        ArtifactValueV1::local_path(location, digest, u64::MAX, "a/a")
+    } else {
+        ArtifactValueV1::external_reference(location, digest, u64::MAX, "a/a")
+    }
+    .unwrap();
+    RecordedItemValueV2::artifact(artifact)
+}
+
+fn views004_artifact_readback_state(
+    source: &[u8],
+    path: bool,
+    location: &str,
+) -> GraphSessionStateV2 {
+    let base = fresh_state("views004-artifact-boundary.json", source);
+    let source_attempt_id = AttemptId::new(ATTEMPT_ID).unwrap();
+    let consumer_attempt_id = second_attempt_id();
+    let slot = base
+        .workflow_memory()
+        .attempts()
+        .first()
+        .unwrap()
+        .item_slots()
+        .first()
+        .unwrap();
+    let source_memory = AttemptWorkflowMemoryV2::new(
+        source_attempt_id.clone(),
+        vec![
+            ItemSlotStateV2::new(
+                source_attempt_id.clone(),
+                slot.item_id().clone(),
+                slot.item_type(),
+                Revision::new(1),
+                Some(views004_artifact_value(path, location)),
+                slot.created_at(),
+                UnixMillis::new(slot.created_at().get() + 1),
+            )
+            .unwrap(),
+        ],
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
+    let source_digest = source_memory.recorded_items_digest().unwrap();
+    let consumer_memory = AttemptWorkflowMemoryV2::new(
+        consumer_attempt_id,
+        Vec::new(),
+        Vec::new(),
+        vec![
+            EvidenceResolutionStateV2::new(
+                0,
+                true,
+                vec![ItemId::new("artifact").unwrap()],
+                ResolvedEvidenceReferenceV2::resolved(
+                    EvidenceReferenceSnapshotV2::new(
+                        GraphNodeId::new("source").unwrap(),
+                        source_attempt_id,
+                        AttemptNumberV2::FIRST,
+                        source_digest,
+                        UnixMillis::new(1_700_000_000_010),
+                    )
+                    .unwrap(),
+                ),
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    source_and_consumer_state(&base, source_memory, consumer_memory)
+}
+
+#[test]
+fn views004_artifact_preview_boundary_fits_then_refuses_by_one_scalar() {
+    let source = views004_artifact_readback_source();
+    // A projected artifact charges 834 structural bytes for a path location (864 for a
+    // reference) plus six bytes per location and media scalar, so with the legal media type
+    // a/a the exact-fit locations are 796 path scalars and 791 reference scalars
+    // (834 + 6 * (796 + 3) = 864 + 6 * (791 + 3) = 5628); one more scalar refuses.
+    for (path, fits_scalars, over_scalars, location_type) in [
+        (true, 796usize, 797usize, "path"),
+        (false, 791usize, 792usize, "reference"),
+    ] {
+        let session_view = view(views004_artifact_readback_state(
+            &source,
+            path,
+            &"a".repeat(fits_scalars),
+        ));
+        let next = project_graph_next_v2(&session_view).unwrap();
+        let item = &next["readback"].as_array().unwrap()[0]["items"]
+            .as_array()
+            .unwrap()[0];
+        assert_eq!(item["size_unit"], "value");
+        assert_eq!(item["total_size"], 1);
+        // The exact-fit preview publishes the complete descriptor; an indivisible value is
+        // never truncated, so no continuation token exists.
+        assert_eq!(
+            item["preview"],
+            json!({
+                "location_type": location_type,
+                "location": "a".repeat(fits_scalars),
+                "sha256_digest": format!("sha256:{}", "f".repeat(64)),
+                "size_bytes": u64::MAX,
+                "media_type": "a/a"
+            })
+        );
+        assert_eq!(item["preview_truncated"], false);
+        assert_eq!(item["next_page_token"], Value::Null);
+
+        let session_view = view(views004_artifact_readback_state(
+            &source,
+            path,
+            &"a".repeat(over_scalars),
+        ));
+        let next = project_graph_next_v2(&session_view).unwrap();
+        let item = &next["readback"].as_array().unwrap()[0]["items"]
+            .as_array()
+            .unwrap()[0];
+        // One scalar over the budget: the indivisible preview is absent rather than
+        // truncated, and the metadata around it stays complete.
+        assert_eq!(item["size_unit"], "value");
+        assert_eq!(item["total_size"], 1);
+        assert!(item.get("preview").is_none());
+        assert!(item.get("preview_truncated").is_none());
+        assert!(item.get("next_page_token").is_none());
+        assert!(
+            item["value_digest"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+    }
+}
+
+/// A selection whose declaration order is 31 previewable text items, one over-budget artifact,
+/// and one final eligible text item: with 32 preview slots, an absent artifact preview must not
+/// consume a slot or the final item would lose the 32nd. A reference selects at most 16 items,
+/// so the declaration order is carried across three references exactly like the wide fixture.
+fn views004_slot_boundary_source() -> Vec<u8> {
+    let text_item = |id: String| {
+        json!({
+            "id": id,
+            "type": "text",
+            "prompt": "Record text.",
+            "required": true,
+            "max_length": 8
+        })
+    };
+    let sources = ["source-a", "source-b", "source-c"];
+    let mut definitions = Map::new();
+    let mut nodes = Vec::new();
+    for (source_index, source) in sources.iter().enumerate() {
+        let mut items: Vec<Value> = (0..16usize)
+            .map(|index| text_item(format!("prefix-{:02}", source_index * 16 + index)))
+            .collect();
+        if source_index == 1 {
+            // The artifact rides the second reference's last position, after exactly 31
+            // previewable text items precede it in declaration order.
+            items[15] = json!({
+                "id": "oversized-artifact",
+                "type": "artifact",
+                "prompt": "Record artifact.",
+                "required": true,
+                "allowed_media_types": ["a/a"]
+            });
+        }
+        if source_index == 2 {
+            items = vec![text_item("final".to_owned())];
+        }
+        definitions.insert(
+            (*source).to_owned(),
+            json!({
+                "type": "action",
+                "title": "Record selection",
+                "intent": "Record the boundary selection.",
+                "items": items
+            }),
+        );
+        let next = sources.get(source_index + 1).copied().unwrap_or("consume");
+        nodes.push(json!({"id": source, "use": source, "next": next}));
+    }
+    definitions.insert(
+        "consume".to_owned(),
+        json!({
+            "type": "action",
+            "title": "Consume selection",
+            "intent": "Read the boundary selection."
+        }),
+    );
+    let references: Vec<Value> = sources
+        .iter()
+        .map(|source| {
+            let selected: Vec<String> = definitions[*source]["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item["id"].as_str().unwrap().to_owned())
+                .collect();
+            json!({"node": source, "required": true, "items": selected})
+        })
+        .collect();
+    nodes.push(json!({
+        "id": "consume",
+        "use": "consume",
+        "evidence_from": references,
+        "terminal": true
+    }));
+    serde_json::to_vec(&json!({
+        "schema": "podway.procedure/v2",
+        "id": "views004-slot-boundary",
+        "version": "1",
+        "name": "Preview slot boundary",
+        "purpose": "Prove an absent preview spends no slot at the budget boundary.",
+        "node_definitions": definitions,
+        "graph": {"entry": "source-a", "nodes": nodes}
+    }))
+    .unwrap()
+}
+
+fn views004_slot_boundary_ids(source_index: usize) -> Vec<String> {
+    let mut ids: Vec<String> = (0..16usize)
+        .map(|index| format!("prefix-{:02}", source_index * 16 + index))
+        .collect();
+    if source_index == 1 {
+        ids[15] = "oversized-artifact".to_owned();
+    }
+    if source_index == 2 {
+        ids = vec!["final".to_owned()];
+    }
+    ids
+}
+
+fn views004_slot_boundary_state(source: &[u8], artifact_location: &str) -> GraphSessionStateV2 {
+    let base = fresh_state("views004-slot-boundary.json", source);
+    let consumer_attempt_id = second_attempt_id();
+    let created_at = UnixMillis::new(1_700_000_000_000);
+    let mut attempt_ids = Vec::new();
+    let mut memories = Vec::new();
+    let mut references = Vec::new();
+    let mut trace_attempts = Vec::new();
+    let mut counters = Vec::new();
+    let mut metadata = Vec::new();
+    for (source_index, source_node) in ["source-a", "source-b", "source-c"].iter().enumerate() {
+        let attempt_id =
+            AttemptId::new(format!("00000000-0000-4000-8000-00000000400{source_index}")).unwrap();
+        let ids = views004_slot_boundary_ids(source_index);
+        let slots = ids
+            .iter()
+            .map(|id| {
+                let value = match id.as_str() {
+                    "oversized-artifact" => views004_artifact_value(true, artifact_location),
+                    "final" => RecordedItemValueV2::text("f").unwrap(),
+                    _ => RecordedItemValueV2::text("p").unwrap(),
+                };
+                ItemSlotStateV2::new(
+                    attempt_id.clone(),
+                    ItemId::new(id).unwrap(),
+                    value.item_type(),
+                    Revision::new(1),
+                    Some(value),
+                    created_at,
+                    UnixMillis::new(created_at.get() + 1),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let memory =
+            AttemptWorkflowMemoryV2::new(attempt_id.clone(), slots.clone(), Vec::new(), Vec::new())
+                .unwrap();
+        references.push(
+            EvidenceResolutionStateV2::new(
+                source_index as u32,
+                true,
+                slots.iter().map(|slot| slot.item_id().clone()).collect(),
+                ResolvedEvidenceReferenceV2::resolved(
+                    EvidenceReferenceSnapshotV2::new(
+                        GraphNodeId::new(*source_node).unwrap(),
+                        attempt_id.clone(),
+                        AttemptNumberV2::FIRST,
+                        memory.recorded_items_digest().unwrap(),
+                        UnixMillis::new(1_700_000_000_010),
+                    )
+                    .unwrap(),
+                ),
+            )
+            .unwrap(),
+        );
+        trace_attempts.push(
+            SessionAttemptV2::new(
+                attempt_id.clone(),
+                GraphNodeId::new(*source_node).unwrap(),
+                AttemptNumberV2::FIRST,
+                TraceSequenceV2::new(source_index as u64 + 1),
+                AttemptLifecycle::Completed,
+                AttemptValidityV2::Valid,
+                None,
+            )
+            .unwrap(),
+        );
+        counters.push(GraphNodeCounterV2::new(
+            GraphNodeId::new(*source_node).unwrap(),
+            1,
+            0,
+        ));
+        metadata.push(
+            AttemptMetadataV2::new(
+                attempt_id.clone(),
+                created_at,
+                Some(UnixMillis::new(1_700_000_000_010)),
+                None,
+            )
+            .unwrap(),
+        );
+        attempt_ids.push(attempt_id);
+        memories.push(memory);
+    }
+    memories.push(
+        AttemptWorkflowMemoryV2::new(
+            consumer_attempt_id.clone(),
+            Vec::new(),
+            Vec::new(),
+            references,
+        )
+        .unwrap(),
+    );
+    trace_attempts.push(
+        SessionAttemptV2::new(
+            consumer_attempt_id.clone(),
+            GraphNodeId::new("consume").unwrap(),
+            AttemptNumberV2::FIRST,
+            TraceSequenceV2::new(4),
+            AttemptLifecycle::Active,
+            AttemptValidityV2::Valid,
+            None,
+        )
+        .unwrap(),
+    );
+    counters.push(GraphNodeCounterV2::new(
+        GraphNodeId::new("consume").unwrap(),
+        1,
+        0,
+    ));
+    metadata.push(
+        AttemptMetadataV2::new(
+            consumer_attempt_id,
+            UnixMillis::new(1_700_000_000_010),
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let trace = SessionTraceV2::from_parts(
+        SessionId::new(SESSION_ID).unwrap(),
+        SessionLifecycle::Running,
+        Revision::new(4),
+        trace_attempts,
+    )
+    .unwrap();
+    GraphSessionStateV2::new_with_goal_state(
+        Revision::new(4),
+        base.task_title(),
+        base.snapshot().clone(),
+        trace,
+        counters,
+        metadata,
+        WorkflowMemoryStateV2::new(memories, Vec::new(), Vec::new()).unwrap(),
+        base.goal_state().clone(),
+        base.created_at(),
+        None,
+        None,
+        None,
+    )
+    .unwrap()
+}
+
+#[test]
+fn views004_absent_preview_consumes_no_slot_at_the_boundary() {
+    let source = views004_slot_boundary_source();
+
+    // At 797 path scalars the artifact refuses its own preview, so the final text item must
+    // still receive the 32nd slot: a preview that admits nothing must spend nothing.
+    let next = project_graph_next_v2(&view(views004_slot_boundary_state(
+        &source,
+        &"a".repeat(797),
+    )))
+    .unwrap();
+    let items: Vec<&Value> = next["readback"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|reference| reference["items"].as_array().unwrap().iter())
+        .collect();
+    assert_eq!(items.len(), 33);
+    for item in &items[..31] {
+        assert!(
+            item.get("preview").is_some(),
+            "{} lost its preview",
+            item["item_id"]
+        );
+    }
+    let artifact = items[31];
+    assert_eq!(artifact["item_id"], "oversized-artifact");
+    assert!(artifact.get("preview").is_none());
+    assert!(artifact.get("preview_truncated").is_none());
+    assert!(artifact.get("next_page_token").is_none());
+    let final_item = items[32];
+    assert_eq!(final_item["item_id"], "final");
+    assert!(
+        final_item.get("preview").is_some(),
+        "the absent artifact preview consumed a slot"
+    );
+    assert_eq!(
+        items
+            .iter()
+            .filter(|item| item.get("preview").is_some())
+            .count(),
+        32
+    );
+
+    // At the exact-fit 796 scalars the artifact itself spends slot 32, and the final item is
+    // refused only because the budget is genuinely exhausted.
+    let next = project_graph_next_v2(&view(views004_slot_boundary_state(
+        &source,
+        &"a".repeat(796),
+    )))
+    .unwrap();
+    let items: Vec<&Value> = next["readback"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|reference| reference["items"].as_array().unwrap().iter())
+        .collect();
+    assert!(items[31].get("preview").is_some());
+    assert!(items[32].get("preview").is_none());
+    assert!(items[32].get("preview_truncated").is_none());
+    assert_eq!(
+        items
+            .iter()
+            .filter(|item| item.get("preview").is_some())
+            .count(),
+        32
+    );
+}
+
+#[test]
+fn views004_observation_guidance_equals_stripped_next_for_preview_rich_evidence() {
+    let source = maximum_selected_readback_source();
+    let session_view = view(maximum_selected_readback_state(&source));
+    let mut next = project_graph_next_v2(&session_view).unwrap();
+    let observation = project_graph_observation_v1(&session_view).unwrap();
+
+    // The rich selection mixes truncated text and list previews with continuation tokens,
+    // indivisible previews, and one over-budget artifact, so every gated arm is exercised.
+    let items: Vec<&Value> = next["readback"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|reference| reference["items"].as_array().unwrap().iter())
+        .collect();
+    assert!(
+        items
+            .iter()
+            .any(|item| item.get("next_page_token").is_some())
+    );
+    assert!(items.iter().any(|item| item.get("preview").is_some()));
+    assert!(items.iter().any(|item| item.get("preview").is_none()));
+
+    // Strip exactly the members observation omits, then require complete equality: an
+    // observation guidance that skips preview materialization must equal the published
+    // projection with those members removed.
+    for reference in next
+        .get_mut("readback")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        for item in reference
+            .get_mut("items")
+            .and_then(Value::as_array_mut)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(item) = item.as_object_mut() {
+                item.remove("preview");
+                item.remove("preview_truncated");
+                item.remove("next_page_token");
+            }
+        }
+    }
+    assert_eq!(observation["guidance"], Value::Object(next));
+
+    // No preview member survives anywhere inside the guidance object.
+    fn assert_preview_free(value: &Value) {
+        match value {
+            Value::Object(fields) => {
+                for (key, member) in fields {
+                    assert!(
+                        key != "preview" && key != "preview_truncated" && key != "next_page_token",
+                        "guidance leaked {key}"
+                    );
+                    assert_preview_free(member);
+                }
+            }
+            Value::Array(members) => members.iter().for_each(assert_preview_free),
+            _ => {}
+        }
+    }
+    assert_preview_free(&observation["guidance"]);
+
+    // Prepared guidance never carried previews, so it is the prepared next projection as is.
+    let prepared = view(prepared_state());
+    let prepared_next = project_graph_next_v2(&prepared).unwrap();
+    let prepared_observation = project_graph_observation_v1(&prepared).unwrap();
+    assert_eq!(
+        prepared_observation["guidance"],
+        Value::Object(prepared_next)
+    );
+}
