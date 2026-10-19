@@ -24,7 +24,18 @@ write-free snapshot reads are the current product boundaries.
 [Examples](examples/) provide walkthroughs and versioned known-answer payloads.
 
 Current adopted work is tracked by the [active roadmap](roadmap/).
-The [internal-improvement sequence](roadmap/README.md#current-internal-improvements)
+The [structural simplification program](roadmap/README.md#structural-simplification-program)
+adopts `VIEWS -> PARSE -> STATE -> ADMIT`: projection construction, document
+admission, same-snapshot state and request admission reuse. The design was
+registered on 2026-10-19; the roadmap owns current execution status.
+The [four adopted dossiers](todo/README.md#current-adopted-dossiers) define scope,
+failure boundaries and task-local correctness checks. Elapsed-time tests,
+latency percentiles, throughput benchmarks and performance baselines/thresholds
+are excluded. Existing CLI/JSON interfaces and persisted validation remain preserved;
+CLI interaction changes remain an [unadopted CALLS candidate](todo/TODO-podway-cli-interaction-simplification.md).
+This program selects no release or external-consumer change.
+
+The preceding [internal-improvement sequence](roadmap/README.md#current-internal-improvements)
 is OPTIM, then BOUND, then READS. OPTIM and BOUND are completed and owner-accepted
 on 2026-10-17. READS is completed and owner-accepted on 2026-10-19; its
 [delivered behavior and correctness scope](implementation-tips/direct-cli-performance-qualification.md#reads-005-functional-closeout)

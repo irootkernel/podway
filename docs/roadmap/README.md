@@ -20,6 +20,113 @@ sequence, for example `OPTIM-001`. Existing alphanumeric epic IDs, including
 `V2CTR` and `REL12`, and the compact `REL12` task IDs remain unchanged historical
 identifiers. Do not rename completed work to apply the new convention.
 
+## Structural simplification program
+
+On 2026-10-19 the owner adopted four sequential design dossiers following the
+accepted OPTIM, BOUND and READS work:
+
+```text
+VIEWS -> PARSE -> STATE -> ADMIT
+```
+
+The goal is to remove structural, logical and conceptual duplication. This
+registration is design-only: every task is Planned and no implementation has
+started. Only the first incomplete task of the first eligible epic may later
+start; accept each epic before starting its successor. There is no cross-epic
+implementation interleaving. The first eligible task is `VIEWS-001`.
+
+Elapsed-time tests, latency percentiles including p95/p99, throughput benchmarks,
+performance baselines and performance thresholds are excluded from this program.
+Acceptance requires preserved behavior and evidence that the targeted duplicate
+work has been removed. Historical qualification is neither a new requirement nor
+a baseline for this program. No release, installation, commit, publication or
+external-consumer change is selected by this design registration.
+
+### Shared preservation boundaries
+
+- Preserve CLI grammar, JSON fields and schemas, error codes/details/exit and
+  retryability, canonical bytes/digests, Store layout and writer identity. No
+  migration, reset, table, index, persistent cache or new runtime is included.
+- Keep eager persisted-value validation, including hidden historical values;
+  archive-list remains summary-only for archived rows, with its existing current
+  session admission unchanged. Share admitted values within one coherent read
+  snapshot, or through ADMIT's identity-checked invocation context, without
+  replacing independent trust-boundary checks.
+- Preserve error precedence, fences, clocks/IDs, exact stored response replay,
+  atomic success-only outcomes, bounded output and read-only file/SHM/WAL checks.
+  Retain full Standard preflight projection/schema/envelope-equivalent failures.
+- Reuse facts only while their Store, root, writer, session and snapshot identity
+  remains valid. Release read guards before mutation admission; keep the real
+  competing-writer gap and mutation artifact preparation outside writer
+  transactions and read leases. Preserve deep doctor's existing exclusive
+  maintenance scope, including its artifact rehash; do not extend that exception
+  to mutations. Preserve deadlines as behavior without measuring performance.
+- Keep separate start/reset observations and existing user interaction semantics.
+  [CALLS](../todo/TODO-podway-cli-interaction-simplification.md) is an unadopted
+  candidate, with no roadmap tasks or implementation commitment.
+
+Each task includes focused correctness verification. Future executable changes
+require `make test` before sharing a development revision. Documentation-only
+changes use documentation checks. See
+[structural simplification verification](../implementation-tips/testing.md#structural-simplification-verification).
+Each epic's first task updates its adopted dossier with the remove/retain ledger,
+eligible and deliberately split paths, and mapped correctness checks defined
+there. This is the first task's checkable deliverable, not another status source.
+Final tasks integrate correctness evidence, review and durable documentation;
+they do not postpone all verification until closeout. Retire each adopted dossier
+only through the [TODO lifecycle](../todo/README.md#lifecycle).
+
+## VIEWS — Projection Simplification
+
+Dependencies: accepted `READS` completion. Design:
+[Projection simplification](../todo/TODO-podway-projection-simplification.md).
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `VIEWS-001` | Pin projection behavior and validation boundaries | Planned | Map complete outputs, byte/scalar limits, hidden-value validation and failure order before changing projection work. | [Design and interfaces](../todo/TODO-podway-projection-simplification.md#accepted-design-decisions-and-interfaces) |
+| `VIEWS-002` | Account for serialized prefixes incrementally | Planned | Replace growing-prefix reserialization with exact incremental byte accounting, retaining wrapper, trace and truncation semantics. | [Exact byte accounting](../todo/TODO-podway-projection-simplification.md#exact-byte-accounting) |
+| `VIEWS-003` | Construct only admitted display content | Planned | Avoid full scalar buffers and undisplayed formatting while retaining logical totals, first-three valued-slot semantics and eager validation. | [Bounded construction](../todo/TODO-podway-projection-simplification.md#bounded-construction) |
+| `VIEWS-004` | Share evidence selection and observation projections | Planned | Reuse evidence selection across readback and delegation packages; omit observation previews while preserving their failure checks. | [Projection reuse](../todo/TODO-podway-projection-simplification.md#projection-reuse) |
+| `VIEWS-005` | Qualify projection equivalence and close documentation | Planned | Verify bounds, errors, output equivalence and corruption refusal, complete the development gate and review, then promote lasting documentation. | [Verification](../todo/TODO-podway-projection-simplification.md#verification-and-release-acceptance) |
+
+## PARSE — Document Admission Reuse
+
+Dependencies: accepted `VIEWS` completion. Design:
+[Document admission reuse](../todo/TODO-podway-document-admission-reuse.md).
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `PARSE-001` | Pin parsing and validation responsibilities | Planned | Map source, Store and Protocol trust boundaries, canonical-byte rules and failure precedence. | [Design and interfaces](../todo/TODO-podway-document-admission-reuse.md#accepted-design-decisions-and-interfaces) |
+| `PARSE-002` | Reuse one parsed Store outcome document | Planned | Share one parsed value through outcome admission without dropping canonical, depth, schema or relational checks or rebuilding replay bytes. | [Store outcome admission](../todo/TODO-podway-document-admission-reuse.md#store-outcome-admission) |
+| `PARSE-003` | Remove unnecessary response ownership conversions | Planned | Borrow or move validated response values through construction and validation while retaining independent checks and output bounds. | [Response ownership](../todo/TODO-podway-document-admission-reuse.md#response-ownership) |
+| `PARSE-004` | Carry first preview parse facts | Planned | Select delegated preview generation from first-parse facts, preserving malformed and parsed-but-invalid behavior; adopt DF-006. | [Preview facts](../todo/TODO-podway-document-admission-reuse.md#preview-facts) |
+| `PARSE-005` | Qualify admission and exact replay | Planned | Verify error order, canonical bytes, preview variants and original-response replay, complete the development gate and review, then promote documentation. | [Verification](../todo/TODO-podway-document-admission-reuse.md#verification-and-release-acceptance) |
+
+## STATE — Snapshot State Reuse
+
+Dependencies: accepted `PARSE` completion. Design:
+[Snapshot state reuse](../todo/TODO-podway-snapshot-state-reuse.md).
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `STATE-001` | Pin reconstruction and validation ownership | Planned | Map same-snapshot graph, disposition, attempt and receipt stages with their existing failure order. | [Design and interfaces](../todo/TODO-podway-snapshot-state-reuse.md#accepted-design-decisions-and-interfaces) |
+| `STATE-002` | Reuse same-snapshot graph and dispositions | Planned | Carry admitted state through view, reset and doctor paths without advancing receipt/disposition checks across existing fences or clocks. | [Staged snapshot reuse](../todo/TODO-podway-snapshot-state-reuse.md#staged-snapshot-reuse) |
+| `STATE-003` | Index borrowed cached attempts once | Planned | Share one reconstruction-local attempt index across owner discovery and reconstruction while preserving validation order and changed-row bounds. | [Borrowed attempt index](../todo/TODO-podway-snapshot-state-reuse.md#borrowed-attempt-index) |
+| `STATE-004` | Reuse admitted active receipt for readiness | Planned | Derive readiness from an already admitted matching receipt, retaining history validation and fallback acquisition when coverage is unproven. | [Receipt readiness](../todo/TODO-podway-snapshot-state-reuse.md#receipt-readiness) |
+| `STATE-005` | Qualify snapshot continuity and corruption refusal | Planned | Verify corruption priority, supported Store continuity and replay, complete the development gate and review, then promote documentation. | [Verification](../todo/TODO-podway-snapshot-state-reuse.md#verification-and-release-acceptance) |
+
+## ADMIT — Request Admission Reuse
+
+Dependencies: accepted `STATE` completion. Design:
+[Request admission reuse](../todo/TODO-podway-request-admission-reuse.md).
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `ADMIT-001` | Pin admission order and lease boundaries | Planned | Map binding, native identity, snapshot, preflight, artifact and writer stages per command before combining any work. | [Design and interfaces](../todo/TODO-podway-request-admission-reuse.md#accepted-design-decisions-and-interfaces) |
+| `ADMIT-002` | Combine binding admission and first snapshot | Planned | Share eligible first-operation acquisition while retaining native identity/error order and releasing leases before artifact work. | [Binding and first snapshot](../todo/TODO-podway-request-admission-reuse.md#binding-and-first-snapshot) |
+| `ADMIT-003` | Reuse preflight-admitted graph in preparation | Planned | Carry Store-prepared state across distinct Engine requests in one opaque invocation context; check it at preparation and preserve existing reload/refusal windows, preflight failures and guard release. | [Preflight and mutation preparation](../todo/TODO-podway-request-admission-reuse.md#preflight-and-mutation-preparation) |
+| `ADMIT-004` | Qualify admission races and exact replay | Planned | Verify competing writers, file replacement, unsupported-state refusal and replay, complete the development gate and review, then promote documentation and retire program-planning text. | [Verification](../todo/TODO-podway-request-admission-reuse.md#verification-and-release-acceptance) |
+
 ## Current internal improvements
 
 On 2026-10-14 the owner adopted three internal-improvement epics, based on the

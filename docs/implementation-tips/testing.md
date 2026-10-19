@@ -182,6 +182,76 @@ that Store file. The case runs in its own process and still acquires the
 connection gate inside the request. Unrelated tests no longer contend for that
 process-global gate during the SQLite busy assertion.
 
+## Structural simplification verification
+
+The [VIEWS, PARSE, STATE and ADMIT program](../roadmap/README.md#structural-simplification-program)
+targets structural, logical and conceptual duplication. Its registration is
+recorded in the roadmap, which owns current status. The following rules guide
+the adopted work without asserting that planned reuse is already implemented.
+
+Do not add or run elapsed-time comparison tests, latency percentiles including
+p95/p99, throughput benchmarks, performance baselines or performance thresholds
+for this program. Existing historical native-scale and release qualification
+records remain unchanged and do not become inherited acceptance gates. Existing
+functional deadlines remain behavior to preserve; they are not speedup targets.
+
+Define focused success and failure checks before each implementation task. Use
+the existing functional owners and add checks only for material behavioral gaps:
+
+- VIEWS: exact byte fit/overflow, escaped JSON, trace bounds and truncation,
+  Unicode scalar pages and logical totals, first-three valued-slot counts,
+  observation/readback/package equivalence, retained preview-gated failures and
+  corruption outside displayed windows.
+- PARSE: malformed/deep/noncanonical documents, independent schema/relational
+  checks, original canonical/stored bytes, preview fallback and parsed-but-invalid
+  delegated facts, exact lookup/replay identity.
+- STATE: graph/fence/clock/receipt/disposition error order, changed/unchanged
+  memory paths, bounded changed-row fallback, matching receipt reuse and history
+  refusal, supported Store continuity without reset or migration.
+- ADMIT: native and Store identity, matching/stale hint handling, full Standard
+  preflight failures, real competing writers after guard release, file replacement,
+  preparation-stage hint discard versus writer reload/refusal, separate Engine
+  request IDs,
+  read-only missing-SHM/hot-WAL behavior and exact replay without new effects.
+  Retention adds no preflight SQL/decode/validation stage; failed optional stamp
+  comparison falls back to the original cold-path error order, while mandatory
+  admission failures still propagate.
+
+Mutation artifact preparation remains outside read leases and writer transactions.
+Deep doctor's existing exclusive maintenance rehash is a distinct path; preserve
+its scope rather than imposing mutation preparation rules on it.
+
+Each `*-001` task produces an update to its adopted dossier, rather than a new
+permanent catalog. Include a bounded remove/retain ledger for the named target
+sites: current owner, duplicated work to remove, validators and failure order to
+retain, eligible paths, deliberately split paths and registered correctness
+checks. Identify any material characterization gap and cover it before changing
+the affected behavior. For an unreachable guard, retain it and record the
+admitted invariant instead of inventing an unsupported fixture. Acceptance of
+the first task requires this ledger and its verification mapping; the next task
+then follows normal roadmap order, without a separate approval ceremony.
+
+Use source-level ownership evidence to show that the named duplicate work has
+been removed. A narrow deterministic assertion of parse reuse, bounded display
+construction or shared admitted state is appropriate when it proves a material
+property. Do not create a general metrics framework, probes or telemetry merely
+to count work, and do not bind tests to TODO prose or incidental helper layout.
+Fewer operations alone cannot justify reduced validation or changed failure order.
+Reuse Store's existing `query_accounting` correctness fixtures and registered
+`int_reads001_query_inventory` checks when a changed path affects them. Update
+their intended assertions deliberately; do not delete them as historical timing
+baselines or create new instrumentation solely to replace them.
+
+Run focused checks during each task and `make test` before sharing future
+executable behavior or contract changes. Final epic tasks integrate evidence,
+independent review and durable documentation; they do not defer earlier checks.
+Accept each epic before starting its successor. CALLS is unadopted and creates no
+interface-change verification obligation.
+
+Promote each epic's lasting verification guidance at closeout. ADMIT-004 also
+retires or rewrites the program-level planning text in this section and the two
+documentation indexes; the completed behavior must not depend on retired TODOs.
+
 ## Optional diagnostics
 
 - The pinned fuzz targets cover canonical JSON, selectors, response decoding,
