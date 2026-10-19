@@ -5393,6 +5393,190 @@ fn v2run002_valid_and_stale_attempt_histories_are_disjoint_and_cursor_bound() {
     assert_output_v2("session.status", before_one);
 }
 
+/// One running session whose finished stale attempt interleaved empty item slots among valued
+/// ones, plus the fresh valid attempt required for a coherent running read.
+fn stale_attempt_interleaved_slots_state() -> GraphSessionStateV2 {
+    let items = (0..6)
+        .map(|index| {
+            json!({
+                "id": format!("item-{index:02}"),
+                "type": "text",
+                "prompt": format!("Record value {index:02}."),
+                "required": false,
+                "max_length": 256
+            })
+        })
+        .collect::<Vec<_>>();
+    let source = serde_json::to_vec(&json!({
+        "schema": "podway.procedure/v2",
+        "id": "stale-interleaved-slots",
+        "version": "2",
+        "name": "Stale interleaved slots",
+        "purpose": "Exercise the stale-attempt valued-slot summary.",
+        "node_definitions": {
+            "work": {
+                "type": "action",
+                "title": "Work",
+                "intent": "Record bounded values.",
+                "items": items
+            }
+        },
+        "graph": {
+            "entry": "work",
+            "nodes": [{"id": "work", "use": "work", "terminal": true}]
+        }
+    }))
+    .unwrap();
+    let base = fresh_state("stale-interleaved-slots.json", &source);
+    let stale_attempt_id = AttemptId::new(ATTEMPT_ID).unwrap();
+    let active_attempt_id = AttemptId::new("00000000-0000-4000-8000-00000000200b").unwrap();
+    let recorded = [
+        Some("value-one"),
+        None,
+        Some("value-two"),
+        None,
+        Some("value-three"),
+        Some("value-four"),
+    ];
+    let template = base.workflow_memory().attempts().first().unwrap();
+    let slots_for = |attempt_id: &AttemptId, started_at: UnixMillis, values: [Option<&str>; 6]| {
+        template
+            .item_slots()
+            .iter()
+            .zip(values)
+            .map(|(slot, value)| {
+                // An unvalued slot carries revision zero and equal timestamps; a valued
+                // slot carries revision one and its update inside the attempt's window.
+                let (revision, updated_at) = match value {
+                    None => (Revision::ZERO, started_at),
+                    Some(_) => (Revision::new(1), UnixMillis::new(started_at.get() + 1)),
+                };
+                ItemSlotStateV2::new(
+                    attempt_id.clone(),
+                    slot.item_id().clone(),
+                    slot.item_type(),
+                    revision,
+                    value.map(|value| RecordedItemValueV2::text(value).unwrap()),
+                    started_at,
+                    updated_at,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>()
+    };
+    let stale_started = UnixMillis::new(1_700_000_000_000);
+    let active_started = UnixMillis::new(1_700_000_000_010);
+    let stale_memory = AttemptWorkflowMemoryV2::new(
+        stale_attempt_id.clone(),
+        slots_for(&stale_attempt_id, stale_started, recorded),
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
+    let active_memory = AttemptWorkflowMemoryV2::new(
+        active_attempt_id.clone(),
+        slots_for(&active_attempt_id, active_started, [None; 6]),
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
+    let trace = SessionTraceV2::from_parts(
+        SessionId::new(SESSION_ID).unwrap(),
+        SessionLifecycle::Running,
+        Revision::new(2),
+        vec![
+            SessionAttemptV2::new(
+                stale_attempt_id.clone(),
+                GraphNodeId::new("work").unwrap(),
+                AttemptNumberV2::FIRST,
+                TraceSequenceV2::FIRST,
+                AttemptLifecycle::Abandoned,
+                AttemptValidityV2::Stale,
+                None,
+            )
+            .unwrap(),
+            SessionAttemptV2::new(
+                active_attempt_id.clone(),
+                GraphNodeId::new("work").unwrap(),
+                AttemptNumberV2::new(2),
+                TraceSequenceV2::new(2),
+                AttemptLifecycle::Active,
+                AttemptValidityV2::Valid,
+                None,
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    GraphSessionStateV2::new_with_goal_state(
+        base.workspace_revision(),
+        base.task_title(),
+        base.snapshot().clone(),
+        trace,
+        vec![GraphNodeCounterV2::new(
+            GraphNodeId::new("work").unwrap(),
+            2,
+            0,
+        )],
+        vec![
+            AttemptMetadataV2::new(
+                stale_attempt_id,
+                stale_started,
+                Some(UnixMillis::new(1_700_000_000_010)),
+                Some("Abandoned for a fresh retry.".to_owned()),
+            )
+            .unwrap(),
+            AttemptMetadataV2::new(active_attempt_id, active_started, None, None).unwrap(),
+        ],
+        WorkflowMemoryStateV2::new(vec![stale_memory, active_memory], Vec::new(), Vec::new())
+            .unwrap(),
+        base.goal_state().clone(),
+        base.created_at(),
+        None,
+        None,
+        None,
+    )
+    .unwrap()
+}
+
+/// VIEWS-001 characterization: the stale-attempt summary counts only slots that carry a recorded
+/// value, formats the first three of those valued slots in their original order, and reports the
+/// cut through the truncation flag. Interleaved empty slots contribute neither an item nor a
+/// count, so the first three valued slots are not the first three slots.
+#[test]
+fn views001_stale_attempt_summary_skips_interleaved_empty_slots() {
+    let verbose = project_graph_status_v2(
+        &view(stale_attempt_interleaved_slots_state()),
+        GraphStatusTierV2::Verbose,
+        None,
+    )
+    .unwrap();
+    let entries = verbose["stale_attempt_history"]["entries"]
+        .as_array()
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    let stale = &entries[0];
+    assert_eq!(stale["items_total"], 4);
+    assert_eq!(stale["items_truncated"], true);
+    let items = stale["items"].as_array().unwrap();
+    assert_eq!(items.len(), 3);
+    let expected = [
+        ("item-00", "value-one"),
+        ("item-02", "value-two"),
+        ("item-04", "value-three"),
+    ];
+    for (item, (item_id, value)) in items.iter().zip(expected) {
+        assert_eq!(item["item_id"], item_id);
+        assert_eq!(item["value"], value);
+        assert_eq!(item["value_truncated"], false);
+    }
+    // The fourth valued slot stays counted but undisplayed, and no empty slot appears.
+    assert!(items.iter().all(|item| {
+        item["item_id"] != "item-01" && item["item_id"] != "item-03" && item["item_id"] != "item-05"
+    }));
+    assert_output_v2("session.status", verbose);
+}
+
 #[test]
 fn v2run002_stale_goal_assessment_digest_matches_the_store_canonical_record_digest() {
     let state = decided_assessment_state(DecidedFixtureLifecycle::Cancelled, true);

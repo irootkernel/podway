@@ -4606,6 +4606,111 @@ mod tests {
         assert!(with_next > OBSERVATION_ITEM_VALUE_BYTES_MAX);
     }
 
+    /// Projects one list value and returns the projected array's serialized byte length.
+    ///
+    /// VIEWS-001 characterization: the existing maximal-prefix case above proves only that the
+    /// admitted prefix fits and the next entry would not. These cases pin the exact boundary
+    /// against real serde serialization of the unprojected candidates: a prefix of exactly the
+    /// budget is admitted, and a candidate one byte over is refused. Every entry stays within
+    /// the per-entry scalar maximum so per-entry truncation cannot distort the measured bytes.
+    fn observation_list_bytes(entries: &[String]) -> (Value, bool, usize) {
+        let value = RecordedItemValueV2::list(entries.to_vec()).unwrap();
+        let (projected, truncated) = project_observation_item_value(&value);
+        let bytes = serde_json::to_vec(&projected).unwrap().len();
+        (projected, truncated, bytes)
+    }
+
+    /// Exact-fit candidates whose JSON array serialization is exactly the observation budget.
+    ///
+    /// A JSON array charges its brackets, quotes and separators: seven 128-byte entries plus
+    /// one 103-byte entry total exactly 1024 bytes. Escaped (`"`) and two-byte (`é`) scalars
+    /// each render to 2 serialized bytes, so those variants use 64 scalars per wide entry and
+    /// a trailing one-byte scalar in the last entry to cost the same bytes. Each candidate is
+    /// verified by oracle before the projection is judged.
+    fn observation_exact_fit_candidates() -> Vec<(&'static str, Vec<String>)> {
+        let candidates = |wide: String, last: String| {
+            let mut entries = vec![wide; 7];
+            entries.push(last);
+            entries
+        };
+        vec![
+            ("ascii", candidates("a".repeat(128), "a".repeat(103))),
+            (
+                "multibyte",
+                candidates("é".repeat(64), format!("{}a", "é".repeat(51))),
+            ),
+            (
+                "escaped",
+                candidates("\"".repeat(64), format!("{}a", "\"".repeat(51))),
+            ),
+        ]
+    }
+
+    #[test]
+    fn views001_observation_list_exact_fit_admits_at_the_byte_budget() {
+        for (label, entries) in observation_exact_fit_candidates() {
+            assert_eq!(
+                serde_json::to_vec(&entries).unwrap().len(),
+                OBSERVATION_ITEM_VALUE_BYTES_MAX,
+                "{label} fixture must serialize to exactly the budget"
+            );
+            let (projected, truncated, bytes) = observation_list_bytes(&entries);
+            assert_eq!(bytes, OBSERVATION_ITEM_VALUE_BYTES_MAX, "{label}");
+            assert_eq!(
+                projected.as_array().unwrap().len(),
+                entries.len(),
+                "{label} exact fit admits every entry"
+            );
+            assert_eq!(truncated, false, "{label}");
+
+            // The unprojected candidate is the oracle: the bounded projection can never show
+            // an over-budget length itself, so one more admitted-width entry must exceed the
+            // budget in raw serialization.
+            let mut next = entries;
+            next.push(next[0].clone());
+            assert!(
+                serde_json::to_vec(&next).unwrap().len() > OBSERVATION_ITEM_VALUE_BYTES_MAX,
+                "{label} appending one entry must exceed the budget"
+            );
+        }
+    }
+
+    #[test]
+    fn views001_observation_list_one_byte_over_the_budget_refuses() {
+        // Seven 128-scalar entries plus one 104-scalar entry serialize to exactly 1025 bytes,
+        // one over the budget: the last entry is refused, the admitted prefix keeps its
+        // order and exact bytes, and the truncation flag reports the cut.
+        let mut entries = vec!["z".repeat(128); 7];
+        entries.push("z".repeat(104));
+        assert_eq!(
+            serde_json::to_vec(&entries).unwrap().len(),
+            OBSERVATION_ITEM_VALUE_BYTES_MAX + 1
+        );
+        let (projected, truncated, bytes) = observation_list_bytes(&entries);
+        assert_eq!(
+            bytes,
+            7 * (128 + 2) + 6 + 2,
+            "admitted prefix keeps the seven whole entries"
+        );
+        assert_eq!(projected.as_array().unwrap().len(), 7);
+        assert_eq!(truncated, true);
+        let admitted: Vec<&str> = projected
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry.as_str().unwrap())
+            .collect();
+        assert!(admitted.iter().all(|entry| entry.chars().count() == 128));
+
+        // Re-adding the refused entry reproduces exactly one byte over the budget.
+        let mut candidate = admitted.into_iter().map(str::to_owned).collect::<Vec<_>>();
+        candidate.push("z".repeat(104));
+        assert_eq!(
+            serde_json::to_vec(&candidate).unwrap().len(),
+            OBSERVATION_ITEM_VALUE_BYTES_MAX + 1
+        );
+    }
+
     #[test]
     fn reads003_serialized_object_bytes_match_wrapped_value_serialization() {
         let mut result = Map::new();
