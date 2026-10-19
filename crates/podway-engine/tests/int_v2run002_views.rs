@@ -7066,6 +7066,108 @@ fn v2scl004_evidence_read_continues_a_multi_page_text_value() {
 }
 
 #[test]
+fn views003_mixed_width_text_pages_rejoin_exactly_across_scalar_boundaries() {
+    // The existing ASCII-only fixture cannot distinguish byte offsets from scalar offsets. This
+    // value mixes two-byte and four-byte scalars and
+    // puts a base scalar at 43,689 with its combining scalar at 43,690, so the 43,690-scalar page
+    // boundary falls exactly between them. Slicing bytes instead of scalars, or splitting one,
+    // would fail a page length, a boundary scalar, UTF-8 validity, or the exact rejoin below.
+    // Every page-length assertion is paired with the same full logical total and unit, because
+    // paging a bounded view may never misreport the size of the value it is a view of.
+    let mut text = String::with_capacity(65_536 * 3);
+    for index in 0..65_536 {
+        let scalar = match index {
+            43_689 => 'e',
+            43_690 => '\u{0301}',
+            index if index % 2 == 0 => 'é',
+            _ => '😀',
+        };
+        text.push(scalar);
+    }
+    assert_eq!(text.chars().count(), 65_536);
+    let source = paged_text_readback_source();
+    let session_view = view(paged_text_readback_state(&source, &text));
+    let node = GraphNodeId::new("source").unwrap();
+    let item = ItemId::new("text").unwrap();
+
+    let first = project_evidence_read_v1(&session_view, &node, &item, None).unwrap();
+    assert_eq!(first["total_size"], 65_536);
+    assert_eq!(first["size_unit"], "scalars");
+    assert_eq!(first["page"]["offset"], 0);
+    assert_eq!(first["page"]["size"], 43_690);
+    assert_eq!(first["truncated"], true);
+    let first_page = first["page"]["data"].as_str().unwrap().to_owned();
+    assert_eq!(first_page.chars().count(), 43_690);
+    // The boundary sits between the base and its combining scalar, never inside either.
+    assert_eq!(first_page.chars().last(), Some('e'));
+    assert!(std::str::from_utf8(first_page.as_bytes()).is_ok());
+
+    let token =
+        podway_protocol::EvidencePageTokenV1::decode(first["next_page_token"].as_str().unwrap())
+            .unwrap();
+    assert_eq!(token.offset(), 43_690);
+    let second = project_evidence_read_v1(&session_view, &node, &item, Some(&token)).unwrap();
+    assert_eq!(second["total_size"], 65_536);
+    assert_eq!(second["size_unit"], "scalars");
+    assert_eq!(second["page"]["offset"], 43_690);
+    assert_eq!(second["page"]["size"], 21_846);
+    assert_eq!(second["truncated"], false);
+    assert_eq!(second["next_page_token"], Value::Null);
+    let second_page = second["page"]["data"].as_str().unwrap().to_owned();
+    assert_eq!(second_page.chars().count(), 21_846);
+    assert_eq!(second_page.chars().next(), Some('\u{0301}'));
+    assert!(std::str::from_utf8(second_page.as_bytes()).is_ok());
+
+    // The pages concatenate back to the recorded value with nothing split, dropped, or
+    // repeated, and both halves name the same value.
+    assert_eq!(format!("{first_page}{second_page}"), text);
+    assert_eq!(first["value_digest"], second["value_digest"]);
+
+    // The preview and its continuation cover the same value without overlap: the preview takes
+    // the first 938 scalars, the resumed page the next 43,690, the terminal page the remaining
+    // 20,908, and the three rejoin to the exact original text.
+    let next = project_graph_next_v2(&session_view).unwrap();
+    let metadata = &next["readback"].as_array().unwrap()[0]["items"]
+        .as_array()
+        .unwrap()[0];
+    assert_eq!(metadata["total_size"], 65_536);
+    assert_eq!(metadata["size_unit"], "scalars");
+    let preview = metadata["preview"].as_str().unwrap();
+    assert_eq!(preview.chars().count(), 938);
+    assert_eq!(metadata["preview_truncated"], true);
+    let preview_token =
+        podway_protocol::EvidencePageTokenV1::decode(metadata["next_page_token"].as_str().unwrap())
+            .unwrap();
+    assert_eq!(preview_token.offset(), 938);
+
+    let resumed =
+        project_evidence_read_v1(&session_view, &node, &item, Some(&preview_token)).unwrap();
+    assert_eq!(resumed["total_size"], 65_536);
+    assert_eq!(resumed["size_unit"], "scalars");
+    assert_eq!(resumed["page"]["offset"], 938);
+    assert_eq!(resumed["page"]["size"], 43_690);
+    assert_eq!(resumed["truncated"], true);
+    let resumed_page = resumed["page"]["data"].as_str().unwrap();
+    assert_eq!(resumed_page.chars().count(), 43_690);
+    let resumed_token =
+        podway_protocol::EvidencePageTokenV1::decode(resumed["next_page_token"].as_str().unwrap())
+            .unwrap();
+    assert_eq!(resumed_token.offset(), 44_628);
+
+    let terminal =
+        project_evidence_read_v1(&session_view, &node, &item, Some(&resumed_token)).unwrap();
+    assert_eq!(terminal["total_size"], 65_536);
+    assert_eq!(terminal["size_unit"], "scalars");
+    assert_eq!(terminal["page"]["offset"], 44_628);
+    assert_eq!(terminal["page"]["size"], 20_908);
+    assert_eq!(terminal["truncated"], false);
+    let terminal_page = terminal["page"]["data"].as_str().unwrap();
+    assert_eq!(terminal_page.chars().count(), 20_908);
+
+    assert_eq!(format!("{preview}{resumed_page}{terminal_page}"), text);
+}
+
+#[test]
 fn v2scl004_evidence_read_answers_indivisible_values_in_one_terminal_page() {
     let source = maximum_selected_readback_source();
     let session_view = view(maximum_selected_readback_state(&source));

@@ -853,18 +853,20 @@ pub(crate) fn project_evidence_read_in(
         offset = token.offset();
     }
 
-    let page = evidence_page_v1(selected.value(), offset).ok_or_else(|| {
-        let (total, unit) = evidence_logical_size_v1(selected.value());
+    // The logical size is measured once for the admitted value: the page helper reuses that total
+    // instead of recomputing it, and both the published fields and the exhausted error report the
+    // same count.
+    let (total_size, size_unit) = evidence_logical_size_v1(selected.value());
+    let page = evidence_page_v1(selected.value(), offset, total_size).ok_or_else(|| {
         EvidenceReadErrorV2::TokenExhausted {
             source_graph_node_id: selected.source_graph_node_id().as_str().to_owned(),
             item_id: selected.item_id().as_str().to_owned(),
             offset,
-            total_size: total,
-            unit,
+            total_size,
+            unit: size_unit,
         }
     })?;
 
-    let (total_size, size_unit) = evidence_logical_size_v1(selected.value());
     let next_page_token = if page.truncated {
         Some(
             EvidencePageTokenV1::new(
@@ -977,31 +979,41 @@ fn evidence_logical_size_v1(value: &RecordedItemValueV2) -> (u64, &'static str) 
 /// past the logical end.
 ///
 /// Text pages end only at a Unicode scalar boundary and list pages carry whole entries, so a page
-/// can always be concatenated with its successors to reproduce the value exactly.
-fn evidence_page_v1(value: &RecordedItemValueV2, offset: u64) -> Option<EvidencePageV1> {
+/// can always be concatenated with its successors to reproduce the value exactly. `total` is the
+/// caller's logical size of the same admitted value, so the text arm allocates only the returned
+/// page text rather than materializing the whole value as scalars.
+fn evidence_page_v1(
+    value: &RecordedItemValueV2,
+    offset: u64,
+    total: u64,
+) -> Option<EvidencePageV1> {
     if let Some(text) = value.as_text() {
-        let scalars: Vec<char> = text.chars().collect();
         let start = usize::try_from(offset).ok()?;
         // An empty value is complete at offset zero. Refusing it would make a legally recorded
         // value unreadable and would report a token failure to a caller that supplied no token.
-        if scalars.is_empty() && start == 0 {
+        if total == 0 && start == 0 {
             return Some(EvidencePageV1 {
                 size: 0,
                 data: Value::String(String::new()),
                 truncated: false,
             });
         }
-        if start >= scalars.len() {
+        if start as u64 >= total {
             return None;
         }
         // At least one scalar always fits, so a page can never be empty and stall a caller.
         let capacity = (MAX_EVIDENCE_PAGE_BYTES_V2 / EVIDENCE_SCALAR_BYTES).max(1);
-        let end = scalars.len().min(start + capacity);
-        let page: String = scalars[start..end].iter().collect();
+        let end = total.min(start as u64 + capacity as u64) as usize;
+        let byte_start = text
+            .char_indices()
+            .nth(start)
+            .expect("a scalar index below the logical count is present")
+            .0;
+        let page: String = text[byte_start..].chars().take(end - start).collect();
         return Some(EvidencePageV1 {
             size: (end - start) as u64,
             data: Value::String(page),
-            truncated: end < scalars.len(),
+            truncated: (end as u64) < total,
         });
     }
     if let Some(entries) = value.as_list() {
@@ -1043,8 +1055,10 @@ fn evidence_page_v1(value: &RecordedItemValueV2, offset: u64) -> Option<Evidence
         if offset != 0 {
             return None;
         }
+        // The logical size of a check result is its encoded byte count, already measured once
+        // for this value; the page reports that same total as its size.
         return Some(EvidencePageV1 {
-            size: check_result_encoded_bytes_v1(value) as u64,
+            size: total,
             data: typed_item_value(value),
             truncated: false,
         });
@@ -1972,43 +1986,45 @@ impl<'a> CurrentProjection<'a> {
             .collect()
     }
 
+    /// The exact total counts every recorded value, while display construction happens only for
+    /// candidates the byte budget can still consider: the first candidate that does not fit ends
+    /// construction, and later values stay counted but unformatted.
     fn item_values(&self) -> (Vec<Value>, usize, bool) {
-        let all = self
+        let total = self
             .memory
             .item_slots()
             .iter()
-            .filter_map(|slot| {
-                slot.value().map(|value| {
-                    if value.item_type() == ItemTypeV1::CheckResult {
-                        return json!({
-                            "item_id": slot.item_id().as_str(),
-                            "value": check_result_preview_v1(value),
-                            "value_truncated": false,
-                        });
-                    }
-                    let display = display_item_value(value);
-                    let (display, value_truncated) =
-                        truncate_chars(&display, ITEM_DISPLAY_CHARS_MAX);
-                    json!({
-                        "item_id": slot.item_id().as_str(),
-                        "value": display,
-                        "value_truncated": value_truncated,
-                    })
-                })
-            })
-            .collect::<Vec<_>>();
-        let total = all.len();
+            .filter(|slot| slot.value().is_some())
+            .count();
         let mut used = 2_usize;
         let mut values = Vec::new();
-        for value in all {
-            let bytes = serde_json::to_vec(&value)
+        for slot in self.memory.item_slots() {
+            let Some(value) = slot.value() else {
+                continue;
+            };
+            let candidate = if value.item_type() == ItemTypeV1::CheckResult {
+                json!({
+                    "item_id": slot.item_id().as_str(),
+                    "value": check_result_preview_v1(value),
+                    "value_truncated": false,
+                })
+            } else {
+                let display = display_item_value(value);
+                let (display, value_truncated) = truncate_chars(&display, ITEM_DISPLAY_CHARS_MAX);
+                json!({
+                    "item_id": slot.item_id().as_str(),
+                    "value": display,
+                    "value_truncated": value_truncated,
+                })
+            };
+            let bytes = serde_json::to_vec(&candidate)
                 .map_or(STATUS_VALUES_BYTES_MAX, |json| json.len())
                 + usize::from(!values.is_empty());
             if used.saturating_add(bytes) > STATUS_VALUES_BYTES_MAX {
                 break;
             }
             used += bytes;
-            values.push(value);
+            values.push(candidate);
         }
         let truncated = values.len() < total;
         (values, total, truncated)
@@ -3432,7 +3448,7 @@ fn readback_value(
 
         if explicit_selector
             && *previews_remaining > 0
-            && let Some(preview) = evidence_preview_v1(item.value())
+            && let Some(preview) = evidence_preview_v1(item.value(), total_size)
         {
             *previews_remaining -= 1;
             metadata.insert("preview".to_owned(), preview.data);
@@ -3498,17 +3514,19 @@ fn readback_value(
 ///
 /// The preview is deliberately small: it exists so a caller can recognise a value, not consume it.
 /// When it truncates, the accompanying token names exactly where a page read should resume.
-fn evidence_preview_v1(value: &RecordedItemValueV2) -> Option<EvidencePageV1> {
+/// `total` is the caller's logical size of the same admitted value, so the text arm allocates only
+/// the previewed text rather than materializing the whole value as scalars.
+fn evidence_preview_v1(value: &RecordedItemValueV2, total: u64) -> Option<EvidencePageV1> {
     if let Some(text) = value.as_text() {
-        let scalars: Vec<char> = text.chars().collect();
-        if scalars.is_empty() {
+        if total == 0 {
             return None;
         }
-        let end = scalars.len().min(MAX_EVIDENCE_PREVIEW_SCALARS_V2);
+        let end = total.min(MAX_EVIDENCE_PREVIEW_SCALARS_V2 as u64);
+        let preview: String = text.chars().take(end as usize).collect();
         return Some(EvidencePageV1 {
-            size: end as u64,
-            data: Value::String(scalars[..end].iter().collect()),
-            truncated: end < scalars.len(),
+            size: end,
+            data: Value::String(preview),
+            truncated: end < total,
         });
     }
     if let Some(entries) = value.as_list() {
@@ -3537,8 +3555,10 @@ fn evidence_preview_v1(value: &RecordedItemValueV2) -> Option<EvidencePageV1> {
         });
     }
     if value.item_type() == ItemTypeV1::CheckResult {
+        // The logical size of a check result is its encoded byte count, already measured once
+        // for this value; the preview reports that same total as its size.
         return Some(EvidencePageV1 {
-            size: check_result_encoded_bytes_v1(value) as u64,
+            size: total,
             data: check_result_preview_v1(value),
             truncated: false,
         });
@@ -3965,19 +3985,23 @@ fn stale_attempt_value(
             "stale attempt memory is absent",
         ))?;
     let definition_id = definition_id_for_node(procedure, attempt.graph_node_id().as_str())?;
-    let all_items = memory
-        .item_slots()
-        .iter()
-        .filter_map(|slot| {
-            slot.value().map(|value| {
-                let display = display_item_value(value);
-                let (display, truncated) = truncate_chars(&display, ITEM_DISPLAY_CHARS_MAX);
-                json!({"item_id": slot.item_id().as_str(), "value": display, "value_truncated": truncated})
-            })
-        })
-        .collect::<Vec<_>>();
-    let items_total = all_items.len();
-    let items = all_items.into_iter().take(3).collect::<Vec<_>>();
+    // The summary counts every slot with a recorded value but formats only the first three of
+    // those valued slots: empty slots contribute neither an item nor a count, and valued slots
+    // beyond the displayed window stay counted but unformatted.
+    let mut items = Vec::new();
+    let mut items_total = 0usize;
+    for slot in memory.item_slots() {
+        let Some(value) = slot.value() else {
+            continue;
+        };
+        items_total += 1;
+        if items.len() >= 3 {
+            continue;
+        }
+        let display = display_item_value(value);
+        let (display, truncated) = truncate_chars(&display, ITEM_DISPLAY_CHARS_MAX);
+        items.push(json!({"item_id": slot.item_id().as_str(), "value": display, "value_truncated": truncated}));
+    }
     Ok(json!({
         "trace_sequence": attempt.trace().get(),
         "graph_node_id": attempt.graph_node_id().as_str(),
