@@ -57,7 +57,10 @@ pub struct CanonicalExecutionJsonV1(String);
 
 impl CanonicalExecutionJsonV1 {
     pub fn new(value: impl Into<String>) -> Result<Self, StoreValueErrorV1> {
-        let value = value.into();
+        Self::admit(value.into()).map(|(canonical, _)| canonical)
+    }
+
+    fn admit(value: String) -> Result<(Self, serde_json::Value), StoreValueErrorV1> {
         if value.is_empty() {
             return Err(StoreValueErrorV1::EmptyValue {
                 field: "canonical execution JSON",
@@ -73,9 +76,9 @@ impl CanonicalExecutionJsonV1 {
         let document: serde_json::Value = serde_json::from_str(&value)
             .map_err(|_| StoreValueErrorV1::InvalidCanonicalExecutionJson)?;
         validate_canonical_execution_depth_v1(&document, 0)?;
-        podway_core::verify_canonical_json_v1(value.as_bytes())
+        podway_core::verify_canonical_json_value_v1(value.as_bytes(), &document)
             .map_err(|_| StoreValueErrorV1::InvalidCanonicalExecutionJson)?;
-        Ok(Self(value))
+        Ok((Self(value), document))
     }
 
     pub fn as_str(&self) -> &str {

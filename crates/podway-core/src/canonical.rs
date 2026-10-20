@@ -45,7 +45,18 @@ pub fn canonicalize_json_v1<T: Serialize>(value: &T) -> Result<String, Canonical
 pub fn verify_canonical_json_v1(input: &[u8]) -> Result<(), CanonicalJsonErrorV1> {
     let value = serde_json::from_slice(input)
         .map_err(|error| CanonicalJsonErrorV1::InvalidJson(error.to_string()))?;
-    let canonical = canonicalize_value(&value)?;
+    verify_canonical_json_value_v1(input, &value)
+}
+
+/// Verifies exact canonical bytes against an already parsed JSON value.
+///
+/// The value alone cannot establish canonical input: its canonical encoding must match the
+/// original bytes, including key order, escaping and number representation.
+pub fn verify_canonical_json_value_v1(
+    input: &[u8],
+    value: &Value,
+) -> Result<(), CanonicalJsonErrorV1> {
+    let canonical = canonicalize_value(value)?;
     if canonical.as_bytes() == input {
         Ok(())
     } else {
@@ -113,7 +124,10 @@ fn write_canonical_json(value: &Value, output: &mut Vec<u8>) -> Result<(), Canon
 mod tests {
     use serde_json::json;
 
-    use super::{CanonicalJsonErrorV1, canonicalize_json_v1, verify_canonical_json_v1};
+    use super::{
+        CanonicalJsonErrorV1, canonicalize_json_v1, verify_canonical_json_v1,
+        verify_canonical_json_value_v1,
+    };
 
     #[test]
     fn canonicalizes_object_keys_by_utf8_bytes() {
@@ -167,6 +181,41 @@ mod tests {
         assert_eq!(
             verify_canonical_json_v1(b"1.0"),
             Err(CanonicalJsonErrorV1::UnsupportedNumber)
+        );
+    }
+
+    #[test]
+    fn value_verifier_compares_original_bytes_instead_of_normalized_values() {
+        for input in [
+            r#"{ "a":1}"#,
+            r#"{"b":1,"a":2}"#,
+            r#"{"a":1,"a":1}"#,
+            r#"{"a":"\u0061"}"#,
+        ] {
+            let value = serde_json::from_str(input).unwrap();
+            assert_eq!(
+                verify_canonical_json_value_v1(input.as_bytes(), &value),
+                Err(CanonicalJsonErrorV1::NonCanonical),
+                "{input}"
+            );
+        }
+        for input in ["1.0", "1e0", "-0"] {
+            let value = serde_json::from_str(input).unwrap();
+            assert_eq!(
+                verify_canonical_json_value_v1(input.as_bytes(), &value),
+                Err(CanonicalJsonErrorV1::UnsupportedNumber),
+                "{input}"
+            );
+        }
+        let input = format!(r#"{{"a":[{},{}],"é":"\\\""}}"#, i64::MIN, u64::MAX);
+        let value = serde_json::from_str(&input).unwrap();
+        assert_eq!(
+            verify_canonical_json_value_v1(input.as_bytes(), &value),
+            Ok(())
+        );
+        assert_eq!(
+            verify_canonical_json_value_v1(br#"{"a":2}"#, &json!({"a":1})),
+            Err(CanonicalJsonErrorV1::NonCanonical)
         );
     }
 }

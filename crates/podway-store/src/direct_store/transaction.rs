@@ -781,10 +781,17 @@ fn validate_success(
     request: &DirectMutationRequestV1,
     response: &CanonicalExecutionJsonV1,
 ) -> DirectStoreResultV1<()> {
-    // Engine owns complete command-result schema validation. Store independently
-    // requires the complete canonical success, its command and original response UUID.
     let document: serde_json::Value =
         serde_json::from_str(response.as_str()).map_err(|_| DirectStoreErrorV1::Unreadable)?;
+    validate_success_document(request, &document)
+}
+
+fn validate_success_document(
+    request: &DirectMutationRequestV1,
+    document: &serde_json::Value,
+) -> DirectStoreResultV1<()> {
+    // Engine owns complete command-result schema validation. Store independently
+    // requires the complete canonical success, its command and original response UUID.
     let object = document
         .as_object()
         .ok_or(DirectStoreErrorV1::InvalidInput {
@@ -898,9 +905,7 @@ pub(super) fn read_outcome(
                 ),
                 _ => return Err(DirectStoreErrorV1::Unreadable),
             };
-            let response = CanonicalExecutionJsonV1::new(response)
-                .map_err(|_| DirectStoreErrorV1::Unreadable)?;
-            let document: serde_json::Value = serde_json::from_str(response.as_str())
+            let (response, document) = CanonicalExecutionJsonV1::admit(response)
                 .map_err(|_| DirectStoreErrorV1::Unreadable)?;
             let response_id = document
                 .get("request_id")
@@ -914,7 +919,8 @@ pub(super) fn read_outcome(
                 scope.clone(),
             )
             .map_err(|_| DirectStoreErrorV1::Unreadable)?;
-            validate_success(&validation, &response).map_err(|_| DirectStoreErrorV1::Unreadable)?;
+            validate_success_document(&validation, &document)
+                .map_err(|_| DirectStoreErrorV1::Unreadable)?;
             if sequence == 0 {
                 return Err(DirectStoreErrorV1::Unreadable);
             }

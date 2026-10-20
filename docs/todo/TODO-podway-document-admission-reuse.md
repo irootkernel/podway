@@ -11,8 +11,8 @@ or persistence contracts. No release is selected.
 ## Verified context and evidence
 
 The PARSE-001 source baseline is `ad735f4a17259131b21abb939508ebcaf81f0014` on
-2026-10-20, after accepted VIEWS completion. The current paths contain distinct
-checks as well as duplicate work:
+2026-10-20, after accepted VIEWS completion. At that baseline, the paths contain
+distinct checks as well as duplicate work:
 
 - [`CanonicalExecutionJsonV1`](../../crates/podway-store/src/lib.rs) parses a
   string for bounded admission; Core's
