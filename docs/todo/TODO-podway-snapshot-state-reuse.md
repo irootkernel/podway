@@ -262,6 +262,25 @@ at most 128 owner/item pairs, TooBig fallback and existing pointer reuse. The
 whole-unchanged fast path remains unchanged; this optimization applies when
 reconstruction is actually necessary.
 
+STATE-003 implementation record: `v2_memory.rs::index_cached_attempts` builds
+one reconstruction-local `BTreeMap` from borrowed cached attempts (first-match
+`entry().or_insert`; no attempt-body clone, no SQL, no validation of later
+rows) once per `load_workflow_memory_v2` mixed reconstruction, before header
+discovery; `discover_slot_owners` and the per-trace-attempt loop share it by
+reference, replacing exactly the two attempt-keyed linear scans. Item-level
+lookups in `classify_owner` and `validate_attempt_slots`, the 128-pair chunk
+bound, TooBig fallback, pointer reuse and the whole-unchanged prepared fast
+path are unchanged, and no SQL is added or removed, so every mixed-path count
+owner and pointer-reuse assertion keeps its existing targets. The first-match
+unit check is owned by
+`v2_memory::reads_tests::state003_attempt_index_keeps_first_match_for_duplicate_ids`.
+Id-keyed matching (not positional) is required because matching prefix
+identity is not proven before admission; in reachable states cached attempts
+are always a same-order prefix of the current trace (session and snapshot
+identity plus digest re-check, append-only attempts), so positional and
+id-keyed lookups are observationally equal there and no reachable-state test
+distinguishes them.
+
 ### Receipt readiness
 
 Extract pure readiness derivation from receipt acquisition. Supply an already

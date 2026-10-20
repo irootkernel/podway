@@ -609,6 +609,21 @@ struct MixedDiscovery {
     pairs: Vec<PairEntry>,
 }
 
+/// One reconstruction-local borrowed index over cached attempts, keyed by
+/// attempt identity. First-match insertion keeps the first attempt for any
+/// duplicated id, the same result as a first-match linear scan in attempt
+/// order; construction performs no validation of later rows and clones no
+/// attempt body.
+fn index_cached_attempts(
+    attempts: &[AttemptWorkflowMemoryV2],
+) -> BTreeMap<&AttemptId, &AttemptWorkflowMemoryV2> {
+    let mut index = BTreeMap::new();
+    for attempt in attempts {
+        index.entry(attempt.attempt_id()).or_insert(attempt);
+    }
+    index
+}
+
 /// Session-wide header discovery for the mixed (prepared-cache) path:
 /// stages one owner's raw cells at a time, capturing every header
 /// column-conversion fault (storage class, scalar type, UTF-8 validity) at
@@ -618,10 +633,10 @@ struct MixedDiscovery {
 /// compact stamps — their raw cells die here — and queue changed/new pairs
 /// in the global consumption order. Owners after a stop are `None` and use
 /// the original per-owner acquisition at their turn.
-fn discover_slot_owners(
+fn discover_slot_owners<'a>(
     connection: &Connection,
     trace: &SessionTraceV2,
-    cached: &WorkflowMemoryStateV2,
+    cached_attempts: &BTreeMap<&'a AttemptId, &'a AttemptWorkflowMemoryV2>,
     snapshot: &ProcedureSnapshotV2,
 ) -> Result<MixedDiscovery, StoreErrorV1> {
     let attempt_count = trace.attempts().len();
@@ -643,10 +658,7 @@ fn discover_slot_owners(
     for index in 0..attempt_count {
         let attempt = &trace.attempts()[index];
         let owner_key = attempt.trace().get() as i64;
-        let cached_memory = cached
-            .attempts()
-            .iter()
-            .find(|memory| memory.attempt_id() == attempt.attempt_id());
+        let cached_memory = cached_attempts.get(attempt.attempt_id()).copied();
         let mut cells: Vec<RawHeaderCell> = Vec::new();
         let mut seen: std::collections::BTreeSet<Vec<u8>> = std::collections::BTreeSet::new();
         let mut fault: Option<SteppingFault> = None;
@@ -1234,8 +1246,13 @@ pub(crate) fn load_workflow_memory_v2(
     }
     #[cfg(any(test, feature = "test-support"))]
     let _discovery_unwind = DiscoveryScratchUnwind;
+    // One shared borrowed index over the cached attempts: header discovery
+    // and the per-trace-attempt loop look owners up by identity through the
+    // same first-match map.
+    let cached_attempt_index =
+        index_cached_attempts(cached.map(WorkflowMemoryStateV2::attempts).unwrap_or(&[]));
     let discovered = match cached {
-        Some(cached_memory) => discover_slot_owners(connection, trace, cached_memory, snapshot)?,
+        Some(_) => discover_slot_owners(connection, trace, &cached_attempt_index, snapshot)?,
         None => MixedDiscovery {
             owners: Vec::new(),
             pairs: Vec::new(),
@@ -1264,12 +1281,7 @@ pub(crate) fn load_workflow_memory_v2(
             let specification = snapshot
                 .item_declarations_v2(attempt.graph_node_id())
                 .map_err(|_| corrupt(StoreRecordKindV1::Attempt))?;
-            let cached_attempt = cached.and_then(|memory| {
-                memory
-                    .attempts()
-                    .iter()
-                    .find(|memory| memory.attempt_id() == attempt.attempt_id())
-            });
+            let cached_attempt = cached_attempt_index.get(attempt.attempt_id()).copied();
             let owner = if index < owner_list.len() {
                 owner_list[index].take()
             } else {
@@ -2250,5 +2262,22 @@ mod reads_tests {
         let report = accountant.finish();
         assert_eq!(report.retention.raw_window_peak, 11);
         assert_eq!(report.retention.raw_released_at_scope_end, 11);
+    }
+
+    #[test]
+    fn state003_attempt_index_keeps_first_match_for_duplicate_ids() {
+        let id = AttemptId::new("11111111-1111-1111-1111-111111111111").unwrap();
+        let probe = id.clone();
+        let first = AttemptWorkflowMemoryV2::new(id, Vec::new(), Vec::new(), Vec::new()).unwrap();
+        let second =
+            AttemptWorkflowMemoryV2::new(probe.clone(), Vec::new(), Vec::new(), Vec::new())
+                .unwrap();
+        let attempts = [first, second];
+        let index = index_cached_attempts(&attempts[..]);
+        assert_eq!(index.len(), 1);
+        assert!(std::ptr::eq(
+            index.get(&probe).copied().unwrap(),
+            &attempts[0]
+        ));
     }
 }
