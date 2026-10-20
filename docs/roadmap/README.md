@@ -29,11 +29,11 @@ accepted OPTIM, BOUND and READS work:
 VIEWS -> PARSE -> STATE -> ADMIT
 ```
 
-The goal is to remove structural, logical and conceptual duplication. This
-registration is design-only: every task is Planned and no implementation has
-started. Only the first incomplete task of the first eligible epic may later
-start; accept each epic before starting its successor. There is no cross-epic
-implementation interleaving. The first eligible task is `VIEWS-001`.
+The goal is to remove structural, logical and conceptual duplication. The
+2026-10-19 registration was design-only; execution began with `VIEWS-001` on
+2026-10-20, and the task tables below alone own current status. Only the first
+incomplete task of the first eligible epic may start; accept each epic before
+starting its successor. There is no cross-epic implementation interleaving.
 
 Elapsed-time tests, latency percentiles including p95/p99, throughput benchmarks,
 performance baselines and performance thresholds are excluded from this program.
@@ -87,7 +87,23 @@ Dependencies: accepted `READS` completion. Design:
 | `VIEWS-002` | Account for serialized prefixes incrementally | Completed | Replace growing-prefix reserialization with exact incremental byte accounting, retaining wrapper, trace and truncation semantics. | [Exact byte accounting](../todo/TODO-podway-projection-simplification.md#exact-byte-accounting) |
 | `VIEWS-003` | Construct only admitted display content | Completed | Avoid full scalar buffers and undisplayed formatting while retaining logical totals, first-three valued-slot semantics and eager validation. | [Bounded construction](../todo/TODO-podway-projection-simplification.md#bounded-construction) |
 | `VIEWS-004` | Share evidence selection and observation projections | Completed | Reuse evidence selection across readback and delegation packages; omit observation previews while preserving their failure checks. | [Projection reuse](../todo/TODO-podway-projection-simplification.md#projection-reuse) |
-| `VIEWS-005` | Qualify projection equivalence and close documentation | Planned | Verify bounds, errors, output equivalence and corruption refusal, complete the development gate and review, then promote lasting documentation. | [Verification](../todo/TODO-podway-projection-simplification.md#verification-and-release-acceptance) |
+| `VIEWS-005` | Qualify projection equivalence and close documentation | Completed | Verify bounds, errors, output equivalence and corruption refusal, complete the development gate and review, then promote lasting documentation. | [Verification](../todo/TODO-podway-projection-simplification.md#verification-and-release-acceptance) |
+
+### VIEWS delivery record
+
+VIEWS-001 through VIEWS-004 are Completed at `3d32cad`, `6dcefee`, `d06021b`
+and `3cb19dc` under delegated Task acceptance: pinned projection boundaries,
+exact incremental serialized-prefix accounting, bounded display construction,
+and shared evidence selection with preview-free observation construction.
+Behavioral ownership is registered under
+[functional regression owners](../implementation-tips/testing.md#functional-regression-owners)
+and projection composition under
+[request-scoped read composition](../architecture/system.md#request-scoped-read-composition).
+VIEWS-005 promotes this lasting documentation without executable changes and
+without a new development-gate run for the unchanged candidate. These are
+delegated Task acceptances; Master Epic acceptance and dossier retirement
+under the [TODO lifecycle](../todo/README.md#lifecycle) remain pending. No
+successor epic has started.
 
 ## PARSE — Document Admission Reuse
 

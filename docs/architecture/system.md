@@ -341,6 +341,49 @@ place. Counters, ordering, exact totals, truncation flags, page-token identity,
 evidence freshness, delegation readiness, and byte budgets stay in place.
 Terminal observation guidance remains null.
 
+Projection computation inside one admitted projection is single-owner. The
+current projection derives the selected evidence readback once and stores it;
+next, readback and delegation work-package consumers reuse that selection for
+the same admitted snapshot, preserving each consumer's reachable error
+precedence and consistency guards; mappings that existed only in the removed
+recomputation are gone. Observation builds guidance without materializing
+evidence preview text it would immediately remove, while still evaluating the
+same explicit-selector, remaining-preview-slot, preview-existence and
+truncation gates for exactly the original items at their original logical
+stage. Preview ownership is split: the plan decides preview presence, size and
+truncation, while the readback path owns the explicit-selector and
+remaining-slot gate and consumes the preview slot; the payload stage then
+renders only admitted text, so discarded display payloads are never built. The
+fallible truncation-time checks are retained exactly: when a plan truncates,
+resolved source-snapshot presence, the active consumer and page-token
+constructibility still run under their original gates and consumer-attempt
+binding; only the payload/map construction and the final infallible encode
+are bound to publication.
+
+Serialized length accounting is exact and incremental. A Protocol-owned
+counting helper returns checked serde JSON lengths without retaining output
+buffers; observation lists and history windows admit each candidate once from
+its own measured length, folding separators, wrapper fields and trial trace
+bounds without reserializing the admitted prefix. A full history window only
+asks whether another filtered source entry exists; that lookahead entry is
+never rendered, so a failing render there remains a truncation fact rather
+than a surfaced error. The indivisible-value evidence charge is a separate
+conservative worst-case policy, distinct from the exact serde length owner.
+
+Display construction is bounded by admission. Status values format each value
+only at its display-consideration point and stop at the first rejected
+candidate while still reporting exact logical totals and truncation. Text
+evidence pages end on Unicode scalar boundaries, allocate only the returned
+page, and reuse the caller's logical size of the same admitted value instead
+of recounting it. The stale-attempt summary counts every slot with a recorded
+value and formats only the first three of those valued slots; empty slots
+contribute neither an item nor a count.
+
+Store admission, the per-item source-slot, revision and digest checks, and the
+Standard preflight projection/schema/envelope-equivalent failures remain
+independently owned trust boundaries; projection reuse merges none of them,
+and archive-list keeps its summary-only exception for archived rows.
+
 ### Procedure identity boundaries
 
 Sharing `ValidatedProcedureV2` shares computation. Revalidation can materialize

@@ -182,6 +182,42 @@ that Store file. The case runs in its own process and still acquires the
 connection gate inside the request. Unrelated tests no longer contend for that
 process-global gate during the SQLite busy assertion.
 
+VIEWS projection equivalence is owned by the registered view suite, its
+in-module oracles and the Protocol length helper's unit checks:
+
+- Exact serde length ownership:
+  [`json_len.rs`](../../crates/podway-protocol/src/json_len.rs) unit checks
+  `views002_serialized_len_matches_to_vec_across_value_shapes`,
+  `views002_serialized_len_reports_serialization_failures` and
+  `views002_serialized_len_agrees_at_history_window_scale`.
+- Incremental admission and lookahead policy, in-module:
+  `reads003_borrowed_history_measurement_matches_owned_construction_bytes`,
+  `reads003_history_window_exact_fit_admits_and_one_byte_over_truncates`,
+  `reads003_history_window_swallows_trailing_error_after_a_full_window`,
+  `reads003_owned_members_move_rather_than_reserialize`,
+  `views001_observation_list_exact_fit_admits_at_the_byte_budget`,
+  `views001_observation_list_one_byte_over_the_budget_refuses`,
+  `views002_history_window_incremental_total_matches_serialized_windows`,
+  `views002_history_window_full_window_lookahead_does_not_render`,
+  `views002_history_window_byte_overflow_stops_all_lookahead` and
+  `views002_observation_list_incremental_admission_matches_serialized_prefixes`.
+- Bounded construction and valued-only summaries, in the
+  [view suite](../../crates/podway-engine/tests/int_v2run002_views.rs):
+  `views003_mixed_width_text_pages_rejoin_exactly_across_scalar_boundaries`,
+  `v2rel002_standard_item_values_stop_before_the_first_whole_value_over_budget`
+  and `views001_stale_attempt_summary_skips_interleaved_empty_slots`.
+- Shared selection and preview plans, in-module:
+  `views004_readback_value_modes_share_slots_and_stripped_output`,
+  `views004_preview_plan_and_payload_match_legacy_construction` and
+  `views004_indivisible_charge_matches_the_legacy_value_charger`; in the same
+  view suite `views004_observation_guidance_equals_stripped_next_for_preview_rich_evidence`,
+  `views004_absent_preview_consumes_no_slot_at_the_boundary` and
+  `views004_artifact_preview_boundary_fits_then_refuses_by_one_scalar`.
+- Public integration and corruption: the view suite's
+  `v2run002_fresh_action_projects_closed_compact_standard_verbose_and_next_views`
+  and the readback corruption precedence owners in
+  [`int_reads001_readback_ports.rs`](../../crates/podway-engine/tests/int_reads001_readback_ports.rs).
+
 ## Structural simplification verification
 
 The [VIEWS, PARSE, STATE and ADMIT program](../roadmap/README.md#structural-simplification-program)
@@ -251,6 +287,8 @@ interface-change verification obligation.
 Promote each epic's lasting verification guidance at closeout. ADMIT-004 also
 retires or rewrites the program-level planning text in this section and the two
 documentation indexes; the completed behavior must not depend on retired TODOs.
+VIEWS lasting verification guidance is registered under
+[functional regression owners](#functional-regression-owners).
 
 ## Optional diagnostics
 
