@@ -467,6 +467,74 @@ fn v2sdg006_delegated_preview_and_graph_select_v2_without_changing_direct_result
     assert_eq!(envelope["result"]["delegated_placement_count"], 1);
     assert_eq!(envelope["result"]["delegated_placements"], json!(["work"]));
     assert!(decode_result_schema_contract_v2(envelope["result"].as_object().unwrap()).is_some());
+
+    let source = fs::read_to_string(fixture.root.join("delegated.yaml")).unwrap();
+    let (prefix, placement) = source.split_once("    - id: work\n").unwrap();
+    let ordered = format!(
+        "{}    - id: z-first\n{}    - id: a-second\n{}",
+        prefix.replace("entry: work", "entry: z-first"),
+        placement.replace("terminal: true", "next: a-second"),
+        placement,
+    );
+    for (file, source, expected_schema, expected_validate, expected_placements) in [
+        (
+            "delegated-semantic-invalid.yaml",
+            source.replace("use: work", "use: missing"),
+            "podway.procedure-preview-result/v2",
+            false,
+            Some(json!(["work"])),
+        ),
+        (
+            "delegated-malformed.yaml",
+            source.replace("node_definitions:", "node_definitions: ["),
+            "podway.procedure-preview-result/v1",
+            false,
+            None,
+        ),
+        (
+            "delegated-ordered.yaml",
+            ordered,
+            "podway.procedure-preview-result/v2",
+            true,
+            Some(json!(["z-first", "a-second"])),
+        ),
+    ] {
+        fs::write(fixture.root.join(file), source).unwrap();
+        let output = fixture.run_from_root(&[
+            "--json".to_owned(),
+            "procedure".to_owned(),
+            "preview".to_owned(),
+            file.to_owned(),
+        ]);
+        assert_eq!(output.status.code(), Some(i32::from(!expected_validate)));
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let envelope = one_json(&output);
+        let result = &envelope["result"];
+        assert_eq!(result["schema"], expected_schema);
+        assert_eq!(result["checks"]["validate"], expected_validate);
+        assert_eq!(result["admissible"], expected_validate);
+        assert_eq!(
+            result.get("delegated_placements"),
+            expected_placements.as_ref()
+        );
+        if let Some(placements) = expected_placements {
+            assert_eq!(
+                result["delegated_placement_count"],
+                placements.as_array().unwrap().len()
+            );
+        } else {
+            assert!(result.get("delegated_placement_count").is_none());
+        }
+        if !expected_validate {
+            assert_eq!(result["checks"]["vet"], false);
+            assert_eq!(result["checks"]["lint"], false);
+            assert!(result.get("procedure_digest").is_none());
+            assert_eq!(result["diagnostics"].as_array().unwrap().len(), 1);
+            assert_eq!(result["diagnostics_total"], 1);
+            assert_eq!(result["diagnostics_truncated"], false);
+        }
+        assert!(decode_result_schema_contract_v2(result.as_object().unwrap()).is_some());
+    }
 }
 
 #[test]

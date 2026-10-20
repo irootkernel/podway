@@ -134,6 +134,53 @@ fn current_workspace_binding_and_shared_values_preserve_bounds_and_lossless_path
     assert!(CanonicalExecutionJsonV1::new(nested(65)).is_err());
 }
 
+#[test]
+fn parse001_canonical_execution_admission_preserves_failure_precedence_and_bytes() {
+    use podway_store::{CanonicalExecutionJsonV1, StoreValueErrorV1};
+
+    assert_eq!(
+        CanonicalExecutionJsonV1::new(""),
+        Err(StoreValueErrorV1::EmptyValue {
+            field: "canonical execution JSON",
+        })
+    );
+    assert_eq!(
+        CanonicalExecutionJsonV1::new("[".repeat(1_048_577)),
+        Err(StoreValueErrorV1::ValueTooLong {
+            field: "canonical execution JSON",
+            maximum_bytes: 1_048_576,
+        })
+    );
+    let nested = |depth: usize| format!("{}0{}", "[".repeat(depth), "]".repeat(depth));
+    for input in [nested(65), format!(" {}", nested(65))] {
+        assert_eq!(
+            CanonicalExecutionJsonV1::new(input),
+            Err(StoreValueErrorV1::CanonicalExecutionJsonDepthExceeded { maximum: 64 })
+        );
+    }
+    for input in [
+        "{".to_owned(),
+        nested(256),
+        r#"{"a":1,"a":1}"#.to_owned(),
+        r#"{"b":1,"a":2}"#.to_owned(),
+        r#"{ "a":1}"#.to_owned(),
+        r#"{"a":"\u0061"}"#.to_owned(),
+        "1.0".to_owned(),
+        "1e0".to_owned(),
+        "-0".to_owned(),
+    ] {
+        assert_eq!(
+            CanonicalExecutionJsonV1::new(&input),
+            Err(StoreValueErrorV1::InvalidCanonicalExecutionJson),
+            "{input}"
+        );
+    }
+    let original = format!(r#"{{"a":[{},{}],"z":"é","é":"\\\""}}"#, i64::MIN, u64::MAX);
+    let admitted = CanonicalExecutionJsonV1::new(original.clone()).unwrap();
+    assert_eq!(admitted.as_str(), original);
+    assert_eq!(admitted.into_inner(), original);
+}
+
 pub(super) fn archive(direct: &DirectStoreV1, completed: &GraphSessionStateV2, now: UnixMillis) {
     assert_eq!(
         completed.trace().lifecycle(),

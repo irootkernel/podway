@@ -938,7 +938,19 @@ fn managed_same_process_reads_never_inherit_a_writers_writable_shm_mapping() {
 
 #[test]
 fn persisted_outcomes_fail_closed_on_invalid_headers_or_future_sequences() {
-    for corruption in ["headers", "sequence", "uuid", "command"] {
+    for corruption in [
+        "headers",
+        "sequence",
+        "uuid",
+        "command",
+        "command-mismatch",
+        "time",
+        "scope",
+        "whitespace",
+        "result",
+        "warnings",
+        "oversize",
+    ] {
         let (_root, direct) = fixture();
         let connection = Connection::open(direct.layout().database()).unwrap();
         connection
@@ -946,6 +958,9 @@ fn persisted_outcomes_fail_closed_on_invalid_headers_or_future_sequences() {
                 rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
                 true,
             )
+            .unwrap();
+        connection
+            .pragma_update(None, "ignore_check_constraints", true)
             .unwrap();
         match corruption {
             "headers" => {
@@ -981,25 +996,78 @@ fn persisted_outcomes_fail_closed_on_invalid_headers_or_future_sequences() {
                     .execute("UPDATE mutation_outcomes SET command_name='INVALID'", [])
                     .unwrap();
             }
+            "command-mismatch" => {
+                connection
+                    .execute("UPDATE mutation_outcomes SET command_name='item.set'", [])
+                    .unwrap();
+            }
+            "time" => {
+                connection
+                    .execute("UPDATE mutation_outcomes SET recorded_at_ms=-1", [])
+                    .unwrap();
+            }
+            "scope" => {
+                connection
+                    .execute("UPDATE mutation_outcomes SET scope_kind='session'", [])
+                    .unwrap();
+            }
+            "whitespace" | "result" | "warnings" | "oversize" => {
+                let original: String = connection
+                    .query_row("SELECT response_json FROM mutation_outcomes", [], |row| {
+                        row.get(0)
+                    })
+                    .unwrap();
+                let response = match corruption {
+                    "whitespace" => format!("{original}\n"),
+                    "oversize" => format!(
+                        "{{\"padding\":\"{}\",\"schema\":\"podway.output/v4\"}}",
+                        "x".repeat(1_048_576)
+                    ),
+                    "result" | "warnings" => {
+                        let mut document: serde_json::Value =
+                            serde_json::from_str(&original).unwrap();
+                        document[corruption] = if corruption == "result" {
+                            json!([])
+                        } else {
+                            json!({})
+                        };
+                        canonicalize_json_v1(&document).unwrap()
+                    }
+                    _ => unreachable!(),
+                };
+                connection
+                    .execute("UPDATE mutation_outcomes SET response_json=?1", [response])
+                    .unwrap();
+            }
             _ => unreachable!(),
         }
         drop(connection);
         let before = images(&direct.layout().runtime_directory());
-        assert!(
-            matches!(
-                direct.read(deadline(), |snapshot| snapshot
-                    .outcome(request("init").key())),
-                Err(DirectStoreErrorV1::Unreadable)
-            ),
-            "{corruption}"
-        );
-        assert!(
-            matches!(
-                direct.verify_integrity(deadline()),
-                Err(DirectStoreErrorV1::Unreadable)
-            ),
-            "{corruption}"
-        );
+        for result in [
+            direct
+                .read(deadline(), |snapshot| {
+                    snapshot.outcome(request("init").key())
+                })
+                .map(|_| ()),
+            direct.verify_integrity(deadline()),
+        ] {
+            if corruption == "oversize" {
+                assert!(
+                    matches!(
+                        result,
+                        Err(DirectStoreErrorV1::Sqlite(
+                            rusqlite::Error::InvalidColumnType(5, _, rusqlite::types::Type::Null)
+                        ))
+                    ),
+                    "{corruption}: {result:?}"
+                );
+            } else {
+                assert!(
+                    matches!(result, Err(DirectStoreErrorV1::Unreadable)),
+                    "{corruption}: {result:?}"
+                );
+            }
+        }
         assert_eq!(images(&direct.layout().runtime_directory()), before);
     }
 }

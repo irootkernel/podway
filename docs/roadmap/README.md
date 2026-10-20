@@ -113,7 +113,7 @@ Dependencies: accepted `VIEWS` completion. Design:
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `PARSE-001` | Pin parsing and validation responsibilities | Planned | Map source, Store and Protocol trust boundaries, canonical-byte rules and failure precedence. | [Design and interfaces](../todo/TODO-podway-document-admission-reuse.md#accepted-design-decisions-and-interfaces) |
+| `PARSE-001` | Pin parsing and validation responsibilities | Completed | Map source, Store and Protocol trust boundaries, canonical-byte rules and failure precedence. | [Design and interfaces](../todo/TODO-podway-document-admission-reuse.md#accepted-design-decisions-and-interfaces) |
 | `PARSE-002` | Reuse one parsed Store outcome document | Planned | Share one parsed value through outcome admission without dropping canonical, depth, schema or relational checks or rebuilding replay bytes. | [Store outcome admission](../todo/TODO-podway-document-admission-reuse.md#store-outcome-admission) |
 | `PARSE-003` | Remove unnecessary response ownership conversions | Planned | Borrow or move validated response values through construction and validation while retaining independent checks and output bounds. | [Response ownership](../todo/TODO-podway-document-admission-reuse.md#response-ownership) |
 | `PARSE-004` | Carry first preview parse facts | Planned | Select delegated preview generation from first-parse facts, preserving malformed and parsed-but-invalid behavior; adopt DF-006. | [Preview facts](../todo/TODO-podway-document-admission-reuse.md#preview-facts) |
