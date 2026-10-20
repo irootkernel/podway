@@ -28,10 +28,11 @@ The [structural simplification program](roadmap/README.md#structural-simplificat
 adopts `VIEWS -> PARSE -> STATE -> ADMIT`: projection construction, document
 admission, same-snapshot state and request admission reuse. The design was
 registered on 2026-10-19; the roadmap owns current execution status.
-The [three remaining adopted dossiers](todo/README.md#current-adopted-dossiers)
+The [two remaining adopted dossiers](todo/README.md#current-adopted-dossiers)
 define unfinished scope, failure boundaries and task-local correctness checks.
-Completed VIEWS behavior and verification live in
+Completed VIEWS and PARSE behavior lives in
 [projection composition](architecture/system.md#request-scoped-read-composition) and
+[document admission reuse](architecture/system.md#document-admission-reuse), with
 [functional regression owners](implementation-tips/testing.md#functional-regression-owners).
 Elapsed-time tests,
 latency percentiles, throughput benchmarks and performance baselines/thresholds

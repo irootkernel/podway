@@ -103,21 +103,26 @@ and projection composition under
 Fresh documentation checks cover VIEWS-005; the full `make test` result is
 reused for unchanged executable, test and contract inputs.
 Master accepted the assembled Epic after final integration review. Its dossier
-is retired under the [TODO lifecycle](../todo/README.md#lifecycle). No successor
-epic has started.
+is retired under the [TODO lifecycle](../todo/README.md#lifecycle).
 
 ## PARSE — Document Admission Reuse
 
-Dependencies: accepted `VIEWS` completion. Design:
-[Document admission reuse](../todo/TODO-podway-document-admission-reuse.md).
+Dependencies: accepted `VIEWS` completion. Implemented ownership:
+[Document admission reuse](../architecture/system.md#document-admission-reuse).
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `PARSE-001` | Pin parsing and validation responsibilities | Completed | Map source, Store and Protocol trust boundaries, canonical-byte rules and failure precedence. | [Design and interfaces](../todo/TODO-podway-document-admission-reuse.md#accepted-design-decisions-and-interfaces) |
-| `PARSE-002` | Reuse one parsed Store outcome document | Completed | Share one parsed value through outcome admission without dropping canonical, depth, schema or relational checks or rebuilding replay bytes. | [Store outcome admission](../todo/TODO-podway-document-admission-reuse.md#store-outcome-admission) |
-| `PARSE-003` | Remove unnecessary response ownership conversions | Completed | Borrow or move validated response values through construction and validation while retaining independent checks and output bounds. | [Response ownership](../todo/TODO-podway-document-admission-reuse.md#response-ownership) |
-| `PARSE-004` | Carry first preview parse facts | Completed | Select delegated preview generation from first-parse facts, preserving malformed and parsed-but-invalid behavior; adopt DF-006. | [Preview facts](../todo/TODO-podway-document-admission-reuse.md#preview-facts) |
-| `PARSE-005` | Qualify admission and exact replay | Completed | Verify error order, canonical bytes, preview variants and original-response replay, complete the development gate and review, then promote documentation. | [Verification](../todo/TODO-podway-document-admission-reuse.md#verification-and-release-acceptance) |
+| `PARSE-001` | Pin parsing and validation responsibilities | Completed | Map source, Store and Protocol trust boundaries, canonical-byte rules and failure precedence. | [Admission ownership](../architecture/system.md#document-admission-reuse) |
+| `PARSE-002` | Reuse one parsed Store outcome document | Completed | Share one parsed value through outcome admission without dropping canonical, depth, schema or relational checks or rebuilding replay bytes. | [Store outcome admission](../architecture/system.md#document-admission-reuse) |
+| `PARSE-003` | Remove unnecessary response ownership conversions | Completed | Borrow or move validated response values through construction and validation while retaining independent checks and output bounds. | [Response ownership](../architecture/system.md#document-admission-reuse) |
+| `PARSE-004` | Carry first preview parse facts | Completed | Select delegated preview generation from first-parse facts, preserving malformed and parsed-but-invalid behavior; adopt DF-006. | [Preview facts](../architecture/system.md#document-admission-reuse) |
+| `PARSE-005` | Qualify admission and exact replay | Completed | Verify error order, canonical bytes, preview variants and original-response replay, complete the development gate and review, then promote documentation. | [Regression owners](../implementation-tips/testing.md#functional-regression-owners) |
+
+PARSE is owner-accepted. Store outcome admission reuses one parsed document
+without rebuilding replay bytes; Protocol moves or borrows response values, and
+Config carries first-parse authoring facts. Independent validation and public
+contracts remain preserved. Its dossier is retired under the
+[TODO lifecycle](../todo/README.md#lifecycle).
 
 ## STATE — Snapshot State Reuse
 

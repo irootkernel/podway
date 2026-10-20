@@ -91,21 +91,19 @@ task order and current status.
 Accept each epic before starting the next, without cross-epic implementation
 interleaving:
 
-1. [PARSE: Document admission reuse](TODO-podway-document-admission-reuse.md)
-   shares parsed values and response ownership while retaining independent checks;
-   it adopts DF-006 for first-parse preview facts.
-2. [STATE: Snapshot state reuse](TODO-podway-snapshot-state-reuse.md)
+1. [STATE: Snapshot state reuse](TODO-podway-snapshot-state-reuse.md)
    shares admitted graph/disposition, attempt lookup and receipt facts within a
    coherent snapshot.
-3. [ADMIT: Request admission reuse](TODO-podway-request-admission-reuse.md)
+2. [ADMIT: Request admission reuse](TODO-podway-request-admission-reuse.md)
    composes eligible admission stages and retains at most one Store-prepared
    graph in an opaque Engine context for one CLI invocation, without retaining
    leases across mutation artifact hashing, prompts or the competing-writer gap.
 
-VIEWS is accepted and its dossier is retired. Completed projection behavior and
-verification guidance live in the
-[system architecture](../architecture/system.md#request-scoped-read-composition)
-and [functional regression owners](../implementation-tips/testing.md#functional-regression-owners).
+VIEWS and PARSE are accepted and their dossiers are retired. Completed behavior
+and verification guidance live in
+[projection composition](../architecture/system.md#request-scoped-read-composition),
+[document admission reuse](../architecture/system.md#document-admission-reuse) and
+[functional regression owners](../implementation-tips/testing.md#functional-regression-owners).
 
 No CLI/JSON interface, storage identity, release or external-consumer change is selected.
 Elapsed-time tests, latency percentiles, throughput benchmarks, performance
