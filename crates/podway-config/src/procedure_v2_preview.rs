@@ -15,7 +15,9 @@ use crate::procedure_v2_diagnostics::{
     AuthoringContext, AuthoringStage, FinalizedDiagnostics, config_error_diagnostic,
     finalize_diagnostics,
 };
-use crate::procedure_v2_format::{FormatFailure, FormatRequest, admit_procedure_v2};
+use crate::procedure_v2_format::{
+    FormatFailure, FormatRequest, ProcedureAdmissionFailureV2, admit_procedure_v2,
+};
 use crate::procedure_v2_graph::GraphIndex;
 use crate::{
     ConfigError, GraphProjectionNodeTypeV2, ProcedureGraphModelV2, ProcedureMermaidProjectionV2,
@@ -242,6 +244,7 @@ impl ProcedurePreviewDetailsV2 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProcedurePreviewReportV2 {
     checks: ProcedurePreviewChecksV2,
+    delegated_placements: Vec<String>,
     details: Option<ProcedurePreviewDetailsV2>,
     findings: FinalizedDiagnostics,
 }
@@ -252,6 +255,10 @@ impl ProcedurePreviewReportV2 {
     }
     pub const fn checks(&self) -> ProcedurePreviewChecksV2 {
         self.checks
+    }
+    /// Delegated action placement IDs retained even when validation or projection fails.
+    pub fn delegated_placements(&self) -> &[String] {
+        &self.delegated_placements
     }
     pub const fn details(&self) -> Option<&ProcedurePreviewDetailsV2> {
         self.details.as_ref()
@@ -270,8 +277,8 @@ impl ProcedurePreviewReportV2 {
 /// Aggregates the complete read-only preview for one source document.
 pub fn preview_procedure_v2(request: FormatRequest<'_>) -> ProcedurePreviewReportV2 {
     let context = AuthoringContext::new(request.source_path, request.source, request.format);
-    let validated = match admit_procedure_v2(&context) {
-        Ok(validated) => validated,
+    let (validated, delegated_placements) = match admit_procedure_v2(&context) {
+        Ok(admitted) => admitted,
         Err(failure) => return stopped(failure, &context),
     };
 
@@ -318,13 +325,17 @@ pub fn preview_procedure_v2(request: FormatRequest<'_>) -> ProcedurePreviewRepor
             vet: vet_ok,
             lint: lint_ok,
         },
+        delegated_placements,
         details,
         findings: finalize_diagnostics(entries),
     }
 }
 
-fn stopped(failure: FormatFailure, context: &AuthoringContext<'_>) -> ProcedurePreviewReportV2 {
-    let diagnostics = match failure {
+fn stopped(
+    failure: ProcedureAdmissionFailureV2,
+    context: &AuthoringContext<'_>,
+) -> ProcedurePreviewReportV2 {
+    let diagnostics = match failure.failure {
         FormatFailure::NotProcedureV2 => vec![config_error_diagnostic(
             &ConfigError::InvalidSchema {
                 expected: podway_core::PROCEDURE_SCHEMA_V2,
@@ -340,6 +351,7 @@ fn stopped(failure: FormatFailure, context: &AuthoringContext<'_>) -> ProcedureP
             vet: false,
             lint: false,
         },
+        delegated_placements: failure.delegated_placements,
         details: None,
         findings: finalize_diagnostics(
             diagnostics

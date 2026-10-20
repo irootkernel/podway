@@ -113,8 +113,8 @@ pub fn check_procedure_v2(request: FormatRequest<'_>) -> ProcedureCheckReport {
     // S0 and S1. A document with no model has nothing left to report, so the one diagnostic that
     // says why is the whole report.
     let validated = match admit_procedure_v2(&context) {
-        Ok(validated) => validated,
-        Err(failure) => return stopped(failure, &context),
+        Ok((validated, _)) => validated,
+        Err(failure) => return stopped(failure.failure, &context),
     };
 
     let mut entries: Vec<(AuthoringStage, AuthoringDiagnostic)> = Vec::new();

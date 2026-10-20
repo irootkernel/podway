@@ -201,6 +201,12 @@ pub enum FormatFailure {
     Diagnostics(Vec<AuthoringDiagnostic>),
 }
 
+/// Admission findings together with the facts retained from a successful parse.
+pub(crate) struct ProcedureAdmissionFailureV2 {
+    pub(crate) failure: FormatFailure,
+    pub(crate) delegated_placements: Vec<String>,
+}
+
 /// Renders a Procedure v2 source document in canonical authoring form.
 ///
 /// Stages, in order: dispatch and parse, validate, scan source constructs and collect comments
@@ -211,7 +217,7 @@ pub fn format_procedure_v2(
     request: FormatRequest<'_>,
 ) -> Result<FormattedProcedureV2, FormatFailure> {
     let context = AuthoringContext::new(request.source_path, request.source, request.format);
-    let validated = admit_procedure_v2(&context)?;
+    let (validated, _) = admit_procedure_v2(&context).map_err(|failure| failure.failure)?;
     render_procedure_v2(&validated, &context).map_err(FormatFailure::Diagnostics)
 }
 
@@ -223,17 +229,24 @@ pub fn format_procedure_v2(
 /// beside a rejection would bury the rejection.
 pub(crate) fn admit_procedure_v2(
     context: &AuthoringContext<'_>,
-) -> Result<ValidatedProcedureV2, FormatFailure> {
+) -> Result<(ValidatedProcedureV2, Vec<String>), ProcedureAdmissionFailureV2> {
     let parsed = match parse_procedure_document(context.source().as_bytes(), context.format()) {
         Ok(ParsedProcedure::V2(parsed)) => parsed,
         Err(error) => {
-            return Err(FormatFailure::Diagnostics(vec![config_error_diagnostic(
-                &error, context,
-            )]));
+            return Err(ProcedureAdmissionFailureV2 {
+                failure: FormatFailure::Diagnostics(vec![config_error_diagnostic(&error, context)]),
+                delegated_placements: Vec::new(),
+            });
         }
     };
-    validate_procedure_v2(parsed)
-        .map_err(|error| FormatFailure::Diagnostics(vec![config_error_diagnostic(&error, context)]))
+    let delegated_placements = parsed.delegated_placements();
+    match validate_procedure_v2(parsed) {
+        Ok(validated) => Ok((validated, delegated_placements)),
+        Err(error) => Err(ProcedureAdmissionFailureV2 {
+            failure: FormatFailure::Diagnostics(vec![config_error_diagnostic(&error, context)]),
+            delegated_placements,
+        }),
+    }
 }
 
 /// Renders a validated model in canonical authoring form: the supported-construct scan and comment

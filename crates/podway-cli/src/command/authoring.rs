@@ -7,15 +7,14 @@ use std::{
 
 use podway_config::{
     AuthoringContext, AuthoringStage, FormatFailure, FormatRequest, FormattedProcedureV2,
-    ParsedProcedure, ParsedProcedureV2, ProcedureDocumentFormat, ScaffoldTemplate,
-    check_procedure_v2, config_error_diagnostic, finalize_diagnostics, format_procedure_v2,
-    lint_procedure_v2, normalize_procedure_v2_graph, parse_procedure_document,
-    preview_procedure_v2, project_procedure_v2_dot, project_procedure_v2_graph,
-    project_procedure_v2_mermaid, project_procedure_v2_plantuml, scaffold_procedure_v2,
-    validate_procedure_v2, vet_procedure_v2,
+    ParsedProcedure, ProcedureDocumentFormat, ScaffoldTemplate, check_procedure_v2,
+    config_error_diagnostic, finalize_diagnostics, format_procedure_v2, lint_procedure_v2,
+    normalize_procedure_v2_graph, parse_procedure_document, preview_procedure_v2,
+    project_procedure_v2_dot, project_procedure_v2_graph, project_procedure_v2_mermaid,
+    project_procedure_v2_plantuml, scaffold_procedure_v2, validate_procedure_v2, vet_procedure_v2,
 };
 use podway_core::{
-    GraphPlacementV2, ItemConditionV2, ItemPredicateOperatorV2, OptionGuardV2, PROCEDURE_SCHEMA_V2,
+    ItemConditionV2, ItemPredicateOperatorV2, OptionGuardV2, PROCEDURE_SCHEMA_V2,
     PredicateScalarV2, Sha256Digest,
 };
 use podway_presets::catalog_v2;
@@ -691,7 +690,7 @@ fn execute_procedure_graph(file: &Path, format_name: &str) -> Result<RunResult, 
     }) else {
         unreachable!("the static graph result is a JSON object");
     };
-    let delegated = delegated_placements_v1(validated.parsed());
+    let delegated = validated.parsed().delegated_placements();
     if !delegated.is_empty() {
         result.insert(
             "schema".to_owned(),
@@ -704,20 +703,6 @@ fn execute_procedure_graph(file: &Path, format_name: &str) -> Result<RunResult, 
         result.insert("delegated_placements".to_owned(), json!(delegated));
     }
     Ok(local_result_v2(PROCEDURE_GRAPH_COMMAND, result, text, 0))
-}
-
-fn delegated_placements_v1(procedure: &ParsedProcedureV2) -> Vec<String> {
-    procedure
-        .graph()
-        .placements()
-        .iter()
-        .filter_map(|placement| match placement {
-            GraphPlacementV2::Action(action) if action.delegation().is_some() => {
-                Some(action.id().as_str().to_owned())
-            }
-            _ => None,
-        })
-        .collect()
 }
 
 fn procedure_graph_diagnostics(
@@ -807,19 +792,17 @@ fn execute_procedure_preview(file: &Path) -> Result<RunResult, LocalFailure> {
     }) else {
         unreachable!("the static preview result is a JSON object");
     };
-    if let Ok(ParsedProcedure::V2(parsed)) = parse_procedure_document(source.as_bytes(), format) {
-        let delegated = delegated_placements_v1(&parsed);
-        if !delegated.is_empty() {
-            result.insert(
-                "schema".to_owned(),
-                json!("podway.procedure-preview-result/v2"),
-            );
-            result.insert(
-                "delegated_placement_count".to_owned(),
-                json!(delegated.len()),
-            );
-            result.insert("delegated_placements".to_owned(), json!(delegated));
-        }
+    let delegated = report.delegated_placements();
+    if !delegated.is_empty() {
+        result.insert(
+            "schema".to_owned(),
+            json!("podway.procedure-preview-result/v2"),
+        );
+        result.insert(
+            "delegated_placement_count".to_owned(),
+            json!(delegated.len()),
+        );
+        result.insert("delegated_placements".to_owned(), json!(delegated));
     }
 
     let text = if let Some(details) = report.details() {

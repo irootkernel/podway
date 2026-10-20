@@ -533,6 +533,27 @@ fn v2sdg006_delegated_preview_and_graph_select_v2_without_changing_direct_result
         }
         assert!(decode_result_schema_contract_v2(result).is_some());
     }
+
+    let output = fixture.run_from_root(&[
+        "--json".to_owned(),
+        "procedure".to_owned(),
+        "graph".to_owned(),
+        "delegated-ordered.yaml".to_owned(),
+        "--format".to_owned(),
+        "json".to_owned(),
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    let envelope = one_json(&output);
+    assert_eq!(
+        envelope["result"]["schema"],
+        "podway.procedure-graph-result/v2"
+    );
+    assert_eq!(envelope["result"]["delegated_placement_count"], 2);
+    assert_eq!(
+        envelope["result"]["delegated_placements"],
+        json!(["z-first", "a-second"])
+    );
+    assert!(decode_result_schema_contract_v2(&envelope["result"]).is_some());
 }
 
 #[test]

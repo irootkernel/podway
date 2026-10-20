@@ -104,6 +104,20 @@ impl ParsedProcedureV2 {
     pub fn graph(&self) -> &ProcedureGraphV2 {
         &self.graph
     }
+
+    /// Returns delegated action placement IDs in authored graph order.
+    pub fn delegated_placements(&self) -> Vec<String> {
+        self.graph()
+            .placements()
+            .iter()
+            .filter_map(|placement| match placement {
+                GraphPlacementV2::Action(action) if action.delegation().is_some() => {
+                    Some(action.id().as_str().to_owned())
+                }
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 /// Maps an already-admitted Procedure v2 YAML `text` into the core v2 authoring model. The

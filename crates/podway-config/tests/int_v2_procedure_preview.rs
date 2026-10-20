@@ -175,7 +175,7 @@ fn preview<'a>(
     })
 }
 
-fn mermaid_overflow_document() -> String {
+fn mermaid_overflow_document() -> (String, String) {
     let graph_node_ids = (0..podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2)
         .map(|index| {
             let prefix = format!("n-{index:04}-");
@@ -200,11 +200,22 @@ fn mermaid_overflow_document() -> String {
                     .collect::<serde_json::Map<_, _>>();
                 json!({"id": id, "use": "choose", "routes": routes})
             } else {
-                json!({"id": id, "use": "finish", "terminal": true})
+                json!({
+                    "id": id,
+                    "use": "finish",
+                    "terminal": true,
+                    "delegation": {
+                        "binding_ref": "local-specialist",
+                        "role_ref": "reviewer",
+                        "role_snapshot_digest": format!("sha256:{}", "a".repeat(64)),
+                        "max_rounds": 3,
+                        "after_accept": "retain",
+                    },
+                })
             }
         })
         .collect::<Vec<_>>();
-    json!({
+    let source = json!({
         "schema": "podway.procedure/v2",
         "id": "preview-overflow",
         "version": "1",
@@ -228,7 +239,116 @@ fn mermaid_overflow_document() -> String {
         "graph": {"entry": graph_node_ids[0], "nodes": nodes},
         "manual_rework": {"allowed_targets": [graph_node_ids[0].clone()]},
     })
-    .to_string()
+    .to_string();
+    (source, graph_node_ids.last().unwrap().clone())
+}
+
+#[test]
+fn parse004_delegated_facts_survive_admission_and_vet_failures() {
+    let direct: serde_json::Value = serde_norway::from_str(MINIMAL_YAML).unwrap();
+    let declaration = json!({
+        "binding_ref": "local-specialist",
+        "role_ref": "reviewer",
+        "role_snapshot_digest": format!("sha256:{}", "a".repeat(64)),
+        "max_rounds": 3,
+        "after_accept": "retain",
+    });
+    let mut delegated = direct.clone();
+    delegated["graph"] = json!({
+        "entry": "z-first",
+        "nodes": [
+            {"id": "z-first", "use": "work", "next": "direct", "delegation": declaration},
+            {"id": "direct", "use": "work", "next": "a-second"},
+            {"id": "a-second", "use": "work", "terminal": true, "delegation": declaration},
+        ],
+    });
+    let mut semantic_invalid = delegated.clone();
+    semantic_invalid["graph"]["nodes"][0]["use"] = json!("missing");
+    let mut vet_invalid = delegated.clone();
+    vet_invalid["graph"]["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id": "stranded", "use": "work", "terminal": true}));
+
+    for (document, expected_facts, expected_checks, expected_diagnostic) in [
+        (&direct, Vec::new(), (true, true, false), None),
+        (
+            &delegated,
+            vec!["z-first", "a-second"],
+            (true, true, false),
+            None,
+        ),
+        (
+            &semantic_invalid,
+            vec!["z-first", "a-second"],
+            (false, false, false),
+            Some("GRAPH_DEFINITION_UNKNOWN"),
+        ),
+        (
+            &vet_invalid,
+            vec!["z-first", "a-second"],
+            (true, false, false),
+            Some("UNREACHABLE_GRAPH_NODE"),
+        ),
+    ] {
+        let yaml = serde_norway::to_string(document).unwrap();
+        let json = serde_json::to_string(document).unwrap();
+        let yaml_report = preview(&yaml, "facts", ProcedureDocumentFormat::Yaml);
+        let json_report = preview(&json, "facts", ProcedureDocumentFormat::Json);
+        assert_eq!(yaml_report.delegated_placements(), expected_facts);
+        assert_eq!(json_report.delegated_placements(), expected_facts);
+        for report in [&yaml_report, &json_report] {
+            assert_eq!(
+                (
+                    report.checks().validate(),
+                    report.checks().vet(),
+                    report.checks().lint(),
+                ),
+                expected_checks
+            );
+            assert_eq!(report.admissible(), expected_checks.0 && expected_checks.1);
+            assert_eq!(report.details().is_some(), report.admissible());
+            if let Some(code) = expected_diagnostic {
+                assert!(
+                    report
+                        .diagnostics()
+                        .iter()
+                        .any(|diagnostic| diagnostic.code().as_str() == code)
+                );
+            }
+        }
+        assert_eq!(yaml_report.checks(), json_report.checks());
+        assert_eq!(yaml_report.details(), json_report.details());
+        assert_eq!(
+            yaml_report
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| diagnostic.code())
+                .collect::<Vec<_>>(),
+            json_report
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| diagnostic.code())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    for (source, format) in [
+        (
+            "schema: podway.procedure/v2\ngraph: [\ndelegation:",
+            ProcedureDocumentFormat::Yaml,
+        ),
+        (
+            "{\"schema\":\"podway.procedure/v2\",\"delegation\":",
+            ProcedureDocumentFormat::Json,
+        ),
+    ] {
+        let report = preview(source, "malformed", format);
+        assert!(report.delegated_placements().is_empty());
+        assert!(!report.checks().validate());
+        assert!(!report.admissible());
+        assert_eq!(report.diagnostics_total(), 1);
+    }
 }
 
 #[test]
@@ -471,7 +591,7 @@ fn v2grf007_vet_failure_still_runs_lint_and_withholds_details() {
 
 #[test]
 fn v2gsc004_preview_fails_closed_when_its_required_mermaid_projection_overflows() {
-    let source = mermaid_overflow_document();
+    let (source, delegated_placement) = mermaid_overflow_document();
     assert!(source.len() <= podway_core::MAX_PROCEDURE_DOCUMENT_BYTES);
     let report = preview(&source, "overflow.json", ProcedureDocumentFormat::Json);
 
@@ -485,6 +605,7 @@ fn v2gsc004_preview_fails_closed_when_its_required_mermaid_projection_overflows(
         (true, false, false)
     );
     assert!(report.details().is_none());
+    assert_eq!(report.delegated_placements(), [delegated_placement]);
     assert!(
         report
             .diagnostics()
