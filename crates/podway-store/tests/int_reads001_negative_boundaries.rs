@@ -16,8 +16,8 @@ use super::int_reads001_query_inventory::{
     attempt_total, attempt_uuid, encoded_payload_bytes, reads001_fixture, reads001_session,
     reads001_snapshot, recipe_medium, recipe_small,
 };
-use super::int_v2dfc005_direct_store::{deadline, store};
-use super::int_v2dfc008_persistence::{archive, image, seed};
+use super::int_v2dfc005_direct_store::{deadline, request, store, success};
+use super::int_v2dfc008_persistence::{archive, fixture, image, seed};
 
 const UNKNOWN_KIND: &str = "{\"kind\":\"mystery\"}";
 const NONCANONICAL_TEXT_PREFIX: &str = "{\"value\":\"";
@@ -455,4 +455,217 @@ fn encoded_slot_count_partial(state: &podway_store::GraphSessionStateV2) -> u64 
         .flat_map(|attempt| attempt.item_slots())
         .filter(|slot| slot.value().is_some())
         .count() as u64
+}
+
+/// Builds the shared STATE-001 fixture: one terminal current session holding
+/// both a stored delegation receipt (for its accepting attempt) and a
+/// recorded terminal disposition.
+fn disposed_delegated_session(direct: &DirectStoreV1) -> podway_store::GraphSessionStateV2 {
+    use super::int_v2sdg004_receipt as receipts;
+    let current = receipts::session_state();
+    seed(direct, &current);
+    let original = receipts::receipt(&current);
+    let accepted = current
+        .accept_delegation_successor_v1(current.trace().active_attempt().unwrap().attempt_id())
+        .unwrap();
+    let accept = request("negative-accept-delegation");
+    direct
+        .mutate(
+            &accept,
+            deadline(),
+            || UnixMillis::new(200),
+            |transaction| {
+                transaction.now();
+                transaction.accept_delegation(
+                    current.workspace_revision(),
+                    current.trace().revision(),
+                    &accepted,
+                    &receipts::digest('d'),
+                    &original,
+                )?;
+                Ok(success(
+                    &accept,
+                    serde_json::json!({"accepted":true}),
+                    transaction.now(),
+                ))
+            },
+        )
+        .unwrap();
+    let completed = accepted
+        .complete_active_action_v2(
+            accepted.trace().revision(),
+            accepted.trace().active_attempt().unwrap().attempt_id(),
+            None,
+            UnixMillis::new(300),
+        )
+        .unwrap()
+        .into_state();
+    let dispose = request("negative-record-disposition");
+    direct
+        .mutate(
+            &dispose,
+            deadline(),
+            || UnixMillis::new(301),
+            |transaction| {
+                transaction.now();
+                transaction.replace_graph(
+                    accepted.workspace_revision(),
+                    accepted.trace().revision(),
+                    &completed,
+                )?;
+                transaction.record_disposition(
+                    &podway_core::TerminalDispositionV2::not_required(
+                        completed.trace().session_id().clone(),
+                        completed.trace().revision(),
+                        "No handoff required",
+                        None,
+                        UnixMillis::new(301),
+                    )
+                    .unwrap(),
+                )?;
+                Ok(success(
+                    &dispose,
+                    serde_json::json!({"disposed":true}),
+                    transaction.now(),
+                ))
+            },
+        )
+        .unwrap();
+    completed
+}
+
+/// Disposition admission runs inside the graph loader before the view's
+/// receipt acquisition and before the loader's in-memory cursor comparison.
+/// Both faults classify as Session corruption, so the winning stage is
+/// proven by registered probe order: the disposition SELECT must have
+/// executed, and the receipt window must not have run.
+#[test]
+fn state001_disposition_admission_precedes_receipt_and_cursor_checks() {
+    // (i) Disposition corruption paired with a forged receipt: the view must
+    // refuse with the disposition's Session classification while the receipt
+    // window statement never executes.
+    let (root, direct) = fixture(&super::int_v2sdg004_receipt::identity());
+    let completed = disposed_delegated_session(&direct);
+    let connection = rusqlite::Connection::open(direct.layout().database()).unwrap();
+    let beyond_session_revision = completed.trace().revision().get() as i64 + 1;
+    let changed = connection
+        .execute(
+            "UPDATE v2_terminal_dispositions SET terminal_session_revision=?1 WHERE session_id=?2",
+            rusqlite::params![
+                beyond_session_revision,
+                completed.trace().session_id().as_str()
+            ],
+        )
+        .unwrap();
+    assert_eq!(changed, 1);
+    let (attempt_id, session_id, receipt_id, receipt_json): (String, String, String, String) =
+        connection
+            .query_row(
+                "SELECT attempt_id,session_id,receipt_id,receipt_json FROM v2_delegation_receipts",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+    let mut forged: serde_json::Value = serde_json::from_str(&receipt_json).unwrap();
+    forged["workspace_uuid"] = serde_json::json!("00000000-0000-4000-8000-000000000499");
+    let stored = podway_store::DelegationReceiptV1::new(forged)
+        .unwrap()
+        .canonical_json()
+        .to_owned();
+    connection
+        .execute("DELETE FROM v2_delegation_receipts", [])
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO v2_delegation_receipts(attempt_id,session_id,receipt_id,receipt_json) VALUES (?1,?2,?3,?4)",
+            rusqlite::params![attempt_id, session_id, receipt_id, stored],
+        )
+        .unwrap();
+    drop(connection);
+    let cold = store(root.path());
+    let accountant = QueryAccountant::start();
+    let refused = cold.read(deadline(), |snapshot| snapshot.view(UnixMillis::new(400)));
+    let report = accountant.finish();
+    assert!(matches!(
+        refused,
+        Err(podway_store::direct_store::DirectStoreErrorV1::State(
+            podway_store::StoreErrorV1::CorruptStateV1 {
+                record: podway_store::StoreRecordKindV1::Session,
+            }
+        ))
+    ));
+    let disposition_executes: u64 = report
+        .sql
+        .iter()
+        .filter(|(key, _)| key.contains("FROM v2_terminal_dispositions"))
+        .map(|(_, counts)| counts.executes)
+        .sum();
+    let window_executes: u64 = report
+        .sql
+        .iter()
+        .filter(|(key, _)| key.contains("ORDER BY a.trace_sequence DESC"))
+        .map(|(_, counts)| counts.executes)
+        .sum();
+    assert_eq!(
+        disposition_executes, 1,
+        "exactly the loader's disposition admission must run before failing"
+    );
+    assert_eq!(
+        window_executes, 0,
+        "the receipt window must not run while disposition admission fails"
+    );
+    drop(root);
+
+    // (ii) Disposition corruption paired with a corrupted persisted cursor
+    // (v2_task_sessions.latest_trace_sequence incremented past the trace's
+    // real latest sequence, the same column the supported corruption helper
+    // uses): the cursor comparison at the end of the loader is in-memory, so
+    // the ordering evidence is the executed disposition SELECT itself. If
+    // the cursor check ever ran first, the disposition statement would not
+    // appear in the refused read's inventory.
+    let (root, direct) = fixture(&super::int_v2sdg004_receipt::identity());
+    let completed = disposed_delegated_session(&direct);
+    let connection = rusqlite::Connection::open(direct.layout().database()).unwrap();
+    let beyond_session_revision = completed.trace().revision().get() as i64 + 1;
+    let changed = connection
+        .execute(
+            "UPDATE v2_terminal_dispositions SET terminal_session_revision=?1 WHERE session_id=?2",
+            rusqlite::params![
+                beyond_session_revision,
+                completed.trace().session_id().as_str()
+            ],
+        )
+        .unwrap();
+    assert_eq!(changed, 1);
+    let cursor_changed = connection
+        .execute(
+            "UPDATE v2_task_sessions SET latest_trace_sequence = latest_trace_sequence + 1 \
+             WHERE activity='current'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+    assert_eq!(cursor_changed, 1);
+    let cold = store(root.path());
+    let accountant = QueryAccountant::start();
+    let refused = cold.read(deadline(), |snapshot| snapshot.view(UnixMillis::new(401)));
+    let report = accountant.finish();
+    assert!(matches!(
+        refused,
+        Err(podway_store::direct_store::DirectStoreErrorV1::State(
+            podway_store::StoreErrorV1::CorruptStateV1 {
+                record: podway_store::StoreRecordKindV1::Session,
+            }
+        ))
+    ));
+    let disposition_executes: u64 = report
+        .sql
+        .iter()
+        .filter(|(key, _)| key.contains("FROM v2_terminal_dispositions"))
+        .map(|(_, counts)| counts.executes)
+        .sum();
+    assert_eq!(
+        disposition_executes, 1,
+        "disposition admission must still run exactly once before the cursor comparison"
+    );
 }

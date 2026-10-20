@@ -1012,6 +1012,180 @@ fn delegated_acceptance_recomputes_package_and_blocks_changed_items_before_clock
         .unwrap();
 }
 
+/// STATE-001 read-path pin: after an acceptance and a later change of one
+/// accepted item, the same-snapshot view still reports `ItemsChanged` with
+/// the receipt present and identity-valid inside the bounded window. The
+/// accepted-items digest comparison is decided at the readiness stage, so
+/// any window-derived readiness must keep evaluating it there.
+#[test]
+fn state001_changed_items_report_items_changed_through_view_with_in_window_receipt() {
+    use podway_core::{AttemptId, ItemId, ProcedureSnapshotId, Revision, SessionId};
+    use podway_engine::{
+        direct_delegation::{DirectDelegationRequestV1, accept_delegation_v1},
+        direct_execution::{
+            DirectReadCommandV1, DirectReadRequestV1, NativeDirectIdSourceV1, execute_read_v1,
+        },
+        direct_items::{DirectItemCommandV1, DirectItemRequestV1, execute_item_v1},
+        execution::workspace_procedure_snapshot_from_bytes_v2,
+    };
+    use podway_protocol::{
+        DelegationAcceptV1, ItemCheckV1, ItemMutationPreconditionsWireV1, ItemSetV1,
+        SessionMutationPreconditionsWireV1,
+    };
+    struct MutationClock;
+    impl ExecutionClockV1 for MutationClock {
+        fn now(&self) -> UnixMillis {
+            UnixMillis::new(NOW + 20)
+        }
+    }
+    let (_fixture, selector, store, _) = fixture();
+    let snapshot = workspace_procedure_snapshot_from_bytes_v2(
+        "delegated.json",
+        &delegated_procedure(),
+        ProcedureSnapshotId::new(LOOKUP_RESPONSE).unwrap(),
+        UnixMillis::new(NOW + 2),
+    )
+    .unwrap();
+    let graph = podway_store::GraphSessionStateV2::prepared(
+        Revision::new(1),
+        "Delegation fixture",
+        snapshot,
+        SessionId::new(LOOKUP_RESPONSE).unwrap(),
+        UnixMillis::new(NOW + 2),
+    )
+    .unwrap()
+    .begin_v2(
+        Revision::ZERO,
+        AttemptId::new(LOOKUP_RESPONSE).unwrap(),
+        None,
+        UnixMillis::new(NOW + 3),
+    )
+    .unwrap()
+    .into_state();
+    seed_graph(&store, &graph);
+    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let fences = || {
+        let graph = store
+            .read(deadline(), |snapshot| snapshot.current_graph())
+            .unwrap()
+            .unwrap();
+        SessionMutationPreconditionsWireV1 {
+            expected_session_id: graph.trace().session_id().clone(),
+            expected_session_revision: graph.trace().revision(),
+            expected_attempt_id: graph.trace().active_attempt().unwrap().attempt_id().clone(),
+        }
+    };
+    let read = |command| {
+        execute_read_v1(
+            &resolver,
+            DirectReadRequestV1 {
+                selector: selector.clone(),
+                expected_workspace_id: None,
+                expected_session_id: None,
+                request_id: RequestIdV1::new(ORIGINAL_RESPONSE).unwrap(),
+                command,
+                deadline: deadline(),
+            },
+            &Clock,
+        )
+        .unwrap()
+    };
+    // Satisfy the delegated procedure's required confirm item first, as the
+    // write-path precedent does, so acceptance is admissible; the package is
+    // read after the check, matching that precedent's order.
+    execute_item_v1(
+        &resolver,
+        DirectItemRequestV1 {
+            selector: selector.clone(),
+            expected_workspace_id: None,
+            request_id: RequestIdV1::new(ORIGINAL_RESPONSE).unwrap(),
+            key: IdempotencyKeyV1::new("view-checked").unwrap(),
+            command: DirectItemCommandV1::Check(ItemCheckV1 {
+                item_id: ItemId::new("checked").unwrap(),
+                preconditions: ItemMutationPreconditionsWireV1 {
+                    expected_session_id: SessionId::new(LOOKUP_RESPONSE).unwrap(),
+                    expected_attempt_id: AttemptId::new(LOOKUP_RESPONSE).unwrap(),
+                    expected_item_revision: Revision::new(0),
+                },
+            }),
+            deadline: deadline(),
+        },
+        &MutationClock,
+    )
+    .unwrap();
+    let package = read(DirectReadCommandV1::DelegationPackage);
+    let current = store
+        .read(deadline(), |snapshot| snapshot.current_graph())
+        .unwrap()
+        .unwrap();
+    let input = json!({"schema":"podway.delegation-accept-input/v1", "workspace_uuid":WORKSPACE, "session_id":current.trace().session_id(),
+        "session_revision":current.trace().revision(), "attempt_id":current.trace().active_attempt().unwrap().attempt_id(), "idempotency_key":"view-accept", "package_digest":package.as_value()["result"]["package_digest"],
+        "execution":{"binding_ref":"local-specialist", "adapter_id":"fixture", "adapter_version":"1", "primary_host":"external",
+            "scope_kind":"test", "scope_ref":"scope-1", "supervisor_ref":"supervisor-1", "worker_ref":"worker-1", "task_ref":"task-1",
+            "role_ref":"reviewer", "role_snapshot_digest":digest(), "agent_configuration_digest":digest(), "accepted_task_digest":digest()},
+        "rounds_used":1, "result_digest":digest(), "summary":"Verified delegated work.", "worker_disposition":"idle", "accepted":true});
+    let acceptance = DirectDelegationRequestV1 {
+        selector: selector.clone(),
+        expected_workspace_id: None,
+        request_id: RequestIdV1::new(ORIGINAL_RESPONSE).unwrap(),
+        key: IdempotencyKeyV1::new("view-accept").unwrap(),
+        input: DelegationAcceptV1 {
+            input,
+            preconditions: fences(),
+        },
+        deadline: deadline(),
+    };
+    accept_delegation_v1(
+        &resolver,
+        acceptance,
+        &MutationClock,
+        &NativeDirectIdSourceV1,
+    )
+    .unwrap();
+    // Change one accepted item on the same active attempt.
+    execute_item_v1(
+        &resolver,
+        DirectItemRequestV1 {
+            selector: selector.clone(),
+            expected_workspace_id: None,
+            request_id: RequestIdV1::new(ORIGINAL_RESPONSE).unwrap(),
+            key: IdempotencyKeyV1::new("view-changed").unwrap(),
+            command: DirectItemCommandV1::Set(ItemSetV1 {
+                item_id: ItemId::new("note").unwrap(),
+                value: "Changed after acceptance.".into(),
+                preconditions: ItemMutationPreconditionsWireV1 {
+                    expected_session_id: SessionId::new(LOOKUP_RESPONSE).unwrap(),
+                    expected_attempt_id: AttemptId::new(LOOKUP_RESPONSE).unwrap(),
+                    expected_item_revision: Revision::new(0),
+                },
+            }),
+            deadline: deadline(),
+        },
+        &MutationClock,
+    )
+    .unwrap();
+    let observed = store
+        .read(deadline(), |snapshot| {
+            let view = snapshot.view(UnixMillis::new(NOW + 30))?;
+            Ok((
+                view.delegation_receipts().readiness(),
+                view.delegation_receipts().current_receipt().is_some(),
+                view.delegation_receipts().truncated(),
+                view.delegation_receipts().total(),
+            ))
+        })
+        .unwrap();
+    assert_eq!(
+        observed,
+        (
+            podway_store::v2_delegation::DelegationReadinessV1::ItemsChanged,
+            true,
+            false,
+            1
+        )
+    );
+}
+
 fn seed_running_items(store: &DirectStoreV1) {
     use podway_core::{AttemptId, ProcedureSnapshotId, Revision, SessionId};
     let snapshot = podway_engine::execution::workspace_procedure_snapshot_from_bytes_v2(

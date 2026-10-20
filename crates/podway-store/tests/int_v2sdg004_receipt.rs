@@ -286,6 +286,16 @@ fn v2sdg006_receipt_snapshot_rejects_incoherent_window_and_readiness() {
         DelegationReceiptSnapshotV1::new(DelegationReadinessV1::ReceiptCurrent, None, vec![], 0)
             .is_err()
     );
+    // STATE-001: a receipt-requiring readiness with no admitted receipt is
+    // the snapshot-path fallback incoherence; it resolves to InvalidStateV1.
+    assert!(
+        DelegationReceiptSnapshotV1::new(DelegationReadinessV1::PackageChanged, None, vec![], 0)
+            .is_err()
+    );
+    assert!(
+        DelegationReceiptSnapshotV1::new(DelegationReadinessV1::ItemsChanged, None, vec![], 0)
+            .is_err()
+    );
     assert!(
         DelegationReceiptSnapshotV1::new(
             DelegationReadinessV1::Direct,
@@ -327,7 +337,7 @@ fn v2sdg006_receipt_snapshot_rejects_incoherent_window_and_readiness() {
 }
 
 use super::int_v2dfc005_direct_store::{deadline, request, success};
-use super::int_v2dfc008_persistence::{fixture, reject_corruption, seed};
+use super::int_v2dfc008_persistence::{fixture, image, reject_corruption, seed};
 use rusqlite::{Connection, params};
 
 fn accepted_fixture() -> (
@@ -840,4 +850,439 @@ fn v2sdg006_receipt_history_reports_exact_total_and_newest_bounded_window() {
         receipts.summaries()
     );
     cold.verify_integrity(deadline()).unwrap();
+}
+
+/// STATE-001 outcome pin: with a truncated receipt history and an active
+/// attempt that holds no receipt, the view reports `ReceiptMissing`. This
+/// pins the observable outcome only — window-derived absence and the point
+/// read are indistinguishable on this path; the prepared-Arc write-path
+/// test below separates the two acquisitions.
+#[test]
+fn state001_truncated_history_reports_point_readiness_outcome_for_absent_active_receipt() {
+    let (_temporary, store) = fixture(&identity());
+    let mut state = session_state();
+    seed(&store, &state);
+    for index in 0..33_u64 {
+        let mut value = receipt(&state).value().clone();
+        value["receipt_id"] = json!(format!("00000000-0000-4000-8000-{:012x}", 0x610 + index));
+        let original = DelegationReceiptV1::new(value).unwrap();
+        let accepted = state
+            .accept_delegation_successor_v1(state.trace().active_attempt().unwrap().attempt_id())
+            .unwrap();
+        let accept = request(&format!("truncated-accept-{index}"));
+        store
+            .mutate(
+                &accept,
+                deadline(),
+                || UnixMillis::new(10 + index * 3),
+                |transaction| {
+                    transaction.now();
+                    transaction.accept_delegation(
+                        state.workspace_revision(),
+                        state.trace().revision(),
+                        &accepted,
+                        &digest('d'),
+                        &original,
+                    )?;
+                    Ok(success(
+                        &accept,
+                        json!({"accepted":true}),
+                        transaction.now(),
+                    ))
+                },
+            )
+            .unwrap();
+        state = accepted;
+        let retried = state
+            .retry_active_attempt_v2(
+                state.trace().revision(),
+                state.trace().active_attempt().unwrap().attempt_id(),
+                AttemptId::new(format!("00000000-0000-4000-8000-{:012x}", 0x710 + index)).unwrap(),
+                podway_core::ReasonV2::new("Move past the accepted attempt").unwrap(),
+                UnixMillis::new(11 + index * 3),
+            )
+            .unwrap()
+            .into_state();
+        let retry = request(&format!("truncated-retry-{index}"));
+        store
+            .mutate(
+                &retry,
+                deadline(),
+                || UnixMillis::new(11 + index * 3),
+                |transaction| {
+                    transaction.now();
+                    transaction.replace_graph(
+                        state.workspace_revision(),
+                        state.trace().revision(),
+                        &retried,
+                    )?;
+                    Ok(success(&retry, json!({"retried":true}), transaction.now()))
+                },
+            )
+            .unwrap();
+        state = retried;
+    }
+    // 33 stored receipts, the 32 newest in the window, and the final retry's
+    // active attempt holds none of them.
+    let view = store
+        .read(deadline(), |snapshot| snapshot.view(UnixMillis::new(200)))
+        .unwrap();
+    let receipts = view.delegation_receipts();
+    assert_eq!(receipts.total(), 33);
+    assert!(receipts.truncated());
+    assert_eq!(receipts.summaries().len(), 32);
+    assert!(receipts.current_receipt().is_none());
+    assert_eq!(
+        receipts.readiness(),
+        podway_store::v2_delegation::DelegationReadinessV1::ReceiptMissing
+    );
+}
+
+/// STATE-001: whole-window history validation runs before readiness, so a
+/// malformed older entry refuses the view even though the active attempt's
+/// receipt is present and valid.
+#[test]
+fn state001_older_receipt_window_corruption_refuses_with_valid_active_receipt() {
+    let (_temporary, store) = fixture(&identity());
+    let current = session_state();
+    seed(&store, &current);
+    let first = receipt(&current);
+    let accepted = current
+        .accept_delegation_successor_v1(current.trace().active_attempt().unwrap().attempt_id())
+        .unwrap();
+    let first_accept = request("older-window-first-accept");
+    store
+        .mutate(
+            &first_accept,
+            deadline(),
+            || UnixMillis::new(200),
+            |transaction| {
+                transaction.now();
+                transaction.accept_delegation(
+                    current.workspace_revision(),
+                    current.trace().revision(),
+                    &accepted,
+                    &digest('d'),
+                    &first,
+                )?;
+                Ok(success(
+                    &first_accept,
+                    json!({"accepted":true}),
+                    transaction.now(),
+                ))
+            },
+        )
+        .unwrap();
+    let retried = accepted
+        .retry_active_attempt_v2(
+            accepted.trace().revision(),
+            accepted.trace().active_attempt().unwrap().attempt_id(),
+            AttemptId::new("00000000-0000-4000-8000-000000000406").unwrap(),
+            podway_core::ReasonV2::new("Retry delegated work").unwrap(),
+            UnixMillis::new(201),
+        )
+        .unwrap()
+        .into_state();
+    let retry = request("older-window-retry");
+    store
+        .mutate(
+            &retry,
+            deadline(),
+            || UnixMillis::new(202),
+            |transaction| {
+                transaction.now();
+                transaction.replace_graph(
+                    accepted.workspace_revision(),
+                    accepted.trace().revision(),
+                    &retried,
+                )?;
+                Ok(success(&retry, json!({"retried":true}), transaction.now()))
+            },
+        )
+        .unwrap();
+    let mut value = receipt(&retried).value().clone();
+    value["receipt_id"] = json!("00000000-0000-4000-8000-000000000407");
+    let second = DelegationReceiptV1::new(value).unwrap();
+    let accepted_second = retried
+        .accept_delegation_successor_v1(retried.trace().active_attempt().unwrap().attempt_id())
+        .unwrap();
+    let second_accept = request("older-window-second-accept");
+    store
+        .mutate(
+            &second_accept,
+            deadline(),
+            || UnixMillis::new(203),
+            |transaction| {
+                transaction.now();
+                transaction.accept_delegation(
+                    retried.workspace_revision(),
+                    retried.trace().revision(),
+                    &accepted_second,
+                    &digest('d'),
+                    &second,
+                )?;
+                Ok(success(
+                    &second_accept,
+                    json!({"accepted":true}),
+                    transaction.now(),
+                ))
+            },
+        )
+        .unwrap();
+    // Control: the active attempt's receipt is valid, newest and current.
+    let healthy = store
+        .read(deadline(), |snapshot| {
+            let view = snapshot.view(UnixMillis::new(204))?;
+            Ok((
+                view.delegation_receipts().readiness(),
+                view.delegation_receipts().current_receipt().is_some(),
+                view.delegation_receipts().total(),
+            ))
+        })
+        .unwrap();
+    assert_eq!(
+        healthy,
+        (
+            podway_store::v2_delegation::DelegationReadinessV1::ReceiptCurrent,
+            true,
+            2
+        )
+    );
+    // Forge only the older accepting attempt's stored receipt.
+    let mut forged = first.value().clone();
+    forged["workspace_uuid"] = json!("00000000-0000-4000-8000-000000000499");
+    let stored = DelegationReceiptV1::new(forged)
+        .unwrap()
+        .canonical_json()
+        .to_owned();
+    let connection = Connection::open(store.layout().database()).unwrap();
+    connection
+        .execute(
+            "DELETE FROM v2_delegation_receipts WHERE attempt_id=?1",
+            [first.attempt_id().as_str()],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO v2_delegation_receipts(attempt_id,session_id,receipt_id,receipt_json) VALUES (?1,?2,?3,?4)",
+            params![
+                first.attempt_id().as_str(),
+                first.session_id().as_str(),
+                first.receipt_id().as_str(),
+                stored
+            ],
+        )
+        .unwrap();
+    drop(connection);
+    let cold =
+        super::int_v2dfc005_direct_store::store(store.layout().root().to_path_buf().as_path());
+    assert!(matches!(
+        cold.read(deadline(), |snapshot| snapshot.view(UnixMillis::new(205))),
+        Err(podway_store::direct_store::DirectStoreErrorV1::State(
+            podway_store::StoreErrorV1::CorruptStateV1 {
+                record: podway_store::StoreRecordKindV1::DelegationReceipt,
+            }
+        ))
+    ));
+    reject_corruption(&cold, true);
+}
+
+/// STATE-001: completing a delegated attempt without an admitted receipt
+/// fails the write-time guard inside replace_direct_graph_session_transaction_v2.
+#[test]
+fn state001_completing_delegated_attempt_without_admitted_receipt_fails_write_time_guard() {
+    let (_temporary, store) = fixture(&identity());
+    let current = session_state();
+    seed(&store, &current);
+    let completed = current
+        .complete_active_action_v2(
+            current.trace().revision(),
+            current.trace().active_attempt().unwrap().attempt_id(),
+            None,
+            UnixMillis::new(300),
+        )
+        .unwrap()
+        .into_state();
+    let sequence = store
+        .read(deadline(), |snapshot| snapshot.committed_sequence())
+        .unwrap();
+    let complete = request("complete-without-receipt");
+    let refusal = store.mutate(
+        &complete,
+        deadline(),
+        || UnixMillis::new(301),
+        |transaction| {
+            transaction.now();
+            transaction.replace_graph(
+                current.workspace_revision(),
+                current.trace().revision(),
+                &completed,
+            )?;
+            Ok(success(
+                &complete,
+                json!({"completed":true}),
+                transaction.now(),
+            ))
+        },
+    );
+    assert!(matches!(
+        refusal,
+        Err(podway_store::direct_store::DirectStoreErrorV1::State(
+            podway_store::StoreErrorV1::InvalidStateV1(
+                podway_store::StoreValueErrorV1::InvalidProcedureV2State {
+                    reason: "delegation receipt is missing or stale",
+                }
+            )
+        ))
+    ));
+    store
+        .read(deadline(), |snapshot| {
+            assert_eq!(snapshot.current_graph()?, Some(current.clone()));
+            assert_eq!(snapshot.committed_sequence()?, sequence);
+            assert!(snapshot.outcome(complete.key())?.is_none());
+            Ok(())
+        })
+        .unwrap();
+    store.verify_integrity(deadline()).unwrap();
+}
+
+/// Deterministic dump of every user table's committed rows through a plain
+/// connection: tables in name order, rows in rowid order, typed values. The
+/// dump is insensitive to WAL and checkpoint file lifecycle, so it captures
+/// the committed logical content rather than physical bytes. It assumes
+/// rowid tables: the v15 schema has no `WITHOUT ROWID` table, and such a
+/// table would fail loudly at the `ORDER BY rowid` prepare.
+fn committed_logical_dump(database: &std::path::Path) -> String {
+    let connection = Connection::open(database).unwrap();
+    let mut tables: Vec<String> = connection
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        .and_then(|mut statement| {
+            statement
+                .query_map([], |row| row.get(0))
+                .map(|rows| rows.collect::<Result<Vec<String>, _>>())
+        })
+        .unwrap()
+        .unwrap();
+    tables.retain(|table| !table.starts_with("sqlite_"));
+    let mut dump = String::new();
+    for table in tables {
+        let mut statement = connection
+            .prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))
+            .unwrap();
+        let columns = statement.column_count();
+        let mut rows = statement.query([]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            let mut fields = Vec::with_capacity(columns);
+            for index in 0..columns {
+                fields.push(format!(
+                    "{:?}",
+                    row.get::<_, rusqlite::types::Value>(index).unwrap()
+                ));
+            }
+            dump.push_str(&table);
+            dump.push('|');
+            dump.push_str(&fields.join("\u{1f}"));
+            dump.push('\n');
+        }
+    }
+    dump
+}
+
+/// STATE-001 write-path boundary: a prepared-Arc transaction's receipt
+/// snapshot keeps the point-query acquisition. After the active attempt's
+/// row is made unjoinable to v2_attempts out of band (with no sequence or
+/// stamp change), the count and window miss the stored receipt while the
+/// point query still finds it, and today's read refuses through snapshot
+/// coherence instead of deriving absence from the window.
+#[test]
+fn state001_prepared_arc_write_path_receipt_snapshot_refuses_unjoinable_active_receipt() {
+    let (_temporary, store, accepted, _original) = accepted_fixture();
+    let active = accepted
+        .trace()
+        .active_attempt()
+        .unwrap()
+        .attempt_id()
+        .clone();
+    let prepared = store.prepare_graph(deadline()).unwrap().unwrap();
+    let connection = Connection::open(store.layout().database()).unwrap();
+    connection
+        .execute_batch("PRAGMA foreign_keys=OFF;")
+        .unwrap();
+    let deleted = connection
+        .execute(
+            "DELETE FROM v2_attempts WHERE attempt_id=?1",
+            [active.as_str()],
+        )
+        .unwrap();
+    drop(connection);
+    assert_eq!(deleted, 1, "the out-of-band delete removes the active row");
+    // The delete itself changes bytes and content; the refused write below
+    // must change neither the committed logical content nor the committed
+    // main database file.
+    let after_delete = image(&store);
+    let after_delete_dump = committed_logical_dump(&store.layout().database());
+    let outcomes_after_delete: i64 = Connection::open(store.layout().database())
+        .and_then(|connection| {
+            connection.query_row("SELECT COUNT(*) FROM mutation_outcomes", [], |row| {
+                row.get(0)
+            })
+        })
+        .unwrap();
+    let sequence = store
+        .read(deadline(), |snapshot| snapshot.committed_sequence())
+        .unwrap();
+    let key = request("prepared-arc-receipts");
+    let refusal = store.mutate(
+        &key,
+        deadline(),
+        || UnixMillis::new(400),
+        |transaction| {
+            transaction.use_prepared_graph(Some(&prepared))?;
+            transaction.delegation_receipts()?;
+            Ok(success(&key, json!({"read":true}), transaction.now()))
+        },
+    );
+    assert!(matches!(
+        refusal,
+        Err(podway_store::direct_store::DirectStoreErrorV1::State(
+            podway_store::StoreErrorV1::InvalidStateV1(
+                podway_store::StoreValueErrorV1::InvalidProcedureV2State {
+                    reason: "delegation receipt is invalid",
+                }
+            )
+        ))
+    ));
+    store
+        .read(deadline(), |snapshot| {
+            assert_eq!(snapshot.committed_sequence()?, sequence);
+            assert!(snapshot.outcome(key.key())?.is_none());
+            Ok(())
+        })
+        .unwrap();
+    let outcomes_after_refusal: i64 = Connection::open(store.layout().database())
+        .and_then(|connection| {
+            connection.query_row("SELECT COUNT(*) FROM mutation_outcomes", [], |row| {
+                row.get(0)
+            })
+        })
+        .unwrap();
+    assert_eq!(
+        outcomes_after_refusal, outcomes_after_delete,
+        "the refused write must not record any outcome row"
+    );
+    // The committed logical content is identical, proving the refused write
+    // committed nothing anywhere (a WAL-confined commit would surface here).
+    assert_eq!(
+        committed_logical_dump(&store.layout().database()),
+        after_delete_dump,
+        "the refused write must not change any committed table content"
+    );
+    // The main database file also keeps its exact bytes. The WAL file's
+    // lifecycle bytes may differ around the plain out-of-band connection,
+    // so the physical comparison covers the main database file only.
+    assert_eq!(
+        image(&store)[0],
+        after_delete[0],
+        "the refused write must not change the committed database bytes"
+    );
 }

@@ -1870,6 +1870,140 @@ fn v2sdg006_delegated_archived_session_show_uses_v2_result() {
     assert_eq!(summaries[0]["receipt_id"], receipt["receipt"]["receipt_id"]);
 }
 #[test]
+fn state001_reset_dry_run_fence_rejection_precedes_clock_and_receipt_admission() {
+    // A forged stored receipt is latent until the view's receipt stage. Reset
+    // dry-run must still fail on its first fences, before the clock and the
+    // view: NoClock panics if the clock is read, and the codes must be the
+    // fence errors rather than WORKSPACE_STATE_UNREADABLE.
+    let source = json!({"schema":"podway.procedure/v2","id":"reset-fence-delegation","version":"1","name":"Reset fence delegation","purpose":"Pin reset fence priority.",
+        "node_definitions":{"work":{"type":"action","title":"Work","intent":"Review work."}},
+        "graph":{"entry":"work","nodes":[{"id":"work","use":"work","terminal":true,"delegation":{"binding_ref":"local-specialist","role_ref":"reviewer","role_snapshot_digest":digest(),"max_rounds":3,"after_accept":"retain"}}]}});
+    let mut engine = empty(&serde_json::to_string(&source).unwrap());
+    let canonical = podway_core::canonicalize_json_v1(&source).unwrap();
+    use sha2::{Digest as _, Sha256};
+    let snapshot = podway_store::admit_procedure_snapshot_v2(
+        podway_core::ProcedureSnapshotId::new("00000000-0000-4000-8000-000000015113").unwrap(),
+        podway_core::CanonicalProcedureJsonV1::new(canonical.clone()).unwrap(),
+        podway_core::Sha256Digest::new(format!(
+            "sha256:{:x}",
+            Sha256::digest(canonical.as_bytes())
+        ))
+        .unwrap(),
+        podway_core::ProcedureSourceLabelV1::file("reset-fence-delegation.yaml").unwrap(),
+        UnixMillis::new(2),
+    )
+    .unwrap();
+    let running = GraphSessionStateV2::prepared(
+        Revision::new(1),
+        "Reset fence delegation",
+        snapshot,
+        SessionId::new("00000000-0000-4000-8000-000000015114").unwrap(),
+        UnixMillis::new(3),
+    )
+    .unwrap()
+    .begin_v2(
+        Revision::ZERO,
+        AttemptId::new("00000000-0000-4000-8000-000000015115").unwrap(),
+        None,
+        UnixMillis::new(4),
+    )
+    .unwrap()
+    .into_state();
+    seed(&engine, &running, "seed-reset-fences");
+    let graph = engine.graph();
+    let package = engine.read(R::DelegationPackage);
+    let uuid = engine
+        .store
+        .read(deadline(), |s| {
+            Ok(s.binding().identity().workspace_uuid().clone())
+        })
+        .unwrap();
+    let input = json!({"schema":"podway.delegation-accept-input/v1","workspace_uuid":uuid,"session_id":graph.trace().session_id(),"session_revision":graph.trace().revision(),
+        "attempt_id":graph.trace().active_attempt().unwrap().attempt_id(),"idempotency_key":"reset-fence-accept","package_digest":package["package_digest"],
+        "execution":{"binding_ref":"local-specialist","adapter_id":"adapter","adapter_version":"1","primary_host":"external","scope_kind":"session","scope_ref":"scope-1",
+            "supervisor_ref":"supervisor-1","worker_ref":"worker-1","task_ref":"task-1","role_ref":"reviewer","role_snapshot_digest":digest(),"agent_configuration_digest":digest(),"accepted_task_digest":digest()},
+        "rounds_used":1,"result_digest":digest(),"summary":"Reviewed reset fences","worker_disposition":"idle","accepted":true});
+    engine.success(
+        D::DelegationAccept(DelegationAcceptV1 {
+            input,
+            preconditions: engine.fences(),
+        }),
+        "reset-fence-accept",
+    );
+    // Healthy control: the dry run succeeds before any corruption.
+    engine.success(
+        reset(&engine, SessionDeletionModeV1::Eligible, true),
+        "reset-healthy",
+    );
+    // Forge the stored receipt (canonical, identity-mismatched) out of band.
+    let database = engine.store.layout().database();
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    let (attempt_id, session_id, receipt_id, receipt_json): (String, String, String, String) =
+        connection
+            .query_row(
+                "SELECT attempt_id,session_id,receipt_id,receipt_json FROM v2_delegation_receipts",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+    drop(connection);
+    let mut forged: serde_json::Value = serde_json::from_str(&receipt_json).unwrap();
+    forged["workspace_uuid"] = json!("00000000-0000-4000-8000-000000015199");
+    let stored = podway_store::DelegationReceiptV1::new(forged)
+        .unwrap()
+        .canonical_json()
+        .to_owned();
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute("DELETE FROM v2_delegation_receipts", [])
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO v2_delegation_receipts(attempt_id,session_id,receipt_id,receipt_json) VALUES (?1,?2,?3,?4)",
+            rusqlite::params![attempt_id, session_id, receipt_id, stored],
+        )
+        .unwrap();
+    drop(connection);
+    // Positive control: with matching fences and an ordinary clock the same
+    // dry run reaches the view and the forged receipt is actually refused
+    // there, so the fence rejections below are order evidence, not the only
+    // signal that the corruption is live.
+    reject(
+        &engine,
+        reset(&engine, SessionDeletionModeV1::Eligible, true),
+        "reset-corrupt-receipt",
+        "WORKSPACE_STATE_UNREADABLE",
+    );
+    let base = identity(&engine);
+    engine.reject(
+        D::Session(S::Reset(SessionResetV1 {
+            mode: SessionDeletionModeV1::Eligible,
+            dry_run: true,
+            preconditions: SessionIdentityPreconditionsWireV1 {
+                expected_session_revision: Revision::new(base.expected_session_revision.get() + 1),
+                ..base.clone()
+            },
+        })),
+        "reset-stale-revision",
+        "SESSION_REVISION_CONFLICT",
+        &NoClock,
+    );
+    engine.reject(
+        D::Session(S::Reset(SessionResetV1 {
+            mode: SessionDeletionModeV1::Eligible,
+            dry_run: true,
+            preconditions: SessionIdentityPreconditionsWireV1 {
+                expected_session_id: SessionId::new("00000000-0000-4000-8000-000000015198")
+                    .unwrap(),
+                ..identity(&engine)
+            },
+        })),
+        "reset-wrong-session",
+        "SESSION_ID_MISMATCH",
+        &NoClock,
+    );
+}
+#[test]
 fn v2run007_preadmission_fences_reject_without_jobs_and_exact_replay_wins() {
     let engine = Engine::new(ACTION_READBACK_PROCEDURE);
     let before = engine.fences();

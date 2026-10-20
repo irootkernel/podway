@@ -422,3 +422,130 @@ fn procedure_v2_terminal_reason_accepts_2000_characters_and_cold_read_rejects_20
     drop(connection);
     reject_corruption(&cold, true);
 }
+
+/// Terminal disposition corruption is characterized on both owners of the
+/// loader's disposition admission: the current view and the integrity
+/// verifier's archived reconstruction. The corruption keeps every schema
+/// CHECK and foreign key intact and fails exactly at the loader's
+/// disposition history validation (`recorded_at < created_at`), so an
+/// earlier stage cannot mask the regression.
+#[test]
+fn state001_disposition_corruption_refuses_view_and_verification() {
+    // (a) A terminal current session with one recorded disposition. The
+    // healthy control first pins the non-delegated empty receipt snapshot.
+    let (_temporary, direct) = fixture(&identity());
+    let running = podway_store::test_support::running_archive_fixture_session_v2(8930, 9030, 10);
+    let completed = running
+        .complete_active_action_v2(
+            running.trace().revision(),
+            running.trace().active_attempt().unwrap().attempt_id(),
+            None,
+            UnixMillis::new(20),
+        )
+        .unwrap()
+        .into_state();
+    seed(&direct, &completed);
+    let dispose = request("dispose-current-terminal");
+    direct
+        .mutate(
+            &dispose,
+            deadline(),
+            || UnixMillis::new(8931),
+            |transaction| {
+                transaction.now();
+                transaction.record_disposition(
+                    &podway_core::TerminalDispositionV2::not_required(
+                        completed.trace().session_id().clone(),
+                        completed.trace().revision(),
+                        "No handoff required",
+                        None,
+                        UnixMillis::new(8931),
+                    )
+                    .unwrap(),
+                )?;
+                Ok(success(
+                    &dispose,
+                    serde_json::json!({"disposed":true}),
+                    transaction.now(),
+                ))
+            },
+        )
+        .unwrap();
+    let healthy = direct
+        .read(deadline(), |snapshot| {
+            let view = snapshot.view(UnixMillis::new(8932))?;
+            Ok((
+                view.delegation_receipts().readiness(),
+                view.delegation_receipts().current_receipt().is_some(),
+                view.delegation_receipts().total(),
+                view.graph().is_some(),
+            ))
+        })
+        .unwrap();
+    assert_eq!(
+        healthy,
+        (
+            podway_store::v2_delegation::DelegationReadinessV1::Direct,
+            false,
+            0,
+            true
+        )
+    );
+    let connection = rusqlite::Connection::open(direct.layout().database()).unwrap();
+    let changed = connection
+        .execute(
+            "UPDATE v2_terminal_dispositions SET recorded_at_ms=0 WHERE session_id=?1",
+            [completed.trace().session_id().as_str()],
+        )
+        .unwrap();
+    drop(connection);
+    assert_eq!(changed, 1, "exactly the disposition row changes");
+    let cold = store(direct.layout().root().to_path_buf().as_path());
+    assert!(matches!(
+        cold.read(deadline(), |snapshot| snapshot.view(UnixMillis::new(8933))),
+        Err(podway_store::direct_store::DirectStoreErrorV1::State(
+            podway_store::StoreErrorV1::CorruptStateV1 {
+                record: podway_store::StoreRecordKindV1::Session,
+            }
+        ))
+    ));
+    reject_corruption(&cold, true);
+
+    // (b) An archived session: the summary-only list and summary reads stay
+    // usable while the archived view and the verifier refuse the same row.
+    let (_temporary, direct) = fixture(&identity());
+    let archived = archived_fixture(&direct, 8940);
+    let connection = rusqlite::Connection::open(direct.layout().database()).unwrap();
+    let changed = connection
+        .execute(
+            "UPDATE v2_terminal_dispositions SET recorded_at_ms=0 WHERE session_id=?1",
+            [archived.trace().session_id().as_str()],
+        )
+        .unwrap();
+    drop(connection);
+    assert_eq!(changed, 1);
+    let cold = store(direct.layout().root().to_path_buf().as_path());
+    let page = cold
+        .read(deadline(), |snapshot| snapshot.archives(256))
+        .unwrap();
+    assert_eq!(page.count(), 1);
+    assert!(
+        cold.read(deadline(), |snapshot| snapshot
+            .archive_summary(archived.trace().session_id()))
+            .unwrap()
+            .is_some(),
+        "the summary path reads summary columns only"
+    );
+    assert!(matches!(
+        cold.read(deadline(), |snapshot| snapshot.archived_view(
+            archived.trace().session_id(),
+            UnixMillis::new(8941)
+        )),
+        Err(podway_store::direct_store::DirectStoreErrorV1::State(
+            podway_store::StoreErrorV1::CorruptStateV1 {
+                record: podway_store::StoreRecordKindV1::Session,
+            }
+        ))
+    ));
+    reject_corruption(&cold, false);
+}
