@@ -218,6 +218,46 @@ in-module oracles and the Protocol length helper's unit checks:
   and the readback corruption precedence owners in
   [`int_reads001_readback_ports.rs`](../../crates/podway-engine/tests/int_reads001_readback_ports.rs).
 
+PARSE document admission and ownership checks use these registered owners:
+
+- Core [canonical unit tests](../../crates/podway-core/src/canonical.rs), including
+  `value_verifier_compares_original_bytes_instead_of_normalized_values`, reject
+  duplicate keys, alternate ordering/escaping and unsupported numeric forms while
+  preserving integer edges. Store's
+  [persistence suite](../../crates/podway-store/tests/int_v2dfc008_persistence.rs)
+  `parse001_canonical_execution_admission_preserves_failure_precedence_and_bytes`
+  pins byte/depth/syntax/canonical precedence and retained original bytes.
+- Store's [direct suite](../../crates/podway-store/tests/int_v2dfc005_direct_store.rs)
+  `persisted_outcomes_fail_closed_on_invalid_headers_or_future_sequences` preserves
+  independent persisted checks, oversized SQL classification and write-free
+  refusal; `success_replay_bypasses_callback_clock_and_new_response_uuid` checks
+  the original canonical response. Engine's
+  [direct execution suite](../../crates/podway-engine/tests/int_v2dfc006_direct_execution.rs)
+  owns original-response lookup without writes, old-attempt replay, clock/ID
+  ordering and replay after artifact file loss.
+- Protocol's [envelope suite](../../crates/podway-protocol/tests/int_v2dfc006_direct_envelopes.rs)
+  `parse003_output_constructor_moves_result_and_warning_trees` checks nested
+  result/warning allocation identity, complete value/byte equality, optional
+  omission and warning order. Its complete-envelope admission checks and the
+  [result suite](../../crates/podway-protocol/tests/int_v2_result_contract.rs)
+  retain registered routes, deep/closed failures, identity and delegation
+  size/correlations. The existing `json_len.rs` unit owners above verify exact
+  escaped-byte accounting and serialization failures.
+- Config's [preview suite](../../crates/podway-config/tests/int_v2_procedure_preview.rs)
+  `parse004_delegated_facts_survive_admission_and_vet_failures` checks authored
+  order, direct/malformed empty facts, delegated success and semantic/vet failure
+  across YAML/JSON. Its existing Mermaid-overflow case also retains delegated
+  facts without success details. The
+  [check suite](../../crates/podway-config/tests/int_v2_procedure_check.rs) owns
+  unchanged invalid/unsupported/clean and format/drift/lint ordering behavior.
+- Real CLI [authoring checks](../../crates/podway-cli/tests/e2e_v2dfc007_local_cli.rs)
+  `v2sdg006_delegated_preview_and_graph_select_v2_without_changing_direct_results`
+  preserve direct/delegated generations, semantic/vet failures, malformed fallback
+  and preview/graph authored order. The
+  [direct CLI suite](../../crates/podway-cli/tests/e2e_v2dfc007_direct_cli.rs)
+  retained-command replay/lookup and postcommit-before-stdout SIGKILL cases own
+  original-response recovery through the real binary.
+
 ## Structural simplification verification
 
 The [VIEWS, PARSE, STATE and ADMIT program](../roadmap/README.md#structural-simplification-program)

@@ -117,7 +117,7 @@ Dependencies: accepted `VIEWS` completion. Design:
 | `PARSE-002` | Reuse one parsed Store outcome document | Completed | Share one parsed value through outcome admission without dropping canonical, depth, schema or relational checks or rebuilding replay bytes. | [Store outcome admission](../todo/TODO-podway-document-admission-reuse.md#store-outcome-admission) |
 | `PARSE-003` | Remove unnecessary response ownership conversions | Completed | Borrow or move validated response values through construction and validation while retaining independent checks and output bounds. | [Response ownership](../todo/TODO-podway-document-admission-reuse.md#response-ownership) |
 | `PARSE-004` | Carry first preview parse facts | Completed | Select delegated preview generation from first-parse facts, preserving malformed and parsed-but-invalid behavior; adopt DF-006. | [Preview facts](../todo/TODO-podway-document-admission-reuse.md#preview-facts) |
-| `PARSE-005` | Qualify admission and exact replay | Planned | Verify error order, canonical bytes, preview variants and original-response replay, complete the development gate and review, then promote documentation. | [Verification](../todo/TODO-podway-document-admission-reuse.md#verification-and-release-acceptance) |
+| `PARSE-005` | Qualify admission and exact replay | Completed | Verify error order, canonical bytes, preview variants and original-response replay, complete the development gate and review, then promote documentation. | [Verification](../todo/TODO-podway-document-admission-reuse.md#verification-and-release-acceptance) |
 
 ## STATE — Snapshot State Reuse
 

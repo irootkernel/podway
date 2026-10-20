@@ -166,6 +166,47 @@ writer identity and fences prevent accidental misrouting and unsupported writes.
 They do not authenticate assertions or defend against malicious same-user code.
 See [Security and Trust](../specs/operations/security-and-trust.md).
 
+### Document admission reuse
+
+Store outcome reads retain the original canonical response string and share one
+operation-local parsed value through canonical, response-identity and success
+checks. Core's pure `verify_canonical_json_value_v1` compares the value's canonical
+encoding with the original bytes; the value alone cannot prove canonical input.
+The wrapper keeps empty input, byte bound, syntax, depth and exact-byte comparison
+in that order. Store depth starts at zero and allows 64: parseable depth overflow
+wins over noncanonical whitespace, while parser recursion refusal remains invalid
+canonical JSON. Bounded SQL row decoding, sequence, timestamp and scope/session
+checks precede wrapper admission; response UUID, request and Store success checks
+follow it. An oversized SQL response still fails String decoding as SQLite NULL,
+before the later unreadable-state mappings.
+
+The parsed value is private to that admission operation; the canonical wrapper
+retains only its original string for exact replay. Fresh writes keep independent
+success admission. Store's success identity/shape check is distinct from complete
+Protocol output admission, and Engine postcommit decoding remains independent.
+Replay returns those retained bytes without reserialization.
+
+Protocol moves owned result and warning trees into `OutputEnvelopeV4` and borrows
+existing values for result and nested-package validation. Serialized-size checks
+reuse `serialized_json_len_v1` without retaining output buffers. Independent
+checks keep their order: generic documents use discriminator, whole-document
+depth at zero, size, selected schema and recovery correlation; registered results
+use schema registration, map depth at one, selected schema and correlations;
+delegation documents use selected schema, size and document correlations.
+Envelope construction still runs complete output admission.
+
+Config's `ParsedProcedureV2::delegated_placements` owns delegated action IDs in
+authored graph order for graph and preview authoring. Admission collects them
+after parsing and before semantic validation; preview retains them outside
+success-only details through semantic, vet and projection failures. CLI preview
+uses those facts without parsing the source again. Malformed source retains no
+facts and keeps the plain preview fallback; diagnostics, details gating and
+YAML/JSON equivalence remain unchanged.
+
+The existing [canonicalization asset](../../assets/specifications/canonicalization-v1.json)
+says signed integers only, while Core and its tests admit `i64`/`u64`. PARSE
+preserves current bytes and behavior; this conformance discrepancy remains unresolved.
+
 ## Mutation path
 
 ```text
