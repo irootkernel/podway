@@ -325,7 +325,7 @@ graph:
     let envelope = one_json(&output);
     assert_eq!(envelope["schema"], "podway.output/v4");
     assert_eq!(envelope["command"], "procedure.preview");
-    let result = envelope["result"].as_object().unwrap();
+    let result = &envelope["result"];
     assert_eq!(result["schema"], "podway.procedure-preview-result/v1");
     assert!(decode_result_schema_contract_v2(result).is_some());
     let direct_graph = fixture.run_from_root(&[
@@ -418,9 +418,7 @@ fn v2sdg006_delegated_preview_and_graph_select_v2_without_changing_direct_result
         assert_eq!(envelope["result"]["schema"], expected_schema);
         assert_eq!(envelope["result"]["delegated_placement_count"], 1);
         assert_eq!(envelope["result"]["delegated_placements"], json!(["work"]));
-        assert!(
-            decode_result_schema_contract_v2(envelope["result"].as_object().unwrap()).is_some()
-        );
+        assert!(decode_result_schema_contract_v2(&envelope["result"]).is_some());
     }
     let graph = fixture.run_from_root(&[
         "--json".to_owned(),
@@ -466,7 +464,7 @@ fn v2sdg006_delegated_preview_and_graph_select_v2_without_changing_direct_result
     assert_eq!(envelope["result"]["checks"]["vet"], false);
     assert_eq!(envelope["result"]["delegated_placement_count"], 1);
     assert_eq!(envelope["result"]["delegated_placements"], json!(["work"]));
-    assert!(decode_result_schema_contract_v2(envelope["result"].as_object().unwrap()).is_some());
+    assert!(decode_result_schema_contract_v2(&envelope["result"]).is_some());
 
     let source = fs::read_to_string(fixture.root.join("delegated.yaml")).unwrap();
     let (prefix, placement) = source.split_once("    - id: work\n").unwrap();
@@ -533,7 +531,7 @@ fn v2sdg006_delegated_preview_and_graph_select_v2_without_changing_direct_result
             assert_eq!(result["diagnostics_total"], 1);
             assert_eq!(result["diagnostics_truncated"], false);
         }
-        assert!(decode_result_schema_contract_v2(result.as_object().unwrap()).is_some());
+        assert!(decode_result_schema_contract_v2(result).is_some());
     }
 }
 

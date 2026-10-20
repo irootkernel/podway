@@ -522,9 +522,15 @@ fn assert_delegation_action(
     assert_eq!(next["schema"], "podway.next-result/v5");
     assert_eq!(status["schema"], "podway.status-result/v5");
     assert_eq!(observation["schema"], "podway.observation-result/v5");
-    podway_protocol::validate_command_result_v2("session.next", &next).unwrap();
-    podway_protocol::validate_command_result_v2("session.status", &status).unwrap();
-    podway_protocol::validate_command_result_v2("session.observe", &observation).unwrap();
+    podway_protocol::validate_command_result_v2("session.next", &Value::Object(next.clone()))
+        .unwrap();
+    podway_protocol::validate_command_result_v2("session.status", &Value::Object(status.clone()))
+        .unwrap();
+    podway_protocol::validate_command_result_v2(
+        "session.observe",
+        &Value::Object(observation.clone()),
+    )
+    .unwrap();
     for delegation in [
         &next["delegation"],
         &status["delegation"],
@@ -839,7 +845,11 @@ fn v2sdg006_current_and_stale_receipts_gate_completion_across_views() {
     assert!(delegation_work_package_from_view_v1(&view(delegated_prepared_state())).is_err());
     let package_result =
         project_delegation_package_result_v1(&view(state.clone()), &package).unwrap();
-    podway_protocol::validate_command_result_v2("delegation.package", &package_result).unwrap();
+    podway_protocol::validate_command_result_v2(
+        "delegation.package",
+        &Value::Object(package_result.clone()),
+    )
+    .unwrap();
     assert!(
         project_delegation_package_result_v1(&view(delegated_prepared_state()), &package).is_err()
     );
@@ -914,8 +924,16 @@ fn v2sdg006_current_and_stale_receipts_gate_completion_across_views() {
         assert_eq!(verbose["schema"], "podway.status-result/v5");
         assert_eq!(verbose["delegation"], status["delegation"]);
         assert_eq!(verbose["receipt_summaries"], status["receipt_summaries"]);
-        podway_protocol::validate_command_result_v2("session.status", &compact).unwrap();
-        podway_protocol::validate_command_result_v2("session.status", &verbose).unwrap();
+        podway_protocol::validate_command_result_v2(
+            "session.status",
+            &Value::Object(compact.clone()),
+        )
+        .unwrap();
+        podway_protocol::validate_command_result_v2(
+            "session.status",
+            &Value::Object(verbose.clone()),
+        )
+        .unwrap();
         output("session.status", compact);
         output("session.status", verbose);
         assert_eq!(observation["status"]["delegation"]["state"], expected_state);
@@ -944,9 +962,18 @@ fn v2sdg006_current_and_stale_receipts_gate_completion_across_views() {
                 .find("界")
                 .is_none()
         );
-        podway_protocol::validate_command_result_v2("session.next", &next).unwrap();
-        podway_protocol::validate_command_result_v2("session.status", &status).unwrap();
-        podway_protocol::validate_command_result_v2("session.observe", &observation).unwrap();
+        podway_protocol::validate_command_result_v2("session.next", &Value::Object(next.clone()))
+            .unwrap();
+        podway_protocol::validate_command_result_v2(
+            "session.status",
+            &Value::Object(status.clone()),
+        )
+        .unwrap();
+        podway_protocol::validate_command_result_v2(
+            "session.observe",
+            &Value::Object(observation.clone()),
+        )
+        .unwrap();
         output("session.next", next);
         output("session.status", status);
         output("session.observe", observation);

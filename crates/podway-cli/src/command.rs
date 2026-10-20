@@ -583,14 +583,18 @@ fn reject_local_flags(has_flags: bool, message: &'static str) -> Result<(), Loca
     }
 }
 
-fn local_result(command: &str, result: Value, text: String) -> RunResult {
-    let mut result = result
-        .as_object()
-        .cloned()
-        .expect("local result is always an object");
-    ensure_procedure_independent_result_schema_v1(command, &mut result);
+fn local_result(command: &str, mut result: Value, text: String) -> RunResult {
+    ensure_procedure_independent_result_schema_v1(
+        command,
+        result
+            .as_object_mut()
+            .expect("local result is always an object"),
+    );
     validate_procedure_independent_result_v1(command, &result)
         .expect("local command result must satisfy its closed protocol contract");
+    let Value::Object(result) = result else {
+        unreachable!("local result is always an object");
+    };
     RunResult::Local {
         command: command.to_owned(),
         result,
@@ -608,11 +612,12 @@ fn local_result_v2(
     text: String,
     exit_code: i32,
 ) -> RunResult {
+    let result = Value::Object(result);
     if result.get("schema").and_then(Value::as_str) == Some("podway.session-start-result/v4") {
         assert!(
             podway_protocol::validate_daemon_free_document_v1(
                 "podway.session-start-result/v4",
-                &Value::Object(result.clone())
+                &result
             ),
             "start preview must satisfy its current contract"
         );
@@ -624,6 +629,9 @@ fn local_result_v2(
         exit_code == 0 || exit_code == 1,
         "a v2 success envelope exits clean or domain, never usage or higher",
     );
+    let Value::Object(result) = result else {
+        unreachable!("local v2 result is always an object");
+    };
     RunResult::LocalV2 {
         command: command.to_owned(),
         result,

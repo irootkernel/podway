@@ -620,7 +620,7 @@ fn v2sdg002_delegation_result_correlations_reject_mismatched_identities() {
         ),
     ] {
         let result = &fixtures[schema];
-        assert!(decode_result_schema_contract_v2(result.as_object().unwrap()).is_some());
+        assert!(decode_result_schema_contract_v2(result).is_some());
         for field in fields {
             let mut mismatched = result.clone();
             mismatched[field] = json!("00000000-0000-4000-8000-000000000002");
@@ -634,7 +634,7 @@ fn v2sdg002_delegation_result_correlations_reject_mismatched_identities() {
                 &mismatched,
             );
             assert!(
-                decode_result_schema_contract_v2(mismatched.as_object().unwrap()).is_none(),
+                decode_result_schema_contract_v2(&mismatched).is_none(),
                 "{schema} {field}"
             );
         }
@@ -645,7 +645,7 @@ fn v2sdg002_delegation_result_correlations_reject_mismatched_identities() {
         "schemas/delegation-receipt-result-v1.schema.json",
         &absent_receipt,
     );
-    assert!(decode_result_schema_contract_v2(absent_receipt.as_object().unwrap()).is_none());
+    assert!(decode_result_schema_contract_v2(&absent_receipt).is_none());
 }
 #[test]
 fn v2sdg002_delegation_views_bind_current_receipt_to_current_attempt() {
@@ -657,7 +657,7 @@ fn v2sdg002_delegation_views_bind_current_receipt_to_current_attempt() {
     let mut next = fixtures["podway.next-result/v5"].clone();
     next["delegation"]["receipt"]["attempt_id"] = json!("00000000-0000-4000-8000-000000000002");
     assert_valid("schemas/next-result-v5.schema.json", &next);
-    assert!(decode_result_schema_contract_v2(next.as_object().unwrap()).is_none());
+    assert!(decode_result_schema_contract_v2(&next).is_none());
 
     for (schema, fixture) in [
         (
@@ -675,7 +675,7 @@ fn v2sdg002_delegation_views_bind_current_receipt_to_current_attempt() {
         inconsistent["delegation"] =
             documents["fixtures"]["podway.delegation-projection/v1"].clone();
         assert!(
-            decode_result_schema_contract_v2(inconsistent.as_object().unwrap()).is_none(),
+            decode_result_schema_contract_v2(&inconsistent).is_none(),
             "{schema}"
         );
 
@@ -702,24 +702,24 @@ fn v2sdg002_delegation_views_bind_current_receipt_to_current_attempt() {
             "schemas/compact-status-result-v5.schema.json"
         };
         assert_valid(schema_path, &running);
-        assert!(decode_result_schema_contract_v2(running.as_object().unwrap()).is_some());
+        assert!(decode_result_schema_contract_v2(&running).is_some());
         let mut inactive = running.clone();
         inactive["delegation"] = fixture["delegation"].clone();
         assert_valid(schema_path, &inactive);
-        assert!(decode_result_schema_contract_v2(inactive.as_object().unwrap()).is_none());
+        assert!(decode_result_schema_contract_v2(&inactive).is_none());
         running["delegation"]["receipt"]["attempt_id"] =
             json!("00000000-0000-4000-8000-000000000002");
         assert_valid(schema_path, &running);
-        assert!(decode_result_schema_contract_v2(running.as_object().unwrap()).is_none());
+        assert!(decode_result_schema_contract_v2(&running).is_none());
     }
     let mut observation = fixtures["podway.observation-result/v5"].clone();
     observation["status"]["delegation"] =
         documents["fixtures"]["podway.delegation-projection/v1"].clone();
-    assert!(decode_result_schema_contract_v2(observation.as_object().unwrap()).is_none());
+    assert!(decode_result_schema_contract_v2(&observation).is_none());
     let mut archive = fixtures["podway.session-archive-show-result/v3"].clone();
     archive["state"]["delegation"] =
         documents["fixtures"]["podway.delegation-projection/v1"].clone();
-    assert!(decode_result_schema_contract_v2(archive.as_object().unwrap()).is_none());
+    assert!(decode_result_schema_contract_v2(&archive).is_none());
 }
 #[test]
 fn v2sdg002_delegation_projection_and_receipt_states_are_closed() {
@@ -1427,7 +1427,7 @@ fn v2lif002_prepared_result_families_enforce_the_reserved_lifecycle_boundary() {
         &mismatched_disposition,
     );
     assert_eq!(
-        decode_result_schema_contract_v2(mismatched_disposition.as_object().unwrap()),
+        decode_result_schema_contract_v2(&mismatched_disposition),
         None
     );
 
@@ -1493,7 +1493,7 @@ fn v2lif002_prepared_result_families_enforce_the_reserved_lifecycle_boundary() {
 fn v2ctr003_decision_result_projections_match_the_immutable_record() {
     let decision = examples()["podway.decision-result/v2"].clone();
     assert_valid("schemas/decision-result-v2.schema.json", &decision);
-    assert!(decode_result_schema_contract_v2(decision.as_object().unwrap()).is_some());
+    assert!(decode_result_schema_contract_v2(&decision).is_some());
 
     for (field, mismatched) in [
         ("graph_node_id", json!("other-node")),
@@ -1507,7 +1507,7 @@ fn v2ctr003_decision_result_projections_match_the_immutable_record() {
         result[field] = mismatched;
         assert_valid("schemas/decision-result-v2.schema.json", &result);
         assert_eq!(
-            decode_result_schema_contract_v2(result.as_object().unwrap()),
+            decode_result_schema_contract_v2(&result),
             None,
             "decoder accepted mismatched decision projection {field}"
         );
@@ -1651,7 +1651,7 @@ fn v2aut001_validate_command_result_v2_binds_registered_families_to_their_routes
         .iter()
         .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
     {
-        let result = result_map(&examples[contract.schema]);
+        let result = examples[contract.schema].clone();
         for command in contract.commands {
             assert!(
                 validate_command_result_v2(command, &result).is_ok(),
@@ -1661,8 +1661,8 @@ fn v2aut001_validate_command_result_v2_binds_registered_families_to_their_routes
         }
     }
 
-    let source = result_map(&examples["podway.procedure-source-result/v1"]);
-    let diagnostics = result_map(&diagnostics_result("format"));
+    let source = examples["podway.procedure-source-result/v1"].clone();
+    let diagnostics = diagnostics_result("format");
     assert!(validate_command_result_v2("procedure.format", &source).is_ok());
     assert!(validate_command_result_v2("procedure.format", &diagnostics).is_ok());
     assert!(validate_command_result_v2("procedure.lint", &diagnostics).is_ok());
@@ -1670,14 +1670,14 @@ fn v2aut001_validate_command_result_v2_binds_registered_families_to_their_routes
     assert!(validate_command_result_v2("procedure.graph", &source).is_err());
 
     let mut released_v1_family = source.clone();
-    released_v1_family.insert(
+    released_v1_family.as_object_mut().unwrap().insert(
         "schema".to_owned(),
         json!("podway.procedure-validation-result/v1"),
     );
     assert!(validate_command_result_v2("procedure.validate", &released_v1_family).is_err());
 
     let mut missing = source;
-    missing.remove("schema");
+    missing.as_object_mut().unwrap().remove("schema");
     assert!(validate_command_result_v2("procedure.format", &missing).is_err());
 }
 #[test]
@@ -2482,7 +2482,7 @@ fn current_authoring_registry_has_the_exact_expected_families_and_routes() {
     assert_eq!(actual, expected);
     for (schema, command) in expected {
         assert!(
-            validate_command_result_v2(command, &result_map(&examples()[schema])).is_ok(),
+            validate_command_result_v2(command, &examples()[schema]).is_ok(),
             "{schema}: {command}"
         );
     }
@@ -2743,13 +2743,15 @@ fn archive_list_and_purge_results_decode_and_bind_to_their_retained_commands() {
         ),
     ] {
         assert_valid(schema_path, &result);
-        let body = result_map(&result);
-        let contract = decode_result_schema_contract_v2(&body).expect("retained archive result");
+        let contract = decode_result_schema_contract_v2(&result).expect("retained archive result");
         assert_eq!(contract.schema_path, schema_path);
-        validate_command_result_v2(command, &body).unwrap();
-        assert!(validate_command_result_v2("session.archive_show", &body).is_err());
-        let mut invalid = body;
-        invalid.insert("unexpected".to_owned(), json!(true));
+        validate_command_result_v2(command, &result).unwrap();
+        assert!(validate_command_result_v2("session.archive_show", &result).is_err());
+        let mut invalid = result;
+        invalid
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected".to_owned(), json!(true));
         assert!(decode_result_schema_contract_v2(&invalid).is_none());
         assert!(validate_command_result_v2(command, &invalid).is_err());
     }
@@ -2792,15 +2794,21 @@ fn current_results_round_trip_every_registered_direct_command_and_reject_discrim
         }
     }
     for result in [
-        Map::new(),
-        Map::from_iter([("schema".to_owned(), json!(1))]),
-        Map::from_iter([("schema".to_owned(), json!("podway.unknown-result/v1"))]),
+        json!({}),
+        json!({"schema": 1}),
+        json!({"schema": "podway.unknown-result/v1"}),
+        Value::Null,
+        json!([]),
+        json!(true),
+        json!("text"),
     ] {
         assert!(decode_result_schema_contract_v2(&result).is_none());
+        assert!(validate_command_result_v2("procedure.format", &result).is_err());
+        assert!(validate_command_result_v2("version", &result).is_err());
     }
     let mut incomplete = fixtures["podway.next-result/v5"].clone();
     incomplete.as_object_mut().unwrap().remove("node");
-    assert!(decode_result_schema_contract_v2(incomplete.as_object().unwrap()).is_none());
+    assert!(decode_result_schema_contract_v2(&incomplete).is_none());
 }
 
 #[test]
@@ -2891,7 +2899,7 @@ fn current_result_decoders_preserve_deep_closed_family_and_variant_failures() {
     }
     for value in invalid {
         assert!(
-            decode_result_schema_contract_v2(value.as_object().unwrap()).is_none(),
+            decode_result_schema_contract_v2(&value).is_none(),
             "accepted malformed {}: {value}",
             value["schema"]
         );

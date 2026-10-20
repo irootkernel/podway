@@ -55,10 +55,47 @@ pub struct OutputEnvelopeV4(Value);
 impl OutputEnvelopeV4 {
     pub fn new(input: OutputEnvelopeInputV4) -> Result<Self, ProtocolError> {
         let command = input.command.as_str().to_owned();
-        let mut value = serde_json::to_value(input)
-            .map_err(|_| ProtocolError::InvalidCommandResult { command })?;
-        value["schema"] = Value::String(OUTPUT_SCHEMA_V4.to_owned());
-        Self::from_value(value)
+        let mut value = Map::from_iter([
+            (
+                "schema".to_owned(),
+                Value::String(OUTPUT_SCHEMA_V4.to_owned()),
+            ),
+            (
+                "request_id".to_owned(),
+                Value::String(input.request_id.into_inner()),
+            ),
+            (
+                "command".to_owned(),
+                Value::String(input.command.into_inner()),
+            ),
+            (
+                "generated_at".to_owned(),
+                Value::String(input.generated_at.into_inner()),
+            ),
+            ("result".to_owned(), Value::Object(input.result)),
+            (
+                "warnings".to_owned(),
+                Value::Array(input.warnings.into_iter().map(Value::Object).collect()),
+            ),
+        ]);
+        if let Some(workspace) = input.workspace {
+            value.insert(
+                "workspace".to_owned(),
+                serde_json::to_value(workspace).map_err(|_| {
+                    ProtocolError::InvalidCommandResult {
+                        command: command.clone(),
+                    }
+                })?,
+            );
+        }
+        if let Some(session) = input.session {
+            value.insert(
+                "session".to_owned(),
+                serde_json::to_value(session)
+                    .map_err(|_| ProtocolError::InvalidCommandResult { command })?,
+            );
+        }
+        Self::from_value(Value::Object(value))
     }
 
     pub fn from_value(value: Value) -> Result<Self, ProtocolError> {

@@ -8,7 +8,9 @@ use std::{
 use jsonschema::{Retrieve, Uri, Validator};
 use serde_json::{Map, Value};
 
-use crate::{ProtocolError, validate_json_document_depth, validate_json_map_depth};
+use crate::{
+    ProtocolError, serialized_json_len_v1, validate_json_document_depth, validate_json_map_depth,
+};
 
 mod embedded_schemas {
     include!(concat!(env!("OUT_DIR"), "/embedded_json_schemas.rs"));
@@ -62,7 +64,7 @@ pub fn validate_delegation_document_v1(schema: &str, value: &Value) -> bool {
         _ => return false,
     };
     if !validate_selected_direct_schema_v1(schema, "", value)
-        || serde_json::to_vec(value).map_or(true, |encoded| encoded.len() > max_bytes)
+        || serialized_json_len_v1(value).map_or(true, |length| length > max_bytes)
     {
         return false;
     }
@@ -572,14 +574,13 @@ pub const DAEMON_FREE_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
     ),
 ];
 
-pub fn decode_result_schema_contract_v2(
-    result: &Map<String, Value>,
-) -> Option<&'static ResultSchemaContractV2> {
-    let schema = result.get("schema")?.as_str()?;
+pub fn decode_result_schema_contract_v2(result: &Value) -> Option<&'static ResultSchemaContractV2> {
+    let object = result.as_object()?;
+    let schema = object.get("schema")?.as_str()?;
     let contract = current_result_contracts_v2().find(|contract| contract.schema == schema)?;
-    (validate_json_map_depth(result, 1).is_ok()
-        && validate_selected_direct_schema_v1(schema, "", &Value::Object(result.clone()))
-        && validate_result_correlations_v2(schema, result))
+    (validate_json_map_depth(object, 1).is_ok()
+        && validate_selected_direct_schema_v1(schema, "", result)
+        && validate_result_correlations_v2(schema, object))
     .then_some(contract)
 }
 fn current_result_contracts_v2() -> impl Iterator<Item = &'static ResultSchemaContractV2> {
@@ -1412,13 +1413,16 @@ fn validate_result_correlations_v2(schema: &str, result: &Map<String, Value>) ->
             )
             .is_some_and(|(session, disposition)| session == disposition),
         "podway.delegation-package-result/v1" => {
-            let Some(package) = result.get("package").and_then(Value::as_object) else {
+            let Some(package_value) = result.get("package") else {
+                return false;
+            };
+            let Some(package) = package_value.as_object() else {
                 return false;
             };
             result_json_within_bound_v2(result, MAX_DELEGATION_PACKAGE_RESULT_BYTES_V1)
                 && validate_delegation_document_v1(
                     "podway.delegation-work-package/v1",
-                    &Value::Object(package.clone()),
+                    package_value,
                 )
                 && ["workspace_uuid", "session_id", "attempt_id"]
                     .iter()
@@ -1480,7 +1484,7 @@ fn validate_result_correlations_v2(schema: &str, result: &Map<String, Value>) ->
 }
 
 fn result_json_within_bound_v2(result: &Map<String, Value>, limit: usize) -> bool {
-    serde_json::to_vec(result).is_ok_and(|encoded| encoded.len() <= limit)
+    serialized_json_len_v1(result).is_ok_and(|length| length <= limit)
 }
 
 fn delegation_projection_matches_current_attempt_v2(result: &Map<String, Value>) -> bool {
@@ -1497,8 +1501,8 @@ fn delegation_projection_matches_attempt_v2(projection: &Value, attempt: Option<
     let Some(state) = projection.get("state").and_then(Value::as_str) else {
         return false;
     };
-    if !serde_json::to_vec(projection)
-        .is_ok_and(|encoded| encoded.len() <= MAX_DELEGATION_PROJECTION_BYTES_V1)
+    if !serialized_json_len_v1(projection)
+        .is_ok_and(|length| length <= MAX_DELEGATION_PROJECTION_BYTES_V1)
     {
         return false;
     }
@@ -1557,10 +1561,7 @@ pub fn validate_v2_output_warnings(warnings: &[Map<String, Value>]) -> bool {
         })
 }
 
-pub fn validate_command_result_v2(
-    command: &str,
-    result: &Map<String, Value>,
-) -> Result<(), ProtocolError> {
+pub fn validate_command_result_v2(command: &str, result: &Value) -> Result<(), ProtocolError> {
     if decode_result_schema_contract_v2(result)
         .is_some_and(|contract| contract.commands.contains(&command))
         || (PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V1.contains(&command)
@@ -1585,13 +1586,15 @@ pub fn ensure_procedure_independent_result_schema_v1(
 }
 pub fn validate_procedure_independent_result_v1(
     command: &str,
-    result: &Map<String, Value>,
+    result: &Value,
 ) -> Result<(), ProtocolError> {
     let valid = if command == "version" {
-        validate_daemon_free_document_v1("podway.version-result/v2", &Value::Object(result.clone()))
+        validate_daemon_free_document_v1("podway.version-result/v2", result)
     } else {
         PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V1.contains(&command)
-            && !result.contains_key("schema")
+            && result
+                .as_object()
+                .is_some_and(|object| !object.contains_key("schema"))
     };
     if valid {
         Ok(())
@@ -1792,7 +1795,7 @@ pub fn validate_daemon_free_document_v1(schema: &str, value: &Value) -> bool {
         return false;
     };
     validate_json_document_depth(value).is_ok()
-        && serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= MAX_DIRECT_OUTPUT_BYTES_V1)
+        && serialized_json_len_v1(value).is_ok_and(|length| length <= MAX_DIRECT_OUTPUT_BYTES_V1)
         && validate_selected_direct_schema_v1(schema, discriminator, value)
         && daemon_free_recovery_identity_v1(schema, value)
 }

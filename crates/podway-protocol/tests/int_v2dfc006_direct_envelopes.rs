@@ -13,6 +13,65 @@ fn answers() -> Value {
 }
 
 #[test]
+fn parse003_output_constructor_moves_result_and_warning_trees() {
+    let fixture = &answers()["fixtures"]["podway.output/v4"];
+    let input = OutputEnvelopeInputV4 {
+        request_id: RequestIdV1::new(fixture["request_id"].as_str().unwrap()).unwrap(),
+        command: CommandNameV1::new("procedure.show").unwrap(),
+        generated_at: Rfc3339MillisV1::new(fixture["generated_at"].as_str().unwrap()).unwrap(),
+        workspace: None,
+        session: None,
+        result: serde_json::Map::from_iter([(
+            "nested".to_owned(),
+            json!({"values": ["payload".repeat(64)]}),
+        )]),
+        warnings: ["First warning", "Second warning"]
+            .into_iter()
+            .map(|message| {
+                json!({"code":"ADVISORY", "path":"procedure", "message":message.repeat(4)})
+                    .as_object()
+                    .unwrap()
+                    .clone()
+            })
+            .collect(),
+    };
+    let result_pointer = input.result["nested"]["values"][0]
+        .as_str()
+        .unwrap()
+        .as_ptr();
+    let warning_pointers: Vec<_> = input
+        .warnings
+        .iter()
+        .map(|warning| warning["message"].as_str().unwrap().as_ptr())
+        .collect();
+    let mut expected = serde_json::to_value(&input).unwrap();
+    expected["schema"] = json!("podway.output/v4");
+
+    let output = OutputEnvelopeV4::new(input).unwrap();
+    assert_eq!(output.as_value(), &expected);
+    assert_eq!(
+        serde_json::to_vec(&output).unwrap(),
+        serde_json::to_vec(&expected).unwrap()
+    );
+    assert_eq!(
+        output.as_value()["result"]["nested"]["values"][0]
+            .as_str()
+            .unwrap()
+            .as_ptr(),
+        result_pointer
+    );
+    for (index, pointer) in warning_pointers.into_iter().enumerate() {
+        assert_eq!(
+            output.as_value()["warnings"][index]["message"]
+                .as_str()
+                .unwrap()
+                .as_ptr(),
+            pointer
+        );
+    }
+}
+
+#[test]
 fn direct_constructors_and_decoders_validate_the_complete_envelope() {
     let fixtures = &answers()["fixtures"];
     let success = &fixtures["podway.output/v4"];
