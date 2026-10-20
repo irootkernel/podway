@@ -68,19 +68,21 @@ pub fn execute_session_v1<R: GitResolverContractV1>(
                 resolver
                     .revalidate(&resolved, snapshot.binding())
                     .map_err(crate::workspace::DirectWorkspaceResolutionErrorV1::from)?;
-                let current = snapshot.current_graph()?.ok_or_else(|| {
-                    DirectStoreErrorV1::Domain(GraphMutationErrorV2::Domain(
-                        podway_core::DomainError::SessionIdentityMismatch {
-                            expected: input.preconditions.expected_session_id.clone(),
-                            actual: None,
-                        },
-                    ))
+                snapshot.with_admitted_current_graph(|current| {
+                    let current = current.ok_or_else(|| {
+                        DirectStoreErrorV1::Domain(GraphMutationErrorV2::Domain(
+                            podway_core::DomainError::SessionIdentityMismatch {
+                                expected: input.preconditions.expected_session_id.clone(),
+                                actual: None,
+                            },
+                        ))
+                    })?;
+                    check_session_fences(
+                        current,
+                        &input.preconditions.expected_session_id,
+                        input.preconditions.expected_session_revision,
+                    )
                 })?;
-                check_session_fences(
-                    &current,
-                    &input.preconditions.expected_session_id,
-                    input.preconditions.expected_session_revision,
-                )?;
                 let now = clock.now();
                 let view = snapshot.view(now)?;
                 let graph = view

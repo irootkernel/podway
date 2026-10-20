@@ -1878,7 +1878,7 @@ fn state001_reset_dry_run_fence_rejection_precedes_clock_and_receipt_admission()
     let source = json!({"schema":"podway.procedure/v2","id":"reset-fence-delegation","version":"1","name":"Reset fence delegation","purpose":"Pin reset fence priority.",
         "node_definitions":{"work":{"type":"action","title":"Work","intent":"Review work."}},
         "graph":{"entry":"work","nodes":[{"id":"work","use":"work","terminal":true,"delegation":{"binding_ref":"local-specialist","role_ref":"reviewer","role_snapshot_digest":digest(),"max_rounds":3,"after_accept":"retain"}}]}});
-    let mut engine = empty(&serde_json::to_string(&source).unwrap());
+    let engine = empty(&serde_json::to_string(&source).unwrap());
     let canonical = podway_core::canonicalize_json_v1(&source).unwrap();
     use sha2::{Digest as _, Sha256};
     let snapshot = podway_store::admit_procedure_snapshot_v2(
@@ -2424,4 +2424,96 @@ fn v2run006_cancel_restarts_without_a_cursor_and_reset_clears_running_and_cancel
             "SESSION_ID_MISMATCH",
         );
     }
+}
+
+/// Sums registered statement executions whose SQL text contains the needle.
+pub(super) fn state002_executes(
+    sql: &std::collections::BTreeMap<String, podway_store::test_support::query_account::SqlCounts>,
+    needle: &str,
+) -> u64 {
+    sql.iter()
+        .filter(|(key, _)| key.contains(needle))
+        .map(|(_, counts)| counts.executes)
+        .sum()
+}
+
+/// STATE-002: the reset dry run reuses one admitted graph and its retained
+/// dispositions, and the admission (including disposition validation) still
+/// precedes the fences and the clock.
+#[test]
+fn state002_reset_dry_run_reuses_admitted_state_and_keeps_admission_before_fences() {
+    use podway_store::test_support::query_account::QueryAccountant;
+    // Arm 1: a terminal, disposed current session. The dry-run result keeps
+    // reporting the recorded disposition, and one admission plus one
+    // disposition load serve the whole request.
+    let engine = empty(STATE_PROCEDURE);
+    let running = podway_store::test_support::running_archive_fixture_session_v2(2310, 2410, 10);
+    seed(&engine, &running, "state002-seed");
+    engine.complete("state002-complete");
+    engine.success(disposition(&engine), "state002-dispose");
+    let command = reset(&engine, SessionDeletionModeV1::Eligible, true);
+    let accountant = QueryAccountant::start();
+    let dry = engine.success(command, "state002-reset-dry");
+    let report = accountant.finish();
+    assert_eq!(dry["result"]["dry_run"], true);
+    assert_eq!(dry["result"]["current_terminal_disposition"], true);
+    assert_eq!(dry["result"]["eligible"], true);
+    assert_eq!(dry["result"]["required_action"], "none");
+    assert_eq!(
+        state002_executes(
+            &report.sql,
+            "SELECT COUNT(*) FROM v2_task_sessions WHERE activity = 'current'"
+        ),
+        1,
+        "the reset dry run must admit the current graph exactly once"
+    );
+    assert_eq!(
+        state002_executes(&report.sql, "FROM v2_terminal_dispositions"),
+        1,
+        "the reset dry run must load dispositions exactly once"
+    );
+    // Arm 2: a corrupt disposition paired with a stale revision fence and a
+    // panicking clock: the admission error wins before the fence and the
+    // clock is never read.
+    let engine = empty(STATE_PROCEDURE);
+    let running = podway_store::test_support::running_archive_fixture_session_v2(2320, 2420, 10);
+    seed(&engine, &running, "state002-seed-corrupt");
+    engine.complete("state002-complete-corrupt");
+    engine.success(disposition(&engine), "state002-dispose-corrupt");
+    let sequence = engine.sequence();
+    let mut stale = identity(&engine);
+    stale.expected_session_revision = Revision::new(stale.expected_session_revision.get() + 1);
+    let session = engine.graph().trace().session_id().clone();
+    let database = engine.store.layout().database();
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    let changed = connection
+        .execute(
+            "UPDATE v2_terminal_dispositions SET recorded_at_ms=0 WHERE session_id=?1",
+            [session.as_str()],
+        )
+        .unwrap();
+    drop(connection);
+    assert_eq!(changed, 1);
+    let request = engine.request(
+        D::Session(S::Reset(SessionResetV1 {
+            mode: SessionDeletionModeV1::Eligible,
+            dry_run: true,
+            preconditions: stale,
+        })),
+        "state002-reset-corrupt",
+    );
+    let DirectResponseV1::Failure(error) = engine.execute(request, &NoClock) else {
+        panic!("expected WORKSPACE_STATE_UNREADABLE");
+    };
+    assert_eq!(error.into_value()["code"], "WORKSPACE_STATE_UNREADABLE");
+    assert_eq!(engine.sequence(), sequence);
+    assert!(
+        engine
+            .store
+            .read(deadline(), |snapshot| snapshot.outcome(
+                &IdempotencyKeyV1::new("state002-reset-corrupt").unwrap()
+            ))
+            .unwrap()
+            .is_none()
+    );
 }

@@ -29,6 +29,14 @@ use crate::{
     StoreInvariantV1, StoreRecordKindV1, StoreValueErrorV1, map_rusqlite_error_v1,
 };
 
+/// One loader admission: the admitted graph plus the terminal dispositions
+/// its loader stage already validated. Store-internal; reuse is valid only
+/// inside the snapshot that admitted it.
+pub(crate) struct AdmittedGraphStateV2 {
+    pub(crate) graph: GraphSessionStateV2,
+    pub(crate) dispositions: Vec<TerminalDispositionV2>,
+}
+
 const PROCEDURE_SCHEMA_V2: &str = "podway.procedure/v2";
 const PROCEDURE_SCHEMA_DOCUMENT_V2: &str =
     include_str!("../../../assets/schemas/procedure-v2.schema.json");
@@ -1164,6 +1172,14 @@ pub(crate) fn load_archived_session_connection_v2(
     connection: &Connection,
     session_id: &SessionId,
 ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1> {
+    load_archived_session_admission_connection_v2(connection, session_id)
+        .map(|admission| admission.map(|admitted| admitted.graph))
+}
+
+pub(crate) fn load_archived_session_admission_connection_v2(
+    connection: &Connection,
+    session_id: &SessionId,
+) -> Result<Option<AdmittedGraphStateV2>, StoreErrorV1> {
     let row = accounted_query_row(
         connection,
         "SELECT archived_workspace_revision, session_id, task_title, procedure_snapshot_id, \
@@ -1196,9 +1212,13 @@ pub(crate) fn load_archived_session_connection_v2(
         },
     );
     match row {
-        Ok((workspace_revision, persisted)) => {
-            load_present_graph_session_v2(connection, workspace_revision, persisted).map(Some)
-        }
+        Ok((workspace_revision, persisted)) => load_present_graph_session_with_cache_v2(
+            connection,
+            workspace_revision,
+            persisted,
+            None,
+        )
+        .map(Some),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(error) => Err(record_error(error, StoreRecordKindV1::Session)),
     }
@@ -1297,13 +1317,28 @@ struct PersistedSessionV2 {
 pub(crate) fn load_graph_session_connection_v2(
     connection: &Connection,
 ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1> {
-    load_graph_session_with_cache_v2(connection, None)
+    load_graph_session_admission_connection_v2(connection)
+        .map(|admission| admission.map(|admitted| admitted.graph))
+}
+
+pub(crate) fn load_graph_session_admission_connection_v2(
+    connection: &Connection,
+) -> Result<Option<AdmittedGraphStateV2>, StoreErrorV1> {
+    load_graph_session_admission_with_cache_v2(connection, None)
 }
 
 pub(crate) fn load_graph_session_with_cache_v2(
     connection: &Connection,
     cached: Option<&GraphSessionStateV2>,
 ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1> {
+    load_graph_session_admission_with_cache_v2(connection, cached)
+        .map(|admission| admission.map(|admitted| admitted.graph))
+}
+
+fn load_graph_session_admission_with_cache_v2(
+    connection: &Connection,
+    cached: Option<&GraphSessionStateV2>,
+) -> Result<Option<AdmittedGraphStateV2>, StoreErrorV1> {
     let current_count: i64 = accounted_query_row(
         connection,
         "SELECT COUNT(*) FROM v2_task_sessions WHERE activity = 'current'",
@@ -1362,20 +1397,12 @@ pub(crate) fn load_graph_session_with_cache_v2(
         .map(Some)
 }
 
-fn load_present_graph_session_v2(
-    connection: &Connection,
-    workspace_revision: i64,
-    persisted: PersistedSessionV2,
-) -> Result<GraphSessionStateV2, StoreErrorV1> {
-    load_present_graph_session_with_cache_v2(connection, workspace_revision, persisted, None)
-}
-
 fn load_present_graph_session_with_cache_v2(
     connection: &Connection,
     workspace_revision: i64,
     persisted: PersistedSessionV2,
     cached: Option<&GraphSessionStateV2>,
-) -> Result<GraphSessionStateV2, StoreErrorV1> {
+) -> Result<AdmittedGraphStateV2, StoreErrorV1> {
     // One guard per whole reconstruction: committed slot payloads stay
     // counted as live only when this function actually returns a graph.
     #[cfg(any(test, feature = "test-support"))]
@@ -1459,9 +1486,11 @@ fn load_present_graph_session_with_cache_v2(
     let schema_version: i64 =
         accounted_query_row(connection, "PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-    if schema_version >= 5 {
-        load_terminal_dispositions_connection_v2(connection, &state)?;
-    }
+    let dispositions = if schema_version >= 5 {
+        load_terminal_dispositions_connection_v2(connection, &state)?
+    } else {
+        Vec::new()
+    };
 
     let expected_cursor = active_cursor_values(state.trace())?;
     let persisted_cursor = (
@@ -1480,7 +1509,10 @@ fn load_present_graph_session_with_cache_v2(
     }
     #[cfg(any(test, feature = "test-support"))]
     _reads001_graph_scope.commit();
-    Ok(state)
+    Ok(AdmittedGraphStateV2 {
+        graph: state,
+        dispositions,
+    })
 }
 
 fn load_snapshot_v2(
@@ -1725,7 +1757,7 @@ fn load_counters_v2(
 
 pub(crate) fn verify_v2_graph_state_connection_v2(
     connection: &Connection,
-) -> Result<(), StoreErrorV1> {
+) -> Result<Option<AdmittedGraphStateV2>, StoreErrorV1> {
     let orphan_snapshot_count: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM v2_procedure_snapshots p \
@@ -1738,7 +1770,7 @@ pub(crate) fn verify_v2_graph_state_connection_v2(
     if orphan_snapshot_count != 0 {
         return Err(corrupt(StoreRecordKindV1::Snapshot));
     }
-    load_graph_session_connection_v2(connection)?;
+    let admission = load_graph_session_admission_connection_v2(connection)?;
     let invalid_inactive: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM v2_task_sessions \
@@ -1766,7 +1798,7 @@ pub(crate) fn verify_v2_graph_state_connection_v2(
         return Err(corrupt(StoreRecordKindV1::Session));
     }
     crate::v2_delegation::verify_receipts_connection_v1(connection)?;
-    Ok(())
+    Ok(admission)
 }
 
 pub(crate) fn load_terminal_dispositions_connection_v2(

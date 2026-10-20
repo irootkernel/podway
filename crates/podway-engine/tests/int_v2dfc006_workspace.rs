@@ -1031,3 +1031,164 @@ fn bootstrap_rejects_existing_nonprod_config_without_creating_runtime_or_store()
     assert_eq!(files(&root.path().join(".podway")), before);
     assert!(!root.path().join(".podway/runtime").exists());
 }
+
+/// STATE-002: the doctor reuses the verifier's admitted current graph in both
+/// modes. Each run performs exactly one current-graph admission and one
+/// disposition load; the deep run still rehashes its required artifacts from
+/// the admitted graph before the clock, and the shallow run skips them.
+#[test]
+fn state002_doctor_reuses_verifier_admission_deep_and_non_deep() {
+    use super::int_v2dfc006_domain_ports::state002_executes;
+    use podway_core::{ItemId, Revision};
+    use podway_engine::{
+        direct_execution::{DirectBeginRequestV1, begin_session_v1},
+        direct_items::{DirectItemCommandV1, DirectItemRequestV1, execute_item_v1},
+        direct_start::{DirectStartCommandV1, DirectStartRequestV1, start_session_v1},
+        execution::prepare_workspace_procedure_source_v2,
+    };
+    use podway_protocol::{
+        ItemAttachSourceV1, ItemAttachV1, ItemMutationPreconditionsWireV1, SessionBeginV1,
+        SessionIdentityPreconditionsWireV1, SessionStartSourceV1, SessionStartV1,
+    };
+    use podway_store::test_support::query_account::QueryAccountant;
+    // Fixture: one current running session with one required local artifact
+    // and no archived sessions, from the deep-doctor family.
+    let root = fixture();
+    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let clock = Clock(AtomicUsize::new(0));
+    initialize_workspace_v1(
+        &resolver,
+        mutation(root.path(), "state002-init"),
+        false,
+        &clock,
+        &NativeDirectIdSourceV1,
+    )
+    .unwrap();
+    let source = br#"{"schema":"podway.procedure/v2","id":"diagnostic-state002","version":"1","name":"Diagnostic","purpose":"Check shared admitted state.",
+        "node_definitions":{"work":{"type":"action","title":"Work","intent":"Attach evidence.","items":[{"id":"report","type":"artifact","prompt":"Attach report.","required":true}]}},
+        "graph":{"entry":"work","nodes":[{"id":"work","use":"work","terminal":true}]}}"#;
+    std::fs::write(root.path().join("procedure.json"), source).unwrap();
+    std::fs::write(root.path().join("report.txt"), "Original report").unwrap();
+    let prepared = prepare_workspace_procedure_source_v2("procedure.json", source).unwrap();
+    let start = start_session_v1(
+        &resolver,
+        DirectStartRequestV1 {
+            selector: selector(root.path()),
+            expected_workspace_id: None,
+            request_id: RequestIdV1::new(RESPONSE).unwrap(),
+            key: Some(IdempotencyKeyV1::new("state002-start").unwrap()),
+            deadline: deadline(),
+            command: DirectStartCommandV1::Start(SessionStartV1 {
+                source: SessionStartSourceV1::Procedure {
+                    procedure: "procedure.json".into(),
+                },
+                expected_procedure_digest: Some(prepared.digest().clone()),
+                task_title: "Diagnose shared admitted state".into(),
+                dry_run: false,
+            }),
+        },
+        &clock,
+        &NativeDirectIdSourceV1,
+    )
+    .unwrap();
+    let session = SessionId::new(start.as_value()["session"]["id"].as_str().unwrap()).unwrap();
+    let begin = begin_session_v1(
+        &resolver,
+        DirectBeginRequestV1 {
+            selector: selector(root.path()),
+            expected_workspace_id: None,
+            request_id: RequestIdV1::new(RESPONSE).unwrap(),
+            key: IdempotencyKeyV1::new("state002-begin").unwrap(),
+            deadline: deadline(),
+            input: SessionBeginV1 {
+                initial_goal: None,
+                preconditions: SessionIdentityPreconditionsWireV1 {
+                    expected_session_id: session.clone(),
+                    expected_session_revision: Revision::ZERO,
+                },
+            },
+        },
+        &clock,
+        &NativeDirectIdSourceV1,
+    )
+    .unwrap();
+    let attempt = AttemptId::new(
+        begin.as_value()["result"]["attempt"]["attempt_id"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    execute_item_v1(
+        &resolver,
+        DirectItemRequestV1 {
+            selector: selector(root.path()),
+            expected_workspace_id: None,
+            request_id: RequestIdV1::new(RESPONSE).unwrap(),
+            key: IdempotencyKeyV1::new("state002-attach").unwrap(),
+            deadline: deadline(),
+            command: DirectItemCommandV1::Attach(ItemAttachV1 {
+                item_id: ItemId::new("report").unwrap(),
+                source: ItemAttachSourceV1::Path {
+                    path: "report.txt".into(),
+                    media_type: None,
+                },
+                preconditions: ItemMutationPreconditionsWireV1 {
+                    expected_session_id: session,
+                    expected_attempt_id: attempt,
+                    expected_item_revision: Revision::ZERO,
+                },
+            }),
+        },
+        &clock,
+    )
+    .unwrap();
+    let check_status = |value: &serde_json::Value, id: &str| -> serde_json::Value {
+        value["result"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["id"] == id)
+            .unwrap_or_else(|| panic!("missing doctor check {id}"))["status"]
+            .clone()
+    };
+    for deep in [false, true] {
+        let accountant = QueryAccountant::start();
+        let healthy = doctor_workspace_v1(&resolver, read(root.path()), deep, &clock).unwrap();
+        let report = accountant.finish();
+        let value = healthy.as_value();
+        assert_eq!(value["result"]["healthy"], true);
+        assert_eq!(value["result"]["deep"], deep);
+        assert_eq!(
+            state002_executes(
+                &report.sql,
+                "SELECT COUNT(*) FROM v2_task_sessions WHERE activity = 'current'"
+            ),
+            1,
+            "doctor ({deep}) must admit the current graph exactly once"
+        );
+        assert_eq!(
+            state002_executes(&report.sql, "FROM v2_terminal_dispositions"),
+            1,
+            "doctor ({deep}) must load dispositions exactly once"
+        );
+        if deep {
+            assert_eq!(
+                value["result"]["current_required_local_artifacts_checked"],
+                1
+            );
+            assert_eq!(
+                check_status(&value, "current_required_local_artifacts"),
+                "pass"
+            );
+        } else {
+            assert_eq!(
+                value["result"]["current_required_local_artifacts_checked"],
+                0
+            );
+            assert_eq!(
+                check_status(&value, "current_required_local_artifacts"),
+                "skipped"
+            );
+        }
+    }
+}

@@ -1,5 +1,5 @@
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     fs::File,
     io::Read,
     os::unix::ffi::OsStrExt,
@@ -172,6 +172,7 @@ impl DirectStoreV1 {
             let snapshot = DirectReadSnapshotV1 {
                 connection: transaction,
                 binding,
+                staged_current: RefCell::new(StagedCurrentAdmissionV1::Unadmitted),
             };
             let result = read(&snapshot)?;
             self.revalidate_files(&lease, &database)?;
@@ -208,6 +209,7 @@ impl DirectStoreV1 {
                 read(&DirectReadSnapshotV1 {
                     connection: &transaction,
                     binding,
+                    staged_current: RefCell::new(StagedCurrentAdmissionV1::Unadmitted),
                 })
                 .map_err(invalid_admission_error)
             })();
@@ -547,7 +549,7 @@ impl DirectStoreV1 {
             {
                 return Err(DirectStoreErrorV1::Unreadable);
             }
-            v2_state::verify_v2_graph_state_connection_v2(&transaction)?;
+            let admission = v2_state::verify_v2_graph_state_connection_v2(&transaction)?;
             // Retained inactive graphs are reconstructed one at a time, without an archive Vec.
             let mut statement = transaction.prepare(
                 "SELECT session_id FROM v2_task_sessions WHERE activity = 'inactive' ORDER BY session_id")?;
@@ -555,9 +557,8 @@ impl DirectStoreV1 {
             while let Some(row) = rows.next()? {
                 let id: String = row.get(0)?;
                 let id = SessionId::new(id).map_err(|_| DirectStoreErrorV1::Unreadable)?;
-                let state = v2_state::load_archived_session_connection_v2(&transaction, &id)?
+                v2_state::load_archived_session_connection_v2(&transaction, &id)?
                     .ok_or(DirectStoreErrorV1::Unreadable)?;
-                v2_state::load_terminal_dispositions_connection_v2(&transaction, &state)?;
             }
             let mut outcomes = transaction
                 .prepare("SELECT idempotency_key FROM mutation_outcomes ORDER BY workspace_sequence")?;
@@ -571,6 +572,11 @@ impl DirectStoreV1 {
             let snapshot = DirectReadSnapshotV1 {
                 connection: &transaction,
                 binding,
+                // Seeded only here, after every verifier check: the callback
+                // reuses the admission this verifier already validated.
+                staged_current: RefCell::new(StagedCurrentAdmissionV1::Admitted(Box::new(
+                    admission,
+                ))),
             };
             let result = read(&snapshot)?;
             lease.revalidate(&self.layout)?;
@@ -634,6 +640,15 @@ fn invalid_admission_error(error: DirectStoreErrorV1) -> DirectStoreErrorV1 {
 pub struct DirectReadSnapshotV1<'connection> {
     pub(super) connection: &'connection Connection,
     pub(super) binding: WorkspaceBindingV1,
+    /// One admitted current graph staged for later reuse in this snapshot.
+    staged_current: RefCell<StagedCurrentAdmissionV1>,
+}
+
+/// Staged reuse state for the current graph. `Admitted(None)` records an
+/// admitted empty store so an empty snapshot is not re-admitted.
+enum StagedCurrentAdmissionV1 {
+    Unadmitted,
+    Admitted(Box<Option<v2_state::AdmittedGraphStateV2>>),
 }
 
 impl DirectReadSnapshotV1<'_> {
@@ -653,6 +668,42 @@ impl DirectReadSnapshotV1<'_> {
 
     pub fn current_graph(&self) -> DirectStoreResultV1<Option<GraphSessionStateV2>> {
         Ok(v2_state::load_graph_session_connection_v2(self.connection)?)
+    }
+
+    /// Lends this snapshot's admitted current graph, admitting it first when
+    /// this snapshot has not admitted one yet. The admitted graph and its
+    /// terminal dispositions stay staged for a later [`Self::view`] call in
+    /// the same snapshot.
+    ///
+    /// Re-entrancy contract: `body` must not call [`Self::view`] on the same
+    /// snapshot. The staged admission is borrowed shared for `body`'s
+    /// duration, so such a call is a programming error and panics on that
+    /// borrow. A nested `with_admitted_current_graph` only re-lends the same
+    /// admitted graph.
+    pub fn with_admitted_current_graph<T, E>(
+        &self,
+        body: impl FnOnce(Option<&GraphSessionStateV2>) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<DirectStoreErrorV1>,
+    {
+        if matches!(
+            &*self.staged_current.borrow(),
+            StagedCurrentAdmissionV1::Unadmitted
+        ) {
+            let admitted = v2_state::load_graph_session_admission_connection_v2(self.connection)
+                .map_err(DirectStoreErrorV1::from)?;
+            *self.staged_current.borrow_mut() =
+                StagedCurrentAdmissionV1::Admitted(Box::new(admitted));
+        }
+        let staged = self.staged_current.borrow();
+        let graph = match &*staged {
+            StagedCurrentAdmissionV1::Admitted(admitted) => {
+                admitted.as_ref().as_ref().map(|admitted| &admitted.graph)
+            }
+            StagedCurrentAdmissionV1::Unadmitted => None,
+        };
+        body(graph)
     }
 
     pub fn outcome(
@@ -748,21 +799,21 @@ impl DirectReadSnapshotV1<'_> {
         session: &SessionId,
         observed_at: UnixMillis,
     ) -> DirectStoreResultV1<Option<DirectWorkspaceViewV1>> {
-        let Some(graph) = self.archived_graph(session)? else {
+        let Some(admitted) =
+            v2_state::load_archived_session_admission_connection_v2(self.connection, session)?
+        else {
             return Ok(None);
         };
         let receipts = v2_delegation::receipt_snapshot_connection_v1(
             self.connection,
-            &graph,
+            &admitted.graph,
             self.binding.identity().workspace_uuid(),
         )?;
-        let dispositions =
-            v2_state::load_terminal_dispositions_connection_v2(self.connection, &graph)?;
         Ok(Some(DirectWorkspaceViewV1 {
             binding: self.binding.clone(),
-            graph: Some(graph),
+            graph: Some(admitted.graph),
             receipts,
-            dispositions,
+            dispositions: admitted.dispositions,
             sequence: self.committed_sequence()?,
             observed_at,
         }))
@@ -776,19 +827,32 @@ impl DirectReadSnapshotV1<'_> {
     }
 
     pub fn view(&self, observed_at: UnixMillis) -> DirectStoreResultV1<DirectWorkspaceViewV1> {
-        let graph = self.current_graph()?;
-        let (receipts, dispositions) = match &graph {
-            Some(state) => (
-                v2_delegation::receipt_snapshot_connection_v1(
+        // Take any staged admission; otherwise admit once here. A shared
+        // borrow from `with_admitted_current_graph` makes this take panic
+        // instead of silently re-admitting.
+        let staged = std::mem::replace(
+            &mut *self.staged_current.borrow_mut(),
+            StagedCurrentAdmissionV1::Unadmitted,
+        );
+        let admitted = match staged {
+            StagedCurrentAdmissionV1::Admitted(admitted) => *admitted,
+            StagedCurrentAdmissionV1::Unadmitted => {
+                v2_state::load_graph_session_admission_connection_v2(self.connection)?
+            }
+        };
+        let (receipts, dispositions, graph) = match admitted {
+            Some(admitted) => {
+                let receipts = v2_delegation::receipt_snapshot_connection_v1(
                     self.connection,
-                    state,
+                    &admitted.graph,
                     self.binding.identity().workspace_uuid(),
-                )?,
-                v2_state::load_terminal_dispositions_connection_v2(self.connection, state)?,
-            ),
+                )?;
+                (receipts, admitted.dispositions, Some(admitted.graph))
+            }
             None => (
                 v2_delegation::DelegationReceiptSnapshotV1::empty(),
                 Vec::new(),
+                None,
             ),
         };
         let sequence = self.committed_sequence()?;

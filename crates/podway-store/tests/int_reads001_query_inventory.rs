@@ -30,7 +30,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use super::int_v2dfc005_direct_store::{deadline, digest, request, store, success};
-use super::int_v2dfc008_persistence::{fixture, seed};
+use super::int_v2dfc008_persistence::{archive, fixture, seed};
 
 /// Frozen fixture recipe dimensions. S/M/grown-L/1024 are newly chosen for
 /// READS-001 Store-level registration; CLI qualification keeps its own
@@ -1322,5 +1322,162 @@ fn failed_first_payload_decode_reports_zero_fresh_and_exact_raw_release() {
     println!(
         "READS001_BASELINE|failed-decode|decode_attempts={}|fresh=0|raw_released_at_scope_end={}",
         report.retention.decode_attempts, report.retention.raw_released_at_scope_end
+    );
+}
+
+/// Sums registered statement executions whose SQL text contains the needle.
+fn state002_executes(
+    sql: &std::collections::BTreeMap<String, podway_store::test_support::query_account::SqlCounts>,
+    needle: &str,
+) -> u64 {
+    sql.iter()
+        .filter(|(key, _)| key.contains(needle))
+        .map(|(_, counts)| counts.executes)
+        .sum()
+}
+
+/// STATE-002: one ordinary view admits the current graph exactly once and
+/// keeps the loader's admitted dispositions instead of reloading them.
+#[test]
+fn state002_view_admits_graph_and_dispositions_once() {
+    let identity = DurableWorktreeIdentityV1::new(
+        digest('a'),
+        WorkspaceId::new("00000000-0000-4000-8000-000000000141").unwrap(),
+        digest('b'),
+    );
+    let (root, direct) = fixture(&identity);
+    let running = podway_store::test_support::running_archive_fixture_session_v2(2110, 2210, 10);
+    let completed = running
+        .complete_active_action_v2(
+            running.trace().revision(),
+            running.trace().active_attempt().unwrap().attempt_id(),
+            None,
+            UnixMillis::new(20),
+        )
+        .unwrap()
+        .into_state();
+    seed(&direct, &completed);
+    let dispose = request("state002-dispose-current");
+    direct
+        .mutate(
+            &dispose,
+            deadline(),
+            || UnixMillis::new(2111),
+            |transaction| {
+                transaction.now();
+                transaction.record_disposition(
+                    &podway_core::TerminalDispositionV2::not_required(
+                        completed.trace().session_id().clone(),
+                        completed.trace().revision(),
+                        "No handoff required",
+                        None,
+                        UnixMillis::new(2111),
+                    )
+                    .unwrap(),
+                )?;
+                Ok(success(
+                    &dispose,
+                    serde_json::json!({"disposed":true}),
+                    transaction.now(),
+                ))
+            },
+        )
+        .unwrap();
+    let cold = store(root.path());
+    let accountant = QueryAccountant::start();
+    let observed = cold
+        .read(deadline(), |snapshot| {
+            let view = snapshot.view(UnixMillis::new(2112))?;
+            Ok((
+                view.graph().map(|graph| graph.trace().session_id().clone()),
+                view.terminal_dispositions().to_vec(),
+            ))
+        })
+        .unwrap();
+    let report = accountant.finish();
+    assert_eq!(
+        observed.0.as_ref(),
+        Some(completed.trace().session_id()),
+        "the admitted graph is the view's graph"
+    );
+    assert_eq!(
+        observed.1.len(),
+        1,
+        "the retained disposition reaches the view"
+    );
+    assert_eq!(
+        observed.1[0].terminal_session_revision(),
+        completed.trace().revision()
+    );
+    assert_eq!(
+        state002_executes(&report.sql, "FROM v2_terminal_dispositions"),
+        1,
+        "the view must load dispositions exactly once"
+    );
+    assert_eq!(
+        state002_executes(
+            &report.sql,
+            "SELECT COUNT(*) FROM v2_task_sessions WHERE activity = 'current'"
+        ),
+        1,
+        "the view must admit the current graph exactly once"
+    );
+}
+
+/// STATE-002: one archived view admits the archived graph exactly once and
+/// keeps the loader's admitted dispositions instead of reloading them.
+#[test]
+fn state002_archived_view_admits_dispositions_once() {
+    let identity = DurableWorktreeIdentityV1::new(
+        digest('a'),
+        WorkspaceId::new("00000000-0000-4000-8000-000000000142").unwrap(),
+        digest('b'),
+    );
+    let (root, direct) = fixture(&identity);
+    let running = podway_store::test_support::running_archive_fixture_session_v2(2120, 2220, 10);
+    let completed = running
+        .complete_active_action_v2(
+            running.trace().revision(),
+            running.trace().active_attempt().unwrap().attempt_id(),
+            None,
+            UnixMillis::new(20),
+        )
+        .unwrap()
+        .into_state();
+    seed(&direct, &completed);
+    archive(&direct, &completed, UnixMillis::new(2121));
+    let cold = store(root.path());
+    let accountant = QueryAccountant::start();
+    let observed = cold
+        .read(deadline(), |snapshot| {
+            let view = snapshot
+                .archived_view(completed.trace().session_id(), UnixMillis::new(2122))?
+                .expect("archived session admits");
+            Ok((
+                view.graph().map(|graph| graph.trace().session_id().clone()),
+                view.terminal_dispositions().to_vec(),
+            ))
+        })
+        .unwrap();
+    let report = accountant.finish();
+    assert_eq!(
+        observed.0.as_ref(),
+        Some(completed.trace().session_id()),
+        "the admitted archived graph is the view's graph"
+    );
+    assert_eq!(observed.1.len(), 1);
+    assert_eq!(
+        observed.1[0].terminal_session_revision(),
+        completed.trace().revision()
+    );
+    assert_eq!(
+        state002_executes(&report.sql, "FROM v2_terminal_dispositions"),
+        1,
+        "the archived view must load dispositions exactly once"
+    );
+    assert_eq!(
+        state002_executes(&report.sql, "activity = 'inactive'"),
+        1,
+        "the archived view must admit the archived graph exactly once"
     );
 }

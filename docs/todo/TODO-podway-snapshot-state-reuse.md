@@ -209,6 +209,44 @@ validation responsibilities and snapshot boundaries; a later projection cannot
 stand in for an earlier integrity check. This work does not extend the lease or
 apply deep scans to ordinary opens.
 
+STATE-002 implementation record: `AdmittedGraphStateV2`
+(`v2_state.rs`) carries the admitted graph plus the dispositions its loader
+stage already validated; `load_present_graph_session_with_cache_v2` keeps the
+`schema_version >= 5` disposition call at its exact stage (the legacy branch
+yields an empty vector) and returns both values. `DirectReadSnapshotV1` stages
+that admission once in a private one-shot carrier: `view` takes it with
+`borrow_mut` (fail-closed; no silent fallback admission), and
+`with_admitted_current_graph` admits first without holding a borrow across the
+admission I/O, then lends the graph under a shared borrow. Its re-entrancy
+contract is documented on the method: calling `view` on the same snapshot from
+inside `body` is a programming error and panics on the staged carrier's borrow,
+while a nested `with_admitted_current_graph` only re-lends the same admitted
+graph. The verifier seeds the carrier only when it constructs the read
+snapshot, after every verifier check; `read_under_exclusive_lease` snapshots
+are never seeded, so the doctor fallback and `workspace.remove` keep their own
+cold work. One retention consequence: the doctor's seeded current admission
+stays alive through the verifier's archived and outcome loops, holding the
+current graph plus one archived graph instead of the previous maximum of one;
+the test-support retention ledger does not observe caller-side drops, so no
+accountant metric changes. Deterministic counts (registered SQL executions,
+no timing): a view or archived view goes from two disposition loads to one and
+from three to two `PRAGMA user_version` reads; a reset dry run from two graph
+admissions and three disposition loads to one and one; doctor from two or
+three admissions (non-deep, deep) and three or four disposition loads to one
+and one; per healthy archived session the verifier's archived loop goes from
+two disposition loads to one and from three `PRAGMA user_version` reads to two
+(3A -> 2A and 2A -> A for A archived sessions; failing admissions never reach
+the removed reload). Count bases: the ordinary-view and reset counts apply
+when a current graph exists — an empty store performs no receipt or
+disposition SQL before or after — and the doctor counts assume no archived
+sessions, with A archived sessions adding the per-session verifier counts
+already given. `int_reads001_query_inventory` targets are unchanged
+because `measure_cold` observes only `current_graph()`, whose wrapper still
+performs the identical loader admission and then discards the retained
+dispositions. `state002_` tests in `int_reads001_query_inventory`,
+`int_v2dfc008_persistence`, `int_v2dfc006_domain_ports` and
+`int_v2dfc006_workspace` pin these counts and the unchanged outputs.
+
 ### Borrowed attempt index
 
 Build one reconstruction-local index from borrowed cached attempts, keyed by

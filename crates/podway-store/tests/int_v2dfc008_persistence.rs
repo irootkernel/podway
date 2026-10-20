@@ -549,3 +549,43 @@ fn state001_disposition_corruption_refuses_view_and_verification() {
     ));
     reject_corruption(&cold, false);
 }
+
+/// STATE-002: the verifier's archived loop admits each healthy archived
+/// session's dispositions exactly once, and a corrupt archived disposition
+/// still refuses verification without any count claim on the failing path
+/// (the loader's admission fails before any reload could run).
+#[test]
+fn state002_verifier_admits_archived_dispositions_once() {
+    use podway_store::test_support::query_account::QueryAccountant;
+    // (a) Healthy archived-only store: the single disposition statement is
+    // the loader's admission inside the verifier's archived loop.
+    let (_temporary, direct) = fixture(&identity());
+    archived_fixture(&direct, 8950);
+    let cold = store(direct.layout().root().to_path_buf().as_path());
+    let accountant = QueryAccountant::start();
+    cold.verify_integrity(deadline()).unwrap();
+    let report = accountant.finish();
+    let disposition_executes: u64 = report
+        .sql
+        .iter()
+        .filter(|(key, _)| key.contains("FROM v2_terminal_dispositions"))
+        .map(|(_, counts)| counts.executes)
+        .sum();
+    assert_eq!(
+        disposition_executes, 1,
+        "the verifier must admit archived dispositions exactly once"
+    );
+    // (b) Corrupt archived disposition: verification refuses unchanged.
+    let (_temporary, direct) = fixture(&identity());
+    let archived = archived_fixture(&direct, 8960);
+    let connection = rusqlite::Connection::open(direct.layout().database()).unwrap();
+    let changed = connection
+        .execute(
+            "UPDATE v2_terminal_dispositions SET recorded_at_ms=0 WHERE session_id=?1",
+            [archived.trace().session_id().as_str()],
+        )
+        .unwrap();
+    drop(connection);
+    assert_eq!(changed, 1);
+    reject_corruption(&direct, false);
+}

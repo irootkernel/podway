@@ -132,14 +132,27 @@ pub fn doctor_workspace_v1<R: GitResolverContractV1>(
     let checked = store.verify_integrity_under_exclusive_lease(&lease, request.deadline, |snapshot| Ok((|| {
         resolver.revalidate(&resolved, snapshot.binding())?;
         let mut checked_artifacts = 0;
-        if deep && let Some(graph) = snapshot.current_graph()? {
-            let artifacts = required_local_artifacts_v2(&graph).map_err(|_| DirectStoreErrorV1::Unreadable)?;
-            let native = NativeDirectWorkspaceV1::new(resolved.clone());
-            for (item, artifact) in artifacts {
-                native.revalidate_local_artifact(snapshot.binding(), &item, &artifact)
-                    .map_err(DirectWorkspaceErrorV1::Boundary)?;
-                checked_artifacts += 1;
-            }
+        if deep {
+            // The deep rehash reuses the verifier's admitted graph; it still
+            // precedes the clock and the view inside this callback.
+            checked_artifacts += snapshot.with_admitted_current_graph(
+                |graph| -> Result<usize, DirectWorkspaceErrorV1> {
+                    let Some(graph) = graph else {
+                        return Ok(0);
+                    };
+                    let artifacts = required_local_artifacts_v2(graph)
+                        .map_err(|_| DirectStoreErrorV1::Unreadable)?;
+                    let native = NativeDirectWorkspaceV1::new(resolved.clone());
+                    let mut checked = 0;
+                    for (item, artifact) in artifacts {
+                        native
+                            .revalidate_local_artifact(snapshot.binding(), &item, &artifact)
+                            .map_err(DirectWorkspaceErrorV1::Boundary)?;
+                        checked += 1;
+                    }
+                    Ok(checked)
+                },
+            )?;
         }
         let observed_at = clock.now();
         let view = snapshot.view(observed_at)?;
