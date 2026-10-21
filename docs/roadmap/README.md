@@ -126,16 +126,23 @@ contracts remain preserved. Its dossier is retired under the
 
 ## STATE — Snapshot State Reuse
 
-Dependencies: accepted `PARSE` completion. Design:
-[Snapshot state reuse](../todo/TODO-podway-snapshot-state-reuse.md).
+Dependencies: accepted `PARSE` completion. Implemented ownership:
+[Staged snapshot state reuse](../architecture/system.md#staged-snapshot-state-reuse).
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `STATE-001` | Pin reconstruction and validation ownership | Completed | Map same-snapshot graph, disposition, attempt and receipt stages with their existing failure order. | [Design and interfaces](../todo/TODO-podway-snapshot-state-reuse.md#accepted-design-decisions-and-interfaces) |
-| `STATE-002` | Reuse same-snapshot graph and dispositions | Completed | Carry admitted state through view, reset and doctor paths without advancing receipt/disposition checks across existing fences or clocks. | [Staged snapshot reuse](../todo/TODO-podway-snapshot-state-reuse.md#staged-snapshot-reuse) |
-| `STATE-003` | Index borrowed cached attempts once | Completed | Share one reconstruction-local attempt index across owner discovery and reconstruction while preserving validation order and changed-row bounds. | [Borrowed attempt index](../todo/TODO-podway-snapshot-state-reuse.md#borrowed-attempt-index) |
-| `STATE-004` | Reuse admitted active receipt for readiness | Completed | Derive readiness from an already admitted matching receipt, retaining history validation and fallback acquisition when coverage is unproven. | [Receipt readiness](../todo/TODO-podway-snapshot-state-reuse.md#receipt-readiness) |
-| `STATE-005` | Qualify snapshot continuity and corruption refusal | Completed | Verify corruption priority, supported Store continuity and replay, complete the development gate and review, then promote documentation. | [Verification](../todo/TODO-podway-snapshot-state-reuse.md#verification-and-release-acceptance) |
+| `STATE-001` | Pin reconstruction and validation ownership | Completed | Map same-snapshot graph, disposition, attempt and receipt stages with their existing failure order. | [Ownership and failure order](../architecture/system.md#staged-snapshot-state-reuse) |
+| `STATE-002` | Reuse same-snapshot graph and dispositions | Completed | Carry admitted state through view, reset and doctor paths without advancing receipt/disposition checks across existing fences or clocks. | [Staged snapshot reuse](../architecture/system.md#staged-snapshot-state-reuse) |
+| `STATE-003` | Index borrowed cached attempts once | Completed | Share one reconstruction-local attempt index across owner discovery and reconstruction while preserving validation order and changed-row bounds. | [Borrowed attempt index](../architecture/system.md#staged-snapshot-state-reuse) |
+| `STATE-004` | Reuse admitted active receipt for readiness | Completed | Derive readiness from an already admitted matching receipt, retaining history validation and fallback acquisition when coverage is unproven. | [Receipt readiness](../architecture/system.md#staged-snapshot-state-reuse) |
+| `STATE-005` | Qualify snapshot continuity and corruption refusal | Completed | Verify corruption priority, supported Store continuity and replay, complete the development gate and review, then promote documentation. | [Regression owners](../implementation-tips/testing.md#functional-regression-owners) |
+
+STATE is owner-accepted. Same-snapshot reads stage one admitted graph with its
+validated dispositions; reconstruction shares one borrowed id-keyed attempt
+index, and views derive receipt readiness from the admitted window while the
+write path keeps point-query acquisition. Validation, failure order, public
+contracts and Store continuity remain preserved. Its dossier is retired under
+the [TODO lifecycle](../todo/README.md#lifecycle).
 
 ## ADMIT — Request Admission Reuse
 

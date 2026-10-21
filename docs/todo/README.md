@@ -85,24 +85,22 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-The remaining dossiers follow the design-only sequence adopted on 2026-10-19.
+The remaining dossier follows the design-only sequence adopted on 2026-10-19.
 The [roadmap](../roadmap/README.md#structural-simplification-program) alone owns
 task order and current status.
 Accept each epic before starting the next, without cross-epic implementation
 interleaving:
 
-1. [STATE: Snapshot state reuse](TODO-podway-snapshot-state-reuse.md)
-   shares admitted graph/disposition, attempt lookup and receipt facts within a
-   coherent snapshot.
-2. [ADMIT: Request admission reuse](TODO-podway-request-admission-reuse.md)
+1. [ADMIT: Request admission reuse](TODO-podway-request-admission-reuse.md)
    composes eligible admission stages and retains at most one Store-prepared
    graph in an opaque Engine context for one CLI invocation, without retaining
    leases across mutation artifact hashing, prompts or the competing-writer gap.
 
-VIEWS and PARSE are accepted and their dossiers are retired. Completed behavior
-and verification guidance live in
+VIEWS, PARSE and STATE are accepted and their dossiers are retired. Completed
+behavior and verification guidance live in
 [projection composition](../architecture/system.md#request-scoped-read-composition),
-[document admission reuse](../architecture/system.md#document-admission-reuse) and
+[document admission reuse](../architecture/system.md#document-admission-reuse),
+[staged snapshot state reuse](../architecture/system.md#staged-snapshot-state-reuse) and
 [functional regression owners](../implementation-tips/testing.md#functional-regression-owners).
 
 No CLI/JSON interface, storage identity, release or external-consumer change is selected.

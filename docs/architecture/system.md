@@ -432,8 +432,10 @@ inside it. The Store graph loader admits terminal dispositions within its
 loader stage, before receipt acquisition and the cursor check, and returns
 them with the admitted graph as `AdmittedGraphStateV2`. `DirectReadSnapshotV1`
 holds that admission in a private one-shot carrier for the snapshot's
-lifetime: `view` takes the staged admission fail-closed, with no silent
-second admission, and `view` and `archived_view` consume the retained
+lifetime: `view` takes any staged admission, and a `view` inside an active
+loan body panics on the carrier's borrow instead of silently admitting
+again; outside a loan, a later `view` on the same snapshot admits again
+from that snapshot. `view` and `archived_view` consume the retained
 dispositions at their original stage, keeping the graph -> receipts ->
 dispositions -> sequence order. The public loan `with_admitted_current_graph`
 admits first without holding a borrow across the admission I/O and then lends
@@ -480,6 +482,23 @@ directly and keeps the same point-query acquisition. The prepared-stamp check
 does not cover attempt and receipt row identity, so derived absence would
 report a silent `ReceiptMissing` where the snapshot-coherence refusal is
 required.
+
+Read-path window derivation is equivalent to point-query acquisition:
+receipts attach only to the attempt active at acceptance, attempts append in
+trace order, and the loader's cursor check binds the persisted active cursor
+to the trace's active attempt, so the active attempt's receipt is always the
+newest receipt-bearing row and an out-of-window active receipt is unreachable
+on the read path. `attempt_id` is the receipts key, so the window and a point
+query address the same row, and a complete window is a sufficient, not a
+necessary, proof of absence.
+
+Some acquisitions stay deliberately separate because the staged carrier binds
+only to read snapshots. The write-side disposition reloads inside one write
+transaction (`DirectTransactionV1::terminal_dispositions` and
+`record_terminal_disposition_transaction_v2`), `archive_current_session_transaction_v2`
+observing an earlier prepared read, the receipt/view cross-check against
+`read_receipt_connection_v1`, `verify_receipts_connection_v1` and the
+early-empty delegation predicate each keep their own acquisition.
 
 ### Procedure identity boundaries
 

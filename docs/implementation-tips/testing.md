@@ -326,6 +326,14 @@ These owners sit beside the unchanged count and reload owners in the
 [reload baseline suite](../../crates/podway-store/tests/int_reads002_baseline.rs),
 whose accounting targets the reuse work keeps.
 
+Recorded invariants, not fixtures, cover these guards by design: the reset
+`MissingGraphSession` check after graph admission; duplicate cached attempt
+IDs, which `WorkflowMemoryStateV2::new` rejects; cached/current attempt-order
+divergence; the legacy pre-generation-5 disposition branch, unreachable under
+generation-15 direct reads; and a read-path out-of-window active receipt. The
+[staged snapshot state reuse](../architecture/system.md#staged-snapshot-state-reuse)
+architecture records why that receipt is unreachable on the read path.
+
 ## Structural simplification verification
 
 The [VIEWS, PARSE, STATE and ADMIT program](../roadmap/README.md#structural-simplification-program)
