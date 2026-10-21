@@ -77,7 +77,7 @@ All four dossiers are retired under the [TODO lifecycle](../todo/README.md#lifec
 
 ## VIEWS — Projection Simplification
 
-Dependencies: accepted `READS` completion. Implemented composition:
+Dependencies: accepted `READS` completion. Status: Completed. Implemented composition:
 [Request-scoped read composition](../architecture/system.md#request-scoped-read-composition).
 
 | id | title | status | goal | references |
