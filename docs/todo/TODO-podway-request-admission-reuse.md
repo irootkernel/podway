@@ -358,6 +358,71 @@ and its specification amendment. ADMIT-004 owns integrated continuity/replay
 qualification and program-documentation promotion. The roadmap remains the
 acceptance/status authority; this record does not claim those later tasks passed.
 
+### ADMIT-003 implementation record
+
+`DirectInvocationContextV1` is an opaque, non-cloneable Engine-owned optional
+`DirectPreparedGraphV1`, owned by CLI `Invocation` and passed through mutable
+context-aware execution/preflight facades. Existing stateless entry points keep
+their cold path. Facts and wire envelopes are unchanged. Every preflight clears
+old state; only successful facts plus the owned view returned through the composed
+read can populate the context after its final witness. Every eligible mutation
+clears an unconsumed hint on return, including pre-preparation failures. Dry-run
+and read-only requests leave it untouched; invocation drop ends its lifetime.
+
+Store's existing qualification query now retains its validated generation in
+private read-admission metadata. The current view carries it with the admitted
+graph, binding and existing sequence. Its consuming conversion performs no SQL,
+decode or validation and returns no hint if metadata is absent. Exclusive and
+archived views carry no retention metadata. Source review complements existing
+query/decode accounting because qualification SQL is not fully accounted.
+
+Cursor, begin, Procedure, single-item, reset/archive and non-dry-run start consume
+only inside their existing preparation read. Record-many and delegation acceptance
+remain cold, and purge gains no graph preparation. Attachment hashing and start
+source preparation retain their original position before this read. Full
+preparation qualification and file witnesses remain mandatory. Store compares
+root, manifest, generation, UUID, sequence, session/revisions and Procedure
+snapshot/digest; a match reuses the graph body with preparation-stage stamps.
+Optional comparison failure discards the hint and runs the unchanged cold
+loader -> generation -> sequence body once in that same read. Writer selection,
+replay, receipt readiness and integrity verification are unchanged.
+
+The transaction specification now records this bounded exception and the accepted
+unstamped-corruption limitation. The CLI/read/staged-state architecture records
+actual ownership, publication and guard boundaries. No roadmap status or later
+ADMIT-004 integration acceptance is established by this implementation record.
+
+Focused correctness owners:
+
+- Store `direct_store::connection::admit003_tests` checks matching body identity,
+  single consumption, missing metadata, every identity/stamp mismatch, mandatory
+  admission priority and cold fallback. Its comparison-result injection is
+  `cfg(test)` only, unavailable through public APIs or `test-support` builds.
+  Real SQLite query/conversion errors are injected at that private result boundary
+  with a real corrupt cold loader; a separate non-STRICT SQLite fixture exercises
+  the actual comparison decoder. STRICT production tables reject that malformed
+  cell before it can be persisted through the supported contract.
+- Engine race-suite `admit003_*` cases check equal preflight query/decode work,
+  matching reuse, single consumption, seeded-context cleanup, both cold/warm
+  READS-004 guard-release rendezvous paths, actual hashing with a competing writer,
+  and generation/file replacement before preparation versus identity refusal
+  before the writer. Existing stateless READS owners remain registered.
+- Engine race-suite `admit003_reset_dry_run_and_read_preserve_pending_hint_until_mutation` pins preservation across reset dry-run and read calls, followed by single consumption.
+- Engine error-suite coverage extends `reads004_equivalence` through the context
+  facade and checks that a failing final preflight witness cannot publish or
+  preserve a hint. The identity suite runs its database-replacement writer refusal
+  through both stateless and context-bearing paths.
+- CLI `command::direct::admit003_tests` checks distinct constructed request IDs,
+  success-envelope identity and the unchanged invocation deadline/observation.
+  The real-binary `admit003_*` case checks automatic preflight/context wiring,
+  replacement/terminal-preview behavior, key/policy rejection, stdin refusal and
+  later invocations. Only the existing token-gated debug READS mechanism exposes
+  retention/consumption/reuse event counts; release and ordinary output gain none.
+
+ADMIT-004 still owns integrated supported Store continuity, complete refusal/replay
+qualification and program-documentation retirement. Task-local tests do not defer
+ADMIT-003 correctness to that integration task.
+
 ## Goals, non-goals, and scope
 
 Reuse eligible binding/first-snapshot admission and an immutable preflight graph

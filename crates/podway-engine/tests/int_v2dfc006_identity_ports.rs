@@ -240,10 +240,32 @@ fn bind_selector(engine: &mut Engine) {
 
 #[test]
 fn runtime_database_replacement_before_begin_rejects_the_pinned_generation() {
+    database_replacement_before_begin(false);
+}
+
+#[test]
+fn admit003_context_database_replacement_before_begin_keeps_writer_refusal() {
+    database_replacement_before_begin(true);
+}
+
+fn database_replacement_before_begin(contextual: bool) {
     use podway_engine::workspace::DirectWorkspaceResolverV1;
     use podway_git::NativeGitResolverV1;
     use podway_store::direct_store::DirectTransactionBoundaryV1;
     let mut engine = Engine::new(STATE_PROCEDURE);
+    let mut context = podway_engine::direct_api::DirectInvocationContextV1::default();
+    if contextual {
+        assert!(matches!(
+            podway_engine::direct_api::execute_direct_preflight_facts_with_context_v1(
+                &engine.resolver,
+                super::int_v2dfc006_races::reads004_facts_request(&engine.selector),
+                &Clock,
+                &mut context,
+            )
+            .unwrap(),
+            podway_engine::direct_execution::DirectPreflightFactsResponseV1::Facts(_)
+        ));
+    }
     let before = engine.graph();
     let sequence = engine.sequence();
     let database = engine.store.layout().database();
@@ -265,10 +287,19 @@ fn runtime_database_replacement_before_begin_rejects_the_pinned_generation() {
             std::fs::copy(&backup, &source).unwrap();
         }
     });
-    let response = engine.execute(
-        engine.request(engine.retry("Reject replacement.".into()), "replaced"),
-        &NoClock,
-    );
+    let request = engine.request(engine.retry("Reject replacement.".into()), "replaced");
+    let response = if contextual {
+        podway_engine::direct_api::execute_direct_with_context_v1(
+            &engine.resolver,
+            request,
+            &NoClock,
+            &podway_engine::direct_execution::NativeDirectIdSourceV1,
+            &mut context,
+        )
+        .unwrap()
+    } else {
+        engine.execute(request, &NoClock)
+    };
     std::fs::rename(saved, database).unwrap();
     engine.cold();
     let DirectResponseV1::Failure(error) = response else {
@@ -374,4 +405,94 @@ fn concurrent_retries_and_cold_long_traversal_keep_exactly_one_cursor() {
         42
     );
     assert_eq!(final_status["session"]["lifecycle"], json!("running"));
+}
+
+#[test]
+fn admit003_changed_session_and_procedure_snapshot_discard_the_hint_before_writer_fences() {
+    use podway_engine::direct_api::{
+        DirectInvocationContextV1, execute_direct_preflight_facts_with_context_v1,
+        execute_direct_with_context_v1,
+    };
+    use podway_engine::direct_execution::{DirectPreflightFactsResponseV1, NativeDirectIdSourceV1};
+    use podway_store::test_support::query_account::QueryAccountant;
+    let engine = Engine::new(RETRY_PROCEDURE);
+    let old = engine.graph();
+    let mut context = DirectInvocationContextV1::default();
+    assert!(matches!(
+        execute_direct_preflight_facts_with_context_v1(
+            &engine.resolver,
+            super::int_v2dfc006_races::reads004_facts_request(&engine.selector),
+            &Clock,
+            &mut context
+        )
+        .unwrap(),
+        DirectPreflightFactsResponseV1::Facts(_)
+    ));
+    let stale = engine.request(
+        DirectCommandV1::Cursor(DirectCursorCommandV1::Complete(SessionCompleteV1 {
+            preconditions: engine.fences(),
+        })),
+        "admit003-old-session",
+    );
+    std::fs::write(engine.temporary.path().join("source.yaml"), STATE_PROCEDURE).unwrap();
+    engine.success(
+        DirectCommandV1::Start(DirectStartCommandV1::Replace(SessionStartReplaceV1 {
+            start: SessionStartV1 {
+                source: SessionStartSourceV1::Procedure {
+                    procedure: "source.yaml".into(),
+                },
+                expected_procedure_digest: Some(
+                    prepare_workspace_procedure_source_v2(
+                        "source.yaml",
+                        STATE_PROCEDURE.as_bytes(),
+                    )
+                    .unwrap()
+                    .digest()
+                    .clone(),
+                ),
+                task_title: "New session and snapshot".into(),
+                dry_run: false,
+            },
+            mode: SessionDeletionModeV1::Delete {
+                confirmed: true,
+                progress_summary: Some("Replace the prior task.".into()),
+            },
+            preconditions: identity(&engine),
+        })),
+        "admit003-new-session",
+    );
+    let successor = engine.graph();
+    assert_ne!(successor.trace().session_id(), old.trace().session_id());
+    assert_ne!(
+        successor.snapshot().snapshot_id(),
+        old.snapshot().snapshot_id()
+    );
+    assert_ne!(successor.snapshot().digest(), old.snapshot().digest());
+    let sequence = engine.sequence();
+    let accountant = QueryAccountant::start();
+    let response = execute_direct_with_context_v1(
+        &engine.resolver,
+        stale,
+        &NoClock,
+        &NativeDirectIdSourceV1,
+        &mut context,
+    )
+    .unwrap();
+    assert!(accountant.finish().retention.graph_scopes > 0);
+    let DirectResponseV1::Failure(error) = response else {
+        panic!("old session mutated its successor")
+    };
+    assert_eq!(error.as_value()["code"], "SESSION_ID_MISMATCH");
+    assert_eq!(engine.graph(), successor);
+    assert_eq!(engine.sequence(), sequence);
+    assert!(
+        engine
+            .store
+            .read(deadline(), |snapshot| snapshot.outcome(
+                &IdempotencyKeyV1::new("admit003-old-session").unwrap()
+            ))
+            .unwrap()
+            .is_none()
+    );
+    engine.store.verify_integrity(deadline()).unwrap();
 }

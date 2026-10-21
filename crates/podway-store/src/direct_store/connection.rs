@@ -175,17 +175,26 @@ impl DirectStoreV1 {
         })?;
         let _connection_gate = connection_gate(deadline)?;
         let database = super::classification::open_read_nofollow(&self.layout.database())?;
-        self.qualified_read(deadline, lease.heap_snapshot(), |transaction, binding| {
-            self.revalidate_files(&lease, &database)?;
-            let snapshot = DirectReadSnapshotV1 {
-                connection: transaction,
-                binding,
-                staged_current: RefCell::new(StagedCurrentAdmissionV1::Unadmitted),
-            };
-            let result = read(&snapshot)?;
-            self.revalidate_files(&lease, &database)?;
-            Ok(result)
-        })
+        self.qualified_read_admitted(
+            deadline,
+            lease.heap_snapshot(),
+            |transaction, binding, generation| {
+                self.revalidate_files(&lease, &database)?;
+                let snapshot = DirectReadSnapshotV1 {
+                    connection: transaction,
+                    binding,
+                    admission: Some(ReadAdmissionV1 {
+                        root: self.layout.root().clone(),
+                        manifest: self.manifest.clone(),
+                        generation,
+                    }),
+                    staged_current: RefCell::new(StagedCurrentAdmissionV1::Unadmitted),
+                };
+                let result = read(&snapshot)?;
+                self.revalidate_files(&lease, &database)?;
+                Ok(result)
+            },
+        )
     }
 
     /// Admit binding and run an operation in one qualified read. Resolver failures
@@ -204,31 +213,40 @@ impl DirectStoreV1 {
         let _connection_gate = connection_gate(deadline).map_err(DirectReadFailureV1::Admission)?;
         let database = super::classification::open_read_nofollow(&self.layout.database())
             .map_err(|error| DirectReadFailureV1::Admission(error.into()))?;
-        self.qualified_read(deadline, lease.heap_snapshot(), |transaction, binding| {
-            self.revalidate_files(&lease, &database)?;
-            let snapshot = DirectReadSnapshotV1 {
-                connection: transaction,
-                binding,
-                staged_current: RefCell::new(StagedCurrentAdmissionV1::Unadmitted),
-            };
-            self.boundary(DirectTransactionBoundaryV1::BeforeBindingReadCompletion);
-            self.revalidate_files(&lease, &database)?;
-            let admitted = match admit(snapshot.binding()) {
-                Ok(admitted) => admitted,
-                Err(error) => return Ok(Err(DirectReadFailureV1::Resolver(error))),
-            };
-            if let Err(error) = self.revalidate_files(&lease, &database) {
-                return Ok(Err(DirectReadFailureV1::Operation(read_admission_error(
-                    error,
-                ))));
-            }
-            let result = operation(admitted, &snapshot);
-            Ok(self
-                .revalidate_files(&lease, &database)
-                .map_err(read_admission_error)
-                .map_err(DirectReadFailureV1::Operation)
-                .map(|()| result))
-        })
+        self.qualified_read_admitted(
+            deadline,
+            lease.heap_snapshot(),
+            |transaction, binding, generation| {
+                self.revalidate_files(&lease, &database)?;
+                let snapshot = DirectReadSnapshotV1 {
+                    connection: transaction,
+                    binding,
+                    admission: Some(ReadAdmissionV1 {
+                        root: self.layout.root().clone(),
+                        manifest: self.manifest.clone(),
+                        generation,
+                    }),
+                    staged_current: RefCell::new(StagedCurrentAdmissionV1::Unadmitted),
+                };
+                self.boundary(DirectTransactionBoundaryV1::BeforeBindingReadCompletion);
+                self.revalidate_files(&lease, &database)?;
+                let admitted = match admit(snapshot.binding()) {
+                    Ok(admitted) => admitted,
+                    Err(error) => return Ok(Err(DirectReadFailureV1::Resolver(error))),
+                };
+                if let Err(error) = self.revalidate_files(&lease, &database) {
+                    return Ok(Err(DirectReadFailureV1::Operation(read_admission_error(
+                        error,
+                    ))));
+                }
+                let result = operation(admitted, &snapshot);
+                Ok(self
+                    .revalidate_files(&lease, &database)
+                    .map_err(read_admission_error)
+                    .map_err(DirectReadFailureV1::Operation)
+                    .map(|()| result))
+            },
+        )
         .map_err(DirectReadFailureV1::Admission)?
     }
 
@@ -261,6 +279,7 @@ impl DirectStoreV1 {
                 read(&DirectReadSnapshotV1 {
                     connection: &transaction,
                     binding,
+                    admission: None,
                     staged_current: RefCell::new(StagedCurrentAdmissionV1::Unadmitted),
                 })
                 .map_err(invalid_admission_error)
@@ -403,6 +422,21 @@ impl DirectStoreV1 {
         heap_snapshot: bool,
         read: impl FnOnce(&rusqlite::Transaction<'_>, WorkspaceBindingV1) -> DirectStoreResultV1<T>,
     ) -> DirectStoreResultV1<T> {
+        self.qualified_read_admitted(deadline, heap_snapshot, |transaction, binding, _| {
+            read(transaction, binding)
+        })
+    }
+
+    fn qualified_read_admitted<T>(
+        &self,
+        deadline: Instant,
+        heap_snapshot: bool,
+        read: impl FnOnce(
+            &rusqlite::Transaction<'_>,
+            WorkspaceBindingV1,
+            String,
+        ) -> DirectStoreResultV1<T>,
+    ) -> DirectStoreResultV1<T> {
         loop {
             let (mut connection, immutable) =
                 match self.open_readonly_connection(deadline, heap_snapshot) {
@@ -417,8 +451,13 @@ impl DirectStoreV1 {
                 .transaction_with_behavior(TransactionBehavior::Deferred)
                 .map_err(DirectStoreErrorV1::from)
                 .map_err(read_admission_error)?;
-            match self.validate_connection_with_mode(&transaction, immutable) {
-                Ok(binding) => return read(&transaction, binding).map_err(read_admission_error),
+            match self
+                .validate_current_connection(&transaction, immutable)
+                .map_err(invalid_admission_error)
+            {
+                Ok((binding, generation)) => {
+                    return read(&transaction, binding, generation).map_err(read_admission_error);
+                }
                 Err(error) if readonly_recovery(&error) => {
                     drop(transaction);
                     drop(connection);
@@ -507,6 +546,7 @@ impl DirectStoreV1 {
         immutable: bool,
     ) -> DirectStoreResultV1<WorkspaceBindingV1> {
         self.validate_current_connection(connection, immutable)
+            .map(|(binding, _)| binding)
             .map_err(invalid_admission_error)
     }
 
@@ -514,7 +554,7 @@ impl DirectStoreV1 {
         &self,
         connection: &Connection,
         immutable: bool,
-    ) -> DirectStoreResultV1<WorkspaceBindingV1> {
+    ) -> DirectStoreResultV1<(WorkspaceBindingV1, String)> {
         let generation: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if generation != DIRECT_SCHEMA_GENERATION_V1 {
             return Err(if generation > DIRECT_SCHEMA_GENERATION_V1 {
@@ -549,7 +589,7 @@ impl DirectStoreV1 {
         {
             return Err(DirectStoreErrorV1::BindingMismatch);
         }
-        Ok(binding)
+        Ok((binding, writer.1))
     }
 
     pub(super) fn revalidate_files(
@@ -624,6 +664,7 @@ impl DirectStoreV1 {
             let snapshot = DirectReadSnapshotV1 {
                 connection: &transaction,
                 binding,
+                admission: None,
                 // Seeded only here, after every verifier check: the callback
                 // reuses the admission this verifier already validated.
                 staged_current: RefCell::new(StagedCurrentAdmissionV1::Admitted(Box::new(
@@ -692,6 +733,7 @@ fn invalid_admission_error(error: DirectStoreErrorV1) -> DirectStoreErrorV1 {
 pub struct DirectReadSnapshotV1<'connection> {
     pub(super) connection: &'connection Connection,
     pub(super) binding: WorkspaceBindingV1,
+    admission: Option<ReadAdmissionV1>,
     /// One admitted current graph staged for later reuse in this snapshot.
     staged_current: RefCell<StagedCurrentAdmissionV1>,
 }
@@ -869,6 +911,7 @@ impl DirectReadSnapshotV1<'_> {
             dispositions: admitted.dispositions,
             sequence: self.committed_sequence()?,
             observed_at,
+            admission: None,
         }))
     }
 
@@ -917,6 +960,7 @@ impl DirectReadSnapshotV1<'_> {
             dispositions,
             sequence,
             observed_at,
+            admission: self.admission.clone(),
         })
     }
 }
@@ -929,9 +973,31 @@ pub struct DirectWorkspaceViewV1 {
     dispositions: Vec<TerminalDispositionV2>,
     sequence: u64,
     observed_at: UnixMillis,
+    admission: Option<ReadAdmissionV1>,
+}
+
+#[derive(Clone, Debug)]
+struct ReadAdmissionV1 {
+    root: crate::ValidatedWorkspaceRootV1,
+    manifest: Sha256Digest,
+    generation: String,
 }
 
 impl DirectWorkspaceViewV1 {
+    /// Convert already admitted values only. The caller must publish this hint
+    /// only after the enclosing read's final file witness has succeeded.
+    pub fn into_prepared_graph(self) -> Option<DirectPreparedGraphV1> {
+        let admission = self.admission?;
+        Some(DirectPreparedGraphV1 {
+            root: admission.root,
+            manifest: admission.manifest,
+            generation_id: admission.generation,
+            workspace: self.binding.identity().workspace_uuid().clone(),
+            sequence: self.sequence,
+            graph: Arc::new(self.graph?),
+        })
+    }
+
     pub fn binding(&self) -> &WorkspaceBindingV1 {
         &self.binding
     }
@@ -1002,31 +1068,110 @@ impl DirectStoreV1 {
         &self,
         deadline: Instant,
     ) -> DirectStoreResultV1<Option<DirectPreparedGraphV1>> {
+        self.read(deadline, |snapshot| self.prepare_graph_cold(snapshot))
+    }
+
+    /// Consume the optional hint only inside the ordinary preparation read.
+    /// Qualification and file witnesses remain outside optional comparison.
+    pub fn prepare_graph_with_hint(
+        &self,
+        deadline: Instant,
+        hint: &mut Option<DirectPreparedGraphV1>,
+    ) -> DirectStoreResultV1<Option<DirectPreparedGraphV1>> {
         self.read(deadline, |snapshot| {
-            let Some(graph) = snapshot.current_graph()? else {
-                return Ok(None);
-            };
-            let generation_id: String = crate::query_accounting::accounted_query_row(
-                snapshot.connection,
-                "SELECT generation_id FROM writer_contract WHERE singleton=1",
-                [],
-                |row| row.get(0),
-            )?;
-            let sequence: i64 = crate::query_accounting::accounted_query_row(
-                snapshot.connection,
-                "SELECT next_workspace_sequence FROM workspace_state WHERE singleton=1",
-                [],
-                |row| row.get(0),
-            )?;
-            Ok(Some(DirectPreparedGraphV1 {
-                root: self.layout.root().clone(),
-                manifest: self.manifest.clone(),
-                generation_id,
-                workspace: snapshot.binding.identity().workspace_uuid().clone(),
-                sequence: u64::try_from(sequence).map_err(|_| DirectStoreErrorV1::Unreadable)?,
-                graph: Arc::new(graph),
-            }))
+            if let Some(prepared) = hint.take()
+                && snapshot.matches_prepared(&prepared).unwrap_or(false)
+            {
+                // Restamp at this read; only the immutable graph body crosses
+                // the preflight-to-preparation boundary.
+                let admission = snapshot
+                    .admission
+                    .as_ref()
+                    .expect("ordinary read admission");
+                return Ok(Some(DirectPreparedGraphV1 {
+                    root: admission.root.clone(),
+                    manifest: admission.manifest.clone(),
+                    generation_id: admission.generation.clone(),
+                    workspace: snapshot.binding.identity().workspace_uuid().clone(),
+                    sequence: prepared.sequence,
+                    graph: prepared.graph,
+                }));
+            }
+            self.prepare_graph_cold(snapshot)
         })
+    }
+
+    fn prepare_graph_cold(
+        &self,
+        snapshot: &DirectReadSnapshotV1<'_>,
+    ) -> DirectStoreResultV1<Option<DirectPreparedGraphV1>> {
+        let Some(graph) = snapshot.current_graph()? else {
+            return Ok(None);
+        };
+        let generation_id: String = crate::query_accounting::accounted_query_row(
+            snapshot.connection,
+            "SELECT generation_id FROM writer_contract WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )?;
+        let sequence: i64 = crate::query_accounting::accounted_query_row(
+            snapshot.connection,
+            "SELECT next_workspace_sequence FROM workspace_state WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(Some(DirectPreparedGraphV1 {
+            root: self.layout.root().clone(),
+            manifest: self.manifest.clone(),
+            generation_id,
+            workspace: snapshot.binding.identity().workspace_uuid().clone(),
+            sequence: u64::try_from(sequence).map_err(|_| DirectStoreErrorV1::Unreadable)?,
+            graph: Arc::new(graph),
+        }))
+    }
+}
+
+impl DirectReadSnapshotV1<'_> {
+    // Only errors from this optional stamp comparison become a miss. Never put
+    // qualification, witnesses or the authoritative cold loader in this scope.
+    fn matches_prepared(&self, prepared: &DirectPreparedGraphV1) -> DirectStoreResultV1<bool> {
+        use rusqlite::OptionalExtension;
+        #[cfg(test)]
+        if let Some(error) = COMPARISON_FAILURE.with(|failure| failure.borrow_mut().take()) {
+            return Err(error);
+        }
+        let Some(admission) = &self.admission else {
+            return Ok(false);
+        };
+        if prepared.root != admission.root
+            || prepared.manifest != admission.manifest
+            || prepared.generation_id != admission.generation
+            || &prepared.workspace != self.binding.identity().workspace_uuid()
+        {
+            return Ok(false);
+        }
+        let sequence = self.committed_sequence()?;
+        if sequence != prepared.sequence {
+            return Ok(false);
+        }
+        let stamps: Option<(String, i64, i64, String, String)> = crate::query_accounting::accounted_query_row(
+            self.connection,
+            "SELECT s.session_id,s.session_revision,w.workspace_revision,s.procedure_snapshot_id,p.digest \
+             FROM v2_workspace_state w JOIN v2_task_sessions s ON s.session_id=w.current_session_id \
+             JOIN v2_procedure_snapshots p ON p.snapshot_id=s.procedure_snapshot_id WHERE w.singleton=1",
+            [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        ).optional()?;
+        let graph = prepared.graph();
+        Ok(
+            stamps.is_some_and(|(id, revision, workspace_revision, snapshot, digest)| {
+                id == graph.trace().session_id().as_str()
+                    && u64::try_from(revision).ok() == Some(graph.trace().revision().get())
+                    && u64::try_from(workspace_revision).ok()
+                        == Some(graph.workspace_revision().get())
+                    && snapshot == graph.snapshot().snapshot_id().as_str()
+                    && digest == graph.snapshot().digest().as_str()
+            }),
+        )
     }
 }
 
@@ -1124,4 +1269,264 @@ fn schema_inventory(connection: &Connection) -> DirectStoreResultV1<SchemaInvent
         return Err(DirectStoreErrorV1::SchemaMismatch);
     }
     Ok(inventory)
+}
+
+// A unit-test-only comparison-result seam; absent even from test-support builds.
+#[cfg(test)]
+thread_local! {
+    static COMPARISON_FAILURE: RefCell<Option<DirectStoreErrorV1>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+mod admit003_tests {
+    use super::super::{
+        DirectMutationRequestV1, DirectOutcomeScopeV1, ExclusiveMaintenanceLeaseV1,
+    };
+    use super::*;
+    use crate::test_support::query_account::QueryAccountant;
+    use crate::{CanonicalExecutionJsonV1, ValidatedWorkspaceRootV1};
+    use podway_core::canonicalize_json_v1;
+    use serde_json::json;
+    use std::path::Path;
+
+    fn deadline() -> Instant {
+        Instant::now() + Duration::from_secs(10)
+    }
+    fn digest(nibble: char) -> Sha256Digest {
+        Sha256Digest::new(format!("sha256:{}", nibble.to_string().repeat(64))).unwrap()
+    }
+    fn fixture() -> (tempfile::TempDir, DirectStoreV1) {
+        let temporary = tempfile::TempDir::new().unwrap();
+        let root = std::fs::canonicalize(temporary.path()).unwrap();
+        let store = DirectStoreV1::new(
+            DirectWorkspaceLayoutV1::new(ValidatedWorkspaceRootV1::from_path(&root).unwrap())
+                .unwrap(),
+            digest('c'),
+            digest('a'),
+            digest('b'),
+        );
+        let request = DirectMutationRequestV1::new(
+            IdempotencyKeyV1::new("admit003-init").unwrap(),
+            digest('d'),
+            "workspace.init",
+            "00000000-0000-4000-8000-000000000002",
+            DirectOutcomeScopeV1::Workspace,
+        )
+        .unwrap();
+        let lease = ExclusiveMaintenanceLeaseV1::acquire(store.layout(), deadline(), true).unwrap();
+        store
+            .bootstrap(
+                &lease,
+                WorkspaceId::new("00000000-0000-4000-8000-000000000001").unwrap(),
+                "admit003-generation",
+                &request,
+                deadline(),
+                || UnixMillis::new(10),
+                |transaction| {
+                    transaction.now();
+                    let graph = crate::test_support::running_archive_fixture_session_v2(10, 20, 10);
+                    transaction.create_graph(&graph)?;
+                    Ok(CanonicalExecutionJsonV1::new(
+                        canonicalize_json_v1(&json!({
+                            "schema":"podway.output/v4", "request_id":request.response_id(),
+                            "command":request.command(), "generated_at":"1970-01-01T00:00:00.010Z",
+                            "result":{"initialized":true}, "warnings":[]
+                        }))
+                        .unwrap(),
+                    )
+                    .unwrap())
+                },
+            )
+            .unwrap();
+        drop(lease);
+        (temporary, store)
+    }
+    fn hint(store: &DirectStoreV1) -> DirectPreparedGraphV1 {
+        // Publish only after the real read, including its final witness, returns.
+        store
+            .read(deadline(), |snapshot| snapshot.view(UnixMillis::new(20)))
+            .unwrap()
+            .into_prepared_graph()
+            .unwrap()
+    }
+
+    #[test]
+    fn matching_hint_reuses_body_once_and_missing_metadata_is_infallible() {
+        let (_temporary, store) = fixture();
+        let prepared = hint(&store);
+        let mut pending = Some(prepared.clone());
+        let accountant = QueryAccountant::start();
+        let current = store
+            .prepare_graph_with_hint(deadline(), &mut pending)
+            .unwrap()
+            .unwrap();
+        let report = accountant.finish();
+        assert!(pending.is_none());
+        assert!(Arc::ptr_eq(&prepared.graph, &current.graph));
+        assert_eq!(report.retention.graph_scopes, 0);
+        assert_eq!(report.retention.decode_attempts, 0);
+        let accountant = QueryAccountant::start();
+        let cold = store
+            .prepare_graph_with_hint(deadline(), &mut pending)
+            .unwrap()
+            .unwrap();
+        assert!(accountant.finish().retention.graph_scopes > 0);
+        assert!(!Arc::ptr_eq(&prepared.graph, &cold.graph));
+        let mut view = store
+            .read(deadline(), |snapshot| snapshot.view(UnixMillis::new(20)))
+            .unwrap();
+        view.admission = None;
+        assert!(view.into_prepared_graph().is_none());
+    }
+
+    #[test]
+    fn every_identity_and_graph_stamp_mismatch_uses_cold_preparation() {
+        for component in ["root", "manifest", "generation", "workspace", "sequence"] {
+            let (_temporary, store) = fixture();
+            let prepared = hint(&store);
+            let mut stale = prepared.clone();
+            match component {
+                "root" => {
+                    stale.root =
+                        ValidatedWorkspaceRootV1::from_path(Path::new("/admit003-other-root"))
+                            .unwrap()
+                }
+                "manifest" => stale.manifest = digest('e'),
+                "generation" => stale.generation_id = "other-generation".into(),
+                "workspace" => {
+                    stale.workspace =
+                        WorkspaceId::new("00000000-0000-4000-8000-000000000099").unwrap()
+                }
+                "sequence" => stale.sequence += 1,
+                _ => unreachable!(),
+            }
+            let mut pending = Some(stale);
+            let current = store
+                .prepare_graph_with_hint(deadline(), &mut pending)
+                .unwrap()
+                .unwrap();
+            assert!(pending.is_none(), "{component}");
+            assert!(!Arc::ptr_eq(&prepared.graph, &current.graph), "{component}");
+            assert_eq!(current.generation_id, prepared.generation_id);
+            assert_eq!(current.sequence, prepared.sequence);
+        }
+        for sql in [
+            "UPDATE v2_task_sessions SET session_id='00000000-0000-4000-8000-000000000098' WHERE activity='current'",
+            "UPDATE v2_task_sessions SET session_revision=session_revision+1 WHERE activity='current'",
+            "UPDATE v2_workspace_state SET workspace_revision=workspace_revision+1 WHERE singleton=1",
+            "UPDATE v2_task_sessions SET procedure_snapshot_id='00000000-0000-4000-8000-000000000097' WHERE activity='current'",
+            "UPDATE v2_procedure_snapshots SET digest='sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'",
+        ] {
+            let (_temporary, store) = fixture();
+            let mut pending = Some(hint(&store));
+            let connection = Connection::open(store.layout.database()).unwrap();
+            connection
+                .pragma_update(None, "foreign_keys", false)
+                .unwrap();
+            connection.execute(sql, []).unwrap();
+            drop(connection);
+            let accountant = QueryAccountant::start();
+            let actual = store.prepare_graph_with_hint(deadline(), &mut pending);
+            let report = accountant.finish();
+            assert!(pending.is_none(), "{sql}");
+            let accountant = QueryAccountant::start();
+            let cold = store.prepare_graph(deadline());
+            let cold_report = accountant.finish();
+            for (statement, counts) in cold_report.sql {
+                assert!(
+                    report
+                        .sql
+                        .get(&statement)
+                        .is_some_and(|actual| actual.executes >= counts.executes),
+                    "cold loader statement not reached: {sql}: {statement}"
+                );
+            }
+            assert_eq!(format!("{actual:?}"), format!("{cold:?}"), "{sql}");
+        }
+    }
+
+    #[test]
+    fn comparison_errors_fall_back_but_cold_fault_and_mandatory_admission_keep_priority() {
+        for decode in [false, true] {
+            let (_temporary, store) = fixture();
+            let mut pending = Some(hint(&store));
+            let connection = Connection::open_in_memory().unwrap();
+            let failure = if decode {
+                connection
+                    .query_row("SELECT 'not-an-integer'", [], |row| row.get::<_, i64>(0))
+                    .unwrap_err()
+            } else {
+                connection
+                    .query_row("SELECT absent FROM absent", [], |row| row.get::<_, i64>(0))
+                    .unwrap_err()
+            };
+            // Real SQLite query/conversion errors are injected only at the
+            // optional comparison result boundary. The cold loader is real.
+            COMPARISON_FAILURE.with(|slot| *slot.borrow_mut() = Some(failure.into()));
+            Connection::open(store.layout.database()).unwrap().execute(
+                "UPDATE v2_task_sessions SET latest_trace_sequence=latest_trace_sequence+1 WHERE activity='current'", []
+            ).unwrap();
+            let actual = store
+                .prepare_graph_with_hint(deadline(), &mut pending)
+                .unwrap_err();
+            let cold = store.prepare_graph(deadline()).unwrap_err();
+            assert_eq!(format!("{actual:?}"), format!("{cold:?}"));
+            assert!(pending.is_none());
+            assert!(COMPARISON_FAILURE.with(|slot| slot.borrow().is_none()));
+        }
+        let (_temporary, store) = fixture();
+        let mut pending = Some(hint(&store));
+        Connection::open(store.layout.database())
+            .unwrap()
+            .execute("PRAGMA user_version=999", [])
+            .unwrap();
+        assert!(matches!(
+            store.prepare_graph_with_hint(deadline(), &mut pending),
+            Err(DirectStoreErrorV1::UnsupportedGeneration { generation: 999 })
+        ));
+        assert!(
+            pending.is_some(),
+            "mandatory admission must precede hint consumption"
+        );
+    }
+
+    #[test]
+    fn real_comparison_decode_failure_is_an_optional_miss() {
+        let (_temporary, store) = fixture();
+        let prepared = hint(&store);
+        // STRICT tables forbid this cell in qualified production state. Exercise
+        // the actual comparison decoder on a private non-STRICT SQLite fixture;
+        // full cold-error priority is covered by the result-injection case.
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(&format!(
+                "CREATE TABLE workspace_state(singleton,next_workspace_sequence); \
+             INSERT INTO workspace_state VALUES(1,{}); \
+             CREATE TABLE v2_workspace_state(singleton,current_session_id,workspace_revision); \
+             INSERT INTO v2_workspace_state VALUES(1,'session',1); \
+             CREATE TABLE v2_task_sessions(session_id,session_revision,procedure_snapshot_id); \
+             INSERT INTO v2_task_sessions VALUES('session','bad-integer','snapshot'); \
+             CREATE TABLE v2_procedure_snapshots(snapshot_id,digest); \
+             INSERT INTO v2_procedure_snapshots VALUES('snapshot','digest');",
+                prepared.sequence
+            ))
+            .unwrap();
+        store
+            .read(deadline(), |snapshot| {
+                let malformed = DirectReadSnapshotV1 {
+                    connection: &connection,
+                    binding: snapshot.binding.clone(),
+                    admission: snapshot.admission.clone(),
+                    staged_current: RefCell::new(StagedCurrentAdmissionV1::Unadmitted),
+                };
+                assert!(matches!(
+                    malformed.matches_prepared(&prepared),
+                    Err(DirectStoreErrorV1::Sqlite(
+                        rusqlite::Error::InvalidColumnType(..)
+                    ))
+                ));
+                Ok(())
+            })
+            .unwrap();
+    }
 }

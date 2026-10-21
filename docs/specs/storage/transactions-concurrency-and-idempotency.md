@@ -230,7 +230,36 @@ ambiguous COMMIT.
 
 ### Request-owned prepared value reuse
 
-A prepared graph belongs to one request and its Store/root/writer identity.
+A prepared graph ordinarily belongs to one request and its Store/root/writer
+identity. An opaque Engine invocation context may retain at most one immutable
+Store-prepared graph from successful full Standard preflight for one later
+eligible mutation in the same CLI invocation. Retention uses only the already
+qualified generation, binding, admitted graph, committed sequence and Store-owned
+root/manifest. It adds no SQL, decoding or validation stage and holds no live
+guard. Missing retention metadata leaves successful facts unchanged. The context
+is populated only after the preflight read's final witness succeeds; a new
+preflight clears previous state, and an eligible mutation clears any unconsumed
+hint on every exit. Dry-run and read-only calls neither consume nor produce hints.
+
+The mutation consumes the hint only inside its existing qualified preparation
+read. Store compares root, manifest digest, generation, workspace UUID, committed
+sequence, session ID and revision, workspace revision, Procedure snapshot
+identifier and digest. A complete match permits graph-body reuse with a new
+preparation-stage stamp. Any optional comparison mismatch or read/decode failure
+discards the hint once and runs ordinary cold preparation in the same snapshot.
+Mandatory admission, file witnesses and cold-path failures retain their existing
+errors and order; no authoritative failure is caught or retried by hint handling.
+Stateless callers retain cold preparation. No lease spans mutation artifact work,
+prompts or the competing-writer gap.
+
+Matching stamps do not prove unchanged row bytes following out-of-protocol
+database modification, which is an [explicit limitation](../operations/security-and-trust.md#explicit-limitations).
+Matching-hint reuse may defer detection until a later cold read or integrity
+check. File witnesses establish object identity, not unchanged row content.
+Writer replay, identity refusal and reload remain unchanged and use the value
+stamped at preparation, preserving the preparation-to-writer identity window.
+Receipt readiness keeps its independent acquisition.
+
 When another compatible writer advances the sequence, transaction admission
 reloads the current cursor, revisions, attempt metadata, blockers, evidence and
 goals. It may reuse immutable parsed Procedure data only for the same session,

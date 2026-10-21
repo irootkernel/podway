@@ -15,6 +15,9 @@ use super::*;
 use std::ops::ControlFlow;
 
 pub(super) struct Invocation {
+    context: protocol_boundary::DirectInvocationContextV1,
+    #[cfg(test)]
+    request_ids: Vec<RequestIdV1>,
     resolver:
         podway_engine::workspace::DirectWorkspaceResolverV1<protocol_boundary::NativeGitResolverV1>,
     selector: protocol_boundary::WorktreeSelectorV1,
@@ -45,6 +48,9 @@ impl Invocation {
         let manifest = Sha256Digest::new(build_identity_v1().contract_manifest_digest().to_owned())
             .map_err(invalid_v2_value)?;
         Ok(Self {
+            context: protocol_boundary::DirectInvocationContextV1::default(),
+            #[cfg(test)]
+            request_ids: Vec::new(),
             resolver: podway_engine::workspace::DirectWorkspaceResolverV1::new(
                 protocol_boundary::NativeGitResolverV1::new(),
                 manifest,
@@ -61,7 +67,7 @@ impl Invocation {
     }
 
     pub(super) fn execute(
-        &self,
+        &mut self,
         command: Direct,
         workspace: Option<WorkspaceId>,
         key: Option<protocol_boundary::IdempotencyKeyV1>,
@@ -76,24 +82,28 @@ impl Invocation {
             observed_at: self.observed_at.clone(),
             timeout_ms: self.timeout_ms,
         };
+        #[cfg(test)]
+        self.request_ids.push(request.request_id.clone());
         #[cfg(debug_assertions)]
         if let Some(stage) = qualification_pause_stage() {
-            return protocol_boundary::execute_direct_with_maintenance_observer_v1(
+            return protocol_boundary::execute_direct_with_context_and_maintenance_observer_v1(
                 &self.resolver,
                 request,
                 &podway_engine::native_execution::WallUtcExecutionClockV1,
                 &podway_engine::direct_execution::NativeDirectIdSourceV1,
+                &mut self.context,
                 move |boundary| qualification_pause(stage, boundary),
             )
             .map_err(|_| {
                 LocalFailure::internal("the Engine could not construct a valid response")
             });
         }
-        protocol_boundary::execute_direct_v1(
+        protocol_boundary::execute_direct_with_context_v1(
             &self.resolver,
             request,
             &podway_engine::native_execution::WallUtcExecutionClockV1,
             &podway_engine::direct_execution::NativeDirectIdSourceV1,
+            &mut self.context,
         )
         .map_err(|_| LocalFailure::internal("the Engine could not construct a valid response"))
     }
@@ -104,7 +114,7 @@ impl Invocation {
     /// Engine error finisher with `session.status` attribution; the outer
     /// protocol failure keeps the direct invocation's local mapping.
     pub(super) fn preflight_facts(
-        &self,
+        &mut self,
         workspace: Option<WorkspaceId>,
         expected_session_id: Option<SessionId>,
     ) -> Result<podway_engine::direct_execution::DirectPreflightFactsResponseV1, LocalFailure> {
@@ -117,10 +127,13 @@ impl Invocation {
             observed_at: self.observed_at.clone(),
             timeout_ms: self.timeout_ms,
         };
-        podway_engine::direct_api::execute_direct_preflight_facts_v1(
+        #[cfg(test)]
+        self.request_ids.push(request.request_id.clone());
+        podway_engine::direct_api::execute_direct_preflight_facts_with_context_v1(
             &self.resolver,
             request,
             &podway_engine::native_execution::WallUtcExecutionClockV1,
+            &mut self.context,
         )
         .map_err(|_| LocalFailure::internal("the Engine could not construct a valid response"))
     }
@@ -192,7 +205,7 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             Ok(target) => target,
             Err(_) => return Ok(empty_dynamic_completion()),
         };
-        let invocation = Invocation::new(&target, 500, started)?;
+        let mut invocation = Invocation::new(&target, 500, started)?;
         return match invocation.execute(
             Direct::Read {
                 command: ReadCommand::Status {
@@ -248,8 +261,8 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     confirm_if_required(&cli, route, &target)?;
     let mut fences = ExplicitPreconditions::parse(&cli)?;
     apply_archive_purge_revision(&mut cli.command, &fences)?;
-    let invocation = Invocation::new(&target, cli.timeout.unwrap_or(5_000), started)?;
-    let preflight = match preflight::prepare(&invocation, &cli, &mut fences)? {
+    let mut invocation = Invocation::new(&target, cli.timeout.unwrap_or(5_000), started)?;
+    let preflight = match preflight::prepare(&mut invocation, &cli, &mut fences)? {
         ControlFlow::Continue(facts) => facts,
         ControlFlow::Break(result) => return Ok(result),
     };
@@ -857,4 +870,95 @@ pub(super) fn typed_command(
             ));
         }
     })
+}
+
+#[cfg(test)]
+mod admit003_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn invocation_keeps_distinct_request_ids_and_one_deadline_across_preflight_and_mutation() {
+        struct OwnedRoot(PathBuf);
+        impl Drop for OwnedRoot {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let temporary =
+            OwnedRoot(env::temp_dir().join(format!("podway-admit003-{}", Uuid::new_v4())));
+        fs::create_dir(&temporary.0).unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "--quiet"])
+                .arg(&temporary.0)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let target = workspace_target(Some(temporary.0.clone())).unwrap();
+        let mut invocation = Invocation::new(&target, 5000, Instant::now()).unwrap();
+        let key = |value: &str| Some(protocol_boundary::IdempotencyKeyV1::new(value).unwrap());
+        assert!(matches!(
+            invocation
+                .execute(Direct::WorkspaceInit { repair: false }, None, key("init"))
+                .unwrap(),
+            protocol_boundary::DirectResponseV1::Success(_)
+        ));
+        let cli = Cli::try_parse_from([
+            "podway",
+            "start",
+            "--preset",
+            "small-change-v2",
+            "--task",
+            "request identity",
+        ])
+        .unwrap();
+        assert!(matches!(
+            invocation
+                .execute(
+                    typed_command(&cli, &ExplicitPreconditions::default()).unwrap(),
+                    None,
+                    key("start")
+                )
+                .unwrap(),
+            protocol_boundary::DirectResponseV1::Success(_)
+        ));
+        invocation.request_ids.clear();
+        let deadline = invocation.deadline;
+        let observed_at = invocation.observed_at.clone();
+        let podway_engine::direct_execution::DirectPreflightFactsResponseV1::Facts(facts) =
+            invocation.preflight_facts(None, None).unwrap()
+        else {
+            panic!("preflight failed")
+        };
+        let response = invocation
+            .execute(
+                Direct::Procedure(protocol::ProcedureV2MutationCommandV1::SessionBegin(
+                    protocol::SessionBeginV1 {
+                        initial_goal: None,
+                        preconditions: protocol::SessionIdentityPreconditionsWireV1 {
+                            expected_session_id: facts.session_id,
+                            expected_session_revision: facts.session_revision,
+                        },
+                    },
+                )),
+                Some(facts.workspace_id),
+                key("begin"),
+            )
+            .unwrap();
+        let protocol_boundary::DirectResponseV1::Success(output) = response else {
+            panic!("begin failed: {response:?}")
+        };
+        assert_eq!(invocation.request_ids.len(), 2);
+        assert_ne!(invocation.request_ids[0], invocation.request_ids[1]);
+        assert_eq!(
+            output.as_value()["request_id"],
+            invocation.request_ids[1].as_str()
+        );
+        assert_eq!(invocation.deadline, deadline);
+        assert_eq!(invocation.observed_at, observed_at);
+        let fresh = Invocation::new(&target, 5000, Instant::now()).unwrap();
+        assert!(fresh.request_ids.is_empty());
+    }
 }

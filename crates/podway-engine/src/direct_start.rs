@@ -68,6 +68,16 @@ pub fn start_session_v1<R: GitResolverContractV1>(
     clock: &impl ExecutionClockV1,
     ids: &impl DirectIdSourceV1,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
+    start_session_with_context_v1(resolver, request, clock, ids, None)
+}
+
+pub(crate) fn start_session_with_context_v1<R: GitResolverContractV1>(
+    resolver: &DirectWorkspaceResolverV1<R>,
+    request: DirectStartRequestV1,
+    clock: &impl ExecutionClockV1,
+    ids: &impl DirectIdSourceV1,
+    context: Option<&mut crate::direct_api::DirectInvocationContextV1>,
+) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
     let (resolved, store, binding) = resolver.resolve_existing_with_binding(
         request.selector,
         request.expected_workspace_id.as_ref(),
@@ -134,7 +144,7 @@ pub fn start_session_v1<R: GitResolverContractV1>(
             reason: "start requires an idempotency key",
         })?;
     let command = request.command.slice();
-    let prepared_graph = store.prepare_graph(request.deadline)?;
+    let prepared_graph = crate::direct_api::prepare_graph_v1(&store, request.deadline, context)?;
     let source = RefCell::new(Some(source));
     let result = store.mutate_resolving_identity_typed(
         key,

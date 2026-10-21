@@ -21,9 +21,7 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
 use crate::{
-    direct_execution::{
-        DirectBeginRequestV1, DirectExecutionErrorV1, DirectIdSourceV1, begin_session_v1,
-    },
+    direct_execution::{DirectBeginRequestV1, DirectExecutionErrorV1, DirectIdSourceV1},
     direct_mutation::{check_attempt_fence, check_session_fences, graph_success},
     execution::{ExecutionClockV1, goal_definition_from_wire_v2},
     v2_read_service::decision_readback_projection,
@@ -46,8 +44,18 @@ pub fn execute_procedure_v1<R: GitResolverContractV1>(
     clock: &impl ExecutionClockV1,
     ids: &impl DirectIdSourceV1,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
+    execute_procedure_with_context_v1(resolver, request, clock, ids, None)
+}
+
+pub(crate) fn execute_procedure_with_context_v1<R: GitResolverContractV1>(
+    resolver: &DirectWorkspaceResolverV1<R>,
+    request: DirectProcedureRequestV1,
+    clock: &impl ExecutionClockV1,
+    ids: &impl DirectIdSourceV1,
+    context: Option<&mut crate::direct_api::DirectInvocationContextV1>,
+) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
     if let C::SessionBegin(input) = request.command {
-        return begin_session_v1(
+        return crate::direct_execution::begin_session_with_context_v1(
             resolver,
             DirectBeginRequestV1 {
                 selector: request.selector,
@@ -59,6 +67,7 @@ pub fn execute_procedure_v1<R: GitResolverContractV1>(
             },
             clock,
             ids,
+            context,
         );
     }
     let (resolved, store, binding) = resolver.resolve_existing_with_binding(
@@ -122,7 +131,7 @@ pub fn execute_procedure_v1<R: GitResolverContractV1>(
         request.request_id.as_str(),
         DirectOutcomeScopeV1::Session(session.clone()),
     )?;
-    let prepared = store.prepare_graph(request.deadline)?;
+    let prepared = crate::direct_api::prepare_graph_v1(&store, request.deadline, context)?;
     let native = resolver.native_workspace(resolved.clone());
     let artifacts = if matches!(command, C::SessionDecide(_)) {
         prepared

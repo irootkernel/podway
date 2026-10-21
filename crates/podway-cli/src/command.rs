@@ -454,6 +454,12 @@ pub fn run() -> i32 {
                     io::stderr().lock(),
                     "podway-test-preflight-count:{facts}:{status}"
                 );
+                let (retained, consumed, reused) =
+                    podway_engine::direct_api::reads004_debug_graph_hint_counters_v1();
+                let _ = writeln!(
+                    io::stderr().lock(),
+                    "podway-test-graph-hint-count:{retained}:{consumed}:{reused}"
+                );
             }
             exit
         }

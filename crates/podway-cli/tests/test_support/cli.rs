@@ -630,3 +630,20 @@ pub(super) fn assert_read004_counters(output: &Output, expected: (u64, u64)) {
         assert_eq!(reads004_preflight_counters(output), Some(expected));
     }
 }
+
+pub(super) fn assert_admit003_hint_counters(output: &Output, expected: (u64, u64, u64)) {
+    let line = String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .find(|line| line.starts_with("podway-test-graph-hint-count:"))
+        .map(str::to_owned);
+    if reads004_counter_harness() {
+        let line = line.expect("instrumented child omitted graph hint counters");
+        let counts: Vec<u64> = line["podway-test-graph-hint-count:".len()..]
+            .split(':')
+            .map(|value| value.parse().unwrap())
+            .collect();
+        assert_eq!(counts, [expected.0, expected.1, expected.2], "{output:?}");
+    } else if std::env::var_os("PODWAY_READS004_UNINSTRUMENTED_CANDIDATE").is_some() {
+        assert!(line.is_none());
+    }
+}

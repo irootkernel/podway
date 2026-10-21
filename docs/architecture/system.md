@@ -61,10 +61,20 @@ operation: the CLI passes one fresh request identity with the original
 selector, fences, observation and deadline, and receives typed owned facts or
 the same rendered failure the status read produced. No public status envelope
 is fetched, built or parsed on this path; the retained status parser serves
-only the later interactive-start consumer. It borrows the original Direct
+only the later interactive-start consumer. It mutably borrows the original Direct
 `Invocation`, retaining its deadline and requested-command error attribution;
 `Command::needs_preflight` stays in grammar because flag validation also uses
 it. Shared error attribution remains with entry coordination.
+
+`Invocation` owns an opaque Engine `DirectInvocationContextV1`. CLI passes it to
+context-aware Engine facades without seeing Store types or stamps. Preflight and
+mutation still allocate independent request IDs and share only the original
+absolute deadline and observation. The context holds at most one immutable graph
+hint, with no connection, transaction, native lease or descriptor. A new preflight
+clears it first; an eligible mutation clears any remainder on every return.
+Terminal-start reset dry-run preserves a pending hint without using it. Plain
+start, stdin-owned commands and interactive post-decision status do not produce
+one; the interactive observations and prompts retain their existing order.
 
 Keep four observations distinct: fence preflight; dynamic completion's separate
 best-effort 500 ms query; offline fresh-start preview versus stateful replacement
@@ -381,6 +391,41 @@ Mutation binding and graph preparation remain separate, with no read lease over
 artifact preparation. Doctor retains its separate exclusive verifier and
 fallback protocols; start previews and interactive observations remain distinct.
 
+### Invocation-local prepared graph reuse
+
+Full typed preflight still performs graph/receipt/disposition admission, Standard
+projection/schema validation and envelope-equivalent checks before returning
+facts. Store qualification retains the generation it already validated in private
+read-admission metadata; the current view carries that metadata alongside its
+existing binding, admitted graph and committed sequence. Engine returns the facts
+and owned view through the composed read. Only after its final file witness and
+guard release does Store's infallible `into_prepared_graph` conversion assemble a
+hint. No second graph load, SQL, decode or validator runs for retention. Missing
+metadata produces facts without a hint. Archived views and exclusive-read/verifier
+views do not supply invocation retention metadata.
+
+The six preflight-reachable preparation consumers are cursor, begin, other
+Procedure commands, single item, reset/archive and non-dry-run start. Each keeps
+its binding/preparation split and preceding input, key, source and artifact
+checks. The hint is taken only inside the existing preparation read, after its
+mandatory qualification and initial file witness. Store compares root, manifest,
+qualified generation, workspace UUID, committed sequence, session ID/revision,
+workspace revision and Procedure snapshot ID/digest. A complete match shares only
+the immutable graph body and produces a preparation-stage stamped value. A
+mismatch or optional comparison read/decode failure discards the hint and runs
+the ordinary graph-load -> generation -> sequence cold path once inside the same
+read. Qualification, native/binding checks, final witnesses and cold failures
+remain authoritative; optional comparison cannot introduce an earlier refusal.
+
+Only this preparation-stage value reaches artifact consumers and the unchanged
+writer `use_prepared_graph` check. Replay still precedes prepared selection;
+writer stamp changes retain reload or identity refusal at their original boundary.
+No guard spans artifact work or the competing-writer gap. Record-many, delegation
+acceptance and stateless Engine callers keep cold preparation; receipt readiness
+and integrity verification remain independent. Matching stamps may defer detection
+of unstamped out-of-protocol row changes, as specified by the
+[prepared-value contract](../specs/storage/transactions-concurrency-and-idempotency.md#request-owned-prepared-value-reuse).
+
 ### Request-scoped read composition
 
 `ReadScope` borrows the coherent view the caller already owns, either
@@ -461,7 +506,9 @@ and archive-list keeps its summary-only exception for archived rows.
 ### Staged snapshot state reuse
 
 Admitted graph state is staged once per coherent read snapshot and reused
-inside it. The Store graph loader admits terminal dispositions within its
+inside it. This snapshot-local carrier is distinct from the invocation-local
+prepared graph described above; it holds no cross-request admission authority.
+The Store graph loader admits terminal dispositions within its
 loader stage, before receipt acquisition and the cursor check, and returns
 them with the admitted graph as `AdmittedGraphStateV2`. `DirectReadSnapshotV1`
 holds that admission in a private one-shot carrier for the snapshot's

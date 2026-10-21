@@ -241,7 +241,7 @@ pub(super) fn fill_facts(
 }
 
 pub(super) fn prepare(
-    invocation: &direct::Invocation,
+    invocation: &mut direct::Invocation,
     cli: &Cli,
     fences: &mut ExplicitPreconditions,
 ) -> Result<ControlFlow<RunResult, Option<StatusPreflight>>, LocalFailure> {

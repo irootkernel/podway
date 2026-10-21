@@ -1724,12 +1724,25 @@ fn typed_citation_bounds_reject_before_effects_and_preserve_fences_retry_and_rep
 
 #[test]
 fn another_process_commits_during_actual_hashing_before_writer_admission() {
+    competing_commit_during_hashing(false);
+}
+
+#[test]
+fn admit003_context_releases_guards_during_actual_hashing() {
+    competing_commit_during_hashing(true);
+}
+
+fn competing_commit_during_hashing(contextual: bool) {
     let (temporary, selector, store) = prepare_fixture();
     std::fs::write(
         temporary.path().join("artifact.txt"),
         vec![b'a'; 128 * 1024],
     )
     .unwrap();
+    let mut context = podway_engine::direct_api::DirectInvocationContextV1::default();
+    if contextual {
+        admit003_facts(&selector, &mut context);
+    }
     let before = graph(&store);
     let before_sequence = sequence(&store);
     let competitor = Arc::new(Mutex::new(Competitor::with_trials(temporary.path(), 1)));
@@ -1765,7 +1778,18 @@ fn another_process_commits_during_actual_hashing_before_writer_admission() {
         artifact_command(&before, "attach"),
         "task014-hashing-writer",
     );
-    success(execute_direct_v1(&instrumented, input, &Clock, &NativeDirectIdSourceV1).unwrap());
+    let result = if contextual {
+        podway_engine::direct_api::execute_direct_with_context_v1(
+            &instrumented,
+            input,
+            &Clock,
+            &NativeDirectIdSourceV1,
+            &mut context,
+        )
+    } else {
+        execute_direct_v1(&instrumented, input, &Clock, &NativeDirectIdSourceV1)
+    };
+    success(result.unwrap());
     assert_eq!(
         outcome(&store, "g6-competing-0"),
         acknowledged.lock().unwrap().take()
@@ -1943,6 +1967,15 @@ fn reads004_state_baseline(store: &DirectStoreV1) -> (u64, u64, Vec<(String, u64
 
 #[test]
 fn reads004_cold_facts_release_all_guards_before_a_competing_commit() {
+    cold_facts_release_all_guards(false);
+}
+
+#[test]
+fn admit003_cold_context_releases_all_guards_before_a_competing_commit() {
+    cold_facts_release_all_guards(true);
+}
+
+fn cold_facts_release_all_guards(contextual: bool) {
     use podway_core::SessionLifecycle;
 
     let (temporary, selector, store) = prepare_fixture();
@@ -1983,7 +2016,12 @@ fn reads004_cold_facts_release_all_guards_before_a_competing_commit() {
     let (arrive, arrive_rx) = mpsc::channel::<(SessionId, Revision, AttemptId, Revision)>();
     let (resume, resume_rx) = mpsc::channel::<()>();
     let caller = Reads004Caller::spawn(move || {
-        let facts = reads004_facts(&facts_selector);
+        let mut context = podway_engine::direct_api::DirectInvocationContextV1::default();
+        let facts = if contextual {
+            admit003_facts(&facts_selector, &mut context)
+        } else {
+            reads004_facts(&facts_selector)
+        };
         assert_eq!(facts.lifecycle, SessionLifecycle::Running);
         let item_revision = facts
             .item_revisions
@@ -2011,12 +2049,22 @@ fn reads004_cold_facts_release_all_guards_before_a_competing_commit() {
                 expected_item_revision: item_revision,
             },
         }));
-        execute_direct_v1(
-            &resolver(),
-            request(&mutation_selector, command, "reads004-cold-caller"),
-            &Clock,
-            &NativeDirectIdSourceV1,
-        )
+        if contextual {
+            podway_engine::direct_api::execute_direct_with_context_v1(
+                &resolver(),
+                request(&mutation_selector, command, "reads004-cold-caller"),
+                &Clock,
+                &NativeDirectIdSourceV1,
+                &mut context,
+            )
+        } else {
+            execute_direct_v1(
+                &resolver(),
+                request(&mutation_selector, command, "reads004-cold-caller"),
+                &Clock,
+                &NativeDirectIdSourceV1,
+            )
+        }
     });
     let (_session_id, session_revision, _attempt_id, item_revision) = arrive_rx
         .recv_timeout(Duration::from_secs(5))
@@ -2076,6 +2124,15 @@ fn reads004_cold_facts_release_all_guards_before_a_competing_commit() {
 
 #[test]
 fn reads004_shared_facts_release_all_guards_with_warm_sidecars() {
+    shared_facts_release_all_guards(false);
+}
+
+#[test]
+fn admit003_shared_context_releases_all_guards_before_a_competing_commit() {
+    shared_facts_release_all_guards(true);
+}
+
+fn shared_facts_release_all_guards(contextual: bool) {
     use podway_core::SessionLifecycle;
 
     let (temporary, selector, store) = prepare_fixture();
@@ -2100,7 +2157,12 @@ fn reads004_shared_facts_release_all_guards_with_warm_sidecars() {
     let (arrive, arrive_rx) = mpsc::channel::<(SessionId, Revision, AttemptId)>();
     let (resume, resume_rx) = mpsc::channel::<()>();
     let caller = Reads004Caller::spawn(move || {
-        let facts = reads004_facts(&facts_selector);
+        let mut context = podway_engine::direct_api::DirectInvocationContextV1::default();
+        let facts = if contextual {
+            admit003_facts(&facts_selector, &mut context)
+        } else {
+            reads004_facts(&facts_selector)
+        };
         assert_eq!(facts.lifecycle, SessionLifecycle::Running);
         arrive
             .send((
@@ -2119,12 +2181,22 @@ fn reads004_shared_facts_release_all_guards_with_warm_sidecars() {
                 expected_attempt_id: facts.attempt_id.clone().unwrap(),
             },
         }));
-        execute_direct_v1(
-            &resolver(),
-            request(&mutation_selector, command, "reads004-shared-caller"),
-            &Clock,
-            &NativeDirectIdSourceV1,
-        )
+        if contextual {
+            podway_engine::direct_api::execute_direct_with_context_v1(
+                &resolver(),
+                request(&mutation_selector, command, "reads004-shared-caller"),
+                &Clock,
+                &NativeDirectIdSourceV1,
+                &mut context,
+            )
+        } else {
+            execute_direct_v1(
+                &resolver(),
+                request(&mutation_selector, command, "reads004-shared-caller"),
+                &Clock,
+                &NativeDirectIdSourceV1,
+            )
+        }
     });
     let (_session_id, session_revision, _attempt_id) = arrive_rx
         .recv_timeout(Duration::from_secs(5))
@@ -2396,4 +2468,352 @@ fn admit002_bound_revalidation_holds_guards_and_one_snapshot_with_a_real_writer(
             original.trace().revision().get() + 1
         );
     }
+}
+
+fn admit003_facts(
+    selector: &WorktreeSelectorV1,
+    context: &mut podway_engine::direct_api::DirectInvocationContextV1,
+) -> podway_engine::direct_execution::DirectPreflightFactsV1 {
+    match podway_engine::direct_api::execute_direct_preflight_facts_with_context_v1(
+        &resolver(),
+        reads004_facts_request(selector),
+        &Clock,
+        context,
+    )
+    .unwrap()
+    {
+        podway_engine::direct_execution::DirectPreflightFactsResponseV1::Facts(facts) => facts,
+        failure => panic!("context preflight failed: {failure:?}"),
+    }
+}
+
+#[test]
+fn admit003_matching_context_adds_no_preflight_queries_and_is_single_use() {
+    use podway_engine::direct_api::{DirectInvocationContextV1, execute_direct_with_context_v1};
+    use podway_store::test_support::query_account::QueryAccountant;
+    let (_root, selector, store) = prepare_fixture();
+    let accountant = QueryAccountant::start();
+    let expected = reads004_facts(&selector);
+    let cold = accountant.finish();
+    let mut context = DirectInvocationContextV1::default();
+    let accountant = QueryAccountant::start();
+    let facts = admit003_facts(&selector, &mut context);
+    let retained = accountant.finish();
+    assert_eq!(
+        (
+            facts.workspace_id,
+            facts.session_id,
+            facts.session_revision,
+            facts.attempt_id,
+            facts.item_revisions,
+            facts.goal_revision,
+            facts.lifecycle
+        ),
+        (
+            expected.workspace_id,
+            expected.session_id,
+            expected.session_revision,
+            expected.attempt_id,
+            expected.item_revisions,
+            expected.goal_revision,
+            expected.lifecycle
+        )
+    );
+    assert_eq!(retained.sql, cold.sql);
+    assert_eq!(
+        retained.retention.decode_attempts,
+        cold.retention.decode_attempts
+    );
+    assert_eq!(retained.retention.graph_scopes, cold.retention.graph_scopes);
+    let first = request(
+        &selector,
+        set(&graph(&store), "i01", "admitted once"),
+        "admit003-once",
+    );
+    assert_ne!(
+        first.request_id,
+        reads004_facts_request(&selector).request_id
+    );
+    let accountant = QueryAccountant::start();
+    success(
+        execute_direct_with_context_v1(
+            &resolver(),
+            first,
+            &Clock,
+            &NativeDirectIdSourceV1,
+            &mut context,
+        )
+        .unwrap(),
+    );
+    assert_eq!(accountant.finish().retention.graph_scopes, 0);
+    let second = request(
+        &selector,
+        set(&graph(&store), "i01", "cold next time"),
+        "admit003-twice",
+    );
+    let accountant = QueryAccountant::start();
+    success(
+        execute_direct_with_context_v1(
+            &resolver(),
+            second,
+            &Clock,
+            &NativeDirectIdSourceV1,
+            &mut context,
+        )
+        .unwrap(),
+    );
+    assert!(accountant.finish().retention.graph_scopes > 0);
+    store.verify_integrity(deadline()).unwrap();
+}
+
+#[test]
+fn admit003_seeded_context_is_cleared_by_failing_preflight_and_early_mutation_rejection() {
+    use podway_engine::direct_api::{
+        DirectInvocationContextV1, execute_direct_preflight_facts_with_context_v1,
+        execute_direct_with_context_v1,
+    };
+    use podway_store::test_support::query_account::QueryAccountant;
+    for preflight_failure in [true, false] {
+        let (_root, selector, store) = prepare_fixture();
+        let mut context = DirectInvocationContextV1::default();
+        admit003_facts(&selector, &mut context);
+        let before = sequence(&store);
+        if preflight_failure {
+            let mut request = reads004_facts_request(&selector);
+            request.expected_session_id =
+                Some(SessionId::new("00000000-0000-4000-8000-000000000099").unwrap());
+            assert!(matches!(
+                execute_direct_preflight_facts_with_context_v1(
+                    &resolver(),
+                    request,
+                    &Clock,
+                    &mut context
+                )
+                .unwrap(),
+                podway_engine::direct_execution::DirectPreflightFactsResponseV1::Failure(_)
+            ));
+        } else {
+            let mut early = request(
+                &selector,
+                set(&graph(&store), "i01", "must not prepare"),
+                "admit003-early",
+            );
+            early.idempotency_key = None;
+            assert!(matches!(
+                execute_direct_with_context_v1(
+                    &resolver(),
+                    early,
+                    &NoEffects,
+                    &NoEffects,
+                    &mut context
+                )
+                .unwrap(),
+                DirectResponseV1::Failure(_)
+            ));
+            assert!(outcome(&store, "admit003-early").is_none());
+        }
+        assert_eq!(sequence(&store), before);
+        let next = request(
+            &selector,
+            set(&graph(&store), "i01", "cold after rejection"),
+            "admit003-after-rejection",
+        );
+        let accountant = QueryAccountant::start();
+        success(
+            execute_direct_with_context_v1(
+                &resolver(),
+                next,
+                &Clock,
+                &NativeDirectIdSourceV1,
+                &mut context,
+            )
+            .unwrap(),
+        );
+        assert!(accountant.finish().retention.graph_scopes > 0);
+    }
+}
+
+#[test]
+fn admit003_generation_change_before_preparation_restamps_but_before_writer_refuses() {
+    use podway_engine::direct_api::{DirectInvocationContextV1, execute_direct_with_context_v1};
+    use podway_store::direct_store::DirectTransactionBoundaryV1;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    for before_preparation in [true, false] {
+        let (_root, selector, store) = prepare_fixture();
+        let mut context = DirectInvocationContextV1::default();
+        admit003_facts(&selector, &mut context);
+        let command = request(
+            &selector,
+            set(&graph(&store), "i01", "new generation"),
+            "admit003-generation",
+        );
+        let before = sequence(&store);
+        let database = store.layout().database();
+        let change = move || {
+            rusqlite::Connection::open(&database).unwrap().execute(
+                "UPDATE writer_contract SET generation_id='admit003-replacement-generation' WHERE singleton=1", []
+            ).unwrap();
+        };
+        if before_preparation {
+            change();
+            // A replacement completed between requests is admitted afresh at G.
+            let database = store.layout().database();
+            let connection = rusqlite::Connection::open(&database).unwrap();
+            connection
+                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+                .unwrap();
+            drop(connection);
+            let saved = store
+                .layout()
+                .runtime_directory()
+                .join("admit003-retired-database");
+            std::fs::rename(&database, &saved).unwrap();
+            std::fs::copy(&saved, &database).unwrap();
+            success(
+                execute_direct_with_context_v1(
+                    &resolver(),
+                    command,
+                    &Clock,
+                    &NativeDirectIdSourceV1,
+                    &mut context,
+                )
+                .unwrap(),
+            );
+            assert_eq!(sequence(&store), before + 1);
+            assert!(outcome(&store, "admit003-generation").is_some());
+        } else {
+            let changed = Arc::new(AtomicBool::new(false));
+            let observed = Arc::clone(&changed);
+            let resolver = resolver().with_store_boundary_observer_v1(move |boundary| {
+                if boundary == DirectTransactionBoundaryV1::BeforeBegin {
+                    assert!(!observed.swap(true, Ordering::SeqCst));
+                    change();
+                }
+            });
+            let response = execute_direct_with_context_v1(
+                &resolver,
+                command,
+                &NoEffects,
+                &NoEffects,
+                &mut context,
+            )
+            .unwrap();
+            let DirectResponseV1::Failure(error) = response else {
+                panic!("changed writer identity committed")
+            };
+            assert_eq!(error.as_value()["code"], "WORKSPACE_ID_CONFLICT");
+            assert!(changed.load(Ordering::SeqCst));
+            assert_eq!(sequence(&store), before);
+            assert!(outcome(&store, "admit003-generation").is_none());
+        }
+        store.verify_integrity(deadline()).unwrap();
+    }
+}
+
+#[test]
+fn admit003_reset_dry_run_and_read_preserve_pending_hint_until_mutation() {
+    use podway_engine::direct_api::{DirectInvocationContextV1, execute_direct_with_context_v1};
+    use podway_engine::v2_read_service::GraphStatusTierV2;
+    use podway_store::test_support::query_account::QueryAccountant;
+
+    let (_root, selector, store) = prepare_fixture();
+    let before = graph(&store);
+    let before_sequence = sequence(&store);
+    let mut context = DirectInvocationContextV1::default();
+    let facts = admit003_facts(&selector, &mut context);
+    let mut preview = request(
+        &selector,
+        DirectCommandV1::Session(DirectSessionCommandV1::Reset(SessionResetV1 {
+            mode: SessionDeletionModeV1::Eligible,
+            dry_run: true,
+            preconditions: SessionIdentityPreconditionsWireV1 {
+                expected_session_id: facts.session_id.clone(),
+                expected_session_revision: facts.session_revision,
+            },
+        })),
+        "admit003-preview-only",
+    );
+    preview.idempotency_key = None;
+    let output = success(
+        execute_direct_with_context_v1(
+            &resolver(),
+            preview,
+            &Clock,
+            &NativeDirectIdSourceV1,
+            &mut context,
+        )
+        .unwrap(),
+    );
+    assert_eq!(output["result"]["dry_run"], true);
+    let mut read = request(
+        &selector,
+        DirectCommandV1::Read {
+            command: DirectReadCommandV1::Status {
+                tier: GraphStatusTierV2::Standard,
+                history_before: None,
+            },
+            expected_session_id: Some(facts.session_id),
+        },
+        "admit003-read-only",
+    );
+    read.idempotency_key = None;
+    success(
+        execute_direct_with_context_v1(
+            &resolver(),
+            read,
+            &Clock,
+            &NativeDirectIdSourceV1,
+            &mut context,
+        )
+        .unwrap(),
+    );
+    assert_eq!(graph(&store), before);
+    assert_eq!(sequence(&store), before_sequence);
+
+    let first = request(
+        &selector,
+        set(&before, "i01", "reuse after preview and read"),
+        "admit003-after-preview",
+    );
+    let accountant = QueryAccountant::start();
+    success(
+        execute_direct_with_context_v1(
+            &resolver(),
+            first,
+            &Clock,
+            &NativeDirectIdSourceV1,
+            &mut context,
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        accountant.finish().retention.graph_scopes,
+        0,
+        "reset dry-run and read must preserve the pending graph hint",
+    );
+    let second = request(
+        &selector,
+        set(&graph(&store), "i01", "cold after single consumption"),
+        "admit003-after-preview-second",
+    );
+    let accountant = QueryAccountant::start();
+    success(
+        execute_direct_with_context_v1(
+            &resolver(),
+            second,
+            &Clock,
+            &NativeDirectIdSourceV1,
+            &mut context,
+        )
+        .unwrap(),
+    );
+    assert!(
+        accountant.finish().retention.graph_scopes > 0,
+        "the preserved hint must still be consumed only once",
+    );
+    assert_eq!(sequence(&store), before_sequence + 2);
+    store.verify_integrity(deadline()).unwrap();
 }

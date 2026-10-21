@@ -95,6 +95,16 @@ pub fn execute_cursor_v1<R: GitResolverContractV1>(
     clock: &impl ExecutionClockV1,
     ids: &impl DirectIdSourceV1,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
+    execute_cursor_with_context_v1(resolver, request, clock, ids, None)
+}
+
+pub(crate) fn execute_cursor_with_context_v1<R: GitResolverContractV1>(
+    resolver: &DirectWorkspaceResolverV1<R>,
+    request: DirectCursorRequestV1,
+    clock: &impl ExecutionClockV1,
+    ids: &impl DirectIdSourceV1,
+    context: Option<&mut crate::direct_api::DirectInvocationContextV1>,
+) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
     let (resolved, store, binding) = resolver.resolve_existing_with_binding(
         request.selector,
         request.expected_workspace_id.as_ref(),
@@ -118,7 +128,7 @@ pub fn execute_cursor_v1<R: GitResolverContractV1>(
         request.request_id.as_str(),
         DirectOutcomeScopeV1::Session(fences.expected_session_id.clone()),
     )?;
-    let prepared = store.prepare_graph(request.deadline)?;
+    let prepared = crate::direct_api::prepare_graph_v1(&store, request.deadline, context)?;
     let native = resolver.native_workspace(resolved.clone());
     let artifacts = if matches!(request.command, DirectCursorCommandV1::Complete(_)) {
         prepared
@@ -272,6 +282,16 @@ pub fn begin_session_v1<R: GitResolverContractV1>(
     clock: &impl ExecutionClockV1,
     ids: &impl DirectIdSourceV1,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
+    begin_session_with_context_v1(resolver, request, clock, ids, None)
+}
+
+pub(crate) fn begin_session_with_context_v1<R: GitResolverContractV1>(
+    resolver: &DirectWorkspaceResolverV1<R>,
+    request: DirectBeginRequestV1,
+    clock: &impl ExecutionClockV1,
+    ids: &impl DirectIdSourceV1,
+    context: Option<&mut crate::direct_api::DirectInvocationContextV1>,
+) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
     let (resolved, store) = resolver.resolve_existing(
         request.selector,
         request.expected_workspace_id.as_ref(),
@@ -309,7 +329,7 @@ pub fn begin_session_v1<R: GitResolverContractV1>(
         })
         .transpose()
         .map_err(DirectExecutionErrorV1::Domain)?;
-    let prepared = store.prepare_graph(request.deadline)?;
+    let prepared = crate::direct_api::prepare_graph_v1(&store, request.deadline, context)?;
     let result = store.mutate_typed(&mutation, request.deadline, || clock.now(), |transaction| -> Result<_, DirectExecutionErrorV1> {
         let current = transaction.use_prepared_graph(prepared.as_ref())?;
         let current = current.as_ref().ok_or_else(|| DirectStoreErrorV1::Domain(
@@ -836,6 +856,21 @@ pub fn preflight_facts_v1<R: GitResolverContractV1>(
     request: DirectPreflightFactsRequestV1,
     clock: &impl ExecutionClockV1,
 ) -> Result<DirectPreflightFactsV1, DirectExecutionErrorV1> {
+    preflight_facts_with_view_v1(resolver, request, clock, false).map(|(facts, _)| facts)
+}
+
+pub(crate) fn preflight_facts_with_view_v1<R: GitResolverContractV1>(
+    resolver: &DirectWorkspaceResolverV1<R>,
+    request: DirectPreflightFactsRequestV1,
+    clock: &impl ExecutionClockV1,
+    retain: bool,
+) -> Result<
+    (
+        DirectPreflightFactsV1,
+        Option<podway_store::direct_store::DirectWorkspaceViewV1>,
+    ),
+    DirectExecutionErrorV1,
+> {
     resolver.resolve_existing_and_read(
         request.selector.clone(),
         request.expected_workspace_id.as_ref(),
@@ -904,7 +939,7 @@ pub fn preflight_facts_v1<R: GitResolverContractV1>(
                         .collect()
                 })
                 .unwrap_or_default();
-            Ok(DirectPreflightFactsV1 {
+            let facts = DirectPreflightFactsV1 {
                 workspace_id: workspace_uuid,
                 session_id: trace.session_id().clone(),
                 session_revision: trace.revision(),
@@ -912,7 +947,8 @@ pub fn preflight_facts_v1<R: GitResolverContractV1>(
                 item_revisions,
                 goal_revision: graph.goal_state().current_revision(),
                 lifecycle,
-            })
+            };
+            Ok((facts, retain.then_some(view)))
         },
     )
 }

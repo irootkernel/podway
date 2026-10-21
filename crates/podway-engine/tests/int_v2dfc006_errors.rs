@@ -1103,6 +1103,22 @@ mod reads004_equivalence {
             }
             DirectPreflightFactsResponseV1::Failure(error) => error.into_value(),
         };
+        let contextual =
+            match podway_engine::direct_api::execute_direct_preflight_facts_with_context_v1(
+                &resolver(),
+                reads004_facts_request(selector),
+                clock,
+                &mut podway_engine::direct_api::DirectInvocationContextV1::default(),
+            )
+            .unwrap()
+            {
+                DirectPreflightFactsResponseV1::Failure(error) => error.into_value(),
+                facts => panic!("context unexpectedly admitted: {facts:?}"),
+            };
+        assert_eq!(
+            serde_json::to_vec(&contextual).unwrap(),
+            serde_json::to_vec(&old).unwrap()
+        );
         assert!(
             validate_daemon_free_document_v1("podway.error/v2", &old),
             "old path produced an invalid error envelope"
@@ -2011,4 +2027,84 @@ mod admit002 {
                 .unwrap();
         }
     }
+}
+
+#[test]
+fn admit003_failed_final_preflight_witness_cannot_publish_or_keep_a_hint() {
+    use super::int_v2dfc006_direct_execution::{Clock, deadline, digest};
+    use super::int_v2dfc006_races::{graph, item_fences, prepare_fixture, reads004_facts_request};
+    use podway_engine::direct_api::{
+        DirectCommandV1, DirectInvocationContextV1, DirectRequestV1, DirectResponseV1,
+        execute_direct_preflight_facts_with_context_v1, execute_direct_with_context_v1,
+    };
+    use podway_engine::direct_execution::{DirectPreflightFactsResponseV1, NativeDirectIdSourceV1};
+    use podway_engine::direct_items::DirectItemCommandV1;
+    use podway_engine::workspace::DirectWorkspaceResolverV1;
+    use podway_store::test_support::query_account::QueryAccountant;
+    use std::sync::{Arc, atomic::AtomicUsize};
+    let (root, selector, store) = prepare_fixture();
+    let mut context = DirectInvocationContextV1::default();
+    let resolver =
+        || DirectWorkspaceResolverV1::new(podway_git::NativeGitResolverV1::new(), digest());
+    assert!(matches!(
+        execute_direct_preflight_facts_with_context_v1(
+            &resolver(),
+            reads004_facts_request(&selector),
+            &Clock,
+            &mut context
+        )
+        .unwrap(),
+        DirectPreflightFactsResponseV1::Facts(_)
+    ));
+    let database = store.layout().database();
+    let saved = root.path().join("admit003-original-database");
+    let replacing = DirectWorkspaceResolverV1::new(
+        Admit001Native {
+            calls: Arc::new(AtomicUsize::new(0)),
+            at: 3,
+            fail: false,
+            replacement: Some((database.clone(), saved.clone())),
+        },
+        digest(),
+    );
+    let failure = execute_direct_preflight_facts_with_context_v1(
+        &replacing,
+        reads004_facts_request(&selector),
+        &Clock,
+        &mut context,
+    )
+    .unwrap();
+    assert!(matches!(
+        failure,
+        DirectPreflightFactsResponseV1::Failure(_)
+    ));
+    std::fs::rename(saved, database).unwrap();
+    let current = graph(&store);
+    let accountant = QueryAccountant::start();
+    let response = execute_direct_with_context_v1(
+        &resolver(),
+        DirectRequestV1 {
+            request_id: RequestIdV1::new(OTHER).unwrap(),
+            selector,
+            expected_workspace_id: None,
+            command: DirectCommandV1::Item(DirectItemCommandV1::Set(podway_protocol::ItemSetV1 {
+                item_id: ItemId::new("i01").unwrap(),
+                value: "cold after witness failure".into(),
+                preconditions: item_fences(&current, "i01"),
+            })),
+            idempotency_key: Some(IdempotencyKeyV1::new("admit003-after-witness").unwrap()),
+            deadline: deadline(),
+            observed_at: Rfc3339MillisV1::new("2023-11-14T22:13:20.001Z").unwrap(),
+            timeout_ms: 5000,
+        },
+        &Clock,
+        &NativeDirectIdSourceV1,
+        &mut context,
+    )
+    .unwrap();
+    assert!(
+        matches!(response, DirectResponseV1::Success(_)),
+        "{response:?}"
+    );
+    assert!(accountant.finish().retention.graph_scopes > 0);
 }

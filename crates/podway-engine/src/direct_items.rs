@@ -302,6 +302,15 @@ pub fn execute_item_v1<R: GitResolverContractV1>(
     request: DirectItemRequestV1,
     clock: &impl ExecutionClockV1,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
+    execute_item_with_context_v1(resolver, request, clock, None)
+}
+
+pub(crate) fn execute_item_with_context_v1<R: GitResolverContractV1>(
+    resolver: &DirectWorkspaceResolverV1<R>,
+    request: DirectItemRequestV1,
+    clock: &impl ExecutionClockV1,
+    context: Option<&mut crate::direct_api::DirectInvocationContextV1>,
+) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
     let (resolved, store, binding) = resolver.resolve_existing_with_binding(
         request.selector,
         request.expected_workspace_id.as_ref(),
@@ -363,7 +372,7 @@ pub fn execute_item_v1<R: GitResolverContractV1>(
     let item_id = request.command.item_id();
     let expected_attempt = &fences.expected_attempt_id;
     let expected_item_revision = fences.expected_item_revision;
-    let prepared = store.prepare_graph(request.deadline)?;
+    let prepared = crate::direct_api::prepare_graph_v1(&store, request.deadline, context)?;
     let result = store.mutate_typed(&mutation, request.deadline, || clock.now(), |transaction| -> Result<_, DirectExecutionErrorV1> {
         let current = transaction.use_prepared_graph(prepared.as_ref())?;
         let current = current.as_ref().ok_or_else(|| DirectStoreErrorV1::Domain(

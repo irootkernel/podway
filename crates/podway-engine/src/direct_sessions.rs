@@ -54,6 +54,15 @@ pub fn execute_session_v1<R: GitResolverContractV1>(
     request: DirectSessionRequestV1,
     clock: &impl ExecutionClockV1,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
+    execute_session_with_context_v1(resolver, request, clock, None)
+}
+
+pub(crate) fn execute_session_with_context_v1<R: GitResolverContractV1>(
+    resolver: &DirectWorkspaceResolverV1<R>,
+    request: DirectSessionRequestV1,
+    clock: &impl ExecutionClockV1,
+    context: Option<&mut crate::direct_api::DirectInvocationContextV1>,
+) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
     if let DirectSessionCommandV1::Reset(input) = &request.command
         && input.dry_run
     {
@@ -152,7 +161,7 @@ pub fn execute_session_v1<R: GitResolverContractV1>(
     let prepared = if matches!(request.command, DirectSessionCommandV1::Purge(_)) {
         None
     } else {
-        store.prepare_graph(request.deadline)?
+        crate::direct_api::prepare_graph_v1(&store, request.deadline, context)?
     };
     let result = store.mutate_typed(&mutation, request.deadline, || clock.now(), |transaction| -> Result<_, DirectExecutionErrorV1> {
         resolver.revalidate(&resolved, transaction.binding()).map_err(DirectExecutionErrorV1::from)?;

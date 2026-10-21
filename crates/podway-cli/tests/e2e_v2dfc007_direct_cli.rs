@@ -3245,3 +3245,171 @@ fn bound005_completion_keeps_its_best_effort_budget_during_maintenance() {
     drop(paused);
     fixture.assert_podway_snapshot(&before);
 }
+
+#[test]
+fn admit003_real_cli_wires_reuse_and_preserves_previews_key_errors_and_later_invocations() {
+    use super::cli_fixture::assert_admit003_hint_counters;
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    fixture.run(&[
+        "start",
+        "--preset",
+        "small-change-v2",
+        "--task",
+        "context wiring",
+        "--idempotency-key",
+        "start",
+    ]);
+    // Begin, single item, cursor, procedure and reset/archive dispatch all use
+    // actual automatic preflight; fresh plain start remains independent.
+    for args in [
+        vec!["begin", "--idempotency-key", "begin"],
+        vec![
+            "set",
+            "scope-summary",
+            "context value",
+            "--idempotency-key",
+            "set",
+        ],
+        vec!["block", "--reason", "hold", "--idempotency-key", "block"],
+        vec!["unblock", "--all", "--idempotency-key", "unblock"],
+        vec!["cancel", "--reason", "close", "--idempotency-key", "cancel"],
+        vec![
+            "disposition",
+            "not-required",
+            "--reason",
+            "no handoff",
+            "--idempotency-key",
+            "disposition",
+        ],
+        vec!["archive", "--idempotency-key", "archive"],
+    ] {
+        let output = output_with_stdin_counted(&fixture, &args, b"");
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
+        let envelope: OutputEnvelopeV4 = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(envelope.as_value()["schema"], "podway.output/v4");
+        if super::cli_fixture::reads004_counter_harness() {
+            assert_eq!(
+                reads004_preflight_counters(&output),
+                Some((1, 0)),
+                "{args:?}"
+            );
+        }
+        assert_admit003_hint_counters(&output, (1, 1, 1));
+    }
+    fixture.run(&[
+        "start",
+        "--preset",
+        "small-change-v2",
+        "--task",
+        "replacement",
+        "--idempotency-key",
+        "start-again",
+    ]);
+    let replace = output_with_stdin_counted(
+        &fixture,
+        &[
+            "start",
+            "--preset",
+            "small-change-v2",
+            "--task",
+            "successor",
+            "--on-existing",
+            "delete",
+            "--idempotency-key",
+            "replace",
+        ],
+        b"",
+    );
+    assert_eq!(replace.status.code(), Some(0), "{replace:?}");
+    assert_read004_counters(&replace, (1, 0));
+    assert_admit003_hint_counters(&replace, (1, 1, 1));
+    let before = fixture.podway_snapshot();
+    let dry_run = output_with_stdin_counted(&fixture, &["reset", "--dry-run"], b"");
+    assert_eq!(dry_run.status.code(), Some(0), "{dry_run:?}");
+    assert_read004_counters(&dry_run, (1, 0));
+    assert_admit003_hint_counters(&dry_run, (1, 0, 0));
+    fixture.assert_podway_snapshot(&before);
+    for args in [
+        vec!["begin"],
+        vec!["begin", "--idempotency-key", ""],
+        vec![
+            "start",
+            "--preset",
+            "small-change-v2",
+            "--task",
+            "bad policy",
+            "--on-existing",
+            "preserve",
+            "--idempotency-key",
+            "bad-policy",
+            "--supersede-reason",
+            "shape-valid policy",
+        ],
+    ] {
+        let rejected = output_with_stdin_counted(&fixture, &args, b"");
+        assert_eq!(rejected.status.code(), Some(2), "{args:?}: {rejected:?}");
+        let error: ErrorEnvelopeV2 = serde_json::from_slice(&rejected.stdout).unwrap();
+        assert_eq!(error.as_value()["code"], "REQUEST_INVALID");
+        if super::cli_fixture::reads004_counter_harness() {
+            assert_eq!(
+                reads004_preflight_counters(&rejected),
+                Some((1, 0)),
+                "{args:?}"
+            );
+        }
+        assert_admit003_hint_counters(&rejected, (1, 0, 0));
+        fixture.assert_podway_snapshot(&before);
+    }
+    let status = output_with_stdin_counted(&fixture, &["status"], b"");
+    assert_eq!(status.status.code(), Some(0));
+    assert_admit003_hint_counters(&status, (0, 0, 0));
+    let malformed = output_with_stdin_counted(&fixture, &["record", "--stdin"], b"not-json");
+    assert_eq!(malformed.status.code(), Some(2));
+    assert_read004_counters(&malformed, (0, 0));
+    assert_admit003_hint_counters(&malformed, (0, 0, 0));
+    fixture.run(&["begin", "--idempotency-key", "last-begin"]);
+    fixture.run(&[
+        "cancel",
+        "--reason",
+        "terminal preview",
+        "--idempotency-key",
+        "terminal-cancel",
+    ]);
+    let before = fixture.podway_snapshot();
+    let preview = output_with_stdin_counted(
+        &fixture,
+        &[
+            "start",
+            "--preset",
+            "small-change-v2",
+            "--task",
+            "terminal",
+            "--on-existing",
+            "delete",
+            "--idempotency-key",
+            "terminal-start",
+        ],
+        b"",
+    );
+    assert_eq!(preview.status.code(), Some(5), "{preview:?}");
+    let error: ErrorEnvelopeV2 = serde_json::from_slice(&preview.stdout).unwrap();
+    assert_eq!(error.as_value()["code"], "SESSION_START_DECISION_REQUIRED");
+    assert_read004_counters(&preview, (1, 0));
+    assert_admit003_hint_counters(&preview, (1, 0, 0));
+    fixture.assert_podway_snapshot(&before);
+    // Plain start first enters writer admission and can change SQLite's SHM
+    // cache. The interactive continue decision must preserve logical state.
+    let before_status = fixture.run(&["status"]);
+    assert!(
+        fixture
+            .continue_in_pty()
+            .contains("No new session was created")
+    );
+    let after_status = fixture.run(&["status"]);
+    assert_eq!(after_status["result"], before_status["result"]);
+    assert_eq!(
+        after_status["workspace"]["latest_workspace_sequence"],
+        before_status["workspace"]["latest_workspace_sequence"]
+    );
+}

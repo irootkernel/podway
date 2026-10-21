@@ -22,17 +22,19 @@ use crate::{
     direct_execution::{
         DirectCursorCommandV1, DirectCursorRequestV1, DirectExecutionErrorV1, DirectIdSourceV1,
         DirectPreflightFactsRequestV1, DirectPreflightFactsResponseV1, DirectReadCommandV1,
-        DirectReadRequestV1, OutcomeLookupRequestV1, execute_cursor_v1, execute_read_v1,
-        lookup_outcome_v1, preflight_facts_v1,
+        DirectReadRequestV1, OutcomeLookupRequestV1, execute_cursor_with_context_v1,
+        execute_read_v1, lookup_outcome_v1, preflight_facts_with_view_v1,
     },
     direct_items::{
-        DirectItemCommandV1, DirectItemRequestV1, DirectRecordManyRequestV1, execute_item_v1,
-        record_many_v1,
+        DirectItemCommandV1, DirectItemRequestV1, DirectRecordManyRequestV1,
+        execute_item_with_context_v1, record_many_v1,
     },
     direct_maintenance::{DirectMaintenanceRequestV1, remove_workspace_v1, reset_all_v1},
-    direct_procedure::{DirectProcedureRequestV1, execute_procedure_v1},
-    direct_sessions::{DirectSessionCommandV1, DirectSessionRequestV1, execute_session_v1},
-    direct_start::{DirectStartCommandV1, DirectStartRequestV1, start_session_v1},
+    direct_procedure::{DirectProcedureRequestV1, execute_procedure_with_context_v1},
+    direct_sessions::{
+        DirectSessionCommandV1, DirectSessionRequestV1, execute_session_with_context_v1,
+    },
+    direct_start::{DirectStartCommandV1, DirectStartRequestV1, start_session_with_context_v1},
     direct_workspace::{
         DirectWorkspaceMutationRequestV1, DirectWorkspaceReadRequestV1, doctor_workspace_v1,
         initialize_workspace_v1, repair_workspace_v1, show_workspace_v1,
@@ -96,6 +98,41 @@ impl DirectCommandV1 {
     }
 }
 
+/// One invocation's optional immutable graph hint. No Store types, stamps or
+/// live guards are exposed to the CLI. A fresh preflight replaces prior state.
+#[derive(Default)]
+pub struct DirectInvocationContextV1 {
+    prepared: Option<podway_store::direct_store::DirectPreparedGraphV1>,
+}
+
+pub(crate) fn prepare_graph_v1(
+    store: &podway_store::direct_store::DirectStoreV1,
+    deadline: Instant,
+    context: Option<&mut DirectInvocationContextV1>,
+) -> Result<Option<podway_store::direct_store::DirectPreparedGraphV1>, DirectStoreErrorV1> {
+    let Some(context) = context else {
+        return store.prepare_graph(deadline);
+    };
+    #[cfg(debug_assertions)]
+    let prior = context.prepared.clone();
+    let result = store.prepare_graph_with_hint(deadline, &mut context.prepared);
+    #[cfg(debug_assertions)]
+    if let Some(prior) = prior
+        && context.prepared.is_none()
+    {
+        reads004_preflight_counters::record(&reads004_preflight_counters::CONSUMED);
+        if result
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .is_some_and(|current| std::ptr::eq(prior.graph(), current.graph()))
+        {
+            reads004_preflight_counters::record(&reads004_preflight_counters::REUSED);
+        }
+    }
+    result
+}
+
 #[derive(Clone, Debug)]
 pub struct DirectRequestV1 {
     pub request_id: RequestIdV1,
@@ -123,7 +160,7 @@ pub fn execute_direct_v1<R: GitResolverContractV1>(
     clock: &impl ExecutionClockV1,
     ids: &impl DirectIdSourceV1,
 ) -> Result<DirectResponseV1, ProtocolError> {
-    execute_direct_inner_v1(resolver, request, clock, ids, None, None)
+    execute_direct_inner_v1(resolver, request, clock, ids, None, None, None)
 }
 
 /// Observe original typed failures and any failed recovery observation without changing dispatch.
@@ -135,7 +172,7 @@ pub fn execute_direct_with_error_observer_v1<R: GitResolverContractV1>(
     ids: &impl DirectIdSourceV1,
     observer: impl Fn(&DirectExecutionErrorV1),
 ) -> Result<DirectResponseV1, ProtocolError> {
-    execute_direct_inner_v1(resolver, request, clock, ids, Some(&observer), None)
+    execute_direct_inner_v1(resolver, request, clock, ids, Some(&observer), None, None)
 }
 
 type MaintenanceObserver =
@@ -149,6 +186,9 @@ type MaintenanceObserver =
 mod reads004_preflight_counters {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    pub(super) static RETAINED: AtomicUsize = AtomicUsize::new(0);
+    pub(super) static CONSUMED: AtomicUsize = AtomicUsize::new(0);
+    pub(super) static REUSED: AtomicUsize = AtomicUsize::new(0);
     pub(super) static FACTS_ENTRIES: AtomicUsize = AtomicUsize::new(0);
     pub(super) static STATUS_DISPATCHES: AtomicUsize = AtomicUsize::new(0);
 
@@ -169,6 +209,18 @@ pub fn reads004_debug_preflight_counters_v1() -> (usize, usize) {
     )
 }
 
+/// Supporting invocation wiring evidence, absent from release builds.
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub fn reads004_debug_graph_hint_counters_v1() -> (usize, usize, usize) {
+    use std::sync::atomic::Ordering;
+    (
+        reads004_preflight_counters::RETAINED.load(Ordering::Relaxed),
+        reads004_preflight_counters::CONSUMED.load(Ordering::Relaxed),
+        reads004_preflight_counters::REUSED.load(Ordering::Relaxed),
+    )
+}
+
 /// Isolated debug-binary qualification observes the same maintenance boundaries as Engine tests.
 #[cfg(debug_assertions)]
 #[doc(hidden)]
@@ -186,7 +238,72 @@ pub fn execute_direct_with_maintenance_observer_v1<R: GitResolverContractV1>(
         ids,
         None,
         Some(Arc::new(observer)),
+        None,
     )
+}
+
+/// Execute a distinct Engine request with one invocation-local optional hint.
+pub fn execute_direct_with_context_v1<R: GitResolverContractV1>(
+    resolver: &DirectWorkspaceResolverV1<R>,
+    request: DirectRequestV1,
+    clock: &impl ExecutionClockV1,
+    ids: &impl DirectIdSourceV1,
+    context: &mut DirectInvocationContextV1,
+) -> Result<DirectResponseV1, ProtocolError> {
+    execute_direct_in_context_v1(resolver, request, clock, ids, context, None)
+}
+
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub fn execute_direct_with_context_and_maintenance_observer_v1<R: GitResolverContractV1>(
+    resolver: &DirectWorkspaceResolverV1<R>,
+    request: DirectRequestV1,
+    clock: &impl ExecutionClockV1,
+    ids: &impl DirectIdSourceV1,
+    context: &mut DirectInvocationContextV1,
+    observer: impl Fn(crate::direct_maintenance::DirectMaintenanceBoundaryV1) + Send + Sync + 'static,
+) -> Result<DirectResponseV1, ProtocolError> {
+    execute_direct_in_context_v1(
+        resolver,
+        request,
+        clock,
+        ids,
+        context,
+        Some(Arc::new(observer)),
+    )
+}
+
+fn execute_direct_in_context_v1<R: GitResolverContractV1>(
+    resolver: &DirectWorkspaceResolverV1<R>,
+    request: DirectRequestV1,
+    clock: &impl ExecutionClockV1,
+    ids: &impl DirectIdSourceV1,
+    context: &mut DirectInvocationContextV1,
+    maintenance_observer: Option<MaintenanceObserver>,
+) -> Result<DirectResponseV1, ProtocolError> {
+    // Classify without validating inputs or moving any command work earlier.
+    let consumes = match &request.command {
+        DirectCommandV1::Cursor(_) | DirectCommandV1::Item(_) | DirectCommandV1::Procedure(_) => {
+            true
+        }
+        DirectCommandV1::Start(command) => !command.input().dry_run,
+        DirectCommandV1::Session(DirectSessionCommandV1::Reset(input)) => !input.dry_run,
+        DirectCommandV1::Session(DirectSessionCommandV1::Archive(_)) => true,
+        _ => false,
+    };
+    let result = execute_direct_inner_v1(
+        resolver,
+        request,
+        clock,
+        ids,
+        None,
+        maintenance_observer,
+        Some(context),
+    );
+    if consumes {
+        context.prepared = None;
+    }
+    result
 }
 
 fn execute_direct_inner_v1<R: GitResolverContractV1>(
@@ -196,6 +313,7 @@ fn execute_direct_inner_v1<R: GitResolverContractV1>(
     ids: &impl DirectIdSourceV1,
     observer: Option<&dyn Fn(&DirectExecutionErrorV1)>,
     maintenance_observer: Option<MaintenanceObserver>,
+    invocation: Option<&mut DirectInvocationContextV1>,
 ) -> Result<DirectResponseV1, ProtocolError> {
     let mut context = DirectErrorContextV1 {
         request_id: request.request_id.clone(),
@@ -206,7 +324,14 @@ fn execute_direct_inner_v1<R: GitResolverContractV1>(
         maintenance: None,
     };
     let selector = request.selector.clone();
-    let result = dispatch(resolver, request, clock, ids, maintenance_observer);
+    let result = dispatch(
+        resolver,
+        request,
+        clock,
+        ids,
+        maintenance_observer,
+        invocation,
+    );
     match result {
         Ok(output) => Ok(DirectResponseV1::Success(output)),
         Err(error) => Ok(DirectResponseV1::Failure(finish_direct_error_v1(
@@ -257,6 +382,28 @@ pub fn execute_direct_preflight_facts_v1<R: GitResolverContractV1>(
     request: DirectPreflightFactsRequestV1,
     clock: &impl ExecutionClockV1,
 ) -> Result<DirectPreflightFactsResponseV1, ProtocolError> {
+    execute_direct_preflight_facts_inner_v1(resolver, request, clock, None)
+}
+
+pub fn execute_direct_preflight_facts_with_context_v1<R: GitResolverContractV1>(
+    resolver: &DirectWorkspaceResolverV1<R>,
+    request: DirectPreflightFactsRequestV1,
+    clock: &impl ExecutionClockV1,
+    context: &mut DirectInvocationContextV1,
+) -> Result<DirectPreflightFactsResponseV1, ProtocolError> {
+    execute_direct_preflight_facts_inner_v1(resolver, request, clock, Some(context))
+}
+
+fn execute_direct_preflight_facts_inner_v1<R: GitResolverContractV1>(
+    resolver: &DirectWorkspaceResolverV1<R>,
+    request: DirectPreflightFactsRequestV1,
+    clock: &impl ExecutionClockV1,
+    mut invocation: Option<&mut DirectInvocationContextV1>,
+) -> Result<DirectPreflightFactsResponseV1, ProtocolError> {
+    if let Some(invocation) = invocation.as_mut() {
+        invocation.prepared = None;
+    }
+
     #[cfg(debug_assertions)]
     reads004_preflight_counters::record(&reads004_preflight_counters::FACTS_ENTRIES);
     let mut context = DirectErrorContextV1 {
@@ -274,8 +421,19 @@ pub fn execute_direct_preflight_facts_v1<R: GitResolverContractV1>(
         maintenance: None,
     };
     let selector = request.selector.clone();
-    match preflight_facts_v1(resolver, request, clock) {
-        Ok(facts) => Ok(DirectPreflightFactsResponseV1::Facts(facts)),
+    match preflight_facts_with_view_v1(resolver, request, clock, invocation.is_some()) {
+        Ok((facts, view)) => {
+            // The composed read has returned: its final witness and guard drops
+            // precede conversion and publication into the invocation context.
+            if let Some(invocation) = invocation {
+                invocation.prepared = view.and_then(|view| view.into_prepared_graph());
+                #[cfg(debug_assertions)]
+                if invocation.prepared.is_some() {
+                    reads004_preflight_counters::record(&reads004_preflight_counters::RETAINED);
+                }
+            }
+            Ok(DirectPreflightFactsResponseV1::Facts(facts))
+        }
         Err(error) => Ok(DirectPreflightFactsResponseV1::Failure(
             finish_direct_error_v1(error, &mut context, resolver, &selector, None)?,
         )),
@@ -454,6 +612,7 @@ fn dispatch<R: GitResolverContractV1>(
     clock: &impl ExecutionClockV1,
     ids: &impl DirectIdSourceV1,
     maintenance_observer: Option<MaintenanceObserver>,
+    invocation: Option<&mut DirectInvocationContextV1>,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
     let key = || {
         request.idempotency_key.clone().ok_or_else(|| {
@@ -499,7 +658,7 @@ fn dispatch<R: GitResolverContractV1>(
                 clock,
             )
         }
-        DirectCommandV1::Start(command) => start_session_v1(
+        DirectCommandV1::Start(command) => start_session_with_context_v1(
             resolver,
             DirectStartRequestV1 {
                 request_id: request.request_id,
@@ -511,8 +670,9 @@ fn dispatch<R: GitResolverContractV1>(
             },
             clock,
             ids,
+            invocation,
         ),
-        DirectCommandV1::Cursor(command) => execute_cursor_v1(
+        DirectCommandV1::Cursor(command) => execute_cursor_with_context_v1(
             resolver,
             DirectCursorRequestV1 {
                 key: key()?,
@@ -524,8 +684,9 @@ fn dispatch<R: GitResolverContractV1>(
             },
             clock,
             ids,
+            invocation,
         ),
-        DirectCommandV1::Item(command) => execute_item_v1(
+        DirectCommandV1::Item(command) => execute_item_with_context_v1(
             resolver,
             DirectItemRequestV1 {
                 key: key()?,
@@ -536,6 +697,7 @@ fn dispatch<R: GitResolverContractV1>(
                 deadline: request.deadline,
             },
             clock,
+            invocation,
         ),
         DirectCommandV1::RecordMany(input) => record_many_v1(
             resolver,
@@ -549,7 +711,7 @@ fn dispatch<R: GitResolverContractV1>(
             },
             clock,
         ),
-        DirectCommandV1::Procedure(command) => execute_procedure_v1(
+        DirectCommandV1::Procedure(command) => execute_procedure_with_context_v1(
             resolver,
             DirectProcedureRequestV1 {
                 key: key()?,
@@ -561,8 +723,9 @@ fn dispatch<R: GitResolverContractV1>(
             },
             clock,
             ids,
+            invocation,
         ),
-        DirectCommandV1::Session(command) => execute_session_v1(
+        DirectCommandV1::Session(command) => execute_session_with_context_v1(
             resolver,
             DirectSessionRequestV1 {
                 key: request.idempotency_key,
@@ -573,6 +736,7 @@ fn dispatch<R: GitResolverContractV1>(
                 deadline: request.deadline,
             },
             clock,
+            invocation,
         ),
         DirectCommandV1::WorkspaceInit { repair } => {
             match maintenance_observer {
