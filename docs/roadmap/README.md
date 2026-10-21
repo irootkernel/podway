@@ -32,10 +32,9 @@ VIEWS -> PARSE -> STATE -> ADMIT
 Execution began with `VIEWS-001` on 2026-10-20. Implemented ownership now covers
 projection construction, parsed documents, staged snapshot state and eligible
 read/preflight admission; the task tables below alone own current status.
-VIEWS, PARSE and STATE are owner-accepted. ADMIT's final integration, independent
-assessment and Master Epic acceptance remain pending. Lasting behavior and
+VIEWS, PARSE, STATE and ADMIT are completed and owner-accepted. Lasting behavior and
 [regression owners](../implementation-tips/testing.md#functional-regression-owners)
-are documented independently of the remaining dossier.
+are documented independently of their retired dossiers.
 
 Elapsed-time tests, latency percentiles including p95/p99, throughput benchmarks,
 performance baselines and performance thresholds are excluded from this program.
@@ -74,8 +73,7 @@ and [structural verification guidance](../implementation-tips/testing.md#structu
 Future executable changes retain focused correctness checks and the required
 `make test` development gate; documentation-only changes use documentation checks.
 Integration evidence and independent review complement those task-local checks.
-Retire the remaining adopted dossier only after Master accepts the exact closeout
-candidate under the [TODO lifecycle](../todo/README.md#lifecycle).
+All four dossiers are retired under the [TODO lifecycle](../todo/README.md#lifecycle).
 
 ## VIEWS — Projection Simplification
 
@@ -147,15 +145,25 @@ the [TODO lifecycle](../todo/README.md#lifecycle).
 
 ## ADMIT — Request Admission Reuse
 
-Dependencies: accepted `STATE` completion. Design:
-[Request admission reuse](../todo/TODO-podway-request-admission-reuse.md).
+Dependencies: accepted `STATE` completion. Status: Completed. Implemented ownership:
+[Invocation-local prepared graph reuse](../architecture/system.md#invocation-local-prepared-graph-reuse)
+and the [read path](../architecture/system.md#read-path).
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `ADMIT-001` | Pin admission order and lease boundaries | Completed | Map binding, native identity, snapshot, preflight, artifact and writer stages per command before combining any work. | [Design and interfaces](../todo/TODO-podway-request-admission-reuse.md#accepted-design-decisions-and-interfaces) |
-| `ADMIT-002` | Combine binding admission and first snapshot | Completed | Share eligible first-operation acquisition while retaining native identity/error order and releasing leases before artifact work. | [Binding and first snapshot](../todo/TODO-podway-request-admission-reuse.md#binding-and-first-snapshot) |
-| `ADMIT-003` | Reuse preflight-admitted graph in preparation | Completed | Carry Store-prepared state across distinct Engine requests in one opaque invocation context; check it at preparation and preserve existing reload/refusal windows, preflight failures and guard release. | [Preflight and mutation preparation](../todo/TODO-podway-request-admission-reuse.md#preflight-and-mutation-preparation) |
-| `ADMIT-004` | Qualify admission races and exact replay | Completed | Verify competing writers, file replacement, unsupported-state refusal and replay, complete the development gate and review, then promote documentation and retire program-planning text. | [Verification](../todo/TODO-podway-request-admission-reuse.md#verification-and-release-acceptance) |
+| `ADMIT-001` | Pin admission order and lease boundaries | Completed | Map binding, native identity, snapshot, preflight, artifact and writer stages per command before combining any work. | [Read path](../architecture/system.md#read-path), [regression owners](../implementation-tips/testing.md#functional-regression-owners) |
+| `ADMIT-002` | Combine binding admission and first snapshot | Completed | Share eligible first-operation acquisition while retaining native identity/error order and releasing leases before artifact work. | [Read path](../architecture/system.md#read-path) |
+| `ADMIT-003` | Reuse preflight-admitted graph in preparation | Completed | Carry Store-prepared state across distinct Engine requests in one opaque invocation context; check it at preparation and preserve existing reload/refusal windows, preflight failures and guard release. | [Invocation-local graph reuse](../architecture/system.md#invocation-local-prepared-graph-reuse), [prepared-value contract](../specs/storage/transactions-concurrency-and-idempotency.md#request-owned-prepared-value-reuse) |
+| `ADMIT-004` | Qualify admission races and exact replay | Completed | Verify competing writers, file replacement, unsupported-state refusal and replay, complete the development gate and review, then promote documentation and retire program-planning text. | [Regression owners](../implementation-tips/testing.md#functional-regression-owners), [supported Store continuity](../implementation-tips/testing.md#supported-store-continuity) |
+
+ADMIT is owner-accepted. Eligible binding admission and the first operation share
+one read; an invocation-local graph hint is stamp-checked at preparation, with
+one cold fallback on an optional mismatch or comparison failure. Matching stamps
+may defer detection of unstamped out-of-protocol row changes until a cold read or
+integrity check. Broadening reuse or relaxing preserved validation or refusal
+requires Master's explicit decision. Public contracts, independent writer
+revalidation and supported Store continuity remain preserved. Its dossier is
+retired under the [TODO lifecycle](../todo/README.md#lifecycle).
 
 ## Current internal improvements
 

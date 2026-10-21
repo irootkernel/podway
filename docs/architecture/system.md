@@ -66,15 +66,24 @@ only the later interactive-start consumer. It mutably borrows the original Direc
 `Command::needs_preflight` stays in grammar because flag validation also uses
 it. Shared error attribution remains with entry coordination.
 
-`Invocation` owns an opaque Engine `DirectInvocationContextV1`. CLI passes it to
-context-aware Engine facades without seeing Store types or stamps. Preflight and
-mutation still allocate independent request IDs and share only the original
+`Invocation` owns an opaque, non-cloneable Engine `DirectInvocationContextV1`.
+CLI passes it to context-aware Engine facades without seeing Store types or stamps.
+Preflight and mutation still allocate independent request IDs and share only the original
 absolute deadline and observation. The context holds at most one immutable graph
 hint, with no connection, transaction, native lease or descriptor. A new preflight
 clears it first; an eligible mutation clears any remainder on every return.
-Terminal-start reset dry-run preserves a pending hint without using it. Plain
+Read-only and dry-run requests preserve a pending hint without using it. Plain
 start, stdin-owned commands and interactive post-decision status do not produce
 one; the interactive observations and prompts retain their existing order.
+
+CLI ordering remains bounded stdin decoding/application, flag/shape validation,
+target/confirmation and fence parsing, invocation construction, optional fence
+preflight, optional terminal-start reset preview and policy resolution, typed
+command construction, key validation, execution and conditional interactive
+fallback. Offline fresh-start preview returns before invocation construction.
+Prepared-state preflight checks caller key requirements and any explicit session
+revision before returning `SESSION_NOT_RUNNING`; it never manufactures an attempt
+or goal fence. Optional retention cannot pre-empt those existing input/key errors.
 
 Keep four observations distinct: fence preflight; dynamic completion's separate
 best-effort 500 ms query; offline fresh-start preview versus stateful replacement
@@ -277,6 +286,17 @@ acceptance commands. Single-item commands retain item-local revision checks;
 prepared, goal, reset/archive/purge, source-backed start and workspace bootstrap
 keep their distinct validation and envelope ordering.
 
+Mutation binding and graph preparation remain separate even without hashing:
+the admitted UUID is needed for canonical request identity, and graph facts are
+needed for artifact preparation before the writer. Existing key, encoded-size,
+count, uniqueness and canonical-JSON checks retain their command-specific order.
+Begin constructs goal values before graph preparation. Captured single-item pure
+preparation and Procedure assessment/artifact failures remain deferred until their
+original writer fences and native revalidation permit consumption.
+Reset/archive revalidate native identity before prepared selection. Source-backed
+start and attachment hashing keep their position before graph preparation; no
+per-artifact native check is removed or moved into an earlier admission stage.
+
 ### Pure graph state and persisted admission
 
 Core owns [graph/session transitions](../../crates/podway-core/src/graph_v2.rs),
@@ -379,6 +399,11 @@ workspace resolution failures, while operation witness errors retain the
 operation's Store wrapper. Callback errors are never Store-normalized or retried.
 Schema/writer/binding qualification and write-free missing-SHM/hot-WAL handling
 remain Store-owned.
+
+Outcome lookup decodes the retained outcome without loading a graph; workspace
+show uses the binding without adding graph admission. Archive-list keeps archived
+rows summary-only while retaining eager current-session admission.
+
 Ordinary Store `read` runs its final witness after a successful outer callback;
 an outer callback error returns before that witness. Engine carries operation
 errors as inner results so their final witness still runs. Exclusive maintenance
@@ -405,9 +430,10 @@ read-admission metadata; the current view carries that metadata alongside its
 existing binding, admitted graph and committed sequence. Engine returns the facts
 and owned view through the composed read. Only after its final file witness and
 guard release does Store's infallible `into_prepared_graph` conversion assemble a
-hint. No second graph load, SQL, decode or validator runs for retention. Missing
-metadata produces facts without a hint. Archived views and exclusive-read/verifier
-views do not supply invocation retention metadata.
+hint carrying that preflight read's stamps. No second graph load, SQL, decode or
+validator runs for retention. Missing metadata produces facts without a hint.
+Archived views and exclusive-read/verifier views do not supply invocation
+retention metadata.
 
 The six preflight-reachable preparation consumers are cursor, begin, other
 Procedure commands, single item, reset/archive and non-dry-run start. Each keeps
@@ -427,8 +453,9 @@ writer `use_prepared_graph` check. Replay still precedes prepared selection;
 writer stamp changes retain reload or identity refusal at their original boundary.
 No guard spans artifact work or the competing-writer gap. Record-many, delegation
 acceptance and stateless Engine callers keep cold preparation; receipt readiness
-and integrity verification remain independent. Matching stamps may defer detection
-of unstamped out-of-protocol row changes, as specified by the
+and integrity verification remain independent. Plain start also prepares cold
+when no preflight occurred; purge gains no graph preparation. Matching stamps may
+defer detection of unstamped out-of-protocol row changes, as specified by the
 [prepared-value contract](../specs/storage/transactions-concurrency-and-idempotency.md#request-owned-prepared-value-reuse).
 A compatible replacement completed before preparation is admitted at that current
 read and discards the old hint; identity changes after preparation retain the

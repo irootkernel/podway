@@ -85,21 +85,17 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-The [roadmap](../roadmap/README.md#structural-simplification-program) owns task
-status. ADMIT retains its dossier while final integration and Master Epic
-acceptance remain pending:
+The [structural simplification program](../roadmap/README.md#structural-simplification-program)
+is completed and owner-accepted in the sequence VIEWS, PARSE, STATE and ADMIT.
+All four dossiers are retired under the lifecycle above; no adopted dossier
+remains for this program. The roadmap owns task status.
 
-1. [ADMIT: Request admission reuse](TODO-podway-request-admission-reuse.md).
-   Implemented [read admission](../architecture/system.md#read-path) and
-   [invocation-local graph reuse](../architecture/system.md#invocation-local-prepared-graph-reuse)
-   preserve separate requests and release guards before mutation artifact work.
-   Keep this entry and dossier until accepted closeout under the lifecycle above.
-
-VIEWS, PARSE and STATE are accepted and their dossiers are retired. Their lasting
-behavior lives in [projection composition](../architecture/system.md#request-scoped-read-composition),
-[document admission reuse](../architecture/system.md#document-admission-reuse) and
-[staged snapshot state reuse](../architecture/system.md#staged-snapshot-state-reuse).
-All four epics' implemented checks have
+Delivered behavior lives in
+[projection composition](../architecture/system.md#request-scoped-read-composition),
+[document admission reuse](../architecture/system.md#document-admission-reuse),
+[staged snapshot state reuse](../architecture/system.md#staged-snapshot-state-reuse),
+[read admission](../architecture/system.md#read-path) and
+[invocation-local graph reuse](../architecture/system.md#invocation-local-prepared-graph-reuse), with
 [functional regression owners](../implementation-tips/testing.md#functional-regression-owners).
 No CLI/JSON interface, storage identity, release or external-consumer change is selected.
 Elapsed-time tests, latency percentiles, throughput benchmarks, performance

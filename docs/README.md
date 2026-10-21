@@ -33,9 +33,8 @@ Implemented ownership lives in
 [staged snapshot state reuse](architecture/system.md#staged-snapshot-state-reuse) and
 [invocation-local admission reuse](architecture/system.md#invocation-local-prepared-graph-reuse),
 with [functional regression owners](implementation-tips/testing.md#functional-regression-owners).
-VIEWS, PARSE and STATE are owner-accepted. ADMIT's final integration and Master
-Epic acceptance remain pending; its [adopted dossier](todo/README.md#current-adopted-dossiers)
-remains indexed until accepted closeout. The roadmap alone owns status.
+VIEWS, PARSE, STATE and ADMIT are completed and owner-accepted. Their dossiers
+are retired; the roadmap alone owns status.
 Elapsed-time tests, latency percentiles, throughput benchmarks and performance
 baselines/thresholds are excluded. Existing CLI/JSON interfaces and persisted
 validation remain preserved; CLI interaction changes remain an

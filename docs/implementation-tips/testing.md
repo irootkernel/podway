@@ -118,8 +118,8 @@ state or sequence. Only completion advances sequence 4 to 5 and enters
 workspace and canonical snapshot bytes/digest remain unchanged, without reset or
 migration. Existing debug-only counters report no hint for fully fenced
 completion and one retained/consumed/reused hint for automatic preflight.
-This functional evidence establishes no release, installed-runtime compatibility
-or final Epic acceptance.
+This functional evidence supports the owner-accepted ADMIT closeout recorded by
+the roadmap; it establishes no release or installed-runtime compatibility.
 
 ## Functional regression owners
 
@@ -421,6 +421,18 @@ ADMIT request admission and invocation-local reuse checks use these registered o
   retained-command replay/lookup and postcommit-before-stdout SIGKILL owners
   remain required; the PARSE owners above retain old-attempt and file-loss replay.
 
+ADMIT characterization also records invariants instead of fabricating fixtures:
+SHA-256 formatting produces a valid digest; typed request IDs and fixed command
+names satisfy `DirectMutationRequestV1::new`; reset's later missing-graph guard
+follows successful same-snapshot admission. Rebuilding a public Git value loses
+native transient evidence and cannot serve as a successful native control.
+The stateless cold-preparation corruption case does not require matching-hint
+reuse to detect arbitrary unchanged-stamp row changes; that bounded limitation
+lives in the [prepared-value contract](../specs/storage/transactions-concurrency-and-idempotency.md#request-owned-prepared-value-reuse).
+Existing private-token debug counters support CLI wiring evidence only and are
+absent from release builds and ordinary output. Query/decode counts still need
+the source inspection described above.
+
 ## Structural simplification verification
 
 The [VIEWS, PARSE, STATE and ADMIT program](../roadmap/README.md#structural-simplification-program)
@@ -428,7 +440,8 @@ removes duplicated projection construction, document admission, same-snapshot
 reconstruction and request admission. Implemented boundaries live in the
 [system architecture](../architecture/system.md); the registered
 [functional regression owners](#functional-regression-owners) above own their
-maintenance checks. The roadmap owns current status and final Epic acceptance.
+maintenance checks. All four epics are completed and owner-accepted, as recorded
+by the roadmap.
 
 Preserve exact byte fit/overflow, Unicode scalar pages, logical totals,
 preview-gated failures and hidden-value corruption refusal; independent document
@@ -459,9 +472,9 @@ Mutation artifact preparation remains outside read leases and writer transaction
 Deep doctor's exclusive maintenance rehash retains its distinct scope. Run focused
 checks and the required `make test` development gate for executable or contract
 changes, plus `make lint-all` for test changes. Integration review and durable
-promotion complement task-local verification. Dossier retirement follows the
-[TODO lifecycle](../todo/README.md#lifecycle) after owner acceptance; completed
-behavior must remain independently documented. CALLS remains unadopted and
+promotion complement task-local verification. The four accepted dossiers are
+retired under the [TODO lifecycle](../todo/README.md#lifecycle); completed behavior
+remains independently documented. CALLS remains unadopted and
 creates no interface-change verification obligation.
 
 ## Optional diagnostics
