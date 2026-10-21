@@ -125,7 +125,7 @@ contracts remain preserved. Its dossier is retired under the
 
 ## STATE — Snapshot State Reuse
 
-Dependencies: accepted `PARSE` completion. Implemented ownership:
+Dependencies: accepted `PARSE` completion. Status: Completed. Implemented ownership:
 [Staged snapshot state reuse](../architecture/system.md#staged-snapshot-state-reuse).
 
 | id | title | status | goal | references |
