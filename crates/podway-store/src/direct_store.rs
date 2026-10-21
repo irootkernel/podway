@@ -24,7 +24,8 @@ pub use classification::{
     DirectStoreClassificationV1, classify_direct_store_v1, require_destructive_generation_v1,
 };
 pub use connection::{
-    DirectPreparedGraphV1, DirectReadSnapshotV1, DirectStoreV1, DirectWorkspaceViewV1,
+    DirectPreparedGraphV1, DirectReadFailureV1, DirectReadSnapshotV1, DirectStoreV1,
+    DirectWorkspaceViewV1,
 };
 pub use maintenance::{ExclusiveMaintenanceLeaseV1, SharedMaintenanceLeaseV1};
 pub use markers::{

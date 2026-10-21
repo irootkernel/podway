@@ -348,6 +348,39 @@ a reservation: a later writer may commit before the caller's next request.
 Doctor performs explicit integrity and graph/outcome checks under exclusion;
 ordinary opens do not run those expensive scans.
 
+Binding admission and the first operation share one qualified Store snapshot for
+Direct read commands, typed preflight facts, outcome lookup, workspace show and
+session reset dry-run. Engine's internal `resolve_existing_and_read` composes
+Store's `read_admitting_typed`; CLI sees no Store connection, snapshot or lease.
+Preliminary native discovery and config checks still precede Store admission.
+The transaction is established during binding qualification, before the supplied
+and durable-selector UUID checks and resolver-stage bound Git revalidation.
+Evidence continuation reads still defer the supplied UUID until after the view
+and page-token binding checks. Both native revalidations remain at their logical
+stages, including the operation's existing `revalidate` before clock/view work.
+
+Store owns an initial file witness and a binding-completion witness before the
+resolver callback. A resolver callback error returns immediately, without a new
+operation witness overriding it. Successful resolution proceeds through an
+operation-entry witness, the typed operation result and the final file witness;
+that final witness takes priority over a carried operation error. Typed
+`DirectReadFailureV1` stages preserve resolver qualification/binding errors as
+workspace resolution failures, while operation witness errors retain the
+operation's Store wrapper. Callback errors are never Store-normalized or retried.
+Schema/writer/binding qualification and write-free missing-SHM/hot-WAL handling
+remain Store-owned.
+
+The transaction, process-local connection gate and native read lease now span
+resolver-stage bound Git revalidation as well as the operation. A cold snapshot
+holds exclusive exclusion throughout that span. A warm reader keeps its earlier
+coherent snapshot if another process commits meanwhile. This composition removes
+the internal binding-to-operation acquisition gap; it does not reserve state for
+a later request. Every guard ends before the Engine call returns, with the
+original absolute admission deadline and completion-after-acquisition semantics.
+Mutation binding and graph preparation remain separate, with no read lease over
+artifact preparation. Doctor retains its separate exclusive verifier and
+fallback protocols; start previews and interactive observations remain distinct.
+
 ### Request-scoped read composition
 
 `ReadScope` borrows the coherent view the caller already owns, either

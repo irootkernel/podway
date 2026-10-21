@@ -1,9 +1,9 @@
 //! Host-independent, read-only workspace resolution.
 //!
 //! Git first establishes a validated worktree snapshot. The Store binding is then inspected
-//! without mutation, and Git is resolved again with the durable binding before a caller may open
-//! or update SQLite. Paths remain diagnostic and routing data. The hosting caller can derive
-//! execution identity from the Store-validated UUID and Git administration fingerprints.
+//! without mutation, and Git is resolved again with the durable binding before an operation
+//! consumes the qualified snapshot or updates SQLite. Paths remain diagnostic and routing data.
+//! The hosting caller derives execution identity from the Store-validated UUID and Git fingerprints.
 
 use std::{
     error::Error,
@@ -42,8 +42,8 @@ use podway_store::{
     DurableWorktreeIdentityV1 as StoreWorktreeIdentityV1, StoreValueErrorV1,
     ValidatedWorkspaceRootV1, WorkspaceBindingV1,
     direct_store::{
-        DirectStoreClassificationV1, DirectStoreErrorV1, DirectStoreV1, DirectWorkspaceLayoutV1,
-        classify_direct_store_v1,
+        DirectReadFailureV1, DirectReadSnapshotV1, DirectStoreClassificationV1, DirectStoreErrorV1,
+        DirectStoreV1, DirectWorkspaceLayoutV1, classify_direct_store_v1,
     },
 };
 
@@ -1324,7 +1324,58 @@ impl<R: GitResolverContractV1> DirectWorkspaceResolverV1<R> {
         (ResolvedWorkspaceV1, DirectStoreV1, WorkspaceBindingV1),
         DirectWorkspaceResolutionErrorV1,
     > {
-        let preliminary = self.resolve_preliminary(&selector).map_err(|mut error| {
+        let (preliminary, store, database_path) = self.existing_store(&selector)?;
+        let binding = store.read(deadline, |snapshot| Ok(snapshot.binding().clone()))?;
+        let resolved = self.resolve_admitted_binding(
+            &preliminary,
+            &database_path,
+            &selector,
+            expected_workspace_id,
+            &binding,
+        )?;
+        Ok((resolved, store, binding))
+    }
+
+    /// Compose resolver admission and one operation without exposing Store guards.
+    pub(crate) fn resolve_existing_and_read<T, E>(
+        &self,
+        selector: WorktreeSelectorV1,
+        expected_workspace_id: Option<&WorkspaceId>,
+        deadline: std::time::Instant,
+        operation: impl FnOnce(&ResolvedWorkspaceV1, &DirectReadSnapshotV1<'_>) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<DirectWorkspaceResolutionErrorV1> + From<DirectStoreErrorV1>,
+    {
+        let (preliminary, store, database_path) = self.existing_store(&selector)?;
+        match store.read_admitting_typed(
+            deadline,
+            |binding| {
+                self.resolve_admitted_binding(
+                    &preliminary,
+                    &database_path,
+                    &selector,
+                    expected_workspace_id,
+                    binding,
+                )
+            },
+            |resolved, snapshot| operation(&resolved, snapshot),
+        ) {
+            Ok(result) => result,
+            Err(DirectReadFailureV1::Admission(error)) => {
+                Err(DirectWorkspaceResolutionErrorV1::Store(error).into())
+            }
+            Err(DirectReadFailureV1::Resolver(error)) => Err(error.into()),
+            Err(DirectReadFailureV1::Operation(error)) => Err(error.into()),
+        }
+    }
+
+    fn existing_store(
+        &self,
+        selector: &WorktreeSelectorV1,
+    ) -> Result<(ValidatedWorktreeV1, DirectStoreV1, PathBuf), DirectWorkspaceResolutionErrorV1>
+    {
+        let preliminary = self.resolve_preliminary(selector).map_err(|mut error| {
             // Preliminary discovery must not trust a supplied UUID. On failure,
             // retain the native deletion classification for a previously bound
             // selector without treating that selector as Store authority.
@@ -1370,8 +1421,17 @@ impl<R: GitResolverContractV1> DirectWorkspaceResolverV1<R> {
                 .worktree_administration_fingerprint()
                 .clone(),
         );
-        let store = self.observed_store(store);
-        let binding = store.read(deadline, |snapshot| Ok(snapshot.binding().clone()))?;
+        Ok((preliminary, self.observed_store(store), database_path))
+    }
+
+    fn resolve_admitted_binding(
+        &self,
+        preliminary: &ValidatedWorktreeV1,
+        database_path: &Path,
+        selector: &WorktreeSelectorV1,
+        expected_workspace_id: Option<&WorkspaceId>,
+        binding: &WorkspaceBindingV1,
+    ) -> Result<ResolvedWorkspaceV1, DirectWorkspaceResolutionErrorV1> {
         for expected in expected_workspace_id.into_iter().chain(
             selector
                 .durable_identity()
@@ -1385,9 +1445,9 @@ impl<R: GitResolverContractV1> DirectWorkspaceResolverV1<R> {
                 .into());
             }
         }
-        let revalidated = self.revalidate_worktree(&preliminary, &binding, &selector)?;
-        let path = require_stable_database_path(&database_path, &revalidated)?;
-        Ok((ResolvedWorkspaceV1::new(revalidated, path)?, store, binding))
+        let revalidated = self.revalidate_worktree(preliminary, binding, selector)?;
+        let path = require_stable_database_path(database_path, &revalidated)?;
+        Ok(ResolvedWorkspaceV1::new(revalidated, path)?)
     }
 
     /// The caller supplies its transaction's validated binding. No nested Store open occurs.

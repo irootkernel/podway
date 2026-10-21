@@ -105,6 +105,14 @@ pub struct DirectStoreV1 {
     pub(super) observer: Option<BoundaryObserver>,
 }
 
+/// Stage attribution for a binding-admitted operation in one qualified snapshot.
+#[derive(Debug)]
+pub enum DirectReadFailureV1<E> {
+    Admission(DirectStoreErrorV1),
+    Resolver(E),
+    Operation(DirectStoreErrorV1),
+}
+
 impl std::fmt::Debug for DirectStoreV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -178,6 +186,50 @@ impl DirectStoreV1 {
             self.revalidate_files(&lease, &database)?;
             Ok(result)
         })
+    }
+
+    /// Admit binding and run an operation in one qualified read. Resolver failures
+    /// return before operation witnesses; operation results stay carried until the
+    /// final witness. Neither callback is retried or normalized as a Store error.
+    pub fn read_admitting_typed<A, T, E>(
+        &self,
+        deadline: Instant,
+        admit: impl FnOnce(&WorkspaceBindingV1) -> Result<A, E>,
+        operation: impl FnOnce(A, &DirectReadSnapshotV1<'_>) -> T,
+    ) -> Result<T, DirectReadFailureV1<E>> {
+        let lease = DirectOpenLease::acquire(&self.layout, deadline, &mut || {
+            self.boundary(DirectTransactionBoundaryV1::UnmarkedMissingReadClassified)
+        })
+        .map_err(DirectReadFailureV1::Admission)?;
+        let _connection_gate = connection_gate(deadline).map_err(DirectReadFailureV1::Admission)?;
+        let database = super::classification::open_read_nofollow(&self.layout.database())
+            .map_err(|error| DirectReadFailureV1::Admission(error.into()))?;
+        self.qualified_read(deadline, lease.heap_snapshot(), |transaction, binding| {
+            self.revalidate_files(&lease, &database)?;
+            let snapshot = DirectReadSnapshotV1 {
+                connection: transaction,
+                binding,
+                staged_current: RefCell::new(StagedCurrentAdmissionV1::Unadmitted),
+            };
+            self.boundary(DirectTransactionBoundaryV1::BeforeBindingReadCompletion);
+            self.revalidate_files(&lease, &database)?;
+            let admitted = match admit(snapshot.binding()) {
+                Ok(admitted) => admitted,
+                Err(error) => return Ok(Err(DirectReadFailureV1::Resolver(error))),
+            };
+            if let Err(error) = self.revalidate_files(&lease, &database) {
+                return Ok(Err(DirectReadFailureV1::Operation(read_admission_error(
+                    error,
+                ))));
+            }
+            let result = operation(admitted, &snapshot);
+            Ok(self
+                .revalidate_files(&lease, &database)
+                .map_err(read_admission_error)
+                .map_err(DirectReadFailureV1::Operation)
+                .map(|()| result))
+        })
+        .map_err(DirectReadFailureV1::Admission)?
     }
 
     /// Qualified coherent read while the engine owns an exact maintenance intent.

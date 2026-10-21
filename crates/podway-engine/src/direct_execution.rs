@@ -476,7 +476,7 @@ pub fn execute_read_v1<R: GitResolverContractV1>(
         &request.command,
         DirectReadCommandV1::Evidence { token: Some(_), .. }
     );
-    let (resolved, store) = resolver.resolve_existing(
+    resolver.resolve_existing_and_read(
         request.selector,
         if token_read {
             None
@@ -484,11 +484,9 @@ pub fn execute_read_v1<R: GitResolverContractV1>(
             request.expected_workspace_id.as_ref()
         },
         request.deadline,
-    )?;
-    store.read(request.deadline, |snapshot| {
-        Ok((|| {
+        |resolved, snapshot| {
             resolver
-                .revalidate(&resolved, snapshot.binding())
+                .revalidate(resolved, snapshot.binding())
                 .map_err(DirectWorkspaceResolutionErrorV1::from)?;
             let now = clock.now();
             let current = snapshot.view(now)?;
@@ -654,8 +652,8 @@ pub fn execute_read_v1<R: GitResolverContractV1>(
                 result,
                 warnings: Vec::new(),
             })?)
-        })())
-    })?
+        },
+    )
 }
 
 /// Request context for the READS-004 typed fence-preflight facts operation.
@@ -824,9 +822,10 @@ pub fn stage5_status_equivalent_checks_v1(
 /// READS-004 typed fence-preflight facts over the shared Standard status
 /// validation core.
 ///
-/// Ordering mirrors [`execute_read_v1`]: workspace resolution, Store read
-/// admission (lease, process gate, transaction), revalidation, one clock read,
-/// the eager current view and the expected-session fence all precede the Stage
+/// Ordering mirrors [`execute_read_v1`]: preliminary workspace discovery,
+/// qualified binding admission (lease, process gate, transaction), bound
+/// resolution, operation revalidation, one clock read, the eager current view
+/// and the expected-session fence all precede the Stage
 /// 4 Standard projection and its schema validation. The retained result then
 /// feeds the exact envelope-equivalent Stage 5 checks — the same fallible
 /// operations, in the original order, without constructing or parsing a public
@@ -837,15 +836,13 @@ pub fn preflight_facts_v1<R: GitResolverContractV1>(
     request: DirectPreflightFactsRequestV1,
     clock: &impl ExecutionClockV1,
 ) -> Result<DirectPreflightFactsV1, DirectExecutionErrorV1> {
-    let (resolved, store) = resolver.resolve_existing(
+    resolver.resolve_existing_and_read(
         request.selector.clone(),
         request.expected_workspace_id.as_ref(),
         request.deadline,
-    )?;
-    store.read(request.deadline, |snapshot| {
-        Ok((|| {
+        |resolved, snapshot| {
             resolver
-                .revalidate(&resolved, snapshot.binding())
+                .revalidate(resolved, snapshot.binding())
                 .map_err(DirectWorkspaceResolutionErrorV1::from)?;
             let now = clock.now();
             let view = snapshot.view(now)?;
@@ -916,8 +913,8 @@ pub fn preflight_facts_v1<R: GitResolverContractV1>(
                 goal_revision: graph.goal_state().current_revision(),
                 lifecycle,
             })
-        })())
-    })?
+        },
+    )
 }
 
 impl From<DirectWorkspaceResolutionErrorV1> for DirectExecutionErrorV1 {
@@ -973,14 +970,12 @@ pub fn lookup_outcome_v1<R: GitResolverContractV1>(
     request: OutcomeLookupRequestV1,
     clock: &impl ExecutionClockV1,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
-    let (resolved, store) = resolver.resolve_existing(
+    resolver.resolve_existing_and_read(
         request.selector,
         request.expected_workspace_id.as_ref(),
         request.deadline,
-    )?;
-    store.read(request.deadline, |snapshot| {
-        Ok((|| {
-            resolver.revalidate(&resolved, snapshot.binding())
+        |resolved, snapshot| {
+            resolver.revalidate(resolved, snapshot.binding())
                 .map_err(DirectWorkspaceResolutionErrorV1::from)?;
             let outcome = snapshot.outcome(&request.key)?;
             let outcome = outcome.map(|outcome| {
@@ -1010,8 +1005,8 @@ pub fn lookup_outcome_v1<R: GitResolverContractV1>(
                     snapshot.committed_sequence()?,
                 )?), session: None, result, warnings: Vec::new(),
             })?)
-        })())
-    })?
+        },
+    )
 }
 
 impl From<crate::direct_workspace::DirectWorkspaceErrorV1> for DirectExecutionErrorV1 {

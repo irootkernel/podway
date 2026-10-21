@@ -88,14 +88,12 @@ pub fn show_workspace_v1<R: GitResolverContractV1>(
     request: DirectWorkspaceReadRequestV1,
     clock: &impl ExecutionClockV1,
 ) -> Result<OutputEnvelopeV4, DirectWorkspaceErrorV1> {
-    let (resolved, store) = resolver.resolve_existing(
+    resolver.resolve_existing_and_read(
         request.selector,
         request.expected_workspace_id.as_ref(),
         request.deadline,
-    )?;
-    store.read(request.deadline, |snapshot| {
-        Ok((|| {
-            resolver.revalidate(&resolved, snapshot.binding())?;
+        |resolved, snapshot| {
+            resolver.revalidate(resolved, snapshot.binding())?;
             let binding = snapshot.binding();
             envelope(
                 &request.request_id,
@@ -111,8 +109,8 @@ pub fn show_workspace_v1<R: GitResolverContractV1>(
                 "git_common_fingerprint":binding.identity().common_dir_identity(),
                 "git_worktree_fingerprint":binding.identity().worktree_admin_identity()}),
             )
-        })())
-    })?
+        },
+    )
 }
 
 /// Runs actual SQLite integrity, foreign-key and complete graph reconstruction

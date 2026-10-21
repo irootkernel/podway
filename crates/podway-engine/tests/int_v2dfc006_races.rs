@@ -317,17 +317,15 @@ impl Competitor {
         Self::with_trials(root, TRIALS)
     }
     fn with_trials(root: &std::path::Path, trials: usize) -> Self {
+        Self::with_child(root, trials, "int_v2dfc006_races::preparation_race_child")
+    }
+    fn with_child(root: &std::path::Path, trials: usize, test: &str) -> Self {
         assert!((1..=TRIALS).contains(&trials));
         // Temporary roots can have symlinked parents, including macOS /var.
         // The child passes these bytes to the fail-closed resolver unchanged.
         let root = std::fs::canonicalize(root).expect("canonical owned fixture root");
         let mut child = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "int_v2dfc006_races::preparation_race_child",
-                "--nocapture",
-                "--test-threads=1",
-            ])
+            .args(["--exact", test, "--nocapture", "--test-threads=1"])
             .env("PODWAY_ENGINE_G6_OWNED_FIXTURE", &root)
             .env("PODWAY_ENGINE_G6_TRIALS", trials.to_string())
             .stdin(Stdio::piped())
@@ -2183,4 +2181,219 @@ fn reads004_shared_facts_release_all_guards_with_warm_sidecars() {
     );
     store.verify_integrity(deadline()).unwrap();
     drop(temporary);
+}
+
+// Uses the existing owned pipe/child guard. Readiness is sent only after all
+// startup reads have returned, so the parent can then make its Store cold.
+#[test]
+fn admit002_competing_writer_child() {
+    let Some(root) = std::env::var_os("PODWAY_ENGINE_G6_OWNED_FIXTURE") else {
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
+    let path = LosslessPathV1::from_raw_bytes(
+        root.as_os_str().as_bytes(),
+        DiagnosticPathDisplayV1::new(root.to_string_lossy()).unwrap(),
+    )
+    .unwrap();
+    let selector = WorktreeSelectorV1::new(WORKTREE_SELECTOR_VERSION_V1, None, path).unwrap();
+    let (_, store) = resolver()
+        .resolve_existing(selector.clone(), None, deadline())
+        .unwrap();
+    let command = set(&graph(&store), "i01", "admit002-competing");
+    println!("{CHILD_PREFIX}{}", json!({"ready":true}));
+    std::io::stdout().flush().unwrap();
+    let mut input = BufReader::new(std::io::stdin());
+    loop {
+        let mut line = String::new();
+        if (&mut input).take(4097).read_line(&mut line).unwrap() == 0 {
+            break;
+        }
+        assert!(line.len() <= 4096 && line.ends_with('\n'));
+        let attempt: Value = serde_json::from_str(&line).unwrap();
+        let mut input = request(&selector, command.clone(), "admit002-competing");
+        if attempt["try"] == true {
+            input.deadline = Instant::now();
+            input.timeout_ms = 0;
+        }
+        let response =
+            execute_direct_v1(&resolver(), input, &Clock, &NativeDirectIdSourceV1).unwrap();
+        let value = match response {
+            DirectResponseV1::Success(output) => output.as_value().clone(),
+            DirectResponseV1::Failure(error) => error.into_value(),
+        };
+        println!("{CHILD_PREFIX}{value}");
+        std::io::stdout().flush().unwrap();
+    }
+}
+
+struct Admit002BoundNative<F> {
+    calls: AtomicUsize,
+    on_bound: F,
+}
+impl<F: Fn() + Send + Sync> podway_git::GitResolverContractV1 for Admit002BoundNative<F> {
+    fn resolve(
+        &self,
+        selector: WorktreeSelectorV1,
+    ) -> Result<podway_git::ValidatedWorktreeV1, podway_git::GitResolveErrorV1> {
+        let native = NativeGitResolverV1::new().resolve(selector)?;
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {
+            (self.on_bound)();
+        }
+        Ok(native)
+    }
+}
+
+#[test]
+fn admit002_bound_revalidation_holds_guards_and_one_snapshot_with_a_real_writer() {
+    use std::os::unix::fs::MetadataExt;
+    for cold in [false, true] {
+        let (temporary, selector, store) = prepare_fixture();
+        let original = graph(&store);
+        let before_sequence = sequence(&store);
+        let competitor = Competitor::with_child(
+            temporary.path(),
+            1,
+            "int_v2dfc006_races::admit002_competing_writer_child",
+        );
+        assert_eq!(
+            competitor
+                .output
+                .recv_timeout(Duration::from_secs(4))
+                .unwrap(),
+            json!({"ready":true})
+        );
+        let competitor = Arc::new(Mutex::new(competitor));
+        if cold {
+            std::fs::remove_file(store.layout().shm()).unwrap();
+        }
+        let images = || {
+            let mut files: Vec<_> = std::fs::read_dir(store.layout().runtime_directory())
+                .unwrap()
+                .map(|entry| {
+                    let entry = entry.unwrap();
+                    let meta = entry.metadata().unwrap();
+                    (
+                        entry.file_name(),
+                        meta.dev(),
+                        meta.ino(),
+                        std::fs::read(entry.path()).unwrap(),
+                    )
+                })
+                .collect();
+            files.sort();
+            files
+        };
+        let after_competitor = Mutex::new(None);
+        let native = Admit002BoundNative {
+            calls: AtomicUsize::new(0),
+            on_bound: || {
+                let error = store.read(Instant::now(), |_| Ok(())).unwrap_err();
+                if cold {
+                    assert!(
+                        matches!(
+                            error,
+                            podway_store::direct_store::DirectStoreErrorV1::Maintenance
+                        ),
+                        "{error:?}"
+                    );
+                } else {
+                    assert!(
+                        matches!(
+                            error,
+                            podway_store::direct_store::DirectStoreErrorV1::ConnectionBusy
+                        ),
+                        "{error:?}"
+                    );
+                }
+                let result = competitor
+                    .lock()
+                    .unwrap()
+                    .commit_request(json!({"try":cold}));
+                if cold {
+                    assert_eq!(result["code"], "WORKSPACE_MAINTENANCE");
+                    assert_eq!(result["exit_code"], 4);
+                    assert!(!store.layout().shm().exists());
+                } else {
+                    assert_eq!(
+                        result["workspace"]["latest_workspace_sequence"],
+                        before_sequence + 1
+                    );
+                }
+                *after_competitor.lock().unwrap() = Some(images());
+            },
+        };
+        let composed = DirectWorkspaceResolverV1::new(native, digest());
+        let output = success(
+            execute_direct_v1(
+                &composed,
+                request(
+                    &selector,
+                    DirectCommandV1::Read {
+                        command: DirectReadCommandV1::Status {
+                            tier: podway_engine::v2_read_service::GraphStatusTierV2::Standard,
+                            history_before: None,
+                        },
+                        expected_session_id: None,
+                    },
+                    "admit002-coherent-read",
+                ),
+                &Clock,
+                &NativeDirectIdSourceV1,
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            output["workspace"]["latest_workspace_sequence"],
+            before_sequence
+        );
+        assert_eq!(
+            output["result"]["session"]["revision"],
+            original.trace().revision().get()
+        );
+        assert_eq!(
+            images(),
+            after_competitor.into_inner().unwrap().unwrap(),
+            "the composed read wrote files"
+        );
+        let mut competitor = competitor.lock().unwrap();
+        if cold {
+            // Success proves the exclusive lease was released before return.
+            let committed = competitor.commit_request(json!({"try":false}));
+            assert_eq!(
+                committed["workspace"]["latest_workspace_sequence"],
+                before_sequence + 1
+            );
+        }
+        competitor.finish();
+        assert_eq!(sequence(&store), before_sequence + 1);
+        assert!(outcome(&store, "admit002-competing").is_some());
+        let next = success(
+            execute_direct_v1(
+                &resolver(),
+                request(
+                    &selector,
+                    DirectCommandV1::Read {
+                        command: DirectReadCommandV1::Status {
+                            tier: podway_engine::v2_read_service::GraphStatusTierV2::Standard,
+                            history_before: None,
+                        },
+                        expected_session_id: None,
+                    },
+                    "admit002-next-read",
+                ),
+                &Clock,
+                &NativeDirectIdSourceV1,
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            next["workspace"]["latest_workspace_sequence"],
+            before_sequence + 1
+        );
+        assert_eq!(
+            next["result"]["session"]["revision"],
+            original.trace().revision().get() + 1
+        );
+    }
 }

@@ -1473,3 +1473,542 @@ mod reads004_equivalence {
         }
     }
 }
+
+/// ADMIT-002 exercises the composed Engine entry points, not a parallel test runner.
+mod admit002 {
+    use super::{Admit001Clock, Admit001Native, ID, OTHER, admit001_runtime_bytes};
+    use crate::{
+        int_v2dfc006_direct_execution::{deadline, digest},
+        int_v2dfc006_races::{graph, prepare_fixture, reads004_facts_request},
+    };
+    use podway_core::{UnixMillis, WorkspaceId};
+    use podway_engine::{
+        direct_execution::{
+            DirectExecutionErrorV1, DirectReadCommandV1, DirectReadRequestV1,
+            OutcomeLookupRequestV1, execute_read_v1, lookup_outcome_v1, preflight_facts_v1,
+        },
+        direct_sessions::{DirectSessionCommandV1, DirectSessionRequestV1, execute_session_v1},
+        direct_workspace::{DirectWorkspaceReadRequestV1, show_workspace_v1},
+        execution::ExecutionClockV1,
+        v2_read_service::GraphStatusTierV2,
+        workspace::{
+            DirectWorkspaceResolutionErrorV1 as Resolution, DirectWorkspaceResolverV1,
+            WorkspaceResolutionErrorV1,
+        },
+    };
+    use podway_git::{GitResolverContractV1, NativeGitResolverV1, WorktreeSelectorV1};
+    use podway_protocol::{
+        RequestIdV1, SessionDeletionModeV1, SessionIdentityPreconditionsWireV1, SessionResetV1,
+    };
+    use podway_store::{
+        IdempotencyKeyV1,
+        direct_store::{DirectStoreErrorV1, DirectTransactionBoundaryV1},
+        test_support::query_account::QueryAccountant,
+    };
+    use serde_json::Value;
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Instant,
+    };
+
+    const ROUTES: [&str; 8] = [
+        "status",
+        "next",
+        "observe",
+        "archives",
+        "preflight",
+        "lookup",
+        "show",
+        "reset",
+    ];
+
+    fn read<R: GitResolverContractV1>(
+        route: &str,
+        resolver: &DirectWorkspaceResolverV1<R>,
+        selector: &WorktreeSelectorV1,
+        workspace: Option<WorkspaceId>,
+        session: &SessionIdentityPreconditionsWireV1,
+        clock: &impl ExecutionClockV1,
+        deadline: Instant,
+    ) -> Result<Value, Box<DirectExecutionErrorV1>> {
+        let request_id = RequestIdV1::new(ID).unwrap();
+        let output = match route {
+            "preflight" => {
+                let mut request = reads004_facts_request(selector);
+                request.expected_workspace_id = workspace;
+                request.deadline = deadline;
+                return preflight_facts_v1(resolver, request, clock)
+                    .map(|facts| serde_json::json!({"session_revision":facts.session_revision.get()}))
+                    .map_err(Box::new);
+            }
+            "lookup" => lookup_outcome_v1(
+                resolver,
+                OutcomeLookupRequestV1 {
+                    selector: selector.clone(),
+                    expected_workspace_id: workspace,
+                    request_id,
+                    key: IdempotencyKeyV1::new("init-key").unwrap(),
+                    deadline,
+                },
+                clock,
+            ),
+            "show" => show_workspace_v1(
+                resolver,
+                DirectWorkspaceReadRequestV1 {
+                    selector: selector.clone(),
+                    expected_workspace_id: workspace,
+                    request_id,
+                    deadline,
+                },
+                clock,
+            )
+            .map_err(DirectExecutionErrorV1::from),
+            "reset" => execute_session_v1(
+                resolver,
+                DirectSessionRequestV1 {
+                    selector: selector.clone(),
+                    expected_workspace_id: workspace,
+                    request_id,
+                    key: None,
+                    command: DirectSessionCommandV1::Reset(SessionResetV1 {
+                        mode: SessionDeletionModeV1::Eligible,
+                        dry_run: true,
+                        preconditions: session.clone(),
+                    }),
+                    deadline,
+                },
+                clock,
+            ),
+            _ => execute_read_v1(
+                resolver,
+                DirectReadRequestV1 {
+                    selector: selector.clone(),
+                    expected_workspace_id: workspace,
+                    request_id,
+                    expected_session_id: None,
+                    deadline,
+                    command: match route {
+                        "status" => DirectReadCommandV1::Status {
+                            tier: GraphStatusTierV2::Standard,
+                            history_before: None,
+                        },
+                        "next" => DirectReadCommandV1::Next,
+                        "observe" => DirectReadCommandV1::Observe,
+                        "archives" => DirectReadCommandV1::ArchiveList,
+                        _ => panic!("unknown composed route"),
+                    },
+                },
+                clock,
+            ),
+        }?;
+        Ok(output.as_value().clone())
+    }
+
+    fn session(
+        store: &podway_store::direct_store::DirectStoreV1,
+    ) -> SessionIdentityPreconditionsWireV1 {
+        let graph = graph(store);
+        SessionIdentityPreconditionsWireV1 {
+            expected_session_id: graph.trace().session_id().clone(),
+            expected_session_revision: graph.trace().revision(),
+        }
+    }
+
+    #[test]
+    fn admit002_successful_routes_read_binding_once_and_keep_native_stages() {
+        for route in ROUTES {
+            let (_root, selector, store) = prepare_fixture();
+            let session = session(&store);
+            let before = admit001_runtime_bytes(&store);
+            let calls = Arc::new(AtomicUsize::new(0));
+            let resolver = DirectWorkspaceResolverV1::new(
+                Admit001Native {
+                    calls: calls.clone(),
+                    at: 0,
+                    fail: false,
+                    replacement: None,
+                },
+                digest(),
+            );
+            let clock = Admit001Clock {
+                calls: AtomicUsize::new(0),
+                allowed: true,
+            };
+            let accountant = QueryAccountant::start();
+            read(
+                route,
+                &resolver,
+                &selector,
+                None,
+                &session,
+                &clock,
+                deadline(),
+            )
+            .unwrap();
+            let report = accountant.finish();
+            let binding: Vec<_> = report.sql.iter().filter(|(sql, _)| sql.starts_with(
+                "SELECT workspace_uuid, git_common_fingerprint, git_worktree_fingerprint, last_validated_root FROM workspace_state"
+            )).collect();
+            assert_eq!(binding.len(), 1, "{route}: {report:?}");
+            assert_eq!(binding[0].1.executes, 1, "{route}");
+            assert_eq!(binding[0].1.rows, 1, "{route}");
+            assert_eq!(calls.load(Ordering::SeqCst), 3, "{route}");
+            assert_eq!(clock.calls.load(Ordering::SeqCst), 1, "{route}");
+            assert_eq!(admit001_runtime_bytes(&store), before, "{route}");
+        }
+    }
+
+    #[test]
+    fn admit002_binding_checkpoint_beats_uuid_before_resolver_callback() {
+        for route in ["status", "preflight", "lookup", "show", "reset"] {
+            for witness in ["database", "lock"] {
+                let (root, selector, store) = prepare_fixture();
+                let session = session(&store);
+                let path = if witness == "database" {
+                    store.layout().database()
+                } else {
+                    store.layout().maintenance_lock()
+                };
+                let saved = root.path().join("owned-binding-witness");
+                let calls = Arc::new(AtomicUsize::new(0));
+                let checkpoints = Arc::new(AtomicUsize::new(0));
+                let observed = checkpoints.clone();
+                let resolver = DirectWorkspaceResolverV1::new(
+                    Admit001Native {
+                        calls: calls.clone(),
+                        at: 0,
+                        fail: false,
+                        replacement: None,
+                    },
+                    digest(),
+                )
+                .with_store_boundary_observer_v1(move |boundary| {
+                    if boundary == DirectTransactionBoundaryV1::BeforeBindingReadCompletion {
+                        assert_eq!(observed.fetch_add(1, Ordering::SeqCst), 0);
+                        std::fs::rename(&path, &saved).unwrap();
+                        std::fs::copy(&saved, &path).unwrap();
+                    }
+                });
+                let clock = Admit001Clock {
+                    calls: AtomicUsize::new(0),
+                    allowed: false,
+                };
+                let error = *read(
+                    route,
+                    &resolver,
+                    &selector,
+                    Some(WorkspaceId::new(OTHER).unwrap()),
+                    &session,
+                    &clock,
+                    deadline(),
+                )
+                .unwrap_err();
+                assert!(
+                    matches!(
+                        error,
+                        DirectExecutionErrorV1::Workspace(Resolution::Store(
+                            DirectStoreErrorV1::Maintenance
+                        ))
+                    ),
+                    "{route}/{witness}: {error:?}"
+                );
+                assert_eq!(calls.load(Ordering::SeqCst), 1);
+                assert_eq!(checkpoints.load(Ordering::SeqCst), 1);
+                assert_eq!(clock.calls.load(Ordering::SeqCst), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn admit002_resolver_failure_skips_operation_witness_but_success_enters_it() {
+        for route in ["status", "preflight", "lookup", "show", "reset"] {
+            for witness in ["database", "lock"] {
+                for fail in [false, true] {
+                    let (root, selector, store) = prepare_fixture();
+                    let session = session(&store);
+                    let calls = Arc::new(AtomicUsize::new(0));
+                    let path = if witness == "database" {
+                        store.layout().database()
+                    } else {
+                        store.layout().maintenance_lock()
+                    };
+                    let resolver = DirectWorkspaceResolverV1::new(
+                        Admit001Native {
+                            calls: calls.clone(),
+                            at: 2,
+                            fail,
+                            replacement: Some((path, root.path().join("owned-resolver-witness"))),
+                        },
+                        digest(),
+                    );
+                    let clock = Admit001Clock {
+                        calls: AtomicUsize::new(0),
+                        allowed: false,
+                    };
+                    let error = *read(
+                        route,
+                        &resolver,
+                        &selector,
+                        None,
+                        &session,
+                        &clock,
+                        deadline(),
+                    )
+                    .unwrap_err();
+                    if fail {
+                        assert!(
+                            matches!(
+                                error,
+                                DirectExecutionErrorV1::Workspace(Resolution::Resolution(
+                                    WorkspaceResolutionErrorV1::Git {
+                                        source: podway_git::GitResolveErrorV1::WorktreeDeleted,
+                                        ..
+                                    }
+                                ))
+                            ),
+                            "{route}/{witness}: {error:?}"
+                        );
+                    } else {
+                        assert!(
+                            matches!(
+                                error,
+                                DirectExecutionErrorV1::Store(DirectStoreErrorV1::Maintenance)
+                            ),
+                            "{route}/{witness}: {error:?}"
+                        );
+                    }
+                    assert_eq!(calls.load(Ordering::SeqCst), 2);
+                    assert_eq!(clock.calls.load(Ordering::SeqCst), 0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn admit002_lookup_and_reset_final_witness_override_operation_native_failure() {
+        for route in ["lookup", "reset"] {
+            for witness in ["database", "lock"] {
+                let (root, selector, store) = prepare_fixture();
+                let session = session(&store);
+                let path = if witness == "database" {
+                    store.layout().database()
+                } else {
+                    store.layout().maintenance_lock()
+                };
+                let calls = Arc::new(AtomicUsize::new(0));
+                let resolver = DirectWorkspaceResolverV1::new(
+                    Admit001Native {
+                        calls: calls.clone(),
+                        at: 3,
+                        fail: true,
+                        replacement: Some((path, root.path().join("owned-final-witness"))),
+                    },
+                    digest(),
+                );
+                let clock = Admit001Clock {
+                    calls: AtomicUsize::new(0),
+                    allowed: false,
+                };
+                let error = *read(
+                    route,
+                    &resolver,
+                    &selector,
+                    None,
+                    &session,
+                    &clock,
+                    deadline(),
+                )
+                .unwrap_err();
+                assert!(
+                    matches!(
+                        error,
+                        DirectExecutionErrorV1::Store(DirectStoreErrorV1::Maintenance)
+                    ),
+                    "{error:?}"
+                );
+                assert_eq!(calls.load(Ordering::SeqCst), 3);
+                assert_eq!(clock.calls.load(Ordering::SeqCst), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn admit002_cold_routes_are_write_free_with_no_shm_or_no_sidecars() {
+        use std::os::unix::fs::MetadataExt;
+        for sidecars in ["no-shm", "neither"] {
+            for route in ["status", "preflight", "lookup", "show", "reset"] {
+                let (_root, selector, store) = prepare_fixture();
+                let session = session(&store);
+                if sidecars == "neither" {
+                    rusqlite::Connection::open(store.layout().database())
+                        .unwrap()
+                        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+                        .unwrap();
+                    if store.layout().wal().exists() {
+                        std::fs::remove_file(store.layout().wal()).unwrap();
+                    }
+                }
+                if store.layout().shm().exists() {
+                    std::fs::remove_file(store.layout().shm()).unwrap();
+                }
+                let images = || {
+                    let mut files: Vec<_> = std::fs::read_dir(store.layout().runtime_directory())
+                        .unwrap()
+                        .map(|entry| {
+                            let entry = entry.unwrap();
+                            let meta = entry.metadata().unwrap();
+                            (
+                                entry.file_name(),
+                                meta.dev(),
+                                meta.ino(),
+                                std::fs::read(entry.path()).unwrap(),
+                            )
+                        })
+                        .collect();
+                    files.sort();
+                    files
+                };
+                let before = images();
+                let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+                let clock = Admit001Clock {
+                    calls: AtomicUsize::new(0),
+                    allowed: true,
+                };
+                read(
+                    route,
+                    &resolver,
+                    &selector,
+                    None,
+                    &session,
+                    &clock,
+                    deadline(),
+                )
+                .unwrap();
+                assert_eq!(images(), before, "{route}/{sidecars}");
+                assert!(!store.layout().shm().exists());
+                if sidecars == "neither" {
+                    assert!(!store.layout().wal().exists());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn admit002_exhausted_deadline_and_resolver_failure_release_guards() {
+        const CHILD: &str = "int_v2dfc006_errors::admit002::admit002_exhausted_deadline_and_resolver_failure_release_guards";
+        if std::env::var_os("PODWAY_ADMIT002_DEADLINE_CHILD").is_none() {
+            struct OwnedChild(std::process::Child);
+            impl Drop for OwnedChild {
+                fn drop(&mut self) {
+                    let _ = self.0.kill();
+                    let _ = self.0.wait();
+                }
+            }
+            let mut child = OwnedChild(
+                std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", CHILD, "--test-threads=1"])
+                    .env("PODWAY_ADMIT002_DEADLINE_CHILD", "1")
+                    .spawn()
+                    .unwrap(),
+            );
+            // Safety bound for the owned child, not a performance assertion.
+            let limit = Instant::now() + std::time::Duration::from_secs(20);
+            loop {
+                if let Some(status) = child.0.try_wait().unwrap() {
+                    assert!(status.success(), "{status}");
+                    return;
+                }
+                assert!(Instant::now() < limit, "isolated admission test timed out");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+        for cold in [false, true] {
+            let (_root, selector, store) = prepare_fixture();
+            let session = session(&store);
+            if cold {
+                std::fs::remove_file(store.layout().shm()).unwrap();
+            }
+            for route in ["status", "preflight", "lookup", "show", "reset"] {
+                let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+                let clock = Admit001Clock {
+                    calls: AtomicUsize::new(0),
+                    allowed: true,
+                };
+                read(
+                    route,
+                    &resolver,
+                    &selector,
+                    None,
+                    &session,
+                    &clock,
+                    Instant::now(),
+                )
+                .unwrap();
+            }
+            let resolver = DirectWorkspaceResolverV1::new(
+                Admit001Native {
+                    calls: Arc::new(AtomicUsize::new(0)),
+                    at: 2,
+                    fail: true,
+                    replacement: None,
+                },
+                digest(),
+            );
+            let clock = Admit001Clock {
+                calls: AtomicUsize::new(0),
+                allowed: false,
+            };
+            let error = *read(
+                "status",
+                &resolver,
+                &selector,
+                None,
+                &session,
+                &clock,
+                deadline(),
+            )
+            .unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    DirectExecutionErrorV1::Workspace(Resolution::Resolution(
+                        WorkspaceResolutionErrorV1::Git {
+                            source: podway_git::GitResolveErrorV1::WorktreeDeleted,
+                            ..
+                        }
+                    ))
+                ),
+                "{error:?}"
+            );
+            // A real same-process writer acquires both the native lease and gate
+            // after resolver failure, even with no wait budget left.
+            let mutation = podway_store::direct_store::DirectMutationRequestV1::new(
+                IdempotencyKeyV1::new("admit002-after-resolver-failure").unwrap(),
+                digest(),
+                "workspace.repair",
+                ID,
+                podway_store::direct_store::DirectOutcomeScopeV1::Workspace,
+            )
+            .unwrap();
+            store
+                .mutate(
+                    &mutation,
+                    Instant::now(),
+                    || UnixMillis::new(1_700_000_000_001),
+                    |transaction| {
+                        transaction.now();
+                        Ok(podway_store::CanonicalExecutionJsonV1::new(
+                            podway_core::canonicalize_json_v1(&serde_json::json!({
+                                "schema":"podway.output/v4", "request_id":ID, "command":"workspace.repair",
+                                "generated_at":"2023-11-14T22:13:20.001Z", "result":{}, "warnings":[]
+                            })).unwrap()
+                        ).unwrap())
+                    },
+                )
+                .unwrap();
+        }
+    }
+}

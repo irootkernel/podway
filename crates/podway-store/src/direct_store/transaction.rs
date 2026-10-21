@@ -151,6 +151,8 @@ impl DirectMutationResultV1 {
 pub enum DirectTransactionBoundaryV1 {
     /// Missing files, final absence of maintenance markers and pinned parent validation.
     UnmarkedMissingReadClassified,
+    /// Qualified binding and initial files are admitted; its completion witness is next.
+    BeforeBindingReadCompletion,
     BeforeBegin,
     AfterBegin,
     AfterStateBeforeOutcome,

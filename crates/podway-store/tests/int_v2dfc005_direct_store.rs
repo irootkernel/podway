@@ -2410,3 +2410,34 @@ fn bound004_typed_identity_and_execution_failures_roll_back_and_retry() {
             .unwrap();
     }
 }
+
+#[test]
+fn admit002_typed_read_callbacks_are_once_only_and_not_store_normalized() {
+    use podway_store::direct_store::DirectReadFailureV1;
+    let (_root, direct) = fixture();
+    let mut admissions = 0;
+    let result = direct.read_admitting_typed(
+        deadline(),
+        |_| {
+            admissions += 1;
+            Err::<(), _>(DirectStoreErrorV1::Busy)
+        },
+        |(), _| panic!("resolver rejection reached the operation"),
+    );
+    assert!(matches!(
+        result,
+        Err(DirectReadFailureV1::Resolver(DirectStoreErrorV1::Busy))
+    ));
+    assert_eq!(admissions, 1);
+    let mut operations = 0;
+    let result = direct.read_admitting_typed(
+        deadline(),
+        |_| Ok::<_, DirectStoreErrorV1>(()),
+        |(), _| {
+            operations += 1;
+            Err::<(), _>(DirectStoreErrorV1::Busy)
+        },
+    );
+    assert!(matches!(result, Ok(Err(DirectStoreErrorV1::Busy))));
+    assert_eq!(operations, 1);
+}

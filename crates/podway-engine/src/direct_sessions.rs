@@ -54,19 +54,17 @@ pub fn execute_session_v1<R: GitResolverContractV1>(
     request: DirectSessionRequestV1,
     clock: &impl ExecutionClockV1,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
-    let (resolved, store) = resolver.resolve_existing(
-        request.selector,
-        request.expected_workspace_id.as_ref(),
-        request.deadline,
-    )?;
-    let command = request.command.slice();
     if let DirectSessionCommandV1::Reset(input) = &request.command
         && input.dry_run
     {
-        return store.read(request.deadline, |snapshot| {
-            Ok((|| {
+        return resolver.resolve_existing_and_read(
+            request.selector.clone(),
+            request.expected_workspace_id.as_ref(),
+            request.deadline,
+            |resolved, snapshot| {
+                let command = request.command.slice();
                 resolver
-                    .revalidate(&resolved, snapshot.binding())
+                    .revalidate(resolved, snapshot.binding())
                     .map_err(crate::workspace::DirectWorkspaceResolutionErrorV1::from)?;
                 snapshot.with_admitted_current_graph(|current| {
                     let current = current.ok_or_else(|| {
@@ -116,9 +114,15 @@ pub fn execute_session_v1<R: GitResolverContractV1>(
                     result: body.as_object().expect("reset result is an object").clone(),
                     warnings: Vec::new(),
                 })?)
-            })())
-        })?;
+            },
+        );
     }
+    let (resolved, store) = resolver.resolve_existing(
+        request.selector,
+        request.expected_workspace_id.as_ref(),
+        request.deadline,
+    )?;
+    let command = request.command.slice();
     let key = request.key.ok_or(DirectStoreErrorV1::InvalidInput {
         reason: "mutation requires an idempotency key",
     })?;

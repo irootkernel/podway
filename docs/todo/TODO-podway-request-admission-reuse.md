@@ -59,7 +59,8 @@ are intentionally distinct and are not duplication this epic may erase.
 
 ### ADMIT-001 responsibility and removal ledger
 
-Stage names in this ledger describe existing ownership:
+Stage names in this ledger describe the characterization baseline ownership.
+The ADMIT-002 implementation record below describes the composed read paths:
 
 - **B (binding):** native preliminary discovery, candidate/layout/config checks,
   qualified binding read including both file-witness checks, supplied and
@@ -293,6 +294,69 @@ Run new cases exactly through each crate's `int_suite` with
 requires `make lint-all`; the Coordinator runs `make test` through Gaori before
 acceptance. Read back this ledger, verify references and run `git diff --check`.
 No release, installation or runtime operation is selected by characterization.
+
+### ADMIT-002 implementation record
+
+The implementation composes binding admission and the first operation for
+`execute_read_v1` (including page-token evidence), `preflight_facts_v1`,
+`lookup_outcome_v1`, `show_workspace_v1` and reset dry-run. Existing public Engine
+signatures and CLI request sequencing are unchanged. All mutations retain their
+binding/preparation split, as do doctor, bootstrap, maintenance and independent
+start/interactive observations. Reset dispatch selects only its dry-run branch
+before resolution. Mutation command derivation stays after split resolution and
+before key/canonical preparation.
+
+Store's `read_admitting_typed` retains its lease, gate and qualified transaction
+for both stages. `DirectReadFailureV1` carries `Admission`, `Resolver` and
+`Operation` failures explicitly. Engine's internal `resolve_existing_and_read`
+uses the same preliminary/config and bound-binding helpers as stateless split
+resolution. Admission failures become the existing workspace-resolution Store
+wrapper; resolver callbacks retain their typed resolution wrapper; operation
+witness failures retain the operation Store wrapper. Operation errors remain
+carried values until the final witness succeeds. Neither Engine callback enters
+Store error normalization or a read-only-recovery retry branch.
+
+Store checks initial file identity, then the binding-completion witness before
+UUID/bound Git resolution. Resolver failure exits without an overriding operation
+witness. Resolver success requires an operation-entry witness before the existing
+in-read native revalidation and command body, followed by the operation-final
+witness even on a carried operation error. The narrow
+`BeforeBindingReadCompletion` observer event occurs only immediately before the
+binding-completion checkpoint, for deterministic test coordination.
+
+The snapshot now starts during binding admission. Resolver-stage native
+revalidation runs under the transaction/gate/read lease, including exclusive Cold
+exclusion when required sidecars are missing. A compatible warm writer may commit
+while the reader retains its earlier coherent snapshot. The removed internal
+acquisition gap is not a promised scheduling opportunity. The original deadline,
+nonblocking acquisition attempt, file/writer classification and guard release
+before the Engine call returns remain required. There is no retained graph or
+cross-request context in ADMIT-002.
+
+New registered correctness owners, alongside unchanged ADMIT-001/READS/STATE
+owners:
+
+- Engine error suite's `admit002` module checks controlled successful admissions'
+  single accounted binding query and three native observations; binding witness
+  priority over UUID; resolver early return versus operation-entry witness;
+  lookup/reset operation-final witness priority; cold write-free files/inodes
+  with no SHM or no sidecars; exhausted deadlines and guard release after resolver
+  rejection. Its matrix covers the selected entry points and ordinary read variants.
+- Store direct suite's
+  `admit002_typed_read_callbacks_are_once_only_and_not_store_normalized` checks
+  exact callback counts and preservation of caller `Busy` errors in both stages.
+- Engine race suite's
+  `admit002_bound_revalidation_holds_guards_and_one_snapshot_with_a_real_writer`
+  uses a bounded owned writer child: warm reads retain one coherent snapshot
+  across a competing commit without writing files; Cold reads exclude the writer,
+  which succeeds after return. It also checks process-gate/native exclusion at
+  bound revalidation and a subsequent read's new sequence/revision.
+
+The [read architecture](../architecture/system.md#read-path) records only this
+delivered composition. ADMIT-003 still owns invocation-local prepared-graph reuse
+and its specification amendment. ADMIT-004 owns integrated continuity/replay
+qualification and program-documentation promotion. The roadmap remains the
+acceptance/status authority; this record does not claim those later tasks passed.
 
 ## Goals, non-goals, and scope
 
