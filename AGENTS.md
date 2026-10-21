@@ -27,6 +27,7 @@ caution over speed; apply them proportionally for trivial work.
 
 - Read relevant tests and the nearest authoritative document or machine contract.
 - Present materially different interpretations and recommend one before implementation.
+- Before changing a feature, read applicable directory AGENTS.md files and the canonical documents relevant to the change. Respect the selected harness's native instruction scope and precedence.
 
 ### 3. Act on Sufficient Evidence
 
@@ -51,6 +52,7 @@ caution over speed; apply them proportionally for trivial work.
 - Remove imports, variables, functions, files, contract entries, generated references,
   and documentation made obsolete by the change; mention unrelated defects instead
   of changing them.
+- Read directory-guide adoption coverage in the root documentation index. Maintain affected canonical documents and existing applicable guides, including guides outside that coverage. Within adopted coverage, add guides for new feature boundaries as part of the authorized work. Report uncovered areas without unrelated backfill; guide absence alone adds no workflow blocker. Finish affected documentation before candidate review.
 
 ### 4. Carry Authorization Forward
 
@@ -370,12 +372,12 @@ trivial changes with no meaningful decision context.
 - Configure the `logic`, `security`, `maintainability`, `product`,
   `documentation`, and `testing` roles using the assignments in
   `.mulgae/config.yaml`. Preserve the configured `60m` timeout for ZCode.
-- Use `--diff origin/main...HEAD` for a branch or pull request, `--stage` for
-  staged changes, `--dirty` for staged and unstaged changes, or `--workspace`
-  only when Master explicitly requests all tracked files. Preflight the same
-  target and confirm the captured paths and required provider routing before
-  review.
-- Track `.mulgae/config.yaml` and `.mulgaeignore`. Keep `.mulgae/local.yaml`,
+- Select exactly one authorized target through `$use-mulgae`. Use `--workspace`
+  only when Master explicitly requests the whole workspace. Preflight the same
+  target and roles, confirm project binding and admitted source selection, and
+  stop on unsafe or unexpected source selection before provider work.
+- Track only `.mulgae/config.yaml` within `.mulgae/`. Preserve existing
+  `.mulgaeignore` files; Mulgae no longer processes them. Keep `.mulgae/local.yaml`,
   every other `.mulgae/**` path, provider homes, credentials, raw transcripts,
   diagnostics, and exported review bundles untracked and private.
 
