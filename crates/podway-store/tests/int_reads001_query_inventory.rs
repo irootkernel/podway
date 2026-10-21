@@ -632,7 +632,7 @@ pub(super) fn reads001_session(
                 node_definition_id: podway_core::NodeDefinitionId::new("assess-def").unwrap(),
                 attempt_id: attempt_uuid(session_number, attempt),
                 attempt_number: AttemptNumberV2::FIRST,
-                goal_revision: Some(attempt_goal_revision.clone()),
+                goal_revision: Some(attempt_goal_revision),
                 selected_option: podway_core::OptionId::new("continue").unwrap(),
                 route_effect: podway_core::TransitionEffectV2::Advance,
                 route_target: node_id(attempt + 1),
@@ -647,7 +647,7 @@ pub(super) fn reads001_session(
         assessments.push(
             AttemptCriterionAssessmentStateV2::new(
                 attempt_uuid(session_number, attempt),
-                attempt_revision.clone(),
+                attempt_revision,
                 results
                     .iter()
                     .cloned()
@@ -756,7 +756,7 @@ pub(super) fn assessed_owner_attempts(recipe: &Recipe) -> u64 {
 /// Resolved evidence-reference rows: only the second assessment attempt
 /// consumes evidence.
 fn evidence_rows(recipe: &Recipe) -> u64 {
-    (recipe.attempts >= 5).then_some(1).unwrap_or(0)
+    if recipe.attempts >= 5 { 1 } else { 0 }
 }
 
 fn expected(needle: &'static str, prepares: u64, executes: u64, rows: u64) -> Expected {
@@ -937,7 +937,7 @@ pub(super) fn encoded_payload_bytes(state: &GraphSessionStateV2) -> u64 {
         .iter()
         .flat_map(|attempt| attempt.item_slots())
         .filter_map(|slot| slot.value().map(recorded_value_encoded_size_v2))
-        .map(|size| size.map(|size| size as u64).unwrap_or_default())
+        .map(|size| size.unwrap_or_default())
         .sum()
 }
 
@@ -954,7 +954,7 @@ fn max_attempt_payload_bytes(state: &GraphSessionStateV2) -> u64 {
                 .item_slots()
                 .iter()
                 .filter_map(|slot| slot.value().map(recorded_value_encoded_size_v2))
-                .map(|size| size.map(|size| size as u64).unwrap_or_default())
+                .map(|size| size.unwrap_or_default())
                 .sum::<u64>()
         })
         .max()

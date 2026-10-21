@@ -587,12 +587,9 @@ pub(super) const READS004_COUNTER_LINE: &str = "podway-test-preflight-count:";
 /// child emitted no counter line (a genuinely uninstrumented candidate).
 pub(super) fn reads004_preflight_counters(output: &Output) -> Option<(u64, u64)> {
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let Some(line) = stderr
+    let line = stderr
         .lines()
-        .find(|line| line.starts_with(READS004_COUNTER_LINE))
-    else {
-        return None;
-    };
+        .find(|line| line.starts_with(READS004_COUNTER_LINE))?;
     let counts: Vec<&str> = line[READS004_COUNTER_LINE.len()..].split(':').collect();
     assert_eq!(counts.len(), 2, "{line:?}");
     Some((counts[0].parse().unwrap(), counts[1].parse().unwrap()))

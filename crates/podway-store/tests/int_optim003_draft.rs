@@ -583,12 +583,11 @@ fn optim003_supported_forms_follow_sorted_item_order() {
     );
     assert_eq!(by_id("integer").revision(), Revision::new(1));
     assert!(
-        follow
+        !follow
             .items()
             .iter()
             .find(|entry| entry.item_id().as_str() == "integer")
             .unwrap()
             .changed()
-            == false
     );
 }

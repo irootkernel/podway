@@ -384,6 +384,7 @@ fn partial_criterion_state() -> AttemptCriterionAssessmentStateV2 {
     .unwrap()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn state(
     revision: u64,
     lifecycle: SessionLifecycle,
@@ -407,6 +408,7 @@ fn state(
     .unwrap()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn try_state(
     revision: u64,
     lifecycle: SessionLifecycle,

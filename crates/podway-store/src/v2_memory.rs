@@ -1776,7 +1776,7 @@ fn materialize_header_cell(cell: &mut RawHeaderCell) -> Result<(String, String),
 /// re-acquisition.
 fn clear_partial_loaded(loaded: &mut BTreeMap<String, SlotRow>) {
     #[cfg(any(test, feature = "test-support"))]
-    for (_, row) in loaded.iter() {
+    for row in loaded.values() {
         if let Some(value) = &row.6 {
             crate::query_accounting::ledger::release_raw(value.len());
         }

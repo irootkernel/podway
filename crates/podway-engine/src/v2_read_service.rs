@@ -4835,7 +4835,7 @@ mod tests {
 
     #[test]
     fn reads003_history_window_swallows_trailing_error_after_a_full_window() {
-        let entries = vec![json!({"trace_sequence": 3}), json!({"trace_sequence": 5})];
+        let entries = [json!({"trace_sequence": 3}), json!({"trace_sequence": 5})];
         let late = |entry: Value| {
             if entry["late"] == json!(true) {
                 Err(GraphViewErrorV2::InconsistentState(
@@ -5207,14 +5207,14 @@ mod tests {
     fn reads003_observation_list_projection_measures_in_place() {
         let fits = RecordedItemValueV2::list(vec!["short".to_owned(); 3]).unwrap();
         let (value, truncated) = project_observation_item_value(&fits);
-        assert_eq!(truncated, false);
+        assert!(!truncated);
         assert_eq!(value, json!(["short", "short", "short"]));
 
         // One entry over the per-entry character maximum marks truncation even though the
         // whole list is admitted: the flag carries entry truncation, not just window cuts.
         let long_entry = RecordedItemValueV2::list(vec!["y".repeat(200)]).unwrap();
         let (value, truncated) = project_observation_item_value(&long_entry);
-        assert_eq!(truncated, true);
+        assert!(truncated);
         assert_eq!(value, json!(["y".repeat(OBSERVATION_ITEM_VALUE_CHARS_MAX)]));
 
         // Entries of the maximum admitted length overflow the byte allocation mid-list. The
@@ -5222,8 +5222,8 @@ mod tests {
         let wide = RecordedItemValueV2::list(vec!["z".repeat(200); 8]).unwrap();
         let (value, truncated) = project_observation_item_value(&wide);
         let admitted = value.as_array().unwrap();
-        assert_eq!(truncated, true);
-        assert!(admitted.len() >= 1 && admitted.len() < 8);
+        assert!(truncated);
+        assert!(!admitted.is_empty() && admitted.len() < 8);
         let admitted_strings: Vec<&str> = admitted
             .iter()
             .map(|entry| entry.as_str().unwrap())
@@ -5292,7 +5292,7 @@ mod tests {
                 entries.len(),
                 "{label} exact fit admits every entry"
             );
-            assert_eq!(truncated, false, "{label}");
+            assert!(!truncated, "{label}");
 
             // The unprojected candidate is the oracle: the bounded projection can never show
             // an over-budget length itself, so one more admitted-width entry must exceed the
@@ -5324,7 +5324,7 @@ mod tests {
             "admitted prefix keeps the seven whole entries"
         );
         assert_eq!(projected.as_array().unwrap().len(), 7);
-        assert_eq!(truncated, true);
+        assert!(truncated);
         let admitted: Vec<&str> = projected
             .as_array()
             .unwrap()

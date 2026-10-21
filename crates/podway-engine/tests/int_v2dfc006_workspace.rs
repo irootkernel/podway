@@ -1177,7 +1177,7 @@ fn state002_doctor_reuses_verifier_admission_deep_and_non_deep() {
                 1
             );
             assert_eq!(
-                check_status(&value, "current_required_local_artifacts"),
+                check_status(value, "current_required_local_artifacts"),
                 "pass"
             );
         } else {
@@ -1186,7 +1186,7 @@ fn state002_doctor_reuses_verifier_admission_deep_and_non_deep() {
                 0
             );
             assert_eq!(
-                check_status(&value, "current_required_local_artifacts"),
+                check_status(value, "current_required_local_artifacts"),
                 "skipped"
             );
         }

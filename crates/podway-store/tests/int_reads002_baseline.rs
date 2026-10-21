@@ -154,7 +154,7 @@ pub(super) fn workchain_session(
     let mut attempts = Vec::new();
     let mut metadata = Vec::new();
     let mut memories = Vec::new();
-    for index in 0..2 {
+    for (index, &item_count) in node_items[..2].iter().enumerate() {
         let active = index == 1;
         attempts.push(
             SessionAttemptV2::new(
@@ -181,7 +181,7 @@ pub(super) fn workchain_session(
             )
             .unwrap(),
         );
-        let slots = (0..node_items[index])
+        let slots = (0..item_count)
             .map(|item| {
                 ItemSlotStateV2::new(
                     chain_attempt_uuid(session_number, index),
@@ -411,7 +411,7 @@ fn reload_baseline_three_waves_128_plus_128() {
     let after_one = record_wave(
         &direct,
         "w1-revise-128",
-        &prepared.graph(),
+        prepared.graph(),
         &wave_one_sets,
         900,
     );
@@ -528,7 +528,7 @@ fn reload_baseline_nonaligned_2_plus_4_global_packing_target() {
     let after_one = record_wave(
         &direct,
         "w1-revise-2",
-        &prepared.graph(),
+        prepared.graph(),
         &[(0, text_value("b", 24)), (1, text_value("b", 24))],
         900,
     );
@@ -640,7 +640,7 @@ fn reload_baseline_heterogeneous_larger_first_exact_combined_peak() {
     let after_one = record_wave(
         &direct,
         "w1-heterogeneous",
-        &prepared.graph(),
+        prepared.graph(),
         // 74 chars -> encoded 100; 14 chars -> encoded 40 (verified below).
         &[(0, text_value("d", 74)), (1, text_value("e", 14))],
         900,
@@ -739,7 +739,7 @@ fn identity_metadata_units_pin_old_per_attempt_header_retention() {
     let after_one = record_wave(
         &direct,
         "w1-revise-2",
-        &prepared.graph(),
+        prepared.graph(),
         &[(0, text_value("b", 24)), (1, text_value("b", 24))],
         900,
     );
@@ -1165,7 +1165,7 @@ fn reload_baseline_new_owner_with_nonlexicographic_declaration_order() {
     let after_revise = record_wave(
         &direct,
         "w0-revise-2",
-        &prepared.graph(),
+        prepared.graph(),
         &[(0, text_value("b", 24)), (1, text_value("b", 24))],
         890,
     );
@@ -1256,7 +1256,7 @@ fn deferred_scratch_survives_earlier_scope_exits_and_books_unwind() {
     let after_revise = record_wave(
         &direct,
         "w0-revise",
-        &prepared.graph(),
+        prepared.graph(),
         &[(0, text_value("b", 24))],
         890,
     );

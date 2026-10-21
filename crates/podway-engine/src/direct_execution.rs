@@ -1174,7 +1174,7 @@ mod reads004_stage5_tests {
             serde_json::to_vec(&result).unwrap().len() <= MAX_DIRECT_OUTPUT_BYTES_V1,
             "oracle result exceeds Stage 4's standalone byte limit"
         );
-        assert!(json_nesting_levels_v1(&result) + 1 <= MAX_JSON_DEPTH_V1);
+        assert!(json_nesting_levels_v1(&result) < MAX_JSON_DEPTH_V1);
         assert!(
             validate_daemon_free_document_v1("podway.status-result/v5", &result),
             "oracle result is not a schema-valid Standard status document"
@@ -1473,10 +1473,7 @@ mod reads004_stage5_tests {
                 accepted,
                 "Stage 5 depth check disagrees at result depth {result_depth}"
             );
-            assert_eq!(
-                json_nesting_levels_v1(&deep) + 1 <= MAX_JSON_DEPTH_V1,
-                accepted
-            );
+            assert_eq!(json_nesting_levels_v1(&deep) < MAX_JSON_DEPTH_V1, accepted);
             if let Err(error) = equivalent {
                 match error {
                     ProtocolError::InvalidCommandResult { command } => {

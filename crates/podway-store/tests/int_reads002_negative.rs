@@ -43,8 +43,8 @@ fn executes_of(
 /// The pinned row-limit concern on the actual OLD Store path, at the exact
 /// COLD boundary position: a legal oversized `item_id` (injected under the
 /// raw connection's default length limit; canonical DDL has no id length
-/// CHECK) that is the FIRST row of the IMMEDIATE successor attempt (index
-/// 1) in PK/BINARY delivery order (leading `!` byte sorts before every
+/// CHECK) that is the FIRST row of the IMMEDIATE successor attempt
+/// (index 1) in PK/BINARY delivery order (leading `!` byte sorts before every
 /// `item-*` id), plus a deterministic blocker fault on attempt 0. A future
 /// cold streaming statement would peek attempt 1's oversized first row at
 /// attempt 0's collection boundary — before attempt 0's blocker stage. The

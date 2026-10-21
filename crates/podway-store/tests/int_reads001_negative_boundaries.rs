@@ -408,13 +408,13 @@ fn failed_second_graph_releases_only_its_own_decoded_bytes() {
             slot.value()
                 .map(podway_core::recorded_value_encoded_size_v2)
         })
-        .map(|size| size.map(|size| size as u64).unwrap_or_default())
+        .map(|size| size.unwrap_or_default())
         .sum();
     assert!(a_bytes > 0);
     assert!(b_partial > 0);
     assert_eq!(report.retention.graph_scopes, 2);
     assert_eq!(
-        report.retention.fresh_payloads as u64,
+        report.retention.fresh_payloads,
         encoded_slot_count(&state_a) + encoded_slot_count_partial(&state_b),
         "fresh payloads cover A's slots plus B's committed attempts"
     );

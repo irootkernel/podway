@@ -186,7 +186,7 @@ pub(crate) mod ledger {
     /// Logical, deterministic retention units. These are not allocator or
     /// heap measurements: they count serialized payload byte lengths and
     /// payload pointer identities observed at the loader boundaries.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, Default)]
     pub(crate) struct RetentionState {
         pub slot_scopes: u64,
         pub raw_current: u64,
@@ -265,45 +265,6 @@ pub(crate) mod ledger {
         /// owning attempt's validation turn (error unwind); nonzero only on
         /// the error path.
         pub discovery_scratch_released_at_abort: u64,
-    }
-
-    impl Default for RetentionState {
-        fn default() -> Self {
-            Self {
-                slot_scopes: 0,
-                raw_current: 0,
-                raw_scope_peak: 0,
-                raw_window_peak: 0,
-                raw_released_at_scope_end: 0,
-                fresh_bytes_cumulative: 0,
-                decoded_live: 0,
-                decoded_live_peak: 0,
-                decoded_released_at_scope_end: 0,
-                scope_fresh_bytes: 0,
-                scope_committed: false,
-                graph_scopes: 0,
-                graph_scope_committed: false,
-                graph_scope_baseline: 0,
-                decode_attempts: 0,
-                fresh_payloads: 0,
-                reused_payloads: 0,
-                reused_bytes: 0,
-                unknown_reuse_payloads: 0,
-                container_copies: 0,
-                cached_input_bytes: 0,
-                combined_peak: 0,
-                identity_rows: 0,
-                identity_current: 0,
-                identity_scope_peak: 0,
-                identity_window_peak: 0,
-                identity_released_at_scope_end: 0,
-                citation_pull_entries: 0,
-                citation_post_check_entries: 0,
-                discovery_scratch_current: 0,
-                discovery_scratch_peak: 0,
-                discovery_scratch_released_at_abort: 0,
-            }
-        }
     }
 
     impl RetentionState {
