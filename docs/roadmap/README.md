@@ -135,7 +135,7 @@ Dependencies: accepted `PARSE` completion. Design:
 | `STATE-002` | Reuse same-snapshot graph and dispositions | Completed | Carry admitted state through view, reset and doctor paths without advancing receipt/disposition checks across existing fences or clocks. | [Staged snapshot reuse](../todo/TODO-podway-snapshot-state-reuse.md#staged-snapshot-reuse) |
 | `STATE-003` | Index borrowed cached attempts once | Completed | Share one reconstruction-local attempt index across owner discovery and reconstruction while preserving validation order and changed-row bounds. | [Borrowed attempt index](../todo/TODO-podway-snapshot-state-reuse.md#borrowed-attempt-index) |
 | `STATE-004` | Reuse admitted active receipt for readiness | Completed | Derive readiness from an already admitted matching receipt, retaining history validation and fallback acquisition when coverage is unproven. | [Receipt readiness](../todo/TODO-podway-snapshot-state-reuse.md#receipt-readiness) |
-| `STATE-005` | Qualify snapshot continuity and corruption refusal | Planned | Verify corruption priority, supported Store continuity and replay, complete the development gate and review, then promote documentation. | [Verification](../todo/TODO-podway-snapshot-state-reuse.md#verification-and-release-acceptance) |
+| `STATE-005` | Qualify snapshot continuity and corruption refusal | Completed | Verify corruption priority, supported Store continuity and replay, complete the development gate and review, then promote documentation. | [Verification](../todo/TODO-podway-snapshot-state-reuse.md#verification-and-release-acceptance) |
 
 ## ADMIT — Request Admission Reuse
 

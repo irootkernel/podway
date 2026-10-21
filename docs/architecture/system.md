@@ -425,6 +425,62 @@ Standard preflight projection/schema/envelope-equivalent failures remain
 independently owned trust boundaries; projection reuse merges none of them,
 and archive-list keeps its summary-only exception for archived rows.
 
+### Staged snapshot state reuse
+
+Admitted graph state is staged once per coherent read snapshot and reused
+inside it. The Store graph loader admits terminal dispositions within its
+loader stage, before receipt acquisition and the cursor check, and returns
+them with the admitted graph as `AdmittedGraphStateV2`. `DirectReadSnapshotV1`
+holds that admission in a private one-shot carrier for the snapshot's
+lifetime: `view` takes the staged admission fail-closed, with no silent
+second admission, and `view` and `archived_view` consume the retained
+dispositions at their original stage, keeping the graph -> receipts ->
+dispositions -> sequence order. The public loan `with_admitted_current_graph`
+admits first without holding a borrow across the admission I/O and then lends
+the admitted graph under a shared borrow. Its re-entrancy contract is exact:
+calling `view` on the same snapshot from inside the loan body is a
+programming error and panics on the staged carrier's borrow, while a nested
+`with_admitted_current_graph` re-lends the same admitted graph.
+
+The integrity verifier seeds the carrier only when it constructs the read
+snapshot and only after every verifier check has passed; the seeded admission
+is consumed after verification completes, so a later projection never stands
+in for an earlier integrity check. Snapshots returned by
+`read_under_exclusive_lease` are never seeded: the doctor fallback read and
+`workspace.remove` keep their own authoritative acquisition. A reset dry run
+admits the graph once through the loan and keeps its order — graph admission,
+including the missing-graph outcome, then first fences, clock, view and fence
+recheck. Deep doctor rehashes its artifacts from the loan after the verifier
+checks and before the clock and view. The seeded current admission stays
+alive through the verifier's archived and outcome loops, so the doctor,
+deep or non-deep, holds the current graph plus one archived graph at that
+point.
+
+Mixed workflow-memory reconstruction shares one attempt index per
+reconstruction. Inside `load_workflow_memory_v2`, a reconstruction-local index
+of borrowed cached attempts is built before slot-owner discovery and shared
+by reference with discovery and the per-attempt reconstruction loop. The
+index is id-keyed; attempts are never matched by position, because matching
+prefix identity is not established before admission. Building the index
+validates no later row, clones no attempt body and issues no SQL. The
+item-level lookups, the 128 owner/item-pair changed-chunk bound, the TooBig
+fallback, pointer reuse and the whole-unchanged prepared fast path keep their
+own owners and bounds.
+
+Delegation receipt readiness derives from the admission the same read
+snapshot already holds. `receipt_snapshot_connection_v1` selects its
+acquisition through `DelegationReadinessAcquisitionV1`. Read views use
+`AdmittedWindow`: readiness is derived from the receipt window admitted in
+the same snapshot, absence is proven only from a complete window, and the
+accounted point query runs only when the active attempt holds no admitted
+receipt and the window is truncated. The prepared-Arc write path `DirectTransactionV1::delegation_receipts`
+selects `PointQuery`. The write-time guard in
+`replace_direct_graph_session_transaction_v2` calls the readiness function
+directly and keeps the same point-query acquisition. The prepared-stamp check
+does not cover attempt and receipt row identity, so derived absence would
+report a silent `ReceiptMissing` where the snapshot-coherence refusal is
+required.
+
 ### Procedure identity boundaries
 
 Sharing `ValidatedProcedureV2` shares computation. Revalidation can materialize

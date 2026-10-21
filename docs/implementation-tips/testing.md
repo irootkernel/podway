@@ -88,6 +88,11 @@ BOUND-006 exercises this scenario across the CLI decomposition against a
 supported generation-15 Store. It complements registered persistence/replay tests
 and does not establish legacy migration or installed-runtime compatibility.
 
+STATE-005 exercises the same scenario across the snapshot and reconstruction
+reuse boundary against a supported generation-15 Store created by a retained
+pre-STATE CLI; it equally complements registered persistence/replay tests and
+establishes no legacy migration or installed-runtime compatibility.
+
 ## Functional regression owners
 
 Pure workflow and goal tests live beside their Core implementations in
@@ -257,6 +262,69 @@ PARSE document admission and ownership checks use these registered owners:
   [direct CLI suite](../../crates/podway-cli/tests/e2e_v2dfc007_direct_cli.rs)
   retained-command replay/lookup and postcommit-before-stdout SIGKILL cases own
   original-response recovery through the real binary.
+
+STATE snapshot state reuse checks use these registered owners:
+
+- Store's [query-inventory suite](../../crates/podway-store/tests/int_reads001_query_inventory.rs)
+  `state002_view_admits_graph_and_dispositions_once` and
+  `state002_archived_view_admits_dispositions_once` pin one graph admission
+  and one disposition load per current and archived view, with the retained
+  dispositions reaching the view.
+- Store's [persistence suite](../../crates/podway-store/tests/int_v2dfc008_persistence.rs)
+  `state001_disposition_corruption_refuses_view_and_verification` refuses
+  corrupt dispositions in the current view and the integrity verifier with
+  intact schema checks and unchanged bytes, and its healthy control pins the
+  non-delegated empty receipt snapshot;
+  `state002_verifier_admits_archived_dispositions_once` pins the verifier's
+  per-archived-session disposition admission.
+- Store's [negative-boundary suite](../../crates/podway-store/tests/int_reads001_negative_boundaries.rs)
+  `state001_disposition_admission_precedes_receipt_and_cursor_checks` pins
+  with probe evidence that the disposition admission SQL runs before the
+  receipt window, and that its execution precedes the loader's in-memory
+  cursor comparison.
+- Store's [receipt suite](../../crates/podway-store/tests/int_v2sdg004_receipt.rs)
+  `state001_truncated_history_reports_point_readiness_outcome_for_absent_active_receipt`
+  pins the truncated-window readiness outcome for an absent active receipt:
+  `ReceiptMissing`, no current receipt, a 32-of-33 truncated window;
+  `state001_older_receipt_window_corruption_refuses_with_valid_active_receipt`
+  pins whole-window history validation before readiness;
+  `state001_completing_delegated_attempt_without_admitted_receipt_fails_write_time_guard`
+  and
+  `state001_prepared_arc_write_path_receipt_snapshot_refuses_unjoinable_active_receipt`
+  pin the write-time guard and the prepared-Arc write-path point-query
+  boundary;
+  `state004_readiness_acquisition_pins_window_derivation_absence_fallback_and_write_path`
+  pins zero readiness point queries for a same-snapshot admitted receipt and
+  for a complete-window proven absence, one for the truncated-window fallback
+  and one on the prepared-Arc write path.
+- Store's [memory unit checks](../../crates/podway-store/src/v2_memory.rs)
+  `v2_memory::reads_tests::state003_attempt_index_keeps_first_match_for_duplicate_ids`
+  pin the reconstruction index's duplicate-id first match and pointer identity
+  to the first attempt. Positional matching is excluded by design, not proven
+  unreachable by this test: in reachable states cached attempts are a
+  same-order prefix of the current trace, so id-keyed and positional lookups
+  agree there, and matching by identity is required because prefix identity
+  is not established before admission.
+- Engine's [domain-port suite](../../crates/podway-engine/tests/int_v2dfc006_domain_ports.rs)
+  `state001_reset_dry_run_fence_rejection_precedes_clock_and_receipt_admission`
+  and
+  `state002_reset_dry_run_reuses_admitted_state_and_keeps_admission_before_fences`
+  pin reset dry-run order — graph admission, first fences, clock, then
+  receipt/view — including the multi-fault case where a corrupt disposition
+  beats a stale revision fence while the clock is never read.
+- Engine's [workspace suite](../../crates/podway-engine/tests/int_v2dfc006_workspace.rs)
+  `state002_doctor_reuses_verifier_admission_deep_and_non_deep` pins doctor
+  reuse of the verifier-seeded admission in both modes with unchanged
+  outputs.
+- Engine's [direct execution suite](../../crates/podway-engine/tests/int_v2dfc006_direct_execution.rs)
+  `state001_changed_items_report_items_changed_through_view_with_in_window_receipt`
+  pins the read path's in-window `ItemsChanged`.
+
+These owners sit beside the unchanged count and reload owners in the
+[query-inventory suite](../../crates/podway-store/tests/int_reads001_query_inventory.rs)
+(`prepared_reload_counts_unchanged_sparse_and_dense_selective_misses`) and the
+[reload baseline suite](../../crates/podway-store/tests/int_reads002_baseline.rs),
+whose accounting targets the reuse work keeps.
 
 ## Structural simplification verification
 
