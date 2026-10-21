@@ -93,6 +93,34 @@ reuse boundary against a supported generation-15 Store created by a retained
 pre-STATE CLI; it equally complements registered persistence/replay tests and
 establishes no legacy migration or installed-runtime compatibility.
 
+ADMIT-004 exercises the same supported generation-15 Store with a retained
+pre-ADMIT CLI from `a5e77bb14d1958b71518b43fd118f97cf108e5a8` (binary SHA-256
+`bede76bac373643930f82d29c82737cfd5778a394ec5da8d78092c4e34383b1a`) and
+an ADMIT candidate CLI (SHA-256
+`aee4588dc163f787427d1c28706af82ec9a37d62dd4a7fc82cdfef2cf0e008f0`).
+The candidate's actual embedded source commit is
+`cac21dd2260bd42bfc015a99472e6ae2aec9878a`, with build identity
+`sha256:df10d6d88de063b00c71176869de677a72f7aeaf1630a80c6f38c0ae1809257a`;
+it was built from the dirty ADMIT-004 test/documentation candidate, not from a
+future completion commit. The captured build-source diff SHA-256 is
+`caca8d246b9fa7903420076ef3abd35051e0a92f5ccdd1b44b5c3278ca270bf8`.
+Later changes to test-only child cleanup and documentation do not change CLI
+inputs; executable input hashes remain bound to that artifact.
+
+Two standalone Git fixtures use fresh processes for every CLI step. Run A uses
+fully explicit current completion fences; Run B omits only session revision to
+exercise automatic preflight and matching context reuse. All 29 comparisons in
+each run pass: candidate reads preserve recorded state; initial and old-attempt
+replays after continuation preserve original stdout bytes; both lookups retain
+the original raw canonical response; reads, replays and lookups change no logical
+state or sequence. Only completion advances sequence 4 to 5 and enters
+`implement` with a new attempt. The complete writer-contract row, generation,
+workspace and canonical snapshot bytes/digest remain unchanged, without reset or
+migration. Existing debug-only counters report no hint for fully fenced
+completion and one retained/consumed/reused hint for automatic preflight.
+This functional evidence establishes no release, installed-runtime compatibility
+or final Epic acceptance.
+
 ## Functional regression owners
 
 Pure workflow and goal tests live beside their Core implementations in
@@ -334,77 +362,107 @@ generation-15 direct reads; and a read-path out-of-window active receipt. The
 [staged snapshot state reuse](../architecture/system.md#staged-snapshot-state-reuse)
 architecture records why that receipt is unreachable on the read path.
 
+ADMIT request admission and invocation-local reuse checks use these registered owners:
+
+- Engine's [error suite](../../crates/podway-engine/tests/int_v2dfc006_errors.rs)
+  `admit001_` and `admit002` cases pin native/binding/UUID order, typed resolver
+  versus operation failures, binding and operation witnesses, resolver early
+  return, deadlines and write-free missing-SHM/no-sidecar reads. The cold-read
+  matrix includes the context-bearing preflight facade. `reads004_equivalence`
+  checks full Standard projection/schema/envelope-equivalent success through the
+  stateless facade and failure through both stateless and context-bearing facades.
+  Context success parity is owned by
+  `int_v2dfc006_races::admit003_matching_context_adds_no_preflight_queries_and_is_single_use`;
+  `admit003_failed_final_preflight_witness_cannot_publish_or_keep_a_hint`
+  prevents publication after a failed witness.
+- Engine's [race suite](../../crates/podway-engine/tests/int_v2dfc006_races.rs)
+  `admit003_cold_context_releases_all_guards_before_a_competing_commit` and
+  `admit003_shared_context_releases_all_guards_before_a_competing_commit` pin
+  the preflight-to-preparation competing-writer window. The existing
+  `unrelated_item_commit_preserves_exact_item_fences_and_replay` and
+  `same_item_race_reports_the_current_revision_without_effects` run stateless
+  and context-bearing paths, admitting the competing child only at `BeforeBegin`
+  after preparation: unrelated items succeed after reload; stale same-item
+  fences refuse without effects. `admit003_context_releases_guards_during_actual_hashing`
+  independently pins lease-free hashing with a real competing process.
+- The same race suite's `admit003_matching_context_adds_no_preflight_queries_and_is_single_use`,
+  seeded-context cleanup, reset dry-run/read neutrality and generation-change
+  cases pin retention, consumption, cold fallback and preparation-stage restamping.
+  The [identity suite](../../crates/podway-engine/tests/int_v2dfc006_identity_ports.rs)
+  `admit003_context_database_replacement_before_begin_keeps_writer_refusal` and
+  `admit003_changed_session_and_procedure_snapshot_discard_the_hint_before_writer_fences`
+  keep later file refusal distinct from earlier hint discard.
+- Store's [connection unit checks](../../crates/podway-store/src/direct_store/connection.rs)
+  `direct_store::connection::admit003_tests` pin graph-body identity, missing
+  metadata, single consumption, every identity/stamp mismatch and optional
+  comparison failure versus mandatory admission/cold-loader failure. The private
+  comparison-result injection and non-STRICT decoder fixture are bounded test
+  seams, not supported malformed production state. Source inspection must also
+  establish no added retention SQL/decode/validation: query accounting excludes
+  some qualification SQL, so equal counters alone do not establish that claim.
+- Store's [direct suite](../../crates/podway-store/tests/int_v2dfc005_direct_store.rs)
+  `admit002_typed_read_callbacks_are_once_only_and_not_store_normalized` preserves
+  callback transport. `hot_wal_read_snapshot_is_write_free_with_an_open_writer_process`
+  checks ordinary and composed reads against a live writer with unchanged file
+  bytes and once-only admission/operation callbacks. Prepared-graph refresh,
+  sequence-only replay, independent identity-component refusal and root-isolation
+  cases remain alongside the [reload accounting](../../crates/podway-store/tests/int_reads001_query_inventory.rs)
+  owner. Receipt readiness and integrity verification retain their independent
+  owners listed under STATE above.
+- Real CLI [direct checks](../../crates/podway-cli/tests/e2e_v2dfc007_direct_cli.rs)
+  `every_legacy_generation_refuses_without_new_files_then_explicitly_resets`,
+  `v2dfc015_newer_generations_refuse_every_store_admission_without_new_files` and
+  `incompatible_writer_identity_refuses_concurrent_reads_mutations_and_old_replays`
+  exercise unsupported-state refusal through reads and automatic preflight.
+  `admit003_real_cli_wires_reuse_and_preserves_previews_key_errors_and_later_invocations`
+  pins actual wiring, input/key ordering, separate observations and invocation
+  lifetime. The [Invocation unit check](../../crates/podway-cli/src/command/direct.rs)
+  pins distinct request IDs and one original deadline. Stdin record/delegation,
+  retained-command replay/lookup and postcommit-before-stdout SIGKILL owners
+  remain required; the PARSE owners above retain old-attempt and file-loss replay.
+
 ## Structural simplification verification
 
 The [VIEWS, PARSE, STATE and ADMIT program](../roadmap/README.md#structural-simplification-program)
-targets structural, logical and conceptual duplication. Its registration is
-recorded in the roadmap, which owns current status. The following rules guide
-the adopted work without asserting that planned reuse is already implemented.
+removes duplicated projection construction, document admission, same-snapshot
+reconstruction and request admission. Implemented boundaries live in the
+[system architecture](../architecture/system.md); the registered
+[functional regression owners](#functional-regression-owners) above own their
+maintenance checks. The roadmap owns current status and final Epic acceptance.
+
+Preserve exact byte fit/overflow, Unicode scalar pages, logical totals,
+preview-gated failures and hidden-value corruption refusal; independent document
+schema/relational admission and original bytes; graph/fence/clock/receipt order
+and bounded reloads; native/Store identity, full Standard preflight, both
+competing-writer windows, write-free reads and exact replay. Use
+[supported Store continuity](#supported-store-continuity) across these boundaries
+without reset or migration. Retention adds no preflight SQL/decode/validation;
+optional comparison failure runs the existing cold path once, while mandatory
+admission and cold-loader failures retain their errors and precedence.
 
 Do not add or run elapsed-time comparison tests, latency percentiles including
 p95/p99, throughput benchmarks, performance baselines or performance thresholds
-for this program. Existing historical native-scale and release qualification
-records remain unchanged and do not become inherited acceptance gates. Existing
-functional deadlines remain behavior to preserve; they are not speedup targets.
+for this program. Historical native-scale and release qualification records do
+not become inherited acceptance gates. Functional deadlines remain behavior to
+preserve, not speedup targets.
 
-Define focused success and failure checks before each implementation task. Use
-the existing functional owners and add checks only for material behavioral gaps:
-
-- VIEWS: exact byte fit/overflow, escaped JSON, trace bounds and truncation,
-  Unicode scalar pages and logical totals, first-three valued-slot counts,
-  observation/readback/package equivalence, retained preview-gated failures and
-  corruption outside displayed windows.
-- PARSE: malformed/deep/noncanonical documents, independent schema/relational
-  checks, original canonical/stored bytes, preview fallback and parsed-but-invalid
-  delegated facts, exact lookup/replay identity.
-- STATE: graph/fence/clock/receipt/disposition error order, changed/unchanged
-  memory paths, bounded changed-row fallback, matching receipt reuse and history
-  refusal, supported Store continuity without reset or migration.
-- ADMIT: native and Store identity, matching/stale hint handling, full Standard
-  preflight failures, real competing writers after guard release, file replacement,
-  preparation-stage hint discard versus writer reload/refusal, separate Engine
-  request IDs,
-  read-only missing-SHM/hot-WAL behavior and exact replay without new effects.
-  Retention adds no preflight SQL/decode/validation stage; failed optional stamp
-  comparison falls back to the original cold-path error order, while mandatory
-  admission failures still propagate.
+Use focused success and failure checks before changing these owners and add tests
+only for material gaps. Keep unreachable guards with their admitted invariants
+rather than fabricating unsupported state. Source-level ownership evidence and
+bounded deterministic reuse assertions complement behavioral checks; fewer
+operations cannot justify reduced validation or changed failure order. Reuse
+Store's existing `query_accounting` and registered query-inventory fixtures;
+do not create a general metrics framework, probes or telemetry, bind tests to
+retired TODO prose, or delete correctness accounting as a historical benchmark.
 
 Mutation artifact preparation remains outside read leases and writer transactions.
-Deep doctor's existing exclusive maintenance rehash is a distinct path; preserve
-its scope rather than imposing mutation preparation rules on it.
-
-Each `*-001` task produces an update to its adopted dossier, rather than a new
-permanent catalog. Include a bounded remove/retain ledger for the named target
-sites: current owner, duplicated work to remove, validators and failure order to
-retain, eligible paths, deliberately split paths and registered correctness
-checks. Identify any material characterization gap and cover it before changing
-the affected behavior. For an unreachable guard, retain it and record the
-admitted invariant instead of inventing an unsupported fixture. Acceptance of
-the first task requires this ledger and its verification mapping; the next task
-then follows normal roadmap order, without a separate approval ceremony.
-
-Use source-level ownership evidence to show that the named duplicate work has
-been removed. A narrow deterministic assertion of parse reuse, bounded display
-construction or shared admitted state is appropriate when it proves a material
-property. Do not create a general metrics framework, probes or telemetry merely
-to count work, and do not bind tests to TODO prose or incidental helper layout.
-Fewer operations alone cannot justify reduced validation or changed failure order.
-Reuse Store's existing `query_accounting` correctness fixtures and registered
-`int_reads001_query_inventory` checks when a changed path affects them. Update
-their intended assertions deliberately; do not delete them as historical timing
-baselines or create new instrumentation solely to replace them.
-
-Run focused checks during each task and `make test` before sharing future
-executable behavior or contract changes. Final epic tasks integrate evidence,
-independent review and durable documentation; they do not defer earlier checks.
-Accept each epic before starting its successor. CALLS is unadopted and creates no
-interface-change verification obligation.
-
-Promote each epic's lasting verification guidance at closeout. ADMIT-004 also
-retires or rewrites the program-level planning text in this section and the two
-documentation indexes; the completed behavior must not depend on retired TODOs.
-VIEWS lasting verification guidance is registered under
-[functional regression owners](#functional-regression-owners).
+Deep doctor's exclusive maintenance rehash retains its distinct scope. Run focused
+checks and the required `make test` development gate for executable or contract
+changes, plus `make lint-all` for test changes. Integration review and durable
+promotion complement task-local verification. Dossier retirement follows the
+[TODO lifecycle](../todo/README.md#lifecycle) after owner acceptance; completed
+behavior must remain independently documented. CALLS remains unadopted and
+creates no interface-change verification obligation.
 
 ## Optional diagnostics
 

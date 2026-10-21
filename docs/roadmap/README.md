@@ -29,11 +29,13 @@ accepted OPTIM, BOUND and READS work:
 VIEWS -> PARSE -> STATE -> ADMIT
 ```
 
-The goal is to remove structural, logical and conceptual duplication. The
-2026-10-19 registration was design-only; execution began with `VIEWS-001` on
-2026-10-20, and the task tables below alone own current status. Only the first
-incomplete task of the first eligible epic may start; accept each epic before
-starting its successor. There is no cross-epic implementation interleaving.
+Execution began with `VIEWS-001` on 2026-10-20. Implemented ownership now covers
+projection construction, parsed documents, staged snapshot state and eligible
+read/preflight admission; the task tables below alone own current status.
+VIEWS, PARSE and STATE are owner-accepted. ADMIT's final integration, independent
+assessment and Master Epic acceptance remain pending. Lasting behavior and
+[regression owners](../implementation-tips/testing.md#functional-regression-owners)
+are documented independently of the remaining dossier.
 
 Elapsed-time tests, latency percentiles including p95/p99, throughput benchmarks,
 performance baselines and performance thresholds are excluded from this program.
@@ -65,16 +67,15 @@ external-consumer change is selected by this design registration.
   [CALLS](../todo/TODO-podway-cli-interaction-simplification.md) is an unadopted
   candidate, with no roadmap tasks or implementation commitment.
 
-Each task includes focused correctness verification. Future executable changes
-require `make test` before sharing a development revision. Documentation-only
-changes use documentation checks. See
-[structural simplification verification](../implementation-tips/testing.md#structural-simplification-verification).
-Each epic's first task updates its adopted dossier with the remove/retain ledger,
-eligible and deliberately split paths, and mapped correctness checks defined
-there. This is the first task's checkable deliverable, not another status source.
-Final tasks integrate correctness evidence, review and durable documentation;
-they do not postpone all verification until closeout. Retire each adopted dossier
-only through the [TODO lifecycle](../todo/README.md#lifecycle).
+The completed task-local ownership ledgers informed the durable
+[read architecture](../architecture/system.md#read-path),
+[invocation-local prepared graph reuse](../architecture/system.md#invocation-local-prepared-graph-reuse)
+and [structural verification guidance](../implementation-tips/testing.md#structural-simplification-verification).
+Future executable changes retain focused correctness checks and the required
+`make test` development gate; documentation-only changes use documentation checks.
+Integration evidence and independent review complement those task-local checks.
+Retire the remaining adopted dossier only after Master accepts the exact closeout
+candidate under the [TODO lifecycle](../todo/README.md#lifecycle).
 
 ## VIEWS — Projection Simplification
 
@@ -154,7 +155,7 @@ Dependencies: accepted `STATE` completion. Design:
 | `ADMIT-001` | Pin admission order and lease boundaries | Completed | Map binding, native identity, snapshot, preflight, artifact and writer stages per command before combining any work. | [Design and interfaces](../todo/TODO-podway-request-admission-reuse.md#accepted-design-decisions-and-interfaces) |
 | `ADMIT-002` | Combine binding admission and first snapshot | Completed | Share eligible first-operation acquisition while retaining native identity/error order and releasing leases before artifact work. | [Binding and first snapshot](../todo/TODO-podway-request-admission-reuse.md#binding-and-first-snapshot) |
 | `ADMIT-003` | Reuse preflight-admitted graph in preparation | Completed | Carry Store-prepared state across distinct Engine requests in one opaque invocation context; check it at preparation and preserve existing reload/refusal windows, preflight failures and guard release. | [Preflight and mutation preparation](../todo/TODO-podway-request-admission-reuse.md#preflight-and-mutation-preparation) |
-| `ADMIT-004` | Qualify admission races and exact replay | Planned | Verify competing writers, file replacement, unsupported-state refusal and replay, complete the development gate and review, then promote documentation and retire program-planning text. | [Verification](../todo/TODO-podway-request-admission-reuse.md#verification-and-release-acceptance) |
+| `ADMIT-004` | Qualify admission races and exact replay | Completed | Verify competing writers, file replacement, unsupported-state refusal and replay, complete the development gate and review, then promote documentation and retire program-planning text. | [Verification](../todo/TODO-podway-request-admission-reuse.md#verification-and-release-acceptance) |
 
 ## Current internal improvements
 

@@ -379,6 +379,11 @@ workspace resolution failures, while operation witness errors retain the
 operation's Store wrapper. Callback errors are never Store-normalized or retried.
 Schema/writer/binding qualification and write-free missing-SHM/hot-WAL handling
 remain Store-owned.
+Ordinary Store `read` runs its final witness after a successful outer callback;
+an outer callback error returns before that witness. Engine carries operation
+errors as inner results so their final witness still runs. Exclusive maintenance
+reads instead check the final witness even after an outer callback error; read
+composition does not merge those distinct failure transports.
 
 The transaction, process-local connection gate and native read lease now span
 resolver-stage bound Git revalidation as well as the operation. A cold snapshot
@@ -425,6 +430,15 @@ acceptance and stateless Engine callers keep cold preparation; receipt readiness
 and integrity verification remain independent. Matching stamps may defer detection
 of unstamped out-of-protocol row changes, as specified by the
 [prepared-value contract](../specs/storage/transactions-concurrency-and-idempotency.md#request-owned-prepared-value-reuse).
+A compatible replacement completed before preparation is admitted at that current
+read and discards the old hint; identity changes after preparation retain the
+writer's original refusal window. Writer sequence/session changes instead reload
+current state before caller fences. Bootstrap, exclusive maintenance, deep doctor,
+source preparation and independent start/reset/interactive observations keep
+their own acquisition boundaries. Broadening reuse beyond these bounded conditions,
+or relaxing mandatory validation or refusal behavior, requires Master's explicit
+decision. Matching stamps are not a claim of arbitrary unstamped-corruption
+detection, including accidental out-of-protocol modification.
 
 ### Request-scoped read composition
 

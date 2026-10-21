@@ -25,20 +25,21 @@ write-free snapshot reads are the current product boundaries.
 
 Current adopted work is tracked by the [active roadmap](roadmap/).
 The [structural simplification program](roadmap/README.md#structural-simplification-program)
-adopts `VIEWS -> PARSE -> STATE -> ADMIT`: projection construction, document
-admission, same-snapshot state and request admission reuse. The design was
-registered on 2026-10-19; the roadmap owns current execution status.
-The [remaining adopted dossier](todo/README.md#current-adopted-dossiers)
-defines unfinished scope, failure boundaries and task-local correctness checks.
-Completed VIEWS, PARSE and STATE behavior lives in
+delivers projection construction, document admission, same-snapshot state and
+request admission reuse in the sequence `VIEWS -> PARSE -> STATE -> ADMIT`.
+Implemented ownership lives in
 [projection composition](architecture/system.md#request-scoped-read-composition),
-[document admission reuse](architecture/system.md#document-admission-reuse) and
-[staged snapshot state reuse](architecture/system.md#staged-snapshot-state-reuse), with
-[functional regression owners](implementation-tips/testing.md#functional-regression-owners).
-Elapsed-time tests,
-latency percentiles, throughput benchmarks and performance baselines/thresholds
-are excluded. Existing CLI/JSON interfaces and persisted validation remain preserved;
-CLI interaction changes remain an [unadopted CALLS candidate](todo/TODO-podway-cli-interaction-simplification.md).
+[document admission reuse](architecture/system.md#document-admission-reuse),
+[staged snapshot state reuse](architecture/system.md#staged-snapshot-state-reuse) and
+[invocation-local admission reuse](architecture/system.md#invocation-local-prepared-graph-reuse),
+with [functional regression owners](implementation-tips/testing.md#functional-regression-owners).
+VIEWS, PARSE and STATE are owner-accepted. ADMIT's final integration and Master
+Epic acceptance remain pending; its [adopted dossier](todo/README.md#current-adopted-dossiers)
+remains indexed until accepted closeout. The roadmap alone owns status.
+Elapsed-time tests, latency percentiles, throughput benchmarks and performance
+baselines/thresholds are excluded. Existing CLI/JSON interfaces and persisted
+validation remain preserved; CLI interaction changes remain an
+[unadopted CALLS candidate](todo/TODO-podway-cli-interaction-simplification.md).
 This program selects no release or external-consumer change.
 
 The preceding [internal-improvement sequence](roadmap/README.md#current-internal-improvements)

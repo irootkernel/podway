@@ -85,27 +85,25 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-The remaining dossier follows the design-only sequence adopted on 2026-10-19.
-The [roadmap](../roadmap/README.md#structural-simplification-program) alone owns
-task order and current status.
-Accept each epic before starting the next, without cross-epic implementation
-interleaving:
+The [roadmap](../roadmap/README.md#structural-simplification-program) owns task
+status. ADMIT retains its dossier while final integration and Master Epic
+acceptance remain pending:
 
-1. [ADMIT: Request admission reuse](TODO-podway-request-admission-reuse.md)
-   composes eligible admission stages and retains at most one Store-prepared
-   graph in an opaque Engine context for one CLI invocation, without retaining
-   leases across mutation artifact hashing, prompts or the competing-writer gap.
+1. [ADMIT: Request admission reuse](TODO-podway-request-admission-reuse.md).
+   Implemented [read admission](../architecture/system.md#read-path) and
+   [invocation-local graph reuse](../architecture/system.md#invocation-local-prepared-graph-reuse)
+   preserve separate requests and release guards before mutation artifact work.
+   Keep this entry and dossier until accepted closeout under the lifecycle above.
 
-VIEWS, PARSE and STATE are accepted and their dossiers are retired. Completed
-behavior and verification guidance live in
-[projection composition](../architecture/system.md#request-scoped-read-composition),
-[document admission reuse](../architecture/system.md#document-admission-reuse),
-[staged snapshot state reuse](../architecture/system.md#staged-snapshot-state-reuse) and
+VIEWS, PARSE and STATE are accepted and their dossiers are retired. Their lasting
+behavior lives in [projection composition](../architecture/system.md#request-scoped-read-composition),
+[document admission reuse](../architecture/system.md#document-admission-reuse) and
+[staged snapshot state reuse](../architecture/system.md#staged-snapshot-state-reuse).
+All four epics' implemented checks have
 [functional regression owners](../implementation-tips/testing.md#functional-regression-owners).
-
 No CLI/JSON interface, storage identity, release or external-consumer change is selected.
 Elapsed-time tests, latency percentiles, throughput benchmarks, performance
-baselines and thresholds are excluded. Use
+baselines and thresholds remain excluded by
 [structural correctness verification](../implementation-tips/testing.md#structural-simplification-verification).
 CALLS remains a candidate, without roadmap tasks.
 

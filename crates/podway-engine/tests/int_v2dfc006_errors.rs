@@ -1552,6 +1552,26 @@ mod admit002 {
     ) -> Result<Value, Box<DirectExecutionErrorV1>> {
         let request_id = RequestIdV1::new(ID).unwrap();
         let output = match route {
+            "preflight-context" => {
+                let mut request = reads004_facts_request(selector);
+                request.expected_workspace_id = workspace;
+                request.deadline = deadline;
+                let mut context = podway_engine::direct_api::DirectInvocationContextV1::default();
+                let response =
+                    podway_engine::direct_api::execute_direct_preflight_facts_with_context_v1(
+                        resolver,
+                        request,
+                        clock,
+                        &mut context,
+                    )
+                    .unwrap();
+                let podway_engine::direct_execution::DirectPreflightFactsResponseV1::Facts(facts) =
+                    response
+                else {
+                    panic!("context preflight refused the cold fixture");
+                };
+                return Ok(serde_json::json!({"session_revision": facts.session_revision.get()}));
+            }
             "preflight" => {
                 let mut request = reads004_facts_request(selector);
                 request.expected_workspace_id = workspace;
@@ -1855,7 +1875,14 @@ mod admit002 {
     fn admit002_cold_routes_are_write_free_with_no_shm_or_no_sidecars() {
         use std::os::unix::fs::MetadataExt;
         for sidecars in ["no-shm", "neither"] {
-            for route in ["status", "preflight", "lookup", "show", "reset"] {
+            for route in [
+                "status",
+                "preflight",
+                "preflight-context",
+                "lookup",
+                "show",
+                "reset",
+            ] {
                 let (_root, selector, store) = prepare_fixture();
                 let session = session(&store);
                 if sidecars == "neither" {

@@ -567,78 +567,127 @@ fn plain_start_race_rechecks_the_winning_session_policy_without_a_revision_hint(
 
 #[test]
 fn unrelated_item_commit_preserves_exact_item_fences_and_replay() {
-    let (temporary, selector, store) = prepare_fixture();
-    let before = graph(&store);
-    let before_sequence = sequence(&store);
-    let competitor = Arc::new(Mutex::new(Competitor::with_trials(temporary.path(), 1)));
-    let instrumented = resolver().with_store_boundary_observer_v1({
-        let competitor = Arc::clone(&competitor);
-        move |boundary| {
-            if boundary == DirectTransactionBoundaryV1::BeforeBegin {
-                competitor.lock().unwrap().commit_item(0, "i16");
-            }
+    for contextual in [false, true] {
+        let (temporary, selector, store) = prepare_fixture();
+        let before = graph(&store);
+        let before_sequence = sequence(&store);
+        let mut context = podway_engine::direct_api::DirectInvocationContextV1::default();
+        if contextual {
+            admit003_facts(&selector, &mut context);
         }
-    });
-    let input = request(&selector, set(&before, "i01", "parent"), "independent-item");
-    let output = success(
-        execute_direct_v1(
-            &instrumented,
-            input.clone(),
-            &Clock,
-            &NativeDirectIdSourceV1,
-        )
-        .unwrap(),
-    );
-    competitor.lock().unwrap().finish();
-    assert_eq!(sequence(&store), before_sequence + 2);
-    assert_eq!(
-        item_fences(&graph(&store), "i01").expected_item_revision,
-        Revision::new(1)
-    );
-    assert_eq!(
-        item_fences(&graph(&store), "i16").expected_item_revision,
-        Revision::new(1)
-    );
-    assert_eq!(outcome(&store, "independent-item"), Some(output.clone()));
-    assert!(outcome(&store, "g6-competing-0").is_some());
-    assert_eq!(
-        success(execute_direct_v1(&resolver(), input, &NoEffects, &NoEffects).unwrap()),
-        output
-    );
-    assert_eq!(sequence(&store), before_sequence + 2);
+        let entered = Arc::new(AtomicUsize::new(0));
+        let competitor = Arc::new(Mutex::new(Competitor::with_trials(temporary.path(), 1)));
+        let instrumented = resolver().with_store_boundary_observer_v1({
+            let competitor = Arc::clone(&competitor);
+            let entered = Arc::clone(&entered);
+            move |boundary| {
+                if boundary == DirectTransactionBoundaryV1::BeforeBegin {
+                    // This boundary follows the actual preparation read, including
+                    // hint consumption in context mode; only now may the child commit.
+                    assert_eq!(entered.fetch_add(1, Ordering::SeqCst), 0);
+                    competitor.lock().unwrap().commit_item(0, "i16");
+                }
+            }
+        });
+        let input = request(&selector, set(&before, "i01", "parent"), "independent-item");
+        let response = if contextual {
+            podway_engine::direct_api::execute_direct_with_context_v1(
+                &instrumented,
+                input.clone(),
+                &Clock,
+                &NativeDirectIdSourceV1,
+                &mut context,
+            )
+        } else {
+            execute_direct_v1(
+                &instrumented,
+                input.clone(),
+                &Clock,
+                &NativeDirectIdSourceV1,
+            )
+        };
+        let output = success(response.unwrap());
+        competitor.lock().unwrap().finish();
+        assert_eq!(entered.load(Ordering::SeqCst), 1);
+        assert_eq!(sequence(&store), before_sequence + 2);
+        assert_eq!(
+            item_fences(&graph(&store), "i01").expected_item_revision,
+            Revision::new(1)
+        );
+        assert_eq!(
+            item_fences(&graph(&store), "i16").expected_item_revision,
+            Revision::new(1)
+        );
+        assert_eq!(outcome(&store, "independent-item"), Some(output.clone()));
+        assert!(outcome(&store, "g6-competing-0").is_some());
+        let replay = if contextual {
+            podway_engine::direct_api::execute_direct_with_context_v1(
+                &resolver(),
+                input,
+                &NoEffects,
+                &NoEffects,
+                &mut context,
+            )
+        } else {
+            execute_direct_v1(&resolver(), input, &NoEffects, &NoEffects)
+        };
+        assert_eq!(success(replay.unwrap()), output);
+        assert_eq!(sequence(&store), before_sequence + 2);
+    }
 }
 
 #[test]
 fn same_item_race_reports_the_current_revision_without_effects() {
-    let (temporary, selector, store) = prepare_fixture();
-    let before = graph(&store);
-    let before_sequence = sequence(&store);
-    let competitor = Arc::new(Mutex::new(Competitor::with_trials(temporary.path(), 1)));
-    let instrumented = resolver().with_store_boundary_observer_v1({
-        let competitor = Arc::clone(&competitor);
-        move |boundary| {
-            if boundary == DirectTransactionBoundaryV1::BeforeBegin {
-                competitor.lock().unwrap().commit_item(0, "i01");
-            }
+    for contextual in [false, true] {
+        let (temporary, selector, store) = prepare_fixture();
+        let before = graph(&store);
+        let before_sequence = sequence(&store);
+        let mut context = podway_engine::direct_api::DirectInvocationContextV1::default();
+        if contextual {
+            admit003_facts(&selector, &mut context);
         }
-    });
-    let input = request(&selector, set(&before, "i01", "parent"), "same-item-stale");
-    let DirectResponseV1::Failure(error) =
-        execute_direct_v1(&instrumented, input, &NoEffects, &NoEffects).unwrap()
-    else {
-        panic!("stale item fence committed");
-    };
-    competitor.lock().unwrap().finish();
-    let error = error.into_value();
-    assert!(validate_daemon_free_document_v1("podway.error/v2", &error));
-    assert_eq!(error["code"], "ITEM_REVISION_CONFLICT");
-    assert_eq!(error["details"]["current_revision"], 1);
-    assert_eq!(sequence(&store), before_sequence + 1);
-    assert!(outcome(&store, "same-item-stale").is_none());
-    assert_eq!(
-        item_fences(&graph(&store), "i01").expected_item_revision,
-        Revision::new(1)
-    );
+        let entered = Arc::new(AtomicUsize::new(0));
+        let competitor = Arc::new(Mutex::new(Competitor::with_trials(temporary.path(), 1)));
+        let instrumented = resolver().with_store_boundary_observer_v1({
+            let competitor = Arc::clone(&competitor);
+            let entered = Arc::clone(&entered);
+            move |boundary| {
+                if boundary == DirectTransactionBoundaryV1::BeforeBegin {
+                    // This boundary follows the actual preparation read, including
+                    // hint consumption in context mode; only now may the child commit.
+                    assert_eq!(entered.fetch_add(1, Ordering::SeqCst), 0);
+                    competitor.lock().unwrap().commit_item(0, "i01");
+                }
+            }
+        });
+        let input = request(&selector, set(&before, "i01", "parent"), "same-item-stale");
+        let response = if contextual {
+            podway_engine::direct_api::execute_direct_with_context_v1(
+                &instrumented,
+                input,
+                &NoEffects,
+                &NoEffects,
+                &mut context,
+            )
+        } else {
+            execute_direct_v1(&instrumented, input, &NoEffects, &NoEffects)
+        };
+        let DirectResponseV1::Failure(error) = response.unwrap() else {
+            panic!("stale item fence committed");
+        };
+        competitor.lock().unwrap().finish();
+        assert_eq!(entered.load(Ordering::SeqCst), 1);
+        let error = error.into_value();
+        assert!(validate_daemon_free_document_v1("podway.error/v2", &error));
+        assert_eq!(error["code"], "ITEM_REVISION_CONFLICT");
+        assert_eq!(error["details"]["current_revision"], 1);
+        assert_eq!(sequence(&store), before_sequence + 1);
+        assert!(outcome(&store, "same-item-stale").is_none());
+        assert_eq!(
+            item_fences(&graph(&store), "i01").expected_item_revision,
+            Revision::new(1)
+        );
+    }
 }
 
 #[test]

@@ -423,6 +423,41 @@ ADMIT-004 still owns integrated supported Store continuity, complete refusal/rep
 qualification and program-documentation retirement. Task-local tests do not defer
 ADMIT-003 correctness to that integration task.
 
+### ADMIT-004 integration record
+
+The integration extends existing registered owners without production, contract,
+dependency or instrumentation changes. Engine's unrelated-item and same-item
+writer races retain their stateless controls and also carry successful preflight
+contexts into preparation. Their competing child commits only at `BeforeBegin`,
+after preparation: current-state reload preserves unrelated item fences and
+replay; stale same-item fences refuse without a rejected outcome. The Engine
+cold-read matrix now includes context-bearing preflight with missing SHM and
+missing sidecars. Store's live-writer hot-WAL owner covers ordinary and composed
+admission with unchanged files and once-only callbacks; its existing owned-child
+guard is shared so callback assertion failures also reap the exact child.
+
+The [supported Store continuity record](../implementation-tips/testing.md#supported-store-continuity)
+binds the retained pre-ADMIT and candidate artifacts, original response bytes,
+read-only lookup, continuation, old-attempt replay and unchanged supported Store
+identity. Separate fully fenced and automatic-preflight completion runs exercise
+both cold invocation and matching context reuse. This complements the existing
+replacement/refusal, optional-comparison/mandatory-failure, full Standard
+preflight, stdin-owned and distinct-request/lifetime owners promoted under
+[functional regression owners](../implementation-tips/testing.md#functional-regression-owners).
+Source inspection still complements accounting for qualification SQL and
+infallible retention; equal counters alone do not prove absence of every stage.
+
+Lasting acquisition, witness and prepared-value limits live in the
+[read architecture](../architecture/system.md#read-path) and
+[prepared-value contract](../specs/storage/transactions-concurrency-and-idempotency.md#request-owned-prepared-value-reuse).
+Program-level planning text in the documentation indexes and testing guidance is
+replaced by implemented ownership and maintenance rules. The Coordinator's final
+`make test`, independent implementation assessments, Task acceptance and Master
+Epic acceptance remain separate pending gates. No roadmap status is changed by
+this record. Retain this dossier and its index until Master accepts the exact
+closeout candidate; only then replace every remaining dossier link and delete it
+under the [TODO lifecycle](README.md#lifecycle).
+
 ## Goals, non-goals, and scope
 
 Reuse eligible binding/first-snapshot admission and an immutable preflight graph

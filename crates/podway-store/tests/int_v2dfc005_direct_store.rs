@@ -595,17 +595,18 @@ fn acquired_locks_allow_callbacks_to_finish_after_the_deadline() {
     assert_eq!(images(&direct.layout().runtime_directory()), before);
 }
 
+struct OwnedChild(std::process::Child);
+impl Drop for OwnedChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 // Deadline-sensitive admission cannot share the process-global gate with other tests.
 fn run_isolated_deadline_test(name: &str) -> bool {
     if std::env::var_os("PODWAY_STORE_DEADLINE_CHILD").is_some() {
         return false;
-    }
-    struct OwnedChild(std::process::Child);
-    impl Drop for OwnedChild {
-        fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
-        }
     }
     let mut child = OwnedChild(
         std::process::Command::new(std::env::current_exe().unwrap())
@@ -1742,43 +1743,68 @@ fn cold_read_with_an_uninitialized_existing_shm_is_write_free() {
 
 #[test]
 fn hot_wal_read_snapshot_is_write_free_with_an_open_writer_process() {
-    let (root, direct) = fixture();
-    let signal = root.path().join("child-ready");
-    let input = root.path().join("child-input.json");
-    fs::write(
-        &input,
-        serde_json::to_vec(&json!({"root":root.path(),"boundary":3,"signal":signal})).unwrap(),
-    )
-    .unwrap();
-    let mut writer = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", CHILD_TEST, "--nocapture"])
-        .env(CHILD_FIXTURE_ENV, &input)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
+    for composed in [false, true] {
+        let (root, direct) = fixture();
+        let signal = root.path().join("child-ready");
+        let input = root.path().join("child-input.json");
+        fs::write(
+            &input,
+            serde_json::to_vec(&json!({"root":root.path(),"boundary":3,"signal":signal})).unwrap(),
+        )
         .unwrap();
-    let limit = deadline();
-    while !signal.exists() && Instant::now() < limit {
-        std::thread::sleep(Duration::from_millis(2));
+        let mut writer = OwnedChild(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", CHILD_TEST, "--nocapture"])
+                .env(CHILD_FIXTURE_ENV, &input)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let limit = deadline();
+        while !signal.exists() && Instant::now() < limit {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(signal.exists(), "writer rendezvous failed");
+        let before = images(&direct.layout().runtime_directory());
+        let mut admissions = 0;
+        let mut operations = 0;
+        let result = if composed {
+            direct
+                .read_admitting_typed(
+                    deadline(),
+                    |_| {
+                        admissions += 1;
+                        Ok::<_, DirectStoreErrorV1>(())
+                    },
+                    |(), snapshot| {
+                        operations += 1;
+                        assert_eq!(snapshot.view(UnixMillis::new(50))?.sequence(), 2);
+                        Ok::<_, DirectStoreErrorV1>(())
+                    },
+                )
+                .and_then(|operation| {
+                    operation.map_err(podway_store::direct_store::DirectReadFailureV1::Operation)
+                })
+        } else {
+            direct
+                .read(deadline(), |snapshot| {
+                    assert_eq!(snapshot.view(UnixMillis::new(50))?.sequence(), 2);
+                    Ok(())
+                })
+                .map_err(podway_store::direct_store::DirectReadFailureV1::Admission)
+        };
+        // The guard also reaps this exact child if a callback assertion panics.
+        writer.0.kill().unwrap();
+        writer.0.wait().unwrap();
+        result.unwrap();
+        assert_eq!(admissions, usize::from(composed));
+        assert_eq!(operations, usize::from(composed));
+        assert!(
+            images(&direct.layout().runtime_directory()) == before,
+            "read changed an authoritative file"
+        );
     }
-    if !signal.exists() {
-        let _ = writer.kill();
-        let _ = writer.wait();
-        panic!("writer rendezvous failed");
-    }
-    let before = images(&direct.layout().runtime_directory());
-    let result = direct.read(deadline(), |snapshot| {
-        assert_eq!(snapshot.view(UnixMillis::new(50))?.sequence(), 2);
-        Ok(())
-    });
-    // Reap the exact owned writer even when the read returns a failure.
-    writer.kill().unwrap();
-    writer.wait().unwrap();
-    result.unwrap();
-    assert!(
-        images(&direct.layout().runtime_directory()) == before,
-        "read changed an authoritative file"
-    );
 }
 
 #[test]
