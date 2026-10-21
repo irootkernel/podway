@@ -293,6 +293,57 @@ Keep all history count/window and receipt checks. Do not narrow history
 validation to the active receipt or bypass a malformed older entry. This task
 does not adopt the separate cross-layer predicate consolidation in DF-005.
 
+STATE-004 implementation record: readiness in `v2_delegation.rs` is owned by
+three private helpers and one crate-local acquisition mode. `readiness_gate_v1`
+returns the delegated active attempt, `Ok(None)` when no active attempt or an
+undelegated active placement settles readiness as `Direct` without
+acquisition, and receipt corruption for a missing active placement.
+`acquire_active_receipt_connection_v1` performs the accounted point query for
+the active attempt's receipt, keeping the former SQL text, parameter order,
+`.optional()` and corruption mappings, now routed through
+`accounted_query_row`. `evaluate_receipt_readiness_v1` is the pure evaluation
+shared by every acquisition: an absent receipt is `ReceiptMissing`, a failed
+`matches_state` is `PackageChanged`, a differing accepted-items digest is
+`ItemsChanged`, otherwise `ReceiptCurrent`. `receipt_snapshot_connection_v1`
+takes a `DelegationReadinessAcquisitionV1`: `AdmittedWindow`, used by
+`view`/`archived_view` with a state admitted in the same snapshot as the
+window, derives readiness from the admitted window with the non-failing
+completeness predicate `u64::try_from(total).is_ok_and(|total|
+receipts.len() as u64 == total)` while the authoritative `u64` conversion
+stays in the `DelegationReceiptSnapshotV1::new` call, and falls back to
+`acquire_active_receipt_connection_v1` only when the active attempt has no
+admitted receipt and the window is truncated, so absence is proven only from a
+complete window; `PointQuery`, used by the prepared-Arc write path of
+`DirectTransactionV1::delegation_receipts`, always point-queries, because the
+prepared-stamp check does not cover `v2_attempts`/`v2_delegation_receipts` row
+identity and derived absence would convert the snapshot-coherence refusal into
+a silent `ReceiptMissing`. Caller inventory:
+`completion_readiness_connection_v1` (gate, acquire, evaluate; unchanged
+signature) is called only by the `PointQuery` arm and the write-time guard in
+`replace_direct_graph_session_transaction_v2`;
+`acquire_active_receipt_connection_v1` is called only by
+`completion_readiness_connection_v1` and the truncated-window fallback.
+Read-path equivalence: `attempt_id` is the receipts primary key and globally
+unique across attempts, so the point query and the window address the same
+single row; the cold same-snapshot loader (`cached: None`) reads the active
+attempt from `v2_attempts` and the cursor check binds it, so its receipt
+always joins the window query; receipts attach only to the attempt active at
+acceptance and attempts append in trace order, so the active attempt's
+receipt is the newest receipt-bearing row — necessary because `new` requires
+the current receipt's summary to equal `summaries.first()` in a
+`trace_sequence DESC` window. A complete window is a sufficient proof of
+absence, not a necessary one: a truncated history also yields point-query
+absence. Deterministic executions of the readiness SQL per acquisition path
+are pinned by
+`int_v2sdg004_receipt::state004_readiness_acquisition_pins_window_derivation_absence_fallback_and_write_path`:
+zero for a same-snapshot view with an admitted receipt or a proven absence,
+one for the truncated-window fallback, one on the prepared-Arc write path. No
+existing accounting target changed: no `int_reads001_query_inventory` recipe
+or `state002_` count fixture has a delegated placement, so the early-empty
+predicate returns before any receipt SQL and the cold-inventory actuals are
+untouched, and the accounted wrapper is a pass-through without
+`test-support`.
+
 ## Failure handling and compatibility boundaries
 
 Preserve corrupt hidden/history values and competing-revision error priority,

@@ -1,8 +1,8 @@
 //! Closed, bounded storage codec for one immutable delegated attempt receipt.
 
 use podway_core::{
-    AttemptId, DelegationReceiptIdV1, GraphNodeId, SessionId, Sha256Digest, WorkspaceId,
-    canonicalize_json_v1, verify_canonical_json_v1,
+    AttemptId, DelegationReceiptIdV1, GraphNodeId, SessionAttemptV2, SessionId, Sha256Digest,
+    WorkspaceId, canonicalize_json_v1, verify_canonical_json_v1,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
@@ -336,13 +336,16 @@ pub fn validate_acceptance_v1(
     Ok(())
 }
 
-pub(crate) fn completion_readiness_connection_v1(
-    connection: &Connection,
+/// Readiness gate shared by every acquisition path. `Ok(None)` means no
+/// active attempt or an active placement without delegation, so readiness
+/// is `Direct` and no receipt acquisition may run; `Ok(Some(active))`
+/// means a delegated active attempt whose receipt must be acquired and
+/// evaluated. A missing active placement is receipt corruption.
+fn readiness_gate_v1(
     state: &GraphSessionStateV2,
-    workspace_uuid: &WorkspaceId,
-) -> Result<DelegationReadinessV1, StoreErrorV1> {
+) -> Result<Option<&SessionAttemptV2>, StoreErrorV1> {
     let Some(active) = state.trace().active_attempt() else {
-        return Ok(DelegationReadinessV1::Direct);
+        return Ok(None);
     };
     let placement = state
         .snapshot()
@@ -351,20 +354,48 @@ pub(crate) fn completion_readiness_connection_v1(
         .find(|node| node.graph_node_id() == active.graph_node_id())
         .ok_or_else(corrupt)?;
     if !placement.has_delegation() {
-        return Ok(DelegationReadinessV1::Direct);
+        return Ok(None);
     }
-    let receipt_json: Option<String> = connection
-        .query_row(
-            "SELECT receipt_json FROM v2_delegation_receipts WHERE attempt_id = ?1 AND session_id = ?2",
-            params![active.attempt_id().as_str(), state.trace().session_id().as_str()],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|_| corrupt())?;
-    let Some(receipt_json) = receipt_json else {
+    Ok(Some(active))
+}
+
+/// Point-query acquisition of the active attempt's receipt: accounted,
+/// session- and attempt-scoped, at most one row by primary key.
+/// `Ok(None)` means no stored receipt for the active attempt.
+fn acquire_active_receipt_connection_v1(
+    connection: &Connection,
+    state: &GraphSessionStateV2,
+    active: &SessionAttemptV2,
+) -> Result<Option<DelegationReceiptV1>, StoreErrorV1> {
+    let receipt_json: Option<String> = crate::query_accounting::accounted_query_row(
+        connection,
+        "SELECT receipt_json FROM v2_delegation_receipts WHERE attempt_id = ?1 AND session_id = ?2",
+        params![
+            active.attempt_id().as_str(),
+            state.trace().session_id().as_str()
+        ],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(|_| corrupt())?;
+    receipt_json
+        .as_deref()
+        .map(DelegationReceiptV1::decode)
+        .transpose()
+}
+
+/// Pure receipt-to-readiness evaluation shared by every acquisition path:
+/// an absent receipt is `ReceiptMissing`, a receipt failing state identity
+/// is `PackageChanged`, one whose accepted-items digest differs is
+/// `ItemsChanged`, otherwise the receipt is `ReceiptCurrent`.
+fn evaluate_receipt_readiness_v1(
+    state: &GraphSessionStateV2,
+    workspace_uuid: &WorkspaceId,
+    receipt: Option<&DelegationReceiptV1>,
+) -> Result<DelegationReadinessV1, StoreErrorV1> {
+    let Some(receipt) = receipt else {
         return Ok(DelegationReadinessV1::ReceiptMissing);
     };
-    let receipt = DelegationReceiptV1::decode(&receipt_json)?;
     if !receipt.matches_state(state, workspace_uuid) {
         return Ok(DelegationReadinessV1::PackageChanged);
     }
@@ -376,11 +407,38 @@ pub(crate) fn completion_readiness_connection_v1(
     Ok(DelegationReadinessV1::ReceiptCurrent)
 }
 
-/// Read the active receipt and newest bounded history for a supplied graph state.
+pub(crate) fn completion_readiness_connection_v1(
+    connection: &Connection,
+    state: &GraphSessionStateV2,
+    workspace_uuid: &WorkspaceId,
+) -> Result<DelegationReadinessV1, StoreErrorV1> {
+    let Some(active) = readiness_gate_v1(state)? else {
+        return Ok(DelegationReadinessV1::Direct);
+    };
+    let receipt = acquire_active_receipt_connection_v1(connection, state, active)?;
+    evaluate_receipt_readiness_v1(state, workspace_uuid, receipt.as_ref())
+}
+
+/// How `receipt_snapshot_connection_v1` obtains readiness after the whole
+/// receipt window validates. `AdmittedWindow` derives readiness from the
+/// admitted window of a state loaded in the same snapshot, falling back to
+/// a point query only when a truncated window cannot prove absence;
+/// `PointQuery` always acquires the active receipt directly, for a state
+/// that may originate from an earlier snapshot.
+#[derive(Clone, Copy)]
+pub(crate) enum DelegationReadinessAcquisitionV1 {
+    AdmittedWindow,
+    PointQuery,
+}
+
+/// Read the active receipt and newest bounded history for a supplied graph
+/// state. `acquisition` selects how readiness is obtained after the whole
+/// window validates.
 pub(crate) fn receipt_snapshot_connection_v1(
     connection: &Connection,
     state: &GraphSessionStateV2,
     workspace_uuid: &WorkspaceId,
+    acquisition: DelegationReadinessAcquisitionV1,
 ) -> Result<DelegationReceiptSnapshotV1, StoreErrorV1> {
     if !state
         .snapshot()
@@ -459,7 +517,30 @@ pub(crate) fn receipt_snapshot_connection_v1(
             .find(|receipt| receipt.attempt_id() == *attempt.attempt_id())
             .cloned()
     });
-    let readiness = completion_readiness_connection_v1(connection, state, workspace_uuid)?;
+    let readiness = match acquisition {
+        DelegationReadinessAcquisitionV1::PointQuery => {
+            completion_readiness_connection_v1(connection, state, workspace_uuid)?
+        }
+        DelegationReadinessAcquisitionV1::AdmittedWindow => {
+            match readiness_gate_v1(state)? {
+                None => DelegationReadinessV1::Direct,
+                Some(active) => {
+                    // A complete window is the only sufficient proof of
+                    // absence; a truncated window without an admitted
+                    // current receipt falls back to the point query.
+                    let window_covers_history =
+                        u64::try_from(total).is_ok_and(|total| receipts.len() as u64 == total);
+                    let fallback_receipt = if current_receipt.is_none() && !window_covers_history {
+                        acquire_active_receipt_connection_v1(connection, state, active)?
+                    } else {
+                        None
+                    };
+                    let receipt = current_receipt.as_ref().or(fallback_receipt.as_ref());
+                    evaluate_receipt_readiness_v1(state, workspace_uuid, receipt)?
+                }
+            }
+        }
+    };
     let summaries = receipts.iter().map(DelegationReceiptV1::summary).collect();
     DelegationReceiptSnapshotV1::new(
         readiness,

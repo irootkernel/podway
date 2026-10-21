@@ -186,6 +186,7 @@ impl<Clock: FnOnce() -> UnixMillis> DirectTransactionV1<'_, '_, Clock> {
             self.transaction,
             graph,
             self.binding.identity().workspace_uuid(),
+            v2_delegation::DelegationReadinessAcquisitionV1::PointQuery,
         )?)
     }
 

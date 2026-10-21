@@ -4,6 +4,7 @@ use podway_core::{
     AttemptId, CanonicalProcedureJsonV1, ProcedureSnapshotId, ProcedureSourceLabelV1, Revision,
     SessionId, Sha256Digest, UnixMillis, WorkspaceId, canonicalize_json_v1,
 };
+use podway_store::test_support::query_account::{QueryAccountant, QueryReport};
 use podway_store::{DelegationReceiptV1, DurableWorktreeIdentityV1, GraphSessionStateV2};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -1285,4 +1286,207 @@ fn state001_prepared_arc_write_path_receipt_snapshot_refuses_unjoinable_active_r
         after_delete[0],
         "the refused write must not change the committed database bytes"
     );
+}
+
+/// Accept the active attempt's delegation receipt, then retry past the
+/// accepted attempt, returning the state whose active attempt holds no
+/// receipt. `index` keeps stored receipt, attempt and request identities
+/// unique; `base_time + index * 3` and `base_time + index * 3 + 1` are the
+/// accept and retry clock times.
+fn state004_accept_then_retry(
+    store: &podway_store::direct_store::DirectStoreV1,
+    state: &GraphSessionStateV2,
+    stored_receipt: &DelegationReceiptV1,
+    tag: &str,
+    index: u64,
+    base_time: u64,
+) -> GraphSessionStateV2 {
+    let accepted = state
+        .accept_delegation_successor_v1(state.trace().active_attempt().unwrap().attempt_id())
+        .unwrap();
+    let accept = request(&format!("state004-{tag}-accept-{index}"));
+    store
+        .mutate(
+            &accept,
+            deadline(),
+            || UnixMillis::new(base_time + index * 3),
+            |transaction| {
+                transaction.now();
+                transaction.accept_delegation(
+                    state.workspace_revision(),
+                    state.trace().revision(),
+                    &accepted,
+                    &digest('d'),
+                    stored_receipt,
+                )?;
+                Ok(success(
+                    &accept,
+                    json!({"accepted":true}),
+                    transaction.now(),
+                ))
+            },
+        )
+        .unwrap();
+    let retried = accepted
+        .retry_active_attempt_v2(
+            accepted.trace().revision(),
+            accepted.trace().active_attempt().unwrap().attempt_id(),
+            AttemptId::new(format!("00000000-0000-4000-8000-{:012x}", 0x820 + index)).unwrap(),
+            podway_core::ReasonV2::new("Retry delegated work").unwrap(),
+            UnixMillis::new(base_time + index * 3 + 1),
+        )
+        .unwrap()
+        .into_state();
+    let retry = request(&format!("state004-{tag}-retry-{index}"));
+    store
+        .mutate(
+            &retry,
+            deadline(),
+            || UnixMillis::new(base_time + index * 3 + 1),
+            |transaction| {
+                transaction.now();
+                transaction.replace_graph(
+                    accepted.workspace_revision(),
+                    accepted.trace().revision(),
+                    &retried,
+                )?;
+                Ok(success(&retry, json!({"retried":true}), transaction.now()))
+            },
+        )
+        .unwrap();
+    retried
+}
+
+/// STATE-004: readiness acquisition routing per snapshot mode. The
+/// readiness point query is accounted under its exact SQL text; every phase
+/// pins its executions and the observable readiness outcome.
+#[test]
+fn state004_readiness_acquisition_pins_window_derivation_absence_fallback_and_write_path() {
+    const READINESS_QUERY_NEEDLE: &str =
+        "SELECT receipt_json FROM v2_delegation_receipts WHERE attempt_id";
+
+    fn readiness_query_executes(report: &QueryReport) -> u64 {
+        let matching: Vec<_> = report
+            .sql
+            .iter()
+            .filter(|(sql, _)| sql.contains(READINESS_QUERY_NEEDLE))
+            .collect();
+        assert!(
+            matching.len() <= 1,
+            "the readiness needle must match at most one registered SQL text"
+        );
+        matching.first().map_or(0, |(_, counts)| counts.executes)
+    }
+
+    // Phase A: a same-snapshot view with a complete window and an admitted
+    // in-window current receipt derives readiness without the point query.
+    let (_temporary, store, _accepted, _original) = accepted_fixture();
+    let accountant = QueryAccountant::start();
+    let view = store
+        .read(deadline(), |snapshot| snapshot.view(UnixMillis::new(500)))
+        .unwrap();
+    let report = accountant.finish();
+    assert_eq!(
+        readiness_query_executes(&report),
+        0,
+        "phase A: window-derived readiness must not point-query"
+    );
+    let receipts = view.delegation_receipts();
+    assert_eq!(
+        receipts.readiness(),
+        podway_store::v2_delegation::DelegationReadinessV1::ReceiptCurrent
+    );
+    assert!(receipts.current_receipt().is_some());
+    assert_eq!(receipts.total(), 1);
+    assert_eq!(receipts.summaries().len(), 1);
+    assert!(!receipts.truncated());
+
+    // Phase B: a truncated history whose active attempt holds none of the
+    // stored receipts cannot prove absence, so the fallback point-query
+    // acquisition runs exactly once.
+    let (_temporary, store) = fixture(&identity());
+    let mut state = session_state();
+    seed(&store, &state);
+    for index in 0..33_u64 {
+        let mut value = receipt(&state).value().clone();
+        value["receipt_id"] = json!(format!("00000000-0000-4000-8000-{:012x}", 0x630 + index));
+        let stored = DelegationReceiptV1::new(value).unwrap();
+        state = state004_accept_then_retry(&store, &state, &stored, "b", index, 510);
+    }
+    let accountant = QueryAccountant::start();
+    let view = store
+        .read(deadline(), |snapshot| snapshot.view(UnixMillis::new(700)))
+        .unwrap();
+    let report = accountant.finish();
+    assert_eq!(
+        readiness_query_executes(&report),
+        1,
+        "phase B: a truncated window must fall back to the point query"
+    );
+    let receipts = view.delegation_receipts();
+    assert_eq!(
+        receipts.readiness(),
+        podway_store::v2_delegation::DelegationReadinessV1::ReceiptMissing
+    );
+    assert!(receipts.current_receipt().is_none());
+    assert_eq!(receipts.total(), 33);
+    assert_eq!(receipts.summaries().len(), 32);
+    assert!(receipts.truncated());
+
+    // Phase C: the prepared-Arc write path keeps the point-query
+    // acquisition.
+    let (_temporary, store, _accepted, _original) = accepted_fixture();
+    let prepared = store.prepare_graph(deadline()).unwrap().unwrap();
+    let key = request("state004-write-readiness");
+    let accountant = QueryAccountant::start();
+    store
+        .mutate(
+            &key,
+            deadline(),
+            || UnixMillis::new(600),
+            |transaction| {
+                transaction.use_prepared_graph(Some(&prepared))?;
+                let receipts = transaction.delegation_receipts()?;
+                assert_eq!(
+                    receipts.readiness(),
+                    podway_store::v2_delegation::DelegationReadinessV1::ReceiptCurrent
+                );
+                assert!(receipts.current_receipt().is_some());
+                Ok(success(&key, json!({"read":true}), transaction.now()))
+            },
+        )
+        .unwrap();
+    let report = accountant.finish();
+    assert_eq!(
+        readiness_query_executes(&report),
+        1,
+        "phase C: the write path keeps the point-query acquisition"
+    );
+
+    // Phase D: a complete window whose active attempt holds no receipt
+    // proves absence, so readiness derives ReceiptMissing without the query.
+    let (_temporary, store) = fixture(&identity());
+    let state = session_state();
+    seed(&store, &state);
+    let stored = receipt(&state);
+    state004_accept_then_retry(&store, &state, &stored, "d", 0, 800);
+    let accountant = QueryAccountant::start();
+    let view = store
+        .read(deadline(), |snapshot| snapshot.view(UnixMillis::new(900)))
+        .unwrap();
+    let report = accountant.finish();
+    assert_eq!(
+        readiness_query_executes(&report),
+        0,
+        "phase D: proven absence must not point-query"
+    );
+    let receipts = view.delegation_receipts();
+    assert_eq!(
+        receipts.readiness(),
+        podway_store::v2_delegation::DelegationReadinessV1::ReceiptMissing
+    );
+    assert!(receipts.current_receipt().is_none());
+    assert_eq!(receipts.total(), 1);
+    assert_eq!(receipts.summaries().len(), 1);
+    assert!(!receipts.truncated());
 }

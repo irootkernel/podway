@@ -808,6 +808,7 @@ impl DirectReadSnapshotV1<'_> {
             self.connection,
             &admitted.graph,
             self.binding.identity().workspace_uuid(),
+            v2_delegation::DelegationReadinessAcquisitionV1::AdmittedWindow,
         )?;
         Ok(Some(DirectWorkspaceViewV1 {
             binding: self.binding.clone(),
@@ -846,6 +847,7 @@ impl DirectReadSnapshotV1<'_> {
                     self.connection,
                     &admitted.graph,
                     self.binding.identity().workspace_uuid(),
+                    v2_delegation::DelegationReadinessAcquisitionV1::AdmittedWindow,
                 )?;
                 (receipts, admitted.dispositions, Some(admitted.graph))
             }
