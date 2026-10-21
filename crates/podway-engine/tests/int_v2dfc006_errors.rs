@@ -19,6 +19,550 @@ use podway_store::{
 const ID: &str = "00000000-0000-4000-8000-000000000001";
 const OTHER: &str = "00000000-0000-4000-8000-000000000002";
 
+// Forward successful native values unchanged: rebuilding them would discard
+// transient Git-object evidence and fail before the intended admission stage.
+struct Admit001Native {
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    at: usize,
+    fail: bool,
+    replacement: Option<(std::path::PathBuf, std::path::PathBuf)>,
+}
+
+impl podway_git::GitResolverContractV1 for Admit001Native {
+    fn resolve(
+        &self,
+        selector: podway_git::WorktreeSelectorV1,
+    ) -> Result<podway_git::ValidatedWorktreeV1, podway_git::GitResolveErrorV1> {
+        use std::{os::unix::fs::MetadataExt, sync::atomic::Ordering};
+        let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        let native = podway_git::NativeGitResolverV1::new().resolve(selector)?;
+        if call == self.at {
+            if let Some((path, saved)) = &self.replacement {
+                std::fs::rename(path, saved).unwrap();
+                std::fs::copy(saved, path).unwrap();
+                assert_ne!(
+                    std::fs::metadata(path).unwrap().ino(),
+                    std::fs::metadata(saved).unwrap().ino()
+                );
+            }
+            if self.fail {
+                return Err(podway_git::GitResolveErrorV1::WorktreeDeleted);
+            }
+        }
+        Ok(native)
+    }
+}
+
+struct Admit001Clock {
+    calls: std::sync::atomic::AtomicUsize,
+    allowed: bool,
+}
+
+impl podway_engine::execution::ExecutionClockV1 for Admit001Clock {
+    fn now(&self) -> podway_core::UnixMillis {
+        assert!(self.allowed, "admission failure read the clock");
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        podway_core::UnixMillis::new(1_700_000_000_001)
+    }
+}
+
+fn admit001_read_error<R: podway_git::GitResolverContractV1>(
+    route: &str,
+    resolver: &podway_engine::workspace::DirectWorkspaceResolverV1<R>,
+    selector: &podway_git::WorktreeSelectorV1,
+    workspace: Option<podway_core::WorkspaceId>,
+    clock: &impl podway_engine::execution::ExecutionClockV1,
+) -> DirectExecutionErrorV1 {
+    use super::{
+        int_v2dfc006_direct_execution::deadline, int_v2dfc006_races::reads004_facts_request,
+    };
+    use podway_engine::direct_execution::{
+        DirectReadCommandV1, DirectReadRequestV1, OutcomeLookupRequestV1, execute_read_v1,
+        lookup_outcome_v1, preflight_facts_v1,
+    };
+    match route {
+        "status" => execute_read_v1(
+            resolver,
+            DirectReadRequestV1 {
+                request_id: RequestIdV1::new(ID).unwrap(),
+                selector: selector.clone(),
+                expected_workspace_id: workspace,
+                expected_session_id: None,
+                command: DirectReadCommandV1::Status {
+                    tier: podway_engine::v2_read_service::GraphStatusTierV2::Standard,
+                    history_before: None,
+                },
+                deadline: deadline(),
+            },
+            clock,
+        )
+        .map(|_| ()),
+        "preflight" => {
+            let mut request = reads004_facts_request(selector);
+            request.expected_workspace_id = workspace;
+            preflight_facts_v1(resolver, request, clock).map(|_| ())
+        }
+        "lookup" => lookup_outcome_v1(
+            resolver,
+            OutcomeLookupRequestV1 {
+                selector: selector.clone(),
+                expected_workspace_id: workspace,
+                request_id: RequestIdV1::new(ID).unwrap(),
+                key: IdempotencyKeyV1::new("init-key").unwrap(),
+                deadline: deadline(),
+            },
+            clock,
+        )
+        .map(|_| ()),
+        _ => unreachable!(),
+    }
+    .unwrap_err()
+}
+
+fn admit001_corrupt_slot(store: &podway_store::direct_store::DirectStoreV1, attempt: &AttemptId) {
+    assert_eq!(
+        podway_store::test_support::corrupt_recorded_slot_value(
+            store.layout().database(),
+            attempt,
+            "i01",
+            "{\"kind\":\"mystery\"}",
+        )
+        .unwrap(),
+        1
+    );
+}
+
+fn admit001_runtime_bytes(
+    store: &podway_store::direct_store::DirectStoreV1,
+) -> std::collections::BTreeMap<std::ffi::OsString, Vec<u8>> {
+    std::fs::read_dir(store.layout().runtime_directory())
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            (entry.file_name(), std::fs::read(entry.path()).unwrap())
+        })
+        .collect()
+}
+
+#[test]
+fn admit001_resolver_and_operation_failures_keep_order_and_wrappers() {
+    use super::{
+        int_v2dfc006_direct_execution::{deadline, digest},
+        int_v2dfc006_races::{graph, prepare_fixture},
+    };
+    use podway_engine::{
+        direct_workspace::{
+            DirectWorkspaceErrorV1, DirectWorkspaceReadRequestV1, show_workspace_v1,
+        },
+        workspace::{
+            DirectWorkspaceResolutionErrorV1 as Resolution, DirectWorkspaceResolverV1,
+            WorkspaceGitObservationV1, WorkspaceResolutionErrorV1,
+        },
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    for route in ["status", "preflight", "lookup", "show"] {
+        for stage in [
+            "preliminary",
+            "qualification",
+            "uuid",
+            "bound",
+            "operation",
+            "view",
+        ] {
+            if route == "lookup" && stage == "view" {
+                continue; // Outcome lookup deliberately does not load the graph.
+            }
+            let (_root, selector, store) = prepare_fixture();
+            let current = graph(&store);
+            admit001_corrupt_slot(
+                &store,
+                current.trace().active_attempt().unwrap().attempt_id(),
+            );
+            if stage == "qualification" {
+                rusqlite::Connection::open(store.layout().database())
+                    .unwrap()
+                    .execute(
+                        "UPDATE writer_contract SET contract_manifest_digest=?1 WHERE singleton=1",
+                        [format!("sha256:{}", "f".repeat(64))],
+                    )
+                    .unwrap();
+            }
+            let before = admit001_runtime_bytes(&store);
+            let calls = Arc::new(AtomicUsize::new(0));
+            let at = match stage {
+                "preliminary" => 1,
+                "uuid" | "bound" => 2,
+                "operation" => 3,
+                _ => 0,
+            };
+            let resolver = DirectWorkspaceResolverV1::new(
+                Admit001Native {
+                    calls: Arc::clone(&calls),
+                    at,
+                    fail: true,
+                    replacement: None,
+                },
+                digest(),
+            );
+            let workspace = matches!(stage, "preliminary" | "qualification" | "uuid")
+                .then(|| podway_core::WorkspaceId::new(OTHER).unwrap());
+            let clock = Admit001Clock {
+                calls: AtomicUsize::new(0),
+                allowed: stage == "view",
+            };
+            let error = if route == "show" {
+                let result = show_workspace_v1(
+                    &resolver,
+                    DirectWorkspaceReadRequestV1 {
+                        selector: selector.clone(),
+                        expected_workspace_id: workspace,
+                        request_id: RequestIdV1::new(ID).unwrap(),
+                        deadline: deadline(),
+                    },
+                    &clock,
+                );
+                if stage == "view" {
+                    // Show has no view: even corrupt graph bytes must not add admission.
+                    result.unwrap();
+                    assert_eq!(clock.calls.load(Ordering::SeqCst), 1);
+                    assert_eq!(admit001_runtime_bytes(&store), before);
+                    continue;
+                }
+                let error = result.unwrap_err();
+                assert!(
+                    matches!(error, DirectWorkspaceErrorV1::Resolution(_)),
+                    "{stage}: {error:?}"
+                );
+                DirectExecutionErrorV1::from(error)
+            } else {
+                admit001_read_error(route, &resolver, &selector, workspace, &clock)
+            };
+            match stage {
+                "qualification" => assert!(
+                    matches!(
+                        error,
+                        DirectExecutionErrorV1::Workspace(Resolution::Store(
+                            DirectStoreErrorV1::WriterMismatch { .. }
+                        ))
+                    ),
+                    "{route}/{stage}: {error:?}"
+                ),
+                "uuid" => assert!(
+                    matches!(
+                        error,
+                        DirectExecutionErrorV1::Workspace(Resolution::Resolution(
+                            WorkspaceResolutionErrorV1::ExpectedWorkspaceUuidMismatch { .. }
+                        ))
+                    ),
+                    "{route}/{stage}: {error:?}"
+                ),
+                "view" => assert!(
+                    matches!(
+                        error,
+                        DirectExecutionErrorV1::Store(DirectStoreErrorV1::State(
+                            StoreErrorV1::CorruptStateV1 { .. }
+                        ))
+                    ),
+                    "{route}/{stage}: {error:?}"
+                ),
+                _ => {
+                    let expected = if stage == "preliminary" {
+                        WorkspaceGitObservationV1::Preliminary
+                    } else {
+                        WorkspaceGitObservationV1::BoundRevalidation
+                    };
+                    assert!(
+                        matches!(error, DirectExecutionErrorV1::Workspace(
+                        Resolution::Resolution(WorkspaceResolutionErrorV1::Git {
+                            observation, source: podway_git::GitResolveErrorV1::WorktreeDeleted,
+                        })
+                    ) if observation == expected),
+                        "{route}/{stage}: {error:?}"
+                    );
+                }
+            }
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                match stage {
+                    "preliminary" | "qualification" | "uuid" => 1,
+                    "bound" => 2,
+                    _ => 3,
+                },
+                "{route}/{stage}"
+            );
+            assert_eq!(
+                clock.calls.load(Ordering::SeqCst),
+                usize::from(stage == "view")
+            );
+            assert_eq!(admit001_runtime_bytes(&store), before);
+        }
+    }
+}
+
+#[test]
+fn admit001_operation_witness_precedes_carried_native_and_view_errors() {
+    use super::{
+        int_v2dfc006_direct_execution::{deadline, digest},
+        int_v2dfc006_races::{graph, prepare_fixture},
+    };
+    use podway_engine::{
+        direct_workspace::{
+            DirectWorkspaceErrorV1, DirectWorkspaceReadRequestV1, show_workspace_v1,
+        },
+        workspace::{DirectWorkspaceResolutionErrorV1, DirectWorkspaceResolverV1},
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    for route in ["status", "preflight", "show"] {
+        for failure in ["native", "view"] {
+            if route == "show" && failure == "view" {
+                continue;
+            }
+            for witness in ["none", "database", "lock"] {
+                let (root, selector, store) = prepare_fixture();
+                let current = graph(&store);
+                admit001_corrupt_slot(
+                    &store,
+                    current.trace().active_attempt().unwrap().attempt_id(),
+                );
+                let before = admit001_runtime_bytes(&store);
+                let path = match witness {
+                    "none" => None,
+                    "database" => Some(store.layout().database()),
+                    "lock" => Some(store.layout().maintenance_lock()),
+                    _ => unreachable!(),
+                };
+                let calls = Arc::new(AtomicUsize::new(0));
+                let resolver = DirectWorkspaceResolverV1::new(
+                    Admit001Native {
+                        calls: Arc::clone(&calls),
+                        at: 3,
+                        fail: failure == "native",
+                        replacement: path
+                            .map(|path| (path, root.path().join("owned-operation-witness"))),
+                    },
+                    digest(),
+                );
+                let clock = Admit001Clock {
+                    calls: AtomicUsize::new(0),
+                    allowed: failure == "view",
+                };
+                let error = if route == "show" {
+                    let error = show_workspace_v1(
+                        &resolver,
+                        DirectWorkspaceReadRequestV1 {
+                            selector: selector.clone(),
+                            expected_workspace_id: None,
+                            request_id: RequestIdV1::new(ID).unwrap(),
+                            deadline: deadline(),
+                        },
+                        &clock,
+                    )
+                    .unwrap_err();
+                    if witness == "none" {
+                        assert!(
+                            matches!(error, DirectWorkspaceErrorV1::Resolution(_)),
+                            "{error:?}"
+                        );
+                    } else {
+                        assert!(
+                            matches!(
+                                error,
+                                DirectWorkspaceErrorV1::Store(DirectStoreErrorV1::Maintenance)
+                            ),
+                            "{error:?}"
+                        );
+                    }
+                    DirectExecutionErrorV1::from(error)
+                } else {
+                    admit001_read_error(route, &resolver, &selector, None, &clock)
+                };
+                if witness != "none" {
+                    assert!(
+                        matches!(
+                            error,
+                            DirectExecutionErrorV1::Store(DirectStoreErrorV1::Maintenance)
+                        ),
+                        "{route}/{failure}/{witness}: {error:?}"
+                    );
+                } else if failure == "native" {
+                    assert!(
+                        matches!(
+                            error,
+                            DirectExecutionErrorV1::Workspace(
+                                DirectWorkspaceResolutionErrorV1::Resolution(_)
+                            )
+                        ),
+                        "{route}: {error:?}"
+                    );
+                } else {
+                    assert!(
+                        matches!(
+                            error,
+                            DirectExecutionErrorV1::Store(DirectStoreErrorV1::State(
+                                StoreErrorV1::CorruptStateV1 { .. }
+                            ))
+                        ),
+                        "{route}: {error:?}"
+                    );
+                }
+                assert_eq!(calls.load(Ordering::SeqCst), 3);
+                assert_eq!(
+                    clock.calls.load(Ordering::SeqCst),
+                    usize::from(failure == "view")
+                );
+                assert_eq!(admit001_runtime_bytes(&store), before);
+            }
+        }
+    }
+}
+
+#[test]
+fn admit001_cold_preparation_rejects_unstamped_post_preflight_corruption() {
+    use super::{
+        int_v2dfc006_direct_execution::{Clock, deadline, digest},
+        int_v2dfc006_races::{
+            cursor_fences, graph, item_fences, prepare_fixture, reads004_facts_request,
+        },
+    };
+    use podway_engine::{
+        direct_api::{DirectCommandV1, DirectRequestV1, DirectResponseV1, execute_direct_v1},
+        direct_execution::{
+            DirectCursorCommandV1, DirectCursorRequestV1, NativeDirectIdSourceV1,
+            execute_cursor_v1, preflight_facts_v1,
+        },
+        direct_items::DirectItemCommandV1,
+        workspace::DirectWorkspaceResolverV1,
+    };
+    use podway_protocol::{ItemSetV1, SessionCancelV1, SessionCompleteV1};
+    use podway_store::direct_store::DirectTransactionBoundaryV1;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let (_root, selector, store) = prepare_fixture();
+    let resolver = DirectWorkspaceResolverV1::new(podway_git::NativeGitResolverV1::new(), digest());
+    let initial = graph(&store);
+    let historical_attempt = initial
+        .trace()
+        .active_attempt()
+        .unwrap()
+        .attempt_id()
+        .clone();
+    let execute = |command, key: &str| {
+        let response = execute_direct_v1(
+            &resolver,
+            DirectRequestV1 {
+                selector: selector.clone(),
+                expected_workspace_id: None,
+                request_id: RequestIdV1::new(ID).unwrap(),
+                command,
+                idempotency_key: Some(IdempotencyKeyV1::new(key).unwrap()),
+                deadline: deadline(),
+                observed_at: Rfc3339MillisV1::new("2023-11-14T22:13:20.001Z").unwrap(),
+                timeout_ms: 5000,
+            },
+            &Clock,
+            &NativeDirectIdSourceV1,
+        )
+        .unwrap();
+        assert!(
+            matches!(response, DirectResponseV1::Success(_)),
+            "{response:?}"
+        );
+    };
+    execute(
+        DirectCommandV1::Item(DirectItemCommandV1::Set(ItemSetV1 {
+            item_id: ItemId::new("i01").unwrap(),
+            value: "historical evidence".into(),
+            preconditions: item_fences(&initial, "i01"),
+        })),
+        "admit001-history",
+    );
+    execute(
+        DirectCommandV1::Cursor(DirectCursorCommandV1::Complete(SessionCompleteV1 {
+            preconditions: cursor_fences(&graph(&store)),
+        })),
+        "admit001-advance",
+    );
+    let current = graph(&store);
+    assert_ne!(
+        current.trace().active_attempt().unwrap().attempt_id(),
+        &historical_attempt
+    );
+    let facts = preflight_facts_v1(&resolver, reads004_facts_request(&selector), &Clock).unwrap();
+    assert_eq!(facts.session_revision, current.trace().revision());
+    // These are exactly the comparison stamps, plus the persisted locator.
+    // The graph's historical payload changes without advancing any of them.
+    let stamps = || {
+        let connection = rusqlite::Connection::open(store.layout().database()).unwrap();
+        connection.query_row(
+            "SELECT w.last_validated_root,c.contract_manifest_digest,c.generation_id,w.workspace_uuid,\
+             CAST(w.next_workspace_sequence AS TEXT),s.session_id,CAST(s.session_revision AS TEXT),\
+             CAST(v.workspace_revision AS TEXT),s.procedure_snapshot_id,p.digest \
+             FROM workspace_state w JOIN writer_contract c ON c.singleton=w.singleton \
+             JOIN v2_workspace_state v ON v.singleton=w.singleton \
+             JOIN v2_task_sessions s ON s.session_id=v.current_session_id \
+             JOIN v2_procedure_snapshots p ON p.snapshot_id=s.procedure_snapshot_id WHERE w.singleton=1",
+            [], |row| (0..10).map(|index| row.get::<_, String>(index)).collect::<rusqlite::Result<Vec<_>>>(),
+        ).unwrap()
+    };
+    let before_stamps = stamps();
+    admit001_corrupt_slot(&store, &historical_attempt);
+    assert_eq!(stamps(), before_stamps);
+    let before = admit001_runtime_bytes(&store);
+    let begins = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&begins);
+    let resolver = resolver.with_store_boundary_observer_v1(move |boundary| {
+        if boundary == DirectTransactionBoundaryV1::BeforeBegin {
+            observed.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+    let key = IdempotencyKeyV1::new("admit001-cold-corruption").unwrap();
+    let result = execute_cursor_v1(
+        &resolver,
+        DirectCursorRequestV1 {
+            request_id: RequestIdV1::new(OTHER).unwrap(),
+            selector,
+            expected_workspace_id: Some(facts.workspace_id),
+            key: key.clone(),
+            command: DirectCursorCommandV1::Cancel(SessionCancelV1 {
+                reason: "Retain the cold preparation boundary.".into(),
+                preconditions: cursor_fences(&current),
+            }),
+            deadline: deadline(),
+        },
+        &Admit001Clock {
+            calls: AtomicUsize::new(0),
+            allowed: false,
+        },
+        &NativeDirectIdSourceV1,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(DirectExecutionErrorV1::Store(DirectStoreErrorV1::State(
+                StoreErrorV1::CorruptStateV1 { .. }
+            )))
+        ),
+        "{result:?}"
+    );
+    assert_eq!(begins.load(Ordering::SeqCst), 0);
+    assert_eq!(admit001_runtime_bytes(&store), before);
+    assert_eq!(stamps(), before_stamps);
+    store
+        .read(deadline(), |snapshot| {
+            assert!(snapshot.outcome(&key)?.is_none());
+            Ok(())
+        })
+        .unwrap();
+}
+
 fn context(command: &str) -> DirectErrorContextV1 {
     DirectErrorContextV1 {
         request_id: RequestIdV1::new(ID).unwrap(),

@@ -483,6 +483,64 @@ fn read_sqlite_contention_is_classified_without_retrying_the_callback() {
 }
 
 #[test]
+fn admit001_ordinary_read_witness_precedes_carried_failure() {
+    for replacement in ["none", "database", "lock"] {
+        for transport in ["binding", "carried", "outer"] {
+            let (root, store) = fixture();
+            let calls = std::cell::Cell::new(0);
+            let mut baseline = None;
+            let result = store.read(deadline(), |snapshot| {
+                calls.set(calls.get() + 1);
+                let binding = snapshot.binding().clone();
+                let path = match replacement {
+                    "none" => None,
+                    "database" => Some(store.layout().database()),
+                    "lock" => Some(store.layout().maintenance_lock()),
+                    _ => unreachable!(),
+                };
+                if let Some(path) = path {
+                    let saved = root.path().join("owned-read-witness");
+                    fs::rename(&path, &saved).unwrap();
+                    fs::copy(&saved, &path).unwrap();
+                    assert_ne!(
+                        fs::metadata(&path).unwrap().ino(),
+                        fs::metadata(saved).unwrap().ino()
+                    );
+                }
+                baseline = Some(images(&store.layout().runtime_directory()));
+                match transport {
+                    "binding" => Ok(Ok(binding)),
+                    "carried" => Ok(Err(DirectStoreErrorV1::SchemaMismatch)),
+                    // Ordinary reads skip the final witness check on an outer
+                    // error. Engine operation failures deliberately travel inside Ok.
+                    "outer" => Err(DirectStoreErrorV1::SchemaMismatch),
+                    _ => unreachable!(),
+                }
+            });
+            assert_eq!(calls.get(), 1);
+            match (replacement, transport, result) {
+                (_, "outer", Err(DirectStoreErrorV1::SchemaMismatch))
+                | ("none", "carried", Ok(Err(DirectStoreErrorV1::SchemaMismatch)))
+                | (
+                    "database" | "lock",
+                    "binding" | "carried",
+                    Err(DirectStoreErrorV1::Maintenance),
+                ) => {}
+                ("none", "binding", Ok(Ok(binding))) => assert_eq!(
+                    binding.identity().workspace_uuid().as_str(),
+                    "00000000-0000-4000-8000-000000000001"
+                ),
+                (_, _, actual) => panic!("{replacement}/{transport}: {actual:?}"),
+            }
+            assert_eq!(
+                images(&store.layout().runtime_directory()),
+                baseline.unwrap()
+            );
+        }
+    }
+}
+
+#[test]
 fn acquired_locks_allow_callbacks_to_finish_after_the_deadline() {
     if run_isolated_deadline_test("acquired_locks_allow_callbacks_to_finish_after_the_deadline") {
         return;
@@ -1947,6 +2005,89 @@ fn prepared_graph_cannot_cross_store_root_or_reuse_after_clock() {
         rejected,
         Err(DirectStoreErrorV1::InvalidInput { .. })
     ));
+}
+
+#[test]
+fn admit001_prepared_graph_identity_components_refuse_independently() {
+    for component in ["generation", "manifest", "workspace"] {
+        let (_root, original) = fixture();
+        let seed = request("admit001-seed");
+        original
+            .mutate(
+                &seed,
+                deadline(),
+                || UnixMillis::new(20),
+                |transaction| {
+                    let now = transaction.now();
+                    transaction.create_graph(&prepared_graph(now))?;
+                    Ok(success(&seed, json!({"seeded":true}), now))
+                },
+            )
+            .unwrap();
+        let prepared = original.prepare_graph(deadline()).unwrap().unwrap();
+        let manifest = if component == "manifest" {
+            digest('e')
+        } else {
+            digest('c')
+        };
+        {
+            let connection = Connection::open(original.layout().database()).unwrap();
+            match component {
+                "generation" => connection.execute(
+                    "UPDATE writer_contract SET generation_id='admit001-generation-two' WHERE singleton=1", []),
+                "manifest" => connection.execute(
+                    "UPDATE writer_contract SET contract_manifest_digest=?1 WHERE singleton=1", [manifest.as_str()]),
+                "workspace" => connection.execute(
+                    "UPDATE workspace_state SET workspace_uuid='00000000-0000-4000-8000-000000000099' WHERE singleton=1", []),
+                _ => unreachable!(),
+            }.unwrap();
+        }
+        // Qualification uses the current manifest. The callback assertion below
+        // proves that any refusal came from the prepared comparison, not open admission.
+        let current = DirectStoreV1::new(
+            original.layout().clone(),
+            manifest,
+            digest('a'),
+            digest('b'),
+        );
+        let baseline = current
+            .read(deadline(), |snapshot| {
+                Ok((snapshot.binding().clone(), snapshot.committed_sequence()?))
+            })
+            .unwrap();
+        let entered = std::cell::Cell::new(false);
+        let rejected = request(&format!("admit001-{component}"));
+        let result = current.mutate(
+            &rejected,
+            deadline(),
+            || panic!("foreign prepared identity read the clock"),
+            |transaction| {
+                entered.set(true);
+                match transaction.use_prepared_graph(Some(&prepared)) {
+                    Err(error) => Err(error),
+                    Ok(_) => panic!("{component}: foreign prepared identity was accepted"),
+                }
+            },
+        );
+        assert!(
+            entered.get(),
+            "{component}: qualification preempted the prepared comparison"
+        );
+        assert!(
+            matches!(result, Err(DirectStoreErrorV1::BindingMismatch)),
+            "{component}: {result:?}"
+        );
+        current
+            .read(deadline(), |snapshot| {
+                assert_eq!(
+                    (snapshot.binding().clone(), snapshot.committed_sequence()?),
+                    baseline
+                );
+                assert!(snapshot.outcome(rejected.key())?.is_none());
+                Ok(())
+            })
+            .unwrap();
+    }
 }
 
 #[test]
