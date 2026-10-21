@@ -178,8 +178,9 @@ pub fn execute_direct_with_error_observer_v1<R: GitResolverContractV1>(
 type MaintenanceObserver =
     Arc<dyn Fn(crate::direct_maintenance::DirectMaintenanceBoundaryV1) + Send + Sync>;
 
-/// READS-004 debug-only, process-local preflight instrumentation: one counter
-/// at the typed facts facade entry and one at the Standard status dispatch.
+/// READS-004 debug-only, process-local preflight instrumentation: counters for
+/// typed facts facade entries, Standard status dispatches, and graph hints
+/// retained, consumed and reused.
 /// Release builds compile the counters away entirely; the CLI prints them
 /// only under its private test token.
 #[cfg(debug_assertions)]
@@ -218,27 +219,6 @@ pub fn reads004_debug_graph_hint_counters_v1() -> (usize, usize, usize) {
         reads004_preflight_counters::RETAINED.load(Ordering::Relaxed),
         reads004_preflight_counters::CONSUMED.load(Ordering::Relaxed),
         reads004_preflight_counters::REUSED.load(Ordering::Relaxed),
-    )
-}
-
-/// Isolated debug-binary qualification observes the same maintenance boundaries as Engine tests.
-#[cfg(debug_assertions)]
-#[doc(hidden)]
-pub fn execute_direct_with_maintenance_observer_v1<R: GitResolverContractV1>(
-    resolver: &DirectWorkspaceResolverV1<R>,
-    request: DirectRequestV1,
-    clock: &impl ExecutionClockV1,
-    ids: &impl DirectIdSourceV1,
-    observer: impl Fn(crate::direct_maintenance::DirectMaintenanceBoundaryV1) + Send + Sync + 'static,
-) -> Result<DirectResponseV1, ProtocolError> {
-    execute_direct_inner_v1(
-        resolver,
-        request,
-        clock,
-        ids,
-        None,
-        Some(Arc::new(observer)),
-        None,
     )
 }
 

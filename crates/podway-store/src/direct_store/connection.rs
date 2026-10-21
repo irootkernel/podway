@@ -1041,9 +1041,13 @@ pub(super) fn configure_connection(
     Ok(())
 }
 
-/// A Store-created, fully validated graph from one read snapshot. Callers cannot
-/// construct or edit its identity/revision stamps. A transaction must revalidate
-/// them before reusing this state; original-key replay still precedes that check.
+/// A Store-created immutable graph body fully admitted by a Store read during
+/// cold preparation or the same invocation's successful preflight. Retained hints
+/// carry the preflight read's identity/revision stamps. Before writer use, cold
+/// preparation supplies current stamps, or matching reuse restamps the value at
+/// the preparation read after every stamp compares equal, without repeating full
+/// graph validation. Callers cannot construct or edit stamps. Transactions
+/// revalidate them before reuse; original-key replay still precedes that check.
 #[derive(Clone, Debug)]
 pub struct DirectPreparedGraphV1 {
     pub(super) root: crate::ValidatedWorkspaceRootV1,
@@ -1080,14 +1084,11 @@ impl DirectStoreV1 {
     ) -> DirectStoreResultV1<Option<DirectPreparedGraphV1>> {
         self.read(deadline, |snapshot| {
             if let Some(prepared) = hint.take()
-                && snapshot.matches_prepared(&prepared).unwrap_or(false)
+                && let Some(admission) = snapshot.admission.as_ref()
+                && matches!(snapshot.matches_prepared(&prepared), Ok(true))
             {
                 // Restamp at this read; only the immutable graph body crosses
                 // the preflight-to-preparation boundary.
-                let admission = snapshot
-                    .admission
-                    .as_ref()
-                    .expect("ordinary read admission");
                 return Ok(Some(DirectPreparedGraphV1 {
                     root: admission.root.clone(),
                     manifest: admission.manifest.clone(),
