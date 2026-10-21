@@ -106,7 +106,7 @@ is retired under the [TODO lifecycle](../todo/README.md#lifecycle).
 
 ## PARSE — Document Admission Reuse
 
-Dependencies: accepted `VIEWS` completion. Implemented ownership:
+Dependencies: accepted `VIEWS` completion. Status: Completed. Implemented ownership:
 [Document admission reuse](../architecture/system.md#document-admission-reuse).
 
 | id | title | status | goal | references |
