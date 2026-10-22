@@ -129,6 +129,32 @@ fn temp() -> TempDir {
     tempfile::tempdir().expect("temporary directory")
 }
 
+const SUN_PATH_CAPACITY: usize = 104;
+
+// The bound socket path is this root's own spelling plus the test's fixed
+// socket suffix and must stay below the macOS `sun_path` capacity. Creating
+// the root under the canonical spelling of the inherited temporary directory
+// makes the measured length exactly the bound length, even when TMPDIR itself
+// is a symlink alias.
+fn socket_fixture_root(suffix: &str) -> TempDir {
+    let inherited_base = fs::canonicalize(std::env::temp_dir()).expect("canonical temporary base");
+    let inherited =
+        tempfile::tempdir_in(inherited_base).expect("inherited socket fixture directory");
+    if inherited.path().as_os_str().len() + suffix.len() < SUN_PATH_CAPACITY {
+        return inherited;
+    }
+    drop(inherited);
+    let fallback_base = fs::canonicalize("/tmp").expect("canonical /tmp spelling");
+    let fallback =
+        tempfile::tempdir_in(fallback_base).expect("short fallback socket fixture directory");
+    assert!(
+        fallback.path().as_os_str().len() + suffix.len() < SUN_PATH_CAPACITY,
+        "fallback socket fixture root must fit the sun_path capacity: {}",
+        fallback.path().display()
+    );
+    fallback
+}
+
 // macOS filesystems may reject these native bytes with EILSEQ (92); only that
 // platform refusal skips the non-UTF-8 fixture.
 fn non_utf8_path_is_unsupported(error: &std::io::Error) -> bool {
@@ -580,7 +606,7 @@ fn durable_directory_fingerprints_ignore_permission_bit_changes() {
 
 #[test]
 fn artifacts_reject_final_and_intermediate_symlinks_and_preserve_non_utf8_bytes() {
-    let temporary = temp();
+    let temporary = socket_fixture_root("/worktree/socket");
     let worktree = temporary.path().join("worktree");
     create_main(&worktree);
     let worktree = fs::canonicalize(&worktree).expect("canonical artifact worktree");

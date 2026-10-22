@@ -1,3 +1,5 @@
+#[path = "int_guide001_socket_roots.rs"]
+mod int_guide001_socket_roots;
 #[path = "int_phase3_layout.rs"]
 mod int_phase3_layout;
 #[path = "int_phase3_resolver.rs"]

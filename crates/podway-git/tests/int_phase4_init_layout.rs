@@ -42,6 +42,32 @@ fn create_main(root: &Path) {
 fn temporary() -> TempDir {
     tempfile::tempdir().expect("temporary directory")
 }
+
+const SUN_PATH_CAPACITY: usize = 104;
+
+// The bound socket path is this root's own spelling plus the test's fixed
+// socket suffix and must stay below the macOS `sun_path` capacity. Creating
+// the root under the canonical spelling of the inherited temporary directory
+// makes the measured length exactly the bound length, even when TMPDIR itself
+// is a symlink alias.
+fn socket_fixture_root(suffix: &str) -> TempDir {
+    let inherited_base = fs::canonicalize(std::env::temp_dir()).expect("canonical temporary base");
+    let inherited =
+        tempfile::tempdir_in(inherited_base).expect("inherited socket fixture directory");
+    if inherited.path().as_os_str().len() + suffix.len() < SUN_PATH_CAPACITY {
+        return inherited;
+    }
+    drop(inherited);
+    let fallback_base = fs::canonicalize("/tmp").expect("canonical /tmp spelling");
+    let fallback =
+        tempfile::tempdir_in(fallback_base).expect("short fallback socket fixture directory");
+    assert!(
+        fallback.path().as_os_str().len() + suffix.len() < SUN_PATH_CAPACITY,
+        "fallback socket fixture root must fit the sun_path capacity: {}",
+        fallback.path().display()
+    );
+    fallback
+}
 #[derive(Debug, Eq, PartialEq)]
 struct GitTreeNodeV1 {
     kind: GitTreeNodeKindV1,
@@ -427,7 +453,7 @@ fn invalid_default_config_bytes_fail_before_layout_mutation() {
 #[test]
 fn config_conflicting_node_kinds_fail_without_layout_mutation() {
     for kind in ["symlink", "directory", "fifo", "socket"] {
-        let temporary = temporary();
+        let temporary = socket_fixture_root("/socket/.podway/config.yaml");
         let worktree = temporary.path().join(kind);
         create_main(&worktree);
         let podway = worktree.join(".podway");

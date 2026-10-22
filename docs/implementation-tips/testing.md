@@ -50,6 +50,20 @@ cargo test -p <package> --test int_suite <source>::<function> -- --exact
 CLI E2E sources use `e2e_suite`. The test-layout verifier rejects sources omitted
 from or duplicated across aggregate suites.
 
+Unix-socket fixtures must keep the bound path below the 104-byte macOS
+`sun_path` capacity. The two socket tests in `podway-git`
+(`int_phase3_resolver` and `int_phase4_init_layout`) create their fixture root
+through a local helper: it creates the root under the canonical spelling of the
+inherited temporary directory — so the measured path is exactly the path the
+test binds — keeps that root when the bound socket path still fits, and
+otherwise falls back to a short root under the canonical form of `/tmp`,
+asserting the fallback fits. The registered regression
+`int_guide001_socket_roots::socket_fixtures_pass_with_a_long_tmpdir`
+re-executes both socket tests in bounded child processes with a roughly
+120-byte TMPDIR, once with a genuinely long directory and once with a long
+symlink alias of a short directory, so the fixtures stay valid regardless of
+the ambient temporary directory's length or spelling.
+
 ## Isolated direct CLI checks
 
 The E2E runner builds the CLI once and uses disposable Git worktrees. Native

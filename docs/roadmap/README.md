@@ -22,7 +22,7 @@ identifiers. Do not rename completed work to apply the new convention.
 
 ## GUIDE — Agent Guidance and Contract Generation 2
 
-Dependencies: none; prior epics are Completed. Status: Planned. Design:
+Dependencies: none; prior epics are Completed. Status: In Progress. Design:
 [GUIDE dossier](../todo/TODO-podway-agent-guidance.md).
 
 On 2026-10-22 the owner adopted GUIDE from hands-on agent sessions against the
@@ -43,7 +43,7 @@ owner starts the epic.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `GUIDE-001` | Keep socket fixtures within sun_path | Planned | Bind the two socket fixtures under a short temporary root when the inherited TMPDIR leaves no room in the 104-byte socket address, proven by a long-TMPDIR regression. | [Socket fixture roots](../todo/TODO-podway-agent-guidance.md#guide-001-socket-fixture-roots) |
+| `GUIDE-001` | Keep socket fixtures within sun_path | Completed | Bind the two socket fixtures under a short temporary root when the inherited TMPDIR leaves no room in the 104-byte socket address, proven by a long-TMPDIR regression. | [Socket fixture roots](../todo/TODO-podway-agent-guidance.md#guide-001-socket-fixture-roots) |
 | `GUIDE-002` | Reject every workspace option on local commands | Planned | Reject `--if-goal-revision` like the other workspace options on local commands, name every option to omit, and correct worktree guidance. | [Local command options](../todo/TODO-podway-agent-guidance.md#guide-002-local-command-options) |
 | `GUIDE-003` | Resolve help topics from command words | Planned | Resolve command words, multi-word commands and groups as help topics, publish a complete topic index, and point unknown topics to it. | [Help topic resolution](../todo/TODO-podway-agent-guidance.md#guide-003-help-topic-resolution) |
 | `GUIDE-004` | Explain record fields, observe/init help and human recovery hints | Planned | Document every record field with its observation source and an example, explain observation and init help, and add human hints without JSON changes. | [Record and recovery guidance](../todo/TODO-podway-agent-guidance.md#guide-004-record-observation-and-recovery-guidance) |
