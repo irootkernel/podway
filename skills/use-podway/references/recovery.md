@@ -84,9 +84,10 @@ inspect that outcome rather than overwriting its identity.
   Semver alone is insufficient. Only a declared release-owned predecessor permits
   migration; do not invent one. For non-destructive continuation, use the original
   writer matching `actual_contract_manifest_digest`, not an arbitrary binary with
-  the same semver. Its `version --json --identity` `contract_manifest_digest` must equal that
-  recorded digest. For discard, use the separately authorized reset-all path above.
-  Use disposable worktrees for development with changed contract bytes.
+  the same semver. Its `version --json --identity` `contract_manifest_digest` must equal
+  that recorded digest; the released-writer table below maps it to a release. For
+  discard, use the separately authorized reset-all path above. Use disposable
+  worktrees for development with changed contract bytes.
 - Initialization resumes keep the original key and `--repair` policy. Foreign
   writer/root markers and predecessor intents require supported read-only writer
   diagnosis. Resume only with the original writer and owning worktree.
@@ -99,6 +100,20 @@ inspect that outcome rather than overwriting its identity.
   original key, applicable UUID/root/fences and exact recovery recipe. A new key or
   deletion of `maintenance-intent.json`, `reset-all.marker` or `removal.marker`
   bypasses supported recovery.
+
+## Released writer manifests
+
+The table below maps a `WORKSPACE_CONTRACT_MISMATCH` error's
+`actual_contract_manifest_digest` (the stored writer digest) to its release:
+
+| Release | Contract-manifest digest |
+| --- | --- |
+| `v0.2.13` | `sha256:dc47bcc5449f7c2e60c920c5b820eb793405b5f2d2f573346ee326f90264d2aa` |
+| `v0.2.14` | `sha256:c699977dd232891041f4063d66295b94004702875855baace876f8a7e0c6391d` |
+
+Identify any other digest with that binary's `podway version --json --identity`
+`contract_manifest_digest`. The table maps releases only; it is not authority
+to switch writers or reset state.
 
 Repair, reset and removal always need applicable lifecycle intent. If diagnosis
 cannot establish a safe operation, report the error, exact worktree, observations

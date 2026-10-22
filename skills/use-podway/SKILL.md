@@ -22,10 +22,15 @@ Do not install it, change project guidance or author a Procedure through this
 skill. Route Procedure source work to `$create-podway-procedure`.
 
 1. Resolve the owning worktree, available CLI and `.podway/config.yaml`. Report
-   missing prerequisites without initializing or installing anything.
+   missing prerequisites without initializing or installing anything. Tracked
+   `.podway` files are `.podway/config.yaml`, `.podway/procedures/` and
+   `.podway/.gitignore`, which ignores `runtime/`; authoritative task state and
+   maintenance locks live under `.podway/runtime/` and are never tracked.
 2. Run `podway observe --json` in the authorized worktree. Require
    `podway.output/v4` and `podway.observation-result/v5`. Error output uses
-   `podway.error/v2`; `SESSION_NOT_FOUND` means no current session.
+   `podway.error/v2`; `SESSION_NOT_FOUND` means no current session;
+   `WORKSPACE_NOT_INITIALIZED` means this worktree has no workspace, so report
+   it and initialize only with explicit intent.
 3. Read identities and lifecycle from `status`, current work from `guidance`,
    declarations from `active_items`, and fenced requests from `mutation_templates`.
    Prepared state has no active attempt; null guidance denotes terminal state.
@@ -75,11 +80,18 @@ and admitted work may finish later. It is not an execution timer.
    Required local artifacts are checked again at completion; `ARTIFACT_CHANGED`
    requires fresh attachment of the verified file.
 4. When one observation supports several item updates, prefer atomic
-   `podway record --stdin`. Its closed `podway.item-record-many-input/v1` includes
-   workspace UUID, session ID/revision, active attempt, key and 1..128 unique
-   operations with observed item revisions. Each operation has one typed `record`
-   or `clear: true`. Do not also pass identity, revision or key flags. Require
-   `podway.item-record-many-result/v2`; any rejected operation changes none of them.
+   `podway record --stdin`. Its closed stdin document requires `schema` set to
+   the constant `podway.item-record-many-input/v1` and draws every identity
+   from the same observation: `workspace_uuid` from `workspace.uuid`,
+   `session_id` and `session_revision` from `result.status.session.id` and `.revision`,
+   `attempt_id` from `result.status.current.attempt.attempt_id`, and a new
+   caller-owned `idempotency_key`. Its 1..128 unique operations each carry
+   `item_id`, an `expected_item_revision` taken from that item's
+   `active_items[].revision` (record templates show it as
+   `preconditions.item_revision`), and exactly one typed `record` or
+   `clear: true`. Do not also pass identity, revision or key flags. Require
+   `podway.item-record-many-result/v2`; any rejected operation changes none of
+   them.
 5. Re-observe after every mutation. Never derive multiple mutations from a stale
    observation. Historical success does not establish current readiness.
 6. Use `complete`, `skip`, `retry`, `decide`, `rework`, `block` or `unblock` only

@@ -4,6 +4,11 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.2.15 - Unreleased
 
+### Changed
+
+- Teach the runtime skill tracked `.podway` files, uninitialized workspaces,
+  record-field observation sources, the criterion citation rule and released writer digests.
+
 ### Fixed
 
 - Reject every worktree request option, including `--if-goal-revision`, on local

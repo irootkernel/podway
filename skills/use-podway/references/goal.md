@@ -37,9 +37,11 @@ invalid mechanically.
 ## Assess and revise
 
 Assess only at the active goal-assessment decision attempt after performing the
-cited work. Supply an English reason describing what was observed. Cite at most
-four resolved source nodes or decision-local items per result. `not_applicable`
-carries no citations.
+cited work. Supply an English reason describing what was observed. Cite only
+resolved `guidance.references[]` sources and recorded items of the decision
+attempt, each once, with at most four citations per result; `not_applicable`
+carries no citations. On `CRITERION_CITATION_INVALID`, re-observe before
+assessing again and cite only currently admitted sources.
 
 The complete current result set derives:
 

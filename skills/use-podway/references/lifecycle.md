@@ -13,8 +13,12 @@ boundary; one operation does not authorize another.
   and, when health diagnosis is needed, `podway doctor`. Consult `podway help
   <route>` for unfamiliar operations. Diagnostic failure is not repair authority.
 - `podway init` requires explicit initialization intent for that worktree. Do not
-  initialize a side-work fixture as part of a session owned elsewhere. A new-key
-  init refuses an initialized workspace; diagnosed repair is a separate operation.
+  initialize a side-work fixture as part of a session owned elsewhere. It creates
+  the tracked files `.podway/config.yaml`, `.podway/procedures/` and
+  `.podway/.gitignore`; that ignore rule keeps `runtime/` untracked, and the
+  authoritative task state and maintenance locks under `.podway/runtime/` are
+  never tracked. A new-key init refuses an initialized workspace; diagnosed
+  repair is a separate operation.
 - Preserve configuration, existing state and unsupported Stores on failure.
   Follow [recovery](recovery.md), not manual database or marker edits.
 
