@@ -1327,7 +1327,7 @@ fn route_topic(topic: &str) -> Option<&'static str> {
             "Usage:\n  podway preset explain <name>\n\nExample:\n  podway preset explain sw-dev-v2"
         }
         "workspace.init" => {
-            "Usage:\n  podway init [--repair]\n\nExamples:\n  podway init\n  podway init --repair"
+            "Usage:\n  podway init [--repair]\n\nCreates the worktree-local Podway workspace. Tracked files:\n  .podway/config.yaml, .podway/procedures/ and .podway/.gitignore, which\n  ignores runtime/ so the worktree-local runtime stays untracked. Authoritative\n  task state and maintenance locks live under .podway/runtime/ and are never\n  tracked.\n\nExamples:\n  podway init\n  podway init --repair"
         }
         "workspace.doctor" => {
             "Usage:\n  podway doctor [--deep]\n\nExample:\n  podway doctor --deep"
@@ -1370,7 +1370,7 @@ fn route_topic(topic: &str) -> Option<&'static str> {
             "Usage:\n  podway next [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nExample:\n  podway next"
         }
         "session.observe" => {
-            "Usage:\n  podway observe [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nReturns one bounded, self-contained status and guidance observation with typed active-item descriptors and fenced mutation templates.\n\nExample:\n  podway --json observe"
+            "Usage:\n  podway observe [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nReturns one bounded, self-contained status and guidance observation with typed active-item descriptors and fenced mutation templates.\nObservation fields map to mutation fences: workspace.uuid feeds --if-workspace-uuid; result.status.session (id, revision) feeds --if-session-id and --if-session-revision; result.status.current.attempt.attempt_id feeds --if-attempt; active_items[].revision feeds --if-item-revision.\nguidance is null once the session is terminal (completed or cancelled).\nTemplates are guidance, not runnable commands: copy preconditions into the matching --if-* flags, supply required arguments a template omits (for example the disposition subcommand), and add your own --idempotency-key; running templates embed fenced argv with placeholders such as <idempotency-key> and <text> to replace; an item.record_many template adds a stdin_template whose expected_item_revision equals preconditions.item_revision — fill it and pass it on stdin.\nSESSION_NOT_FOUND means this workspace has no current task session; a fenced session id that differs from the current session fails as SESSION_ID_MISMATCH, and a stale fenced session revision fails as SESSION_REVISION_CONFLICT.\nWORKSPACE_NOT_INITIALIZED means this worktree has no workspace, so report it and run init only with explicit intent.\n\nExample:\n  podway --json observe"
         }
         "evidence.read" => {
             "Usage:\n  podway evidence read --source <graph-node-id> --item <item-id> [--page-token <token>] [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nReturns one bounded page of an item selected by a currently resolved, declared evidence reference of the current attempt. It changes no session revision. Text offsets count Unicode scalars, list offsets count entries, and other item types return one terminal page. The page token is opaque and is not an authorization credential.\n\nExample:\n  podway --json evidence read --source implement --item notes"
@@ -1445,7 +1445,7 @@ fn route_topic(topic: &str) -> Option<&'static str> {
             "Usage:\n  podway clear <item-id> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-attempt <uuid>] [--if-item-revision <n>]\n\nExample:\n  podway clear constraints"
         }
         "item.record_many" => {
-            "Usage:\n  podway record --stdin [--worktree <path>] [--json]\n\nThe closed JSON stdin document supplies workspace_uuid, session_id, session_revision, attempt_id, idempotency_key, and 1..128 unique typed operations. A check_result is caller supplied and structurally bound; Podway does not execute, verify, or attest the named external operation.\n\nExample:\n  podway record --stdin < record.json"
+            "Usage:\n  podway record --stdin [--worktree <path>] [--json]\n\nOne atomic batch: either every operation commits with one session revision\nbump, or nothing changes. The closed stdin document is\npodway.item-record-many-input/v1; each field's observation source:\n  schema                  the constant podway.item-record-many-input/v1\n  workspace_uuid          workspace.uuid\n  session_id              result.status.session (id)\n  session_revision        result.status.session (revision)\n  attempt_id              result.status.current.attempt.attempt_id\n  idempotency_key         a new caller-owned key\nEach of the 1..128 unique operations carries:\n  item_id\n  expected_item_revision  that item's active_items[].revision, also shown as\n                          preconditions.item_revision in record templates\n  exactly one of record (a type and its value fields) or clear: true\nRecord value fields follow the input schema: confirm value; text value; choice value; integer value; list value; artifact in path form (type, path, optional media_type) or reference form (type, reference, digest, size_bytes, media_type); check_result operation_id, operation_digest, input_basis, executor, outcome, summary and output_digest. A check_result is caller supplied and structurally bound; Podway does not execute, verify, or attest the named external operation.\n\nExample stdin document (one line):\n  {\"schema\":\"podway.item-record-many-input/v1\",\"workspace_uuid\":\"00000000-0000-4000-8000-000000000001\",\"session_id\":\"00000000-0000-4000-8000-000000000002\",\"session_revision\":3,\"attempt_id\":\"00000000-0000-4000-8000-000000000003\",\"idempotency_key\":\"record-example\",\"operations\":[{\"item_id\":\"summary\",\"expected_item_revision\":1,\"record\":{\"type\":\"text\",\"value\":\"Recorded.\"}}]}\n\nExample:\n  podway record --stdin < record.json"
         }
         "outcome.lookup" => {
             "Usage:\n  podway outcome lookup --idempotency-key <key> [--if-workspace-uuid <uuid>] [--json]\n\nRead the original committed success response without replaying or admitting a mutation."
@@ -1690,5 +1690,110 @@ mod tests {
             "  retired families: {}",
             RETIRED_FAMILY_TOPICS.join(", ")
         )));
+    }
+
+    #[test]
+    fn guide004_record_help_documents_sources_and_decodes_example() {
+        let text = help_text(&owned(&["record"])).unwrap();
+        assert_eq!(text, help_text(&["item.record_many".to_owned()]).unwrap());
+        assert!(text.contains("Usage:"));
+        for phrase in [
+            "workspace_uuid          workspace.uuid",
+            "session_id              result.status.session (id)",
+            "session_revision        result.status.session (revision)",
+            "attempt_id              result.status.current.attempt.attempt_id",
+            "active_items[].revision, also shown as",
+            "preconditions.item_revision in record templates",
+            "exactly one of record (a type and its value fields) or clear: true",
+            "artifact in path form (type, path, optional media_type) or reference form (type, reference, digest, size_bytes, media_type)",
+        ] {
+            assert!(text.contains(phrase), "missing: {phrase}");
+        }
+        let example = text
+            .lines()
+            .find(|line| {
+                line.trim_start()
+                    .starts_with("{\"schema\":\"podway.item-record-many-input/v1\"")
+            })
+            .expect("the record help carries the one-line example document")
+            .trim();
+        let decoded = podway_protocol::decode_item_record_many_input_v1(example.as_bytes())
+            .expect("the example document decodes through the real stdin decoder");
+        let value = serde_json::to_value(&decoded).unwrap();
+        assert_eq!(
+            value["schema"],
+            serde_json::json!("podway.item-record-many-input/v1")
+        );
+        assert_eq!(
+            value["workspace_uuid"],
+            serde_json::json!("00000000-0000-4000-8000-000000000001")
+        );
+        assert_eq!(
+            value["session_id"],
+            serde_json::json!("00000000-0000-4000-8000-000000000002")
+        );
+        assert_eq!(
+            value["attempt_id"],
+            serde_json::json!("00000000-0000-4000-8000-000000000003")
+        );
+        assert_eq!(value["session_revision"], serde_json::json!(3));
+        assert_eq!(
+            value["idempotency_key"],
+            serde_json::json!("record-example")
+        );
+        assert_eq!(
+            value["operations"],
+            serde_json::json!([{
+                "item_id": "summary",
+                "expected_item_revision": 1,
+                "record": {"type": "text", "value": "Recorded."},
+            }])
+        );
+        assert_eq!(
+            value,
+            serde_json::from_str::<serde_json::Value>(example).unwrap()
+        );
+    }
+
+    #[test]
+    fn guide004_observe_help_documents_fences_guidance_templates_and_errors() {
+        let text = help_text(&owned(&["observe"])).unwrap();
+        assert_eq!(text, help_text(&["session.observe".to_owned()]).unwrap());
+        assert!(text.contains("Usage:"));
+        for phrase in [
+            "workspace.uuid feeds --if-workspace-uuid",
+            "result.status.session (id, revision) feeds --if-session-id and --if-session-revision",
+            "result.status.current.attempt.attempt_id feeds --if-attempt",
+            "active_items[].revision feeds --if-item-revision",
+            "guidance is null once the session is terminal (completed or cancelled)",
+            "copy preconditions into the matching --if-* flags",
+            "the disposition subcommand",
+            "add your own --idempotency-key",
+            "stdin_template whose expected_item_revision equals preconditions.item_revision",
+            "fill it and pass it on stdin",
+            "SESSION_NOT_FOUND means this workspace has no current task session",
+            "a fenced session id that differs from the current session fails as SESSION_ID_MISMATCH",
+            "a stale fenced session revision fails as SESSION_REVISION_CONFLICT",
+            "WORKSPACE_NOT_INITIALIZED means this worktree has no workspace",
+            "run init only with explicit intent",
+        ] {
+            assert!(text.contains(phrase), "missing: {phrase}");
+        }
+    }
+
+    #[test]
+    fn guide004_init_help_separates_tracked_files_from_ignored_runtime() {
+        let text = help_text(&owned(&["init"])).unwrap();
+        assert_eq!(text, help_text(&["workspace.init".to_owned()]).unwrap());
+        assert!(text.contains("Usage:"));
+        for phrase in [
+            ".podway/config.yaml",
+            ".podway/procedures/",
+            ".podway/.gitignore",
+            "ignores runtime/",
+            ".podway/runtime/",
+        ] {
+            assert!(text.contains(phrase), "missing: {phrase}");
+        }
     }
 }

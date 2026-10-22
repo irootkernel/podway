@@ -10,6 +10,9 @@ This file records concise shipped outcomes and the planned next stable release.
   commands with a message naming each option to omit.
 - Resolve `podway help` topics from command words, multi-word commands, command
   groups and retired families, and list every topic in the help overview.
+- Document `item.record_many` fields with observation sources and a decodable
+  example, expand `session.observe` and `workspace.init` help, and add
+  human-mode recovery hints for writer-contract and citation errors.
 
 ## v0.2.14 - 2026-10-13
 

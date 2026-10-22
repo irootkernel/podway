@@ -270,6 +270,16 @@ pub(super) fn render_human_error_direct(
     {
         write_text_line(stderr, format_args!("hint: {guidance}"))?;
     }
+    if error["code"] == "WORKSPACE_CONTRACT_MISMATCH" {
+        for line in workspace_contract_mismatch_hint_lines(&error["details"]) {
+            write_text_line(stderr, format_args!("hint: {line}"))?;
+        }
+    }
+    if error["code"] == "CRITERION_CITATION_INVALID" {
+        for line in criterion_citation_hint_lines(&error["details"]) {
+            write_text_line(stderr, format_args!("hint: {line}"))?;
+        }
+    }
     if let Some(reason) = error["details"]["recovery"]
         .get("reason")
         .and_then(Value::as_str)
@@ -315,6 +325,41 @@ pub(super) fn render_human_error_direct(
         )?;
     }
     Ok(())
+}
+
+/// Generation-1 human recovery hints for a stored writer contract this binary
+/// does not support. GUIDE-010 appends generation-2 detail fields (for example
+/// the stored writer release) inside this helper; call sites stay fixed.
+fn workspace_contract_mismatch_hint_lines(details: &Value) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(stored) = details
+        .get("actual_contract_manifest_digest")
+        .and_then(Value::as_str)
+    {
+        lines.push(format!("stored writer manifest digest: {stored}"));
+    }
+    if let Some(current) = details
+        .get("expected_contract_manifest_digest")
+        .and_then(Value::as_str)
+    {
+        lines.push(format!("this binary manifest digest: {current}"));
+    }
+    if !lines.is_empty() {
+        lines.push(
+            "continue with the writer whose version --identity reports the stored digest, or explicitly confirm an unfenced reset --all"
+                .to_owned(),
+        );
+    }
+    lines
+}
+
+/// Generation-1 human hint for a rejected goal-criterion citation. GUIDE-010
+/// appends generation-2 citable-source lines inside this helper.
+fn criterion_citation_hint_lines(_details: &Value) -> Vec<String> {
+    vec![
+        "cite only resolved guidance.references[] sources and recorded items of the decision attempt, each once, at most four citations"
+            .to_owned(),
+    ]
 }
 
 fn render_human_output_direct(

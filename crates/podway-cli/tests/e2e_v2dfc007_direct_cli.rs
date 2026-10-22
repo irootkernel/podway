@@ -3413,3 +3413,189 @@ fn admit003_real_cli_wires_reuse_and_preserves_previews_key_errors_and_later_inv
         before_status["workspace"]["latest_workspace_sequence"]
     );
 }
+
+/// GUIDE-004 JSON byte-identity normalization: replaces only per-invocation
+/// volatile values (the random request id and the wall-clock generated_at) in
+/// their exact serialized patterns, so the complete stdout bytes, including
+/// the trailing newline, stay comparable against the frozen pre-change
+/// baselines below. The writer baseline additionally normalizes the
+/// build-dependent expected manifest digest at its call site.
+fn guide004_normalized_error_stdout(stdout: &[u8]) -> String {
+    let text = String::from_utf8(stdout.to_vec()).unwrap();
+    let envelope: Value = serde_json::from_str(&text).unwrap();
+    let request_id = envelope["request_id"].as_str().unwrap().to_owned();
+    let generated_at = envelope["generated_at"].as_str().unwrap().to_owned();
+    text.replace(
+        &format!("\"request_id\":\"{request_id}\""),
+        "\"request_id\":\"<request-id>\"",
+    )
+    .replace(
+        &format!("\"generated_at\":\"{generated_at}\""),
+        "\"generated_at\":\"<generated-at>\"",
+    )
+}
+
+/// Frozen from the unmodified renderer at base e9b03ab before any GUIDE-004
+/// render.rs edit; only the volatile values above (plus the expected digest)
+/// are normalized. Any other byte change to these envelopes fails the tests.
+const GUIDE004_WRITER_MISMATCH_JSON_BASELINE: &str = "{\"code\":\"WORKSPACE_CONTRACT_MISMATCH\",\"command\":\"session.status\",\"details\":{\"actual_contract_manifest_digest\":\"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"expected_contract_manifest_digest\":\"<expected-digest>\",\"recovery\":{\"action\":\"diagnose_writer\",\"argv\":[\"podway\",\"--json\",\"version\",\"--identity\"],\"command\":\"version\",\"reason\":\"Inspect writer identity. Restore access or use the original writer. To discard invalid state, retire other writers and confirm an unfenced reset --all with a new key; unfenced removal needs a terminal and exact path. Newer generations stay refused.\",\"requires_explicit_authorization\":false},\"schema\":\"podway.workspace-contract-mismatch-details/v1\"},\"exit_code\":5,\"generated_at\":\"<generated-at>\",\"message\":\"The Store writer contract is not supported by this binary.\",\"request_id\":\"<request-id>\",\"retryable\":false,\"schema\":\"podway.error/v2\"}\n";
+const GUIDE004_CRITERION_CITATION_JSON_BASELINE: &str = "{\"code\":\"CRITERION_CITATION_INVALID\",\"command\":\"goal.assess_criterion\",\"details\":{\"citation\":{\"local_item_id\":\"unrecorded-note\"},\"criterion_id\":\"correct\",\"kind\":\"CRITERION_CITATION_INVALID\",\"schema\":\"podway.v2-runtime-error-details/v2\"},\"exit_code\":1,\"generated_at\":\"<generated-at>\",\"message\":\"A criterion citation does not name resolved attempt state.\",\"request_id\":\"<request-id>\",\"retryable\":false,\"schema\":\"podway.error/v2\"}\n";
+
+#[test]
+fn guide004_human_writer_mismatch_hint_names_digests_and_recovery() {
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    let stored = format!("sha256:{}", "f".repeat(64));
+    let connection =
+        rusqlite::Connection::open(fixture.0.join(".podway/runtime/state.sqlite3")).unwrap();
+    connection
+        .execute(
+            "UPDATE writer_contract SET contract_manifest_digest=?1 WHERE singleton=1",
+            [&stored],
+        )
+        .unwrap();
+    connection
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .unwrap();
+    drop(connection);
+    let identity = fixture.run(&["version", "--identity"]);
+    let current = identity["result"]["contract_manifest_digest"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // JSON leg first: the complete envelope bytes stay identical to the frozen
+    // pre-change baseline after normalizing only volatile values.
+    let refusal = fixture.output(&["status"]);
+    assert_eq!(refusal.status.code(), Some(5), "{refusal:?}");
+    assert!(refusal.stderr.is_empty(), "{refusal:?}");
+    let envelope: Value = serde_json::from_slice(&refusal.stdout).unwrap();
+    assert_eq!(envelope["code"], json!("WORKSPACE_CONTRACT_MISMATCH"));
+    assert_eq!(
+        envelope["details"]["actual_contract_manifest_digest"],
+        json!(stored)
+    );
+    assert_eq!(
+        envelope["details"]["expected_contract_manifest_digest"],
+        json!(current)
+    );
+    let normalized = guide004_normalized_error_stdout(&refusal.stdout).replace(
+        &format!("\"expected_contract_manifest_digest\":\"{current}\""),
+        "\"expected_contract_manifest_digest\":\"<expected-digest>\"",
+    );
+    assert_eq!(normalized, GUIDE004_WRITER_MISMATCH_JSON_BASELINE);
+
+    // Human leg: exact stderr naming both digests and both recovery routes.
+    let human = fixture.raw_output(&["status"]);
+    assert_eq!(human.status.code(), Some(5), "{human:?}");
+    let stderr = String::from_utf8(human.stderr.clone()).unwrap();
+    assert_eq!(
+        stderr,
+        format!(
+            "error: WORKSPACE_CONTRACT_MISMATCH: The Store writer contract is not supported by this binary.\n\
+             hint: stored writer manifest digest: {stored}\n\
+             hint: this binary manifest digest: {current}\n\
+             hint: continue with the writer whose version --identity reports the stored digest, or explicitly confirm an unfenced reset --all\n\
+             reason: Inspect writer identity. Restore access or use the original writer. To discard invalid state, retire other writers and confirm an unfenced reset --all with a new key; unfenced removal needs a terminal and exact path. Newer generations stay refused.\n"
+        ),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn guide004_human_citation_hint_states_the_admission_rule() {
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    fs::write(
+        fixture.0.join("goal.yaml"),
+        include_str!("../../../tests/fixtures/v2/procedures/goal-outcomes.yaml").replace(
+            "    options:\n",
+            concat!(
+                "    items:\n",
+                "      - id: assessment-note\n",
+                "        type: text\n",
+                "        prompt: Record local criterion evidence.\n",
+                "        required: false\n",
+                "        max_length: 100\n",
+                "    options:\n",
+            ),
+        ),
+    )
+    .unwrap();
+    let preview = fixture.run(&["procedure", "preview", "goal.yaml"]);
+    fixture.run(&[
+        "start",
+        "--procedure",
+        "goal.yaml",
+        "--expect-procedure-digest",
+        preview["result"]["procedure_digest"].as_str().unwrap(),
+        "--task",
+        "guide004 citation hint",
+        "--idempotency-key",
+        "start",
+    ]);
+    let begin = vec![
+        "begin",
+        "--idempotency-key",
+        "begin",
+        "--goal",
+        "Verify the retained goal.",
+        "--criterion",
+        "correct=The result is correct.",
+        "--criterion",
+        "tested=The result is tested.",
+        "--actor",
+        "owner",
+    ];
+    fixture.run(&begin);
+    fixture.run(&[
+        "set",
+        "result",
+        "Evidence supports this result.",
+        "--idempotency-key",
+        "evidence",
+    ]);
+    fixture.run(&["complete", "--idempotency-key", "complete-work"]);
+    fixture.run(&[
+        "set",
+        "assessment-note",
+        "Decision-local evidence.",
+        "--idempotency-key",
+        "assessment-note",
+    ]);
+    let assess = [
+        "goal",
+        "assess-criterion",
+        "correct",
+        "--status",
+        "satisfied",
+        "--reason",
+        "The cited item has no recorded value.",
+        "--item",
+        "unrecorded-note",
+        "--idempotency-key",
+        "guide004-citation",
+    ];
+
+    // JSON leg first: the complete envelope bytes stay identical to the frozen
+    // pre-change baseline after normalizing only volatile values.
+    let refusal = fixture.output(&assess);
+    assert_eq!(refusal.status.code(), Some(1), "{refusal:?}");
+    assert!(refusal.stderr.is_empty(), "{refusal:?}");
+    let envelope: Value = serde_json::from_slice(&refusal.stdout).unwrap();
+    assert_eq!(envelope["code"], json!("CRITERION_CITATION_INVALID"));
+    assert_eq!(envelope["command"], json!("goal.assess_criterion"));
+    let normalized = guide004_normalized_error_stdout(&refusal.stdout);
+    assert_eq!(normalized, GUIDE004_CRITERION_CITATION_JSON_BASELINE);
+
+    // Human leg: exact stderr = the error line plus the admission-rule hint;
+    // this runtime detail family carries no recovery reason.
+    let human = fixture.raw_output(&assess);
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    let stderr = String::from_utf8(human.stderr.clone()).unwrap();
+    assert_eq!(
+        stderr,
+        "error: CRITERION_CITATION_INVALID: A criterion citation does not name resolved attempt state.\n\
+         hint: cite only resolved guidance.references[] sources and recorded items of the decision attempt, each once, at most four citations\n"
+    );
+}

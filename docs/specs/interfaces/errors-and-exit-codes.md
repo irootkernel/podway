@@ -409,4 +409,8 @@ operator may confirm an unfenced `reset --all` with a new idempotency key, or
 perform unfenced removal in a human terminal by typing the exact worktree path.
 This guidance grants no destructive authorization and never permits a newer
 Store generation. `WORKSPACE_ID_CONFLICT` human output names the original
-worktree and the same explicitly confirmed discard alternatives.
+worktree and the same explicitly confirmed discard alternatives. In human mode,
+`WORKSPACE_CONTRACT_MISMATCH` also prints hint lines naming the stored and
+current manifest digests and repeating the original-writer or explicitly
+confirmed unfenced reset alternatives, and `CRITERION_CITATION_INVALID` prints
+the citation admission rule; JSON output is unchanged.
