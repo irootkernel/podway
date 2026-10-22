@@ -28,11 +28,12 @@ pub use release_contract::{
     verify_release_contract_v1,
 };
 pub use result_contract::{
-    DAEMON_FREE_DOCUMENT_SCHEMAS_V1, EXISTING_ROUTE_RESULT_SCHEMAS_V2, MAX_DIRECT_INPUT_BYTES_V1,
-    MAX_DIRECT_OUTPUT_BYTES_V1, MAX_V2_OUTPUT_WARNINGS, MAX_V2_WARNING_CODE_CHARS,
-    MAX_V2_WARNING_MESSAGE_CHARS, MAX_V2_WARNING_PATH_CHARS, NEW_ROUTE_RESULT_SCHEMAS_V1,
-    PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1, ResultSchemaContractV2,
-    decode_result_schema_contract_v2, ensure_procedure_independent_result_schema_v1,
+    ContractGenerationV1, DAEMON_FREE_DOCUMENT_SCHEMAS_V1, EXISTING_ROUTE_RESULT_SCHEMAS_V2,
+    MAX_DIRECT_INPUT_BYTES_V1, MAX_DIRECT_OUTPUT_BYTES_V1, MAX_V2_OUTPUT_WARNINGS,
+    MAX_V2_WARNING_CODE_CHARS, MAX_V2_WARNING_MESSAGE_CHARS, MAX_V2_WARNING_PATH_CHARS,
+    NEW_ROUTE_RESULT_SCHEMAS_V1, PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1,
+    RELEASED_CONTRACT_MANIFESTS_V1, ResultSchemaContractV2, decode_result_schema_contract_v2,
+    ensure_procedure_independent_result_schema_v1, released_writer_release_v1,
     result_schema_top_level_fields_v2, validate_command_result_v2,
     validate_daemon_free_document_v1, validate_delegation_document_v1,
     validate_procedure_independent_result_v1, validate_v2_output_warnings,

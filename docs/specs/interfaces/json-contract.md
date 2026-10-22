@@ -263,6 +263,40 @@ the complete version envelope and manifest through the canonical schema registry
 Store v15 DDL is enrolled in the current
 manifest with asset kind `store_schema` so its bytes affect writer identity.
 
+## Contract generations
+
+[ADR-0039](../../architecture-decision-records/0039-opt-in-contract-generations.md)
+defines a contract generation as a closed, named selection of result and
+error-detail families. All generations share the Output v4 and Error v2
+envelopes, the routes, error codes, exit classes, retryability, messages, the
+Store layout and the writer identity. The canonical declaration
+[`assets/specifications/contract-generations.json`](../../../assets/specifications/contract-generations.json)
+(`podway.contract-generations/v1`, enrolled in the manifest) declares the
+`default` generation and, for each generation, its selection for every variable
+point and its status from the closed set `reserved`, `supported`, `deprecated`
+and `retired`. Generation 1 is the direct contract shipped since `v0.2.13`,
+`supported` and the default. Generation 2 substitutes
+`podway.observation-result/v6` for `session.observe`,
+`podway.criterion-citation-invalid-details/v1` for `CRITERION_CITATION_INVALID`
+and `podway.workspace-contract-mismatch-details/v2` for
+`WORKSPACE_CONTRACT_MISMATCH`, and is `reserved`: the Output v4 `session.observe`
+selection and the two Error v2 details rules list the reserved families next to
+the generation-1 families, but no runtime path emits them until generation 2 is
+selected and supported. The error catalog keeps naming the default generation's
+families in `details_schema`, so its bytes are unchanged.
+
+`tools/verify_contracts.py` checks the declaration against the Output v4 and
+Error v2 selections in generation order, against the command catalog's
+`session.observe` result schemas, and against the error catalog's
+`details_schema` for the default generation. The reserved
+`podway.observation-result/v6` family specifies executable lifecycle templates:
+running templates keep the v5 shapes, while the prepared and terminal templates
+carry the session fences and the idempotency-key placeholder and use the closed
+placeholder vocabulary of ADR-0039. Consumers re-pin on every release; the
+manifest, the Output v4 and Error v2 schema bytes and the Dolgorae adapter
+schema pins change with this reservation, so Dolgorae must re-pin when a release
+ships it.
+
 ## Evidence paging
 
 `V2SCL-002` reserved the route, the `podway.evidence-read-result/v1` family, and the error codes, and `V2SCL-004` serves them.

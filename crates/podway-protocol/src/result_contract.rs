@@ -305,6 +305,11 @@ pub const DAEMON_FREE_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
         &["goal.assess_criterion"],
     ),
     result_schema_v2(
+        "podway.criterion-citation-invalid-details/v1",
+        "schemas/criterion-citation-invalid-details-v1.schema.json",
+        &[],
+    ),
+    result_schema_v2(
         "podway.decision-result/v2",
         "schemas/decision-result-v2.schema.json",
         &["session.decide"],
@@ -376,6 +381,11 @@ pub const DAEMON_FREE_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
     result_schema_v2(
         "podway.observation-result/v5",
         "schemas/observation-result-v5.schema.json",
+        &["session.observe"],
+    ),
+    result_schema_v2(
+        "podway.observation-result/v6",
+        "schemas/observation-result-v6.schema.json",
         &["session.observe"],
     ),
     result_schema_v2(
@@ -523,6 +533,11 @@ pub const DAEMON_FREE_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
         &[],
     ),
     result_schema_v2(
+        "podway.workspace-contract-mismatch-details/v2",
+        "schemas/workspace-contract-mismatch-details-v2.schema.json",
+        &[],
+    ),
+    result_schema_v2(
         "podway.workspace-init-result/v2",
         "schemas/workspace-init-result-v2.schema.json",
         &["workspace.init"],
@@ -573,6 +588,57 @@ pub const DAEMON_FREE_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
         &[],
     ),
 ];
+
+/// Opt-in contract generation of ADR-0039. The default remains generation 1
+/// while generation 1 is supported; selection is presentation-only and never
+/// part of request identity, idempotency or stored outcomes.
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ContractGenerationV1 {
+    #[default]
+    Generation1,
+    Generation2,
+}
+
+impl ContractGenerationV1 {
+    pub fn as_u64(self) -> u64 {
+        match self {
+            Self::Generation1 => 1,
+            Self::Generation2 => 2,
+        }
+    }
+
+    /// Parse one `--contract-generation` value; every other spelling,
+    /// including an empty value, fails closed before workspace access.
+    pub fn parse_generation_value_v1(value: &str) -> Option<Self> {
+        match value {
+            "1" => Some(Self::Generation1),
+            "2" => Some(Self::Generation2),
+            _ => None,
+        }
+    }
+}
+
+/// Released contract-manifest digests, appended once per stable release
+/// (ADR-0039 decision 5); the runtime skill's digest table mirrors it.
+pub const RELEASED_CONTRACT_MANIFESTS_V1: &[(&str, &str)] = &[
+    (
+        "v0.2.13",
+        "sha256:dc47bcc5449f7c2e60c920c5b820eb793405b5f2d2f573346ee326f90264d2aa",
+    ),
+    (
+        "v0.2.14",
+        "sha256:c699977dd232891041f4063d66295b94004702875855baace876f8a7e0c6391d",
+    ),
+];
+
+/// Map a stored writer manifest digest to its release, or `None` when the
+/// digest belongs to no released manifest.
+pub fn released_writer_release_v1(manifest_digest: &str) -> Option<&'static str> {
+    RELEASED_CONTRACT_MANIFESTS_V1
+        .iter()
+        .find(|(_, digest)| *digest == manifest_digest)
+        .map(|(release, _)| *release)
+}
 
 pub fn decode_result_schema_contract_v2(result: &Value) -> Option<&'static ResultSchemaContractV2> {
     let object = result.as_object()?;
@@ -870,6 +936,22 @@ pub fn result_schema_top_level_fields_v2(
                 "revision",
             ],
         )),
+        "podway.criterion-citation-invalid-details/v1" => Some((
+            &[
+                "schema",
+                "criterion_id",
+                "citation",
+                "citable_evidence_source_nodes",
+                "citable_item_ids",
+            ],
+            &[
+                "schema",
+                "criterion_id",
+                "citation",
+                "citable_evidence_source_nodes",
+                "citable_item_ids",
+            ],
+        )),
         "podway.decision-result/v2" => Some((
             &[
                 "schema",
@@ -1080,6 +1162,30 @@ pub fn result_schema_top_level_fields_v2(
             ],
         )),
         "podway.observation-result/v5" => Some((
+            &[
+                "schema",
+                "status",
+                "guidance",
+                "active_items",
+                "active_items_total",
+                "active_items_truncated",
+                "mutation_templates",
+                "mutation_templates_total",
+                "mutation_templates_truncated",
+            ],
+            &[
+                "schema",
+                "status",
+                "guidance",
+                "active_items",
+                "active_items_total",
+                "active_items_truncated",
+                "mutation_templates",
+                "mutation_templates_total",
+                "mutation_templates_truncated",
+            ],
+        )),
+        "podway.observation-result/v6" => Some((
             &[
                 "schema",
                 "status",
@@ -1378,6 +1484,22 @@ pub fn result_schema_top_level_fields_v2(
                 "contract_manifest_digest",
             ],
         )),
+        "podway.workspace-contract-mismatch-details/v2" => Some((
+            &[
+                "schema",
+                "expected_contract_manifest_digest",
+                "actual_contract_manifest_digest",
+                "actual_product_version",
+                "recovery",
+            ],
+            &[
+                "schema",
+                "expected_contract_manifest_digest",
+                "actual_contract_manifest_digest",
+                "actual_product_version",
+                "recovery",
+            ],
+        )),
         "podway.workspace-init-result/v2" => Some((
             &["schema", "initialized", "revision"],
             &["schema", "initialized", "revision"],
@@ -1455,6 +1577,7 @@ fn validate_result_correlations_v2(schema: &str, result: &Map<String, Value>) ->
             .get("status")
             .and_then(Value::as_object)
             .is_some_and(delegation_projection_matches_current_attempt_v2),
+        "podway.observation-result/v6" => observation_v6_correlations_v2(result),
         "podway.session-archive-show-result/v3" => result
             .get("state")
             .and_then(Value::as_object)
@@ -1515,6 +1638,191 @@ fn delegation_projection_matches_attempt_v2(projection: &Value, attempt: Option<
                     .is_none_or(|receipt| receipt.get("attempt_id") == Some(attempt_id))
         }
         None => state == "inactive",
+    }
+}
+
+const LIFECYCLE_COMMANDS_V6: &[&str] = &[
+    "session.begin",
+    "session.terminal_disposition",
+    "session.reset",
+    "session.start_replace",
+    "session.start",
+    "session.archive",
+];
+const IDEMPOTENCY_KEY_PLACEHOLDER_V1: &str = "<idempotency-key>";
+const LIFECYCLE_ARGV_FENCE_FLAGS_V6: &[&str] = &[
+    "--if-workspace-uuid",
+    "--if-session-id",
+    "--if-session-revision",
+    "--idempotency-key",
+];
+
+/// Generation-2 observation correlations: the v5 delegation projection rule
+/// plus the four reserved lifecycle-template correlations (ADR-0039, GUIDE-007).
+fn observation_v6_correlations_v2(result: &Map<String, Value>) -> bool {
+    result
+        .get("status")
+        .and_then(Value::as_object)
+        .is_some_and(delegation_projection_matches_current_attempt_v2)
+        && observation_v6_templates_correlate_v2(result)
+}
+
+fn observation_v6_templates_correlate_v2(result: &Map<String, Value>) -> bool {
+    let Some(session) = result
+        .get("status")
+        .and_then(|status| status.get("session"))
+        .and_then(Value::as_object)
+    else {
+        return false;
+    };
+    let Some(templates) = result.get("mutation_templates").and_then(Value::as_array) else {
+        return false;
+    };
+    templates.iter().all(|template| {
+        let Some(object) = template.as_object() else {
+            return false;
+        };
+        let Some(command) = object.get("command").and_then(Value::as_str) else {
+            return false;
+        };
+        let Some(argv) = object.get("argv").and_then(Value::as_array) else {
+            return false;
+        };
+        let Some(preconditions) = object.get("preconditions").and_then(Value::as_object) else {
+            return false;
+        };
+        // Exactly one key placeholder, counted across argv and stdin_template.
+        let argv_keys = argv
+            .iter()
+            .filter(|token| token.as_str() == Some(IDEMPOTENCY_KEY_PLACEHOLDER_V1))
+            .count();
+        let stdin_keys = object
+            .get("stdin_template")
+            .and_then(Value::as_str)
+            .map_or(0, |text| {
+                text.matches(IDEMPOTENCY_KEY_PLACEHOLDER_V1).count()
+            });
+        if argv_keys + stdin_keys != 1 {
+            return false;
+        }
+        // stdin-template identities equal the template preconditions.
+        if let Some(stdin) = object.get("stdin_template").and_then(Value::as_str) {
+            let Ok(parsed) = serde_json::from_str::<Value>(stdin) else {
+                return false;
+            };
+            let Some(identities) = parsed.as_object() else {
+                return false;
+            };
+            for field in [
+                "workspace_uuid",
+                "session_id",
+                "session_revision",
+                "attempt_id",
+            ] {
+                match (preconditions.get(field), identities.get(field)) {
+                    (Some(expected), Some(observed)) if expected == observed => {}
+                    (None, None) => {}
+                    _ => return false,
+                }
+            }
+        }
+        if !LIFECYCLE_COMMANDS_V6.contains(&command) {
+            return true;
+        }
+        // Lifecycle argv fences equal the preconditions: the exact tail.
+        let Some(workspace_uuid) = preconditions.get("workspace_uuid").and_then(Value::as_str)
+        else {
+            return false;
+        };
+        let Some(session_id) = preconditions.get("session_id").and_then(Value::as_str) else {
+            return false;
+        };
+        let Some(session_revision) = preconditions.get("session_revision") else {
+            return false;
+        };
+        // The argv token is the canonical JSON-number text of the revision.
+        let revision_text = session_revision.to_string();
+        let expected_tail = [
+            "--if-workspace-uuid",
+            workspace_uuid,
+            "--if-session-id",
+            session_id,
+            "--if-session-revision",
+            &revision_text,
+            "--idempotency-key",
+            IDEMPOTENCY_KEY_PLACEHOLDER_V1,
+        ];
+        if argv.len() < expected_tail.len() {
+            return false;
+        }
+        let split = argv.len() - expected_tail.len();
+        let tail_matches = argv[split..]
+            .iter()
+            .zip(expected_tail)
+            .all(|(token, expected)| token.as_str() == Some(expected));
+        let fences_only_in_tail = argv[..split].iter().all(|token| {
+            token
+                .as_str()
+                .is_none_or(|text| !LIFECYCLE_ARGV_FENCE_FLAGS_V6.contains(&text))
+        });
+        // Lifecycle preconditions equal the status session.
+        let session_matches = preconditions.get("session_id") == session.get("id")
+            && preconditions.get("session_revision") == session.get("revision");
+        tail_matches && fences_only_in_tail && session_matches
+    })
+}
+
+/// Generation-2 mismatch details agree with the released-manifest table: a
+/// known digest requires its exact release, an unknown digest requires null.
+fn workspace_mismatch_v2_release_agrees_v1(details: &Map<String, Value>) -> bool {
+    let Some(actual) = details
+        .get("actual_contract_manifest_digest")
+        .and_then(Value::as_str)
+    else {
+        return false;
+    };
+    let release = released_writer_release_v1(actual);
+    match details.get("actual_product_version") {
+        Some(Value::Null) => release.is_none(),
+        Some(Value::String(version)) => release == Some(version.as_str()),
+        _ => false,
+    }
+}
+
+// Generation-family correlations for standalone documents and the envelopes
+// carrying them, layered after schema validation like the recovery identity.
+fn daemon_free_generation_correlations_v1(schema: &str, value: &Value) -> bool {
+    match schema {
+        "podway.observation-result/v6" => value
+            .as_object()
+            .is_some_and(observation_v6_correlations_v2),
+        "podway.workspace-contract-mismatch-details/v2" => value
+            .as_object()
+            .is_some_and(workspace_mismatch_v2_release_agrees_v1),
+        "podway.output/v4" => {
+            let result = &value["result"];
+            if result.get("schema").and_then(Value::as_str) == Some("podway.observation-result/v6")
+            {
+                result
+                    .as_object()
+                    .is_some_and(observation_v6_correlations_v2)
+            } else {
+                true
+            }
+        }
+        "podway.error/v2" => {
+            let details = &value["details"];
+            if details.get("schema").and_then(Value::as_str)
+                == Some("podway.workspace-contract-mismatch-details/v2")
+            {
+                details
+                    .as_object()
+                    .is_some_and(workspace_mismatch_v2_release_agrees_v1)
+            } else {
+                true
+            }
+        }
+        _ => true,
     }
 }
 
@@ -1798,6 +2106,7 @@ pub fn validate_daemon_free_document_v1(schema: &str, value: &Value) -> bool {
         && serialized_json_len_v1(value).is_ok_and(|length| length <= MAX_DIRECT_OUTPUT_BYTES_V1)
         && validate_selected_direct_schema_v1(schema, discriminator, value)
         && daemon_free_recovery_identity_v1(schema, value)
+        && daemon_free_generation_correlations_v1(schema, value)
 }
 
 // Shared delegation callers retain their own budgets and correlations. Select
@@ -2026,5 +2335,69 @@ mod daemon_free_tests {
                 compare(&candidate);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod guide007_generation_tests {
+    use super::{ContractGenerationV1, RELEASED_CONTRACT_MANIFESTS_V1, released_writer_release_v1};
+
+    #[test]
+    fn guide007_generation_type_parses_only_closed_values() {
+        assert_eq!(
+            ContractGenerationV1::default(),
+            ContractGenerationV1::Generation1
+        );
+        assert_eq!(
+            ContractGenerationV1::parse_generation_value_v1("1"),
+            Some(ContractGenerationV1::Generation1)
+        );
+        assert_eq!(
+            ContractGenerationV1::parse_generation_value_v1("2"),
+            Some(ContractGenerationV1::Generation2)
+        );
+        for rejected in ["", "0", "3", "v2", " 1", "1 ", "-1", "02"] {
+            assert_eq!(
+                ContractGenerationV1::parse_generation_value_v1(rejected),
+                None
+            );
+        }
+        assert_eq!(ContractGenerationV1::Generation1.as_u64(), 1);
+        assert_eq!(ContractGenerationV1::Generation2.as_u64(), 2);
+    }
+
+    #[test]
+    fn guide007_released_manifest_table_pins_published_digests() {
+        assert_eq!(
+            RELEASED_CONTRACT_MANIFESTS_V1,
+            &[
+                (
+                    "v0.2.13",
+                    "sha256:dc47bcc5449f7c2e60c920c5b820eb793405b5f2d2f573346ee326f90264d2aa"
+                ),
+                (
+                    "v0.2.14",
+                    "sha256:c699977dd232891041f4063d66295b94004702875855baace876f8a7e0c6391d"
+                ),
+            ]
+        );
+        assert_eq!(
+            released_writer_release_v1(
+                "sha256:dc47bcc5449f7c2e60c920c5b820eb793405b5f2d2f573346ee326f90264d2aa"
+            ),
+            Some("v0.2.13")
+        );
+        assert_eq!(
+            released_writer_release_v1(
+                "sha256:c699977dd232891041f4063d66295b94004702875855baace876f8a7e0c6391d"
+            ),
+            Some("v0.2.14")
+        );
+        assert_eq!(
+            released_writer_release_v1(
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            ),
+            None
+        );
     }
 }

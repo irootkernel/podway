@@ -467,7 +467,14 @@
           "const": "session.observe"
         },
         "result": {
-          "$ref": "urn:podway:schema:observation-result:v5"
+          "oneOf": [
+            {
+              "$ref": "urn:podway:schema:observation-result:v5"
+            },
+            {
+              "$ref": "urn:podway:schema:observation-result:v6"
+            }
+          ]
         }
       }
     },

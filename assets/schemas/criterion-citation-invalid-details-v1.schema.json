@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:criterion-citation-invalid-details:v1",
+  "title": "Podway Criterion Citation Invalid Details v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "criterion_id",
+    "citation",
+    "citable_evidence_source_nodes",
+    "citable_item_ids"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.criterion-citation-invalid-details/v1"
+    },
+    "criterion_id": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/identifier"
+    },
+    "citation": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/citation"
+    },
+    "citable_evidence_source_nodes": {
+      "type": "array",
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/identifier"
+      }
+    },
+    "citable_item_ids": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/identifier"
+      }
+    }
+  },
+  "$comment": "Generation-2 detail contract under ADR-0039; reserved by GUIDE-007 without emission."
+}

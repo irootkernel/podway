@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:workspace-contract-mismatch-details:v2",
+  "title": "Podway Workspace Contract Mismatch Details v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "expected_contract_manifest_digest",
+    "actual_contract_manifest_digest",
+    "actual_product_version",
+    "recovery"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.workspace-contract-mismatch-details/v2"
+    },
+    "expected_contract_manifest_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "actual_contract_manifest_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "actual_product_version": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+        }
+      ]
+    },
+    "recovery": {
+      "$ref": "urn:podway:schema:recovery-recipe:v2",
+      "oneOf": [
+        {
+          "properties": {
+            "action": {
+              "const": "diagnose_workspace"
+            },
+            "command": {
+              "const": "workspace.doctor"
+            },
+            "requires_explicit_authorization": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "action": {
+              "const": "diagnose_writer"
+            },
+            "command": {
+              "const": "version"
+            },
+            "requires_explicit_authorization": {
+              "const": false
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$comment": "Generation-2 detail contract under ADR-0039; reserved by GUIDE-007 without emission."
+}

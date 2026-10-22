@@ -1,0 +1,24 @@
+{
+  "schema": "podway.contract-generations/v1",
+  "default": 1,
+  "generations": [
+    {
+      "generation": 1,
+      "status": "supported",
+      "selections": {
+        "session.observe": "podway.observation-result/v5",
+        "CRITERION_CITATION_INVALID": "podway.v2-runtime-error-details/v2",
+        "WORKSPACE_CONTRACT_MISMATCH": "podway.workspace-contract-mismatch-details/v1"
+      }
+    },
+    {
+      "generation": 2,
+      "status": "reserved",
+      "selections": {
+        "session.observe": "podway.observation-result/v6",
+        "CRITERION_CITATION_INVALID": "podway.criterion-citation-invalid-details/v1",
+        "WORKSPACE_CONTRACT_MISMATCH": "podway.workspace-contract-mismatch-details/v2"
+      }
+    }
+  ]
+}

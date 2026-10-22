@@ -2196,12 +2196,19 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
-            "properties": {
-              "kind": {
-                "const": "CRITERION_CITATION_INVALID"
+            "oneOf": [
+              {
+                "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+                "properties": {
+                  "kind": {
+                    "const": "CRITERION_CITATION_INVALID"
+                  }
+                }
+              },
+              {
+                "$ref": "urn:podway:schema:criterion-citation-invalid-details:v1"
               }
-            }
+            ]
           }
         }
       }
@@ -2735,7 +2742,14 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:workspace-contract-mismatch-details:v1"
+            "oneOf": [
+              {
+                "$ref": "urn:podway:schema:workspace-contract-mismatch-details:v1"
+              },
+              {
+                "$ref": "urn:podway:schema:workspace-contract-mismatch-details:v2"
+              }
+            ]
           }
         }
       }

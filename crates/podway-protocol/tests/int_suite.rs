@@ -1,5 +1,7 @@
 #[path = "int_build_identity_git_refs.rs"]
 mod int_build_identity_git_refs;
+#[path = "int_guide007_contract_generations.rs"]
+mod int_guide007_contract_generations;
 #[cfg(feature = "release-contract-verifier")]
 #[path = "int_release_contract_verifier.rs"]
 mod int_release_contract_verifier;

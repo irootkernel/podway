@@ -213,6 +213,7 @@ commands:
   - session_id_optional
   result_schemas:
   - podway.observation-result/v5
+  - podway.observation-result/v6
 - name: evidence.read
   availability: executable
   cli:

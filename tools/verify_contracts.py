@@ -371,6 +371,18 @@ V2_AUTHORING_DIAGNOSTIC_CODES = {
     "NO_REACTIVATION_PATH", "GOAL_REVISION_TARGET_UNSAFE",
     "MULTIPLE_GOAL_ASSESSMENT_SOURCES",
 }
+CONTRACT_GENERATIONS_PATH = Path("assets/specifications/contract-generations.json")
+CONTRACT_GENERATIONS_VERSION = "podway.contract-generations/v1"
+CONTRACT_GENERATION_STATUSES = frozenset({"reserved", "supported", "deprecated", "retired"})
+GENERATION_RESULT_VARIABLE_POINTS = ("session.observe",)
+GENERATION_DETAILS_VARIABLE_POINTS = (
+    "CRITERION_CITATION_INVALID",
+    "WORKSPACE_CONTRACT_MISMATCH",
+)
+GENERATION_VARIABLE_POINTS = (
+    *GENERATION_RESULT_VARIABLE_POINTS,
+    *GENERATION_DETAILS_VARIABLE_POINTS,
+)
 
 
 class VerificationError(Exception):
@@ -581,13 +593,38 @@ def validate_catalog_inventory(root: Path) -> int:
              for rule in code_rules}
     if set(rules) != expected_codes or len(code_rules) != len(expected_codes):
         fail("each direct error must have one closed metadata rule")
+    successor_details = generation_successor_details(root)
     for entry in entries:
         if not isinstance(entry.get("summary"), str) or not entry["summary"]:
             fail("runtime error entries require a summary")
         rule = rules[entry["code"]]
         if (entry.get("exit_code"), entry.get("retryable")) != (rule["exit_code"]["const"], rule["retryable"]["const"]):
             fail("direct error catalog metadata disagrees with its schema")
-        reference = rule["details"].get("$ref", "")
+        branches = rule["details"].get("oneOf")
+        if branches is None:
+            reference = rule["details"].get("$ref", "")
+        elif (
+            isinstance(branches, list)
+            and len(branches) == 2
+            and all(isinstance(branch, dict) for branch in branches)
+        ):
+            first, second = branches
+            reference = first.get("$ref", "")
+            if (
+                set(first) - {"$ref", "properties"}
+                or first.get("properties", {}) not in ({}, {"kind": {"const": entry["code"]}})
+            ):
+                fail("direct error catalog details disagree with their closed schema")
+            successor = re.fullmatch(r"urn:podway:schema:(.+):v([1-9][0-9]*)", second.get("$ref", ""))
+            if (
+                set(second) != {"$ref"}
+                or successor is None
+                or f"podway.{successor[1]}/v{successor[2]}"
+                not in successor_details[entry["code"]]
+            ):
+                fail("direct error catalog details disagree with their declared successor")
+        else:
+            reference = ""
         if "#" not in reference:
             match = re.fullmatch(r"urn:podway:schema:(.+):v([1-9][0-9]*)", reference)
             if match is None or entry.get("details_schema") != f"podway.{match[1]}/v{match[2]}":
@@ -615,6 +652,148 @@ def validate_catalog_inventory(root: Path) -> int:
         if entry["severity"] not in {"error", "warning"} or not isinstance(entry["summary"], str) or not entry["summary"]:
             fail("authoring diagnostic entry has an invalid severity or summary")
     return len(entries) + len(diagnostics)
+
+
+def load_contract_generations(root: Path) -> dict[str, Any]:
+    declaration = read_json(root, CONTRACT_GENERATIONS_PATH, "contract generations declaration")
+    if set(declaration) != {"schema", "default", "generations"}:
+        fail("contract generations declaration has unexpected or missing top-level fields")
+    if declaration["schema"] != CONTRACT_GENERATIONS_VERSION:
+        fail("contract generations declaration identity is invalid")
+    default = declaration["default"]
+    generations = declaration["generations"]
+    if (
+        not isinstance(default, int)
+        or isinstance(default, bool)
+        or not isinstance(generations, list)
+        or not generations
+    ):
+        fail("contract generations declaration default or generations are invalid")
+    seen: set[int] = set()
+    for index, generation in enumerate(generations, start=1):
+        if not isinstance(generation, dict) or set(generation) != {"generation", "status", "selections"}:
+            fail("contract generations entry has unexpected or missing fields")
+        number = generation["generation"]
+        if (
+            not isinstance(number, int)
+            or isinstance(number, bool)
+            or number != index
+            or number in seen
+        ):
+            fail("contract generations must be unique consecutive integers starting at one")
+        seen.add(number)
+        if generation["status"] not in CONTRACT_GENERATION_STATUSES:
+            fail("contract generations status is outside the closed status set")
+        selections = generation["selections"]
+        if not isinstance(selections, dict) or set(selections) != set(GENERATION_VARIABLE_POINTS):
+            fail("contract generations selections must declare exactly the variable points")
+        for variable, family in selections.items():
+            if not isinstance(family, str) or re.fullmatch(r"podway\.[a-z0-9-]+/v[1-9][0-9]*", family) is None:
+                fail(f"contract generations selection is not a closed family: {variable}")
+    if default not in seen:
+        fail("contract generations default must name a declared generation")
+    if generations[default - 1]["status"] not in {"supported", "deprecated"}:
+        fail("contract generations default must be supported or deprecated")
+    return declaration
+
+
+def generation_successor_details(root: Path) -> dict[str, set[str]]:
+    declaration = load_contract_generations(root)
+    default = declaration["default"]
+    successors = {code: set() for code in GENERATION_DETAILS_VARIABLE_POINTS}
+    for generation in declaration["generations"]:
+        if generation["generation"] == default:
+            continue
+        for code in GENERATION_DETAILS_VARIABLE_POINTS:
+            successors[code].add(generation["selections"][code])
+    return successors
+
+
+def family_urn(family: str) -> str:
+    name, _, version = family.rpartition("/v")
+    return f"urn:podway:schema:{name.removeprefix('podway.')}:v{version}"
+
+
+def catalog_result_schemas(root: Path, command: str) -> list[str]:
+    path = repository_assets.checked_path(
+        root, Path("assets/specifications/command-catalog.yaml"), "command catalog"
+    )
+    text = path.read_text(encoding="utf-8")
+    starts = [match.start() for match in re.finditer(r"^- name: ", text, flags=re.MULTILINE)]
+    names = re.findall(r"^- name: ([a-z][a-z0-9._-]*)$", text, flags=re.MULTILINE)
+    if command not in names:
+        fail(f"command catalog entry is missing: {command}")
+    index = names.index(command)
+    block = text[starts[index]:starts[index + 1] if index + 1 < len(starts) else len(text)]
+    schemas: list[str] = []
+    collecting = False
+    for line in block.splitlines():
+        if line == "  result_schemas:":
+            collecting = True
+            continue
+        if collecting:
+            if line.startswith("  - "):
+                schemas.append(line[4:].strip())
+            else:
+                break
+    if not schemas:
+        fail(f"command catalog entry declares no result schemas: {command}")
+    return schemas
+
+
+def validate_contract_generations(root: Path) -> int:
+    declaration = load_contract_generations(root)
+    generations = declaration["generations"]
+    default = declaration["default"]
+    observation_families = [
+        generation["selections"]["session.observe"] for generation in generations
+    ]
+
+    output = read_json(root, Path("assets/schemas/output-v4.schema.json"), "direct output schema")
+    result = output["$defs"]["observation"]["properties"]["result"]
+    branches = result.get("oneOf")
+    if (
+        not isinstance(branches, list)
+        or len(branches) != len(generations)
+        or any(set(branch) != {"$ref"} for branch in branches)
+        or [branch["$ref"] for branch in branches] != [family_urn(family) for family in observation_families]
+    ):
+        fail("Output v4 session.observe selection disagrees with the contract generations declaration")
+
+    error_schema = read_json(root, Path("assets/schemas/error-v2.schema.json"), "direct error schema")
+    code_rules = [
+        rule for rule in error_schema["allOf"]
+        if "const" in rule.get("if", {}).get("properties", {}).get("code", {})
+    ]
+    rules = {
+        rule["if"]["properties"]["code"]["const"]: rule["then"]["properties"] for rule in code_rules
+    }
+    runtime = read_json(root, Path("assets/specifications/error-codes.json"), "error catalog")
+    entries = {entry["code"]: entry for entry in runtime["errors"] if isinstance(entry, dict)}
+    for code in GENERATION_DETAILS_VARIABLE_POINTS:
+        expected = [generation["selections"][code] for generation in generations]
+        details = rules.get(code, {}).get("details", {})
+        branches = details.get("oneOf")
+        if not isinstance(branches, list) or len(branches) != len(generations):
+            fail("Error v2 details selection disagrees with the contract generations declaration")
+        for index, branch in enumerate(branches):
+            reference = branch.get("$ref", "")
+            match = re.fullmatch(r"urn:podway:schema:(.+):v([1-9][0-9]*)", reference)
+            extra_keys = set(branch) - {"$ref"} if index else set(branch) - {"$ref", "properties"}
+            if (
+                extra_keys
+                or match is None
+                or f"podway.{match[1]}/v{match[2]}" != expected[index]
+            ):
+                fail("Error v2 details selection disagrees with the contract generations declaration")
+        if branches[0].get("properties", {}) not in ({}, {"kind": {"const": code}}):
+            fail("Error v2 default details selection must be the closed family rule")
+        if entries.get(code, {}).get("details_schema") != expected[default - 1]:
+            fail("error catalog details_schema disagrees with the default generation selection")
+
+    if catalog_result_schemas(root, "session.observe") != observation_families:
+        fail("command catalog session.observe result schemas disagree with the contract generations declaration")
+    return len(generations)
 
 
 def validate_contract_identifiers(root: Path) -> int:
@@ -1265,6 +1444,141 @@ def run_sentinels(root: Path) -> list[str]:
         )
         completed.append("runtime_authoring_overlap")
 
+        generations_fixture = temporary / "contract-generations"
+        generations_fixture.mkdir()
+        shutil.copytree(root / "assets", generations_fixture / "assets")
+        copy_contracts(root, generations_fixture)
+        declaration_path = generations_fixture / "assets/specifications/contract-generations.json"
+
+        def reset_generation_assets() -> None:
+            shutil.copy2(root / CONTRACT_GENERATIONS_PATH, generations_fixture / CONTRACT_GENERATIONS_PATH)
+            shutil.copy2(
+                root / "assets/schemas/error-v2.schema.json",
+                generations_fixture / "assets/schemas/error-v2.schema.json",
+            )
+            shutil.copy2(
+                root / "assets/schemas/output-v4.schema.json",
+                generations_fixture / "assets/schemas/output-v4.schema.json",
+            )
+            shutil.copy2(
+                root / "assets/specifications/error-codes.json",
+                generations_fixture / "assets/specifications/error-codes.json",
+            )
+
+        def mutate_declaration(mutator: Callable[[dict[str, Any]], None], label: str) -> None:
+            declaration = json.loads(declaration_path.read_text(encoding="utf-8"))
+            mutator(declaration)
+            declaration_path.write_text(
+                json.dumps(declaration, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            require_known_failure(label, lambda: validate_contract_generations(generations_fixture))
+            reset_generation_assets()
+
+        def citation_branches(schema: dict[str, Any]) -> list[dict[str, Any]]:
+            return next(
+                rule["then"]["properties"]["details"]["oneOf"]
+                for rule in schema["allOf"]
+                if rule.get("if", {}).get("properties", {}).get("code", {}).get("const")
+                == "CRITERION_CITATION_INVALID"
+            )
+
+        def mutate_generation_schema(
+            relative: str, mutator: Callable[[dict[str, Any]], None], label: str
+        ) -> None:
+            path = generations_fixture / relative
+            document = json.loads(path.read_text(encoding="utf-8"))
+            mutator(document)
+            path.write_text(json.dumps(document, sort_keys=True) + "\n", encoding="utf-8")
+            require_known_failure(label, lambda: validate_contract_generations(generations_fixture))
+            reset_generation_assets()
+
+        mutate_declaration(
+            lambda value: value.update(schema="podway.contract-generations/v2"),
+            "contract generations identity drift",
+        )
+        completed.append("contract_generations_identity_drift")
+        mutate_declaration(
+            lambda value: value["generations"][1].update(status="active"),
+            "contract generations status drift",
+        )
+        completed.append("contract_generations_status_drift")
+        mutate_declaration(
+            lambda value: value.update(default=3),
+            "contract generations default drift",
+        )
+        completed.append("contract_generations_default_drift")
+        mutate_declaration(
+            lambda value: value["generations"][1]["selections"].update(
+                CRITERION_CITATION_INVALID="podway.v2-runtime-error-details/v3"
+            ),
+            "contract generations selection drift",
+        )
+        completed.append("contract_generations_selection_drift")
+        mutate_generation_schema(
+            "assets/schemas/error-v2.schema.json",
+            lambda schema: citation_branches(schema)[1].update(
+                **{"$ref": "urn:podway:schema:criterion-citation-invalid-details:v2"}
+            ),
+            "contract generations schema selection drift",
+        )
+        completed.append("contract_generations_schema_selection_drift")
+        mutate_generation_schema(
+            "assets/schemas/output-v4.schema.json",
+            lambda schema: schema["$defs"]["observation"]["properties"]["result"]["oneOf"].pop(),
+            "contract generations observation selection drift",
+        )
+        completed.append("contract_generations_observation_selection_drift")
+        mutate_declaration(
+            lambda value: value["generations"][0]["selections"].pop("session.observe"),
+            "contract generations missing default selections",
+        )
+        completed.append("contract_generations_missing_default_selections")
+
+        catalog_path = generations_fixture / "assets/specifications/error-codes.json"
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        for entry in catalog["errors"]:
+            if entry["code"] == "WORKSPACE_CONTRACT_MISMATCH":
+                entry["details_schema"] = "podway.workspace-contract-mismatch-details/v2"
+        catalog_path.write_text(json.dumps(catalog, sort_keys=True) + "\n", encoding="utf-8")
+        require_known_failure(
+            "default generation catalog disagreement",
+            lambda: validate_contract_generations(generations_fixture),
+        )
+        reset_generation_assets()
+        mutate_generation_schema(
+            "assets/schemas/error-v2.schema.json",
+            lambda schema: citation_branches(schema)[0].update(
+                **{"$ref": "urn:podway:schema:v2-runtime-error-details/v3"}
+            ),
+            "default generation schema branch drift",
+        )
+        completed.append("contract_generations_default_catalog_disagreement")
+        mutate_declaration(
+            lambda value: value.update(default=2),
+            "default naming a reserved generation",
+        )
+        completed.append("contract_generations_default_reserved")
+
+        error_path = generations_fixture / "assets/schemas/error-v2.schema.json"
+        error_schema = json.loads(error_path.read_text(encoding="utf-8"))
+        citation_branches(error_schema)[0]["$ref"] = "urn:podway:schema:v2-runtime-error-details:v3"
+        error_path.write_text(json.dumps(error_schema, sort_keys=True) + "\n", encoding="utf-8")
+        require_known_failure(
+            "catalog inventory oneOf family drift",
+            lambda: validate_catalog_inventory(generations_fixture),
+        )
+        citation_branches(error_schema)[0]["$ref"] = "urn:podway:schema:v2-runtime-error-details:v2"
+        citation_branches(error_schema)[1]["$ref"] = (
+            "urn:podway:schema:criterion-citation-invalid-details/v2"
+        )
+        error_path.write_text(json.dumps(error_schema, sort_keys=True) + "\n", encoding="utf-8")
+        require_known_failure(
+            "catalog inventory oneOf successor drift",
+            lambda: validate_catalog_inventory(generations_fixture),
+        )
+        reset_generation_assets()
+        completed.append("catalog_inventory_details_oneof_drift")
+
         v1_surface_fixture = temporary / "procedure-v1-surface"
         (v1_surface_fixture / "crates/podway-core/src").mkdir(parents=True)
         (v1_surface_fixture / V2_ONLY_ADR.parent).mkdir(parents=True)
@@ -1293,6 +1607,7 @@ def production_checks(root: Path) -> dict[str, int]:
         "contract_identifiers": validate_contract_identifiers(root),
         "v2_only_surface": validate_v2_only_surface(root),
         "catalog_inventory": validate_catalog_inventory(root),
+        "contract_generations": validate_contract_generations(root),
         "cargo_adjacency": validate_adjacency(root),
         "command_routes": validate_routes(root),
         "direct_contracts": validate_direct_contracts(root),

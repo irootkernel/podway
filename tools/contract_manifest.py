@@ -30,6 +30,7 @@ STATIC_ASSETS = {
     "release/dolgorae-adapter-contract-v3.json": "catalog",
     "spec/authoring-diagnostics.json": "catalog",
     "spec/command-catalog.yaml": "catalog",
+    "spec/contract-generations.json": "catalog",
     "spec/error-codes.json": "catalog",
     "spec/retired-commands-v1.json": "catalog",
     "spec/sqlite-v15.sql": "store_schema",

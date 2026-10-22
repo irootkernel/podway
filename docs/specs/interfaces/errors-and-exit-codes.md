@@ -150,33 +150,46 @@ All identifiers below carry the `podway.` prefix. Their canonical schemas under
 [`assets/schemas/`](../../../assets/schemas/) own closure and code-specific fields.
 Named details contain no admission or job facts.
 
-| Code or family | Current detail schema | Important facts |
-|---|---|---|
-| `WORKSPACE_BUSY` | `workspace-busy-details/v1` | `boundary`: `connection_gate`, `sqlite_read_admission`, or `sqlite_write_lock`; `timeout_ms`, refresh |
-| `WORKSPACE_MAINTENANCE` | `workspace-maintenance-details/v1` | Boundary, timeout, boundary-specific recovery |
-| `LEGACY_RUNTIME_STATE_UNSUPPORTED` | `legacy-runtime-state-unsupported-details/v1` | Store generation, marker names, authorized reset |
-| `WORKSPACE_CONTRACT_MISMATCH` | `workspace-contract-mismatch-details/v1` | Expected/actual writer manifest digest, diagnosis |
-| `COMMAND_RETIRED` | `command-retired-details/v1` | `retired`, nullable `replacement`, bounded `guidance` |
-| `WORKSPACE_UUID_MISMATCH` | `workspace-uuid-mismatch-details/v3` | Expected/actual UUID, diagnosis |
-| `SESSION_ID_MISMATCH` | `session-id-mismatch-details/v3` | Expected ID, nullable actual ID, refresh |
-| `PROCEDURE_DIGEST_MISMATCH` | `procedure-digest-mismatch-details/v3` | Expected/actual canonical digest, refresh |
-| `SESSION_REVISION_CONFLICT`, `ITEM_REVISION_CONFLICT` | `revision-conflict-details/v3` | `expected_revision` and/or `current_revision`, refresh |
-| `ATTEMPT_NOT_CURRENT` | `attempt-conflict-details/v3` | Expected/actual attempt, refresh |
-| `EVIDENCE_REFERENCE_STALE`, `GOAL_REVISION_STALE`, `EVIDENCE_PAGE_TOKEN_STALE` | `recoverable-v2-runtime-error-details/v2` | Code-bound `kind`, bounded facts, refresh |
-| Other typed graph/goal/guard/Procedure-v2/evidence errors | `v2-runtime-error-details/v2` | `kind` equals outer code; closed code-specific fields |
-| `BLOCKER_LIMIT_REACHED` | `blocker-limit-details/v2` | `maximum_open_blockers: 64` |
-| `IDEMPOTENCY_KEY_REUSED` | `idempotency-key-reused-details/v2` | Closed schema marker |
-| `MUTATION_OUTCOME_UNKNOWN` | `mutation-outcome-unknown-details/v3` | Original key and matching lookup/recovery key |
-| `WORKSPACE_STATE_UNREADABLE` | `workspace-recovery-details/v2` | Diagnosis |
-| `WORKSPACE_SCHEMA_UNSUPPORTED` | `workspace-schema-unsupported-details/v1` | Actual/supported Store generations and compatible-Podway guidance; no recovery recipe |
-| `SESSION_RESET_NOT_ELIGIBLE` | `session-reset-not-eligible-details/v2` | Lifecycle, disposition, required action |
-| `SESSION_START_DECISION_REQUIRED` | `session-start-decision-required-details/v2` | Lifecycle, disposition, allowed actions |
-| `SESSION_START_STATE_CONFLICT` | `session-start-state-conflict-details/v2` | Current lifecycle/disposition, allowed actions |
-| `SESSION_ARCHIVE_NOT_ELIGIBLE` | `session-archive-not-eligible-details/v2` | Lifecycle/disposition, required action |
-| `SESSION_ARCHIVE_LIMIT_REACHED` | `session-archive-limit-details/v2` | Historical maximum; not emitted by current archival |
-| `SESSION_ARCHIVE_NOT_FOUND` | `session-archive-not-found-details/v2` | Exact inactive session ID |
-| Five `DELEGATION_*` codes | `delegation-error-details/v2` | Closed code/reason pairing |
-| `INTERNAL_ERROR` | `internal-error-details/v2` | Diagnostic UUID and optional bounded message |
+| Code or family | Current detail schema | Gen | Important facts |
+|---|---|---|---|
+| `WORKSPACE_BUSY` | `workspace-busy-details/v1` | 1, 2 | `boundary`: `connection_gate`, `sqlite_read_admission`, or `sqlite_write_lock`; `timeout_ms`, refresh |
+| `WORKSPACE_MAINTENANCE` | `workspace-maintenance-details/v1` | 1, 2 | Boundary, timeout, boundary-specific recovery |
+| `LEGACY_RUNTIME_STATE_UNSUPPORTED` | `legacy-runtime-state-unsupported-details/v1` | 1, 2 | Store generation, marker names, authorized reset |
+| `WORKSPACE_CONTRACT_MISMATCH` | `workspace-contract-mismatch-details/v1` | 1 | Expected/actual writer manifest digest, diagnosis |
+| `WORKSPACE_CONTRACT_MISMATCH` (generation 2) | `workspace-contract-mismatch-details/v2` | 2 (reserved) | Adds `actual_product_version` from the released-manifest table (null for an unknown digest); the recovery reason names the original writer |
+| `COMMAND_RETIRED` | `command-retired-details/v1` | 1, 2 | `retired`, nullable `replacement`, bounded `guidance` |
+| `WORKSPACE_UUID_MISMATCH` | `workspace-uuid-mismatch-details/v3` | 1, 2 | Expected/actual UUID, diagnosis |
+| `SESSION_ID_MISMATCH` | `session-id-mismatch-details/v3` | 1, 2 | Expected ID, nullable actual ID, refresh |
+| `PROCEDURE_DIGEST_MISMATCH` | `procedure-digest-mismatch-details/v3` | 1, 2 | Expected/actual canonical digest, refresh |
+| `SESSION_REVISION_CONFLICT`, `ITEM_REVISION_CONFLICT` | `revision-conflict-details/v3` | 1, 2 | `expected_revision` and/or `current_revision`, refresh |
+| `ATTEMPT_NOT_CURRENT` | `attempt-conflict-details/v3` | 1, 2 | Expected/actual attempt, refresh |
+| `EVIDENCE_REFERENCE_STALE`, `GOAL_REVISION_STALE`, `EVIDENCE_PAGE_TOKEN_STALE` | `recoverable-v2-runtime-error-details/v2` | 1, 2 | Code-bound `kind`, bounded facts, refresh |
+| `CRITERION_CITATION_INVALID` | `v2-runtime-error-details/v2` | 1 | Code-bound `kind`, rejected criterion and citation |
+| `CRITERION_CITATION_INVALID` (generation 2) | `criterion-citation-invalid-details/v1` | 2 (reserved) | Adds the citable evidence source nodes (at most eight) and item identifiers (at most 128) computed with the citation admission rule |
+| Other typed graph/goal/guard/Procedure-v2/evidence errors | `v2-runtime-error-details/v2` | 1, 2 | `kind` equals outer code; closed code-specific fields |
+| `BLOCKER_LIMIT_REACHED` | `blocker-limit-details/v2` | 1, 2 | `maximum_open_blockers: 64` |
+| `IDEMPOTENCY_KEY_REUSED` | `idempotency-key-reused-details/v2` | 1, 2 | Closed schema marker |
+| `MUTATION_OUTCOME_UNKNOWN` | `mutation-outcome-unknown-details/v3` | 1, 2 | Original key and matching lookup/recovery key |
+| `WORKSPACE_STATE_UNREADABLE` | `workspace-recovery-details/v2` | 1, 2 | Diagnosis |
+| `WORKSPACE_SCHEMA_UNSUPPORTED` | `workspace-schema-unsupported-details/v1` | 1, 2 | Actual/supported Store generations and compatible-Podway guidance; no recovery recipe |
+| `SESSION_RESET_NOT_ELIGIBLE` | `session-reset-not-eligible-details/v2` | 1, 2 | Lifecycle, disposition, required action |
+| `SESSION_START_DECISION_REQUIRED` | `session-start-decision-required-details/v2` | 1, 2 | Lifecycle, disposition, allowed actions |
+| `SESSION_START_STATE_CONFLICT` | `session-start-state-conflict-details/v2` | 1, 2 | Current lifecycle/disposition, allowed actions |
+| `SESSION_ARCHIVE_NOT_ELIGIBLE` | `session-archive-not-eligible-details/v2` | 1, 2 | Lifecycle/disposition, required action |
+| `SESSION_ARCHIVE_LIMIT_REACHED` | `session-archive-limit-details/v2` | 1, 2 | Historical maximum; not emitted by current archival |
+| `SESSION_ARCHIVE_NOT_FOUND` | `session-archive-not-found-details/v2` | 1, 2 | Exact inactive session ID |
+| Five `DELEGATION_*` codes | `delegation-error-details/v2` | 1, 2 | Closed code/reason pairing |
+| `INTERNAL_ERROR` | `internal-error-details/v2` | 1, 2 | Diagnostic UUID and optional bounded message |
+
+The Gen column records which contract generations select the family
+([ADR-0039](../../architecture-decision-records/0039-opt-in-contract-generations.md);
+the declaration is
+[`contract-generations.json`](../../../assets/specifications/contract-generations.json)).
+Families marked `1, 2` are shared by both generations. The two `2 (reserved)`
+families are validatable but emitted by no runtime path until generation 2 is
+selected and supported; the generation-1 families of `WORKSPACE_CONTRACT_MISMATCH`
+and `CRITERION_CITATION_INVALID` remain the emitted and catalog-named
+(`details_schema`) ones until then.
 
 `ITEM_CONSTRAINT_FAILED` may use a generic object; if its details include a parsed
 `field`, the envelope selects the closed named-bound branch. Typed v2 runtime

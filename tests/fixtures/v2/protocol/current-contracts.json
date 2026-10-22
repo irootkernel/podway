@@ -481,6 +481,190 @@
       "mutation_templates_total": 3,
       "mutation_templates_truncated": false
     },
+    "podway.observation-result/v6": {
+      "schema": "podway.observation-result/v6",
+      "status": {
+        "procedure": {
+          "schema": "podway.procedure/v2",
+          "id": "workflow",
+          "version": "1",
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "session": {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "lifecycle": "prepared",
+          "revision": 0
+        },
+        "current": null,
+        "goal_tracking": true,
+        "goal_defined": false,
+        "trace_length": 0,
+        "counters": [],
+        "items": [],
+        "items_total": 0,
+        "items_truncated": false,
+        "delegation": {
+          "state": "inactive",
+          "reason": "no_active_attempt",
+          "safe_next_action": "begin_or_inspect"
+        }
+      },
+      "guidance": {
+        "schema": "podway.prepared-next-result/v3",
+        "procedure_schema": "podway.procedure/v2",
+        "procedure_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "session_id": "00000000-0000-4000-8000-000000000001",
+        "session_state": "prepared",
+        "revision": 0,
+        "goal_tracking": true,
+        "goal_defined": false,
+        "trace_length": 0,
+        "allowed_actions": [
+          "session.begin",
+          "session.reset",
+          "session.start_replace"
+        ],
+        "suggestions": [
+          {
+            "command": "session.begin",
+            "argv": [
+              "podway",
+              "begin"
+            ]
+          },
+          {
+            "command": "session.reset",
+            "argv": [
+              "podway",
+              "reset"
+            ]
+          },
+          {
+            "command": "session.start_replace",
+            "argv": [
+              "podway",
+              "start",
+              "--on-existing",
+              "delete"
+            ]
+          }
+        ],
+        "delegated_placement_count": 1
+      },
+      "active_items": [],
+      "active_items_total": 0,
+      "active_items_truncated": false,
+      "mutation_templates": [
+        {
+          "command": "session.begin",
+          "argv": [
+            "podway",
+            "begin",
+            "--if-workspace-uuid",
+            "00000000-0000-4000-8000-000000000001",
+            "--if-session-id",
+            "00000000-0000-4000-8000-000000000001",
+            "--if-session-revision",
+            "0",
+            "--idempotency-key",
+            "<idempotency-key>"
+          ],
+          "preconditions": {
+            "workspace_uuid": "00000000-0000-4000-8000-000000000001",
+            "session_id": "00000000-0000-4000-8000-000000000001",
+            "session_revision": 0
+          },
+          "authority": "optimistic_concurrency_only",
+          "idempotency_key_required": true,
+          "requires_explicit_authorization": false
+        },
+        {
+          "command": "session.reset",
+          "argv": [
+            "podway",
+            "reset",
+            "--if-workspace-uuid",
+            "00000000-0000-4000-8000-000000000001",
+            "--if-session-id",
+            "00000000-0000-4000-8000-000000000001",
+            "--if-session-revision",
+            "0",
+            "--idempotency-key",
+            "<idempotency-key>"
+          ],
+          "preconditions": {
+            "workspace_uuid": "00000000-0000-4000-8000-000000000001",
+            "session_id": "00000000-0000-4000-8000-000000000001",
+            "session_revision": 0
+          },
+          "authority": "optimistic_concurrency_only",
+          "idempotency_key_required": true,
+          "requires_explicit_authorization": true
+        },
+        {
+          "command": "session.start_replace",
+          "argv": [
+            "podway",
+            "start",
+            "--on-existing",
+            "delete",
+            "--preset",
+            "<preset>",
+            "--task",
+            "<task>",
+            "--if-workspace-uuid",
+            "00000000-0000-4000-8000-000000000001",
+            "--if-session-id",
+            "00000000-0000-4000-8000-000000000001",
+            "--if-session-revision",
+            "0",
+            "--idempotency-key",
+            "<idempotency-key>"
+          ],
+          "preconditions": {
+            "workspace_uuid": "00000000-0000-4000-8000-000000000001",
+            "session_id": "00000000-0000-4000-8000-000000000001",
+            "session_revision": 0
+          },
+          "authority": "optimistic_concurrency_only",
+          "idempotency_key_required": true,
+          "requires_explicit_authorization": true
+        },
+        {
+          "command": "session.start_replace",
+          "argv": [
+            "podway",
+            "start",
+            "--on-existing",
+            "delete",
+            "--procedure",
+            "<procedure-file>",
+            "--expect-procedure-digest",
+            "<procedure-digest>",
+            "--task",
+            "<task>",
+            "--if-workspace-uuid",
+            "00000000-0000-4000-8000-000000000001",
+            "--if-session-id",
+            "00000000-0000-4000-8000-000000000001",
+            "--if-session-revision",
+            "0",
+            "--idempotency-key",
+            "<idempotency-key>"
+          ],
+          "preconditions": {
+            "workspace_uuid": "00000000-0000-4000-8000-000000000001",
+            "session_id": "00000000-0000-4000-8000-000000000001",
+            "session_revision": 0
+          },
+          "authority": "optimistic_concurrency_only",
+          "idempotency_key_required": true,
+          "requires_explicit_authorization": true
+        }
+      ],
+      "mutation_templates_total": 4,
+      "mutation_templates_truncated": false
+    },
     "podway.session-archive-show-result/v3": {
       "schema": "podway.session-archive-show-result/v3",
       "activity": "inactive",
@@ -641,6 +825,20 @@
     "podway.v2-runtime-error-details/v2": {
       "schema": "podway.v2-runtime-error-details/v2",
       "kind": "GOAL_TRACKING_NOT_ENABLED"
+    },
+    "podway.criterion-citation-invalid-details/v1": {
+      "schema": "podway.criterion-citation-invalid-details/v1",
+      "criterion_id": "done",
+      "citation": {
+        "local_item_id": "result"
+      },
+      "citable_evidence_source_nodes": [
+        "evidence-node"
+      ],
+      "citable_item_ids": [
+        "result",
+        "notes"
+      ]
     },
     "podway.workspace-recovery-details/v2": {
       "schema": "podway.workspace-recovery-details/v2",
@@ -842,6 +1040,24 @@
           "doctor"
         ],
         "reason": "Refresh committed state before retrying.",
+        "requires_explicit_authorization": false
+      }
+    },
+    "podway.workspace-contract-mismatch-details/v2": {
+      "schema": "podway.workspace-contract-mismatch-details/v2",
+      "expected_contract_manifest_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "actual_contract_manifest_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "actual_product_version": null,
+      "recovery": {
+        "action": "diagnose_writer",
+        "command": "version",
+        "argv": [
+          "podway",
+          "--json",
+          "version",
+          "--identity"
+        ],
+        "reason": "Identify the original writer release of the stored manifest, then recover with that release.",
         "requires_explicit_authorization": false
       }
     },
