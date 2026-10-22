@@ -20,6 +20,42 @@ sequence, for example `OPTIM-001`. Existing alphanumeric epic IDs, including
 `V2CTR` and `REL12`, and the compact `REL12` task IDs remain unchanged historical
 identifiers. Do not rename completed work to apply the new convention.
 
+## GUIDE — Agent Guidance and Contract Generation 2
+
+Dependencies: none; prior epics are Completed. Status: Planned. Design:
+[GUIDE dossier](../todo/TODO-podway-agent-guidance.md).
+
+On 2026-10-22 the owner adopted GUIDE from hands-on agent sessions against the
+`v0.2.15` candidate. GUIDE-001 through GUIDE-005 repair the socket test harness,
+local-command option handling, help-topic resolution, record and observation
+guidance and runtime-skill guidance without changing JSON contracts. GUIDE-006
+through GUIDE-011 implement
+[ADR-0039](../architecture-decision-records/0039-opt-in-contract-generations.md):
+fenced plain start, the opt-in contract generation 2 and the deprecation of
+generation 1. GUIDE-012 qualifies and closes the epic.
+
+Tasks run in numeric order with one active task. Executable tasks pass focused
+checks and `make test`; documentation-only tasks pass the documentation checks.
+Conditional release target: `v0.2.15`. Inclusion requires GUIDE completion and a
+separately authorized release. This registration selects no release, push,
+installation or external-consumer change; implementation starts only when the
+owner starts the epic.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `GUIDE-001` | Keep socket fixtures within sun_path | Planned | Bind the two socket fixtures under a short temporary root when the inherited TMPDIR leaves no room in the 104-byte socket address, proven by a long-TMPDIR regression. | [Socket fixture roots](../todo/TODO-podway-agent-guidance.md#guide-001-socket-fixture-roots) |
+| `GUIDE-002` | Reject every workspace option on local commands | Planned | Reject `--if-goal-revision` like the other workspace options on local commands, name every option to omit, and correct worktree guidance. | [Local command options](../todo/TODO-podway-agent-guidance.md#guide-002-local-command-options) |
+| `GUIDE-003` | Resolve help topics from command words | Planned | Resolve command words, multi-word commands and groups as help topics, publish a complete topic index, and point unknown topics to it. | [Help topic resolution](../todo/TODO-podway-agent-guidance.md#guide-003-help-topic-resolution) |
+| `GUIDE-004` | Explain record fields, observe/init help and human recovery hints | Planned | Document every record field with its observation source and an example, explain observation and init help, and add human hints without JSON changes. | [Record and recovery guidance](../todo/TODO-podway-agent-guidance.md#guide-004-record-observation-and-recovery-guidance) |
+| `GUIDE-005` | Teach recording, citation and workspace boundaries in the runtime skill | Planned | Teach tracked files, uninitialized workspaces, record fields, citation rules and released writer digests. | [Runtime skill guidance](../todo/TODO-podway-agent-guidance.md#guide-005-runtime-skill-guidance) |
+| `GUIDE-006` | Freeze generation-1 outputs | Planned | Pin normalized generation-1 observation, status, next and error-detail outputs before any generation-2 change. | [Generation-1 baselines](../todo/TODO-podway-agent-guidance.md#guide-006-generation-1-baselines) |
+| `GUIDE-007` | Reserve generation-2 contracts without emitting them | Planned | Add the generation-2 schemas, selections, generation declaration, protocol registration and contract tooling without emitting them. | [Contract reservation](../todo/TODO-podway-agent-guidance.md#guide-007-generation-2-contract-reservation) |
+| `GUIDE-008` | Fence plain start inside the Engine | Planned | Accept session fences on plain `start`, verify them in the start transaction after the idempotency lookup, and keep unfenced requests byte-identical. | [Fenced plain start](../todo/TODO-podway-agent-guidance.md#guide-008-fenced-plain-start) |
+| `GUIDE-009` | Select the generation and emit observation v6 | Planned | Add `--contract-generation` and project observation v6 with executable fenced lifecycle and archive templates. | [Selection and observation v6](../todo/TODO-podway-agent-guidance.md#guide-009-generation-selection-and-observation-v6) |
+| `GUIDE-010` | Emit generation-2 error details | Planned | Emit citable sources and the recorded writer release in generation-2 error details. | [Generation-2 details](../todo/TODO-podway-agent-guidance.md#guide-010-generation-2-error-details) |
+| `GUIDE-011` | Declare generation 2 and the deprecation; align guidance | Planned | Declare generation 2 and the generation-1 deprecation across release policy, the AGENTS.md upgrade-QA rule, README, skill, examples and packaged scenarios. | [Declaration and alignment](../todo/TODO-podway-agent-guidance.md#guide-011-declaration-and-guidance-alignment) |
+| `GUIDE-012` | Qualify and close GUIDE | Planned | Complete integration review, VM re-verification and `make test`, promote regression owners, retire the dossier and record acceptance. | [Qualification and closeout](../todo/TODO-podway-agent-guidance.md#guide-012-qualification-and-closeout) |
+
 ## Structural simplification program
 
 On 2026-10-19 the owner adopted four sequential design dossiers following the

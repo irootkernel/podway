@@ -85,6 +85,13 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
+The [GUIDE dossier](TODO-podway-agent-guidance.md) is adopted for the
+[GUIDE epic](../roadmap/README.md#guide-agent-guidance-and-contract-generation-2):
+agent-facing guidance fixes and the opt-in contract generation 2 accepted by
+[ADR-0039](../architecture-decision-records/0039-opt-in-contract-generations.md).
+The roadmap owns task status. Its release target, `v0.2.15`, is conditional on
+GUIDE completion and a separately authorized release.
+
 The [structural simplification program](../roadmap/README.md#structural-simplification-program)
 is completed and owner-accepted in the sequence VIEWS, PARSE, STATE and ADMIT.
 All four dossiers are retired under the lifecycle above; no adopted dossier
