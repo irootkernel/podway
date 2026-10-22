@@ -39,7 +39,7 @@ managed Primaries use their respective authorized integration paths;
    when current acceptance and ordinary readiness permit it, with fresh completion
    fences and a new key.
 
-Keep the established owning worktree on every command.
+Keep the established owning worktree on every workspace command.
 
 ## Acceptance field sources
 

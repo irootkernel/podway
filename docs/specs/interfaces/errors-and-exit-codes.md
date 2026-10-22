@@ -288,7 +288,9 @@ the client's controlled invocation context.
 
 Read-only argv uses `podway --json observe`, `podway --json doctor`, or
 `podway --json version --identity`; lookup uses
-`podway --json outcome lookup --idempotency-key <original-key>`. Legacy reset uses
+`podway --json outcome lookup --idempotency-key <original-key>`. The
+`version --identity` recipe is local: it opens no workspace and takes no
+`--worktree` or other worktree request option. Legacy reset uses
 `reset --all --yes --idempotency-key <new-idempotency-key>`; replace the placeholder
 with a fresh caller-owned key only after destructive authorization. Published
 reset recovery retains its original key. Removal retains its original force and

@@ -514,18 +514,13 @@ fn preset_failure(error: PresetError) -> LocalFailure {
 }
 
 fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
-    let local_flags = cli.worktree.is_some()
-        || cli.timeout.is_some()
-        || cli.idempotency_key.is_some()
-        || cli.if_workspace_uuid.is_some()
-        || cli.if_session_id.is_some()
-        || cli.if_session_revision.is_some()
-        || cli.if_attempt.is_some()
-        || cli.if_item_revision.is_some()
-        || cli.yes;
+    let workspace_options = supplied_workspace_options(cli);
     match &cli.command {
         Command::Help { topic } => {
-            reject_local_flags(local_flags, "help accepts no worktree request flags")?;
+            reject_local_workspace_options(
+                &workspace_options,
+                "help runs locally and opens no workspace",
+            )?;
             let text = help_text(topic.as_deref())?;
             Ok(Some(local_result(
                 "help",
@@ -534,7 +529,10 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
             )))
         }
         Command::Version { identity } => {
-            reject_local_flags(local_flags, "version accepts no worktree request flags")?;
+            reject_local_workspace_options(
+                &workspace_options,
+                "version runs locally and opens no workspace",
+            )?;
             if !identity {
                 return Ok(Some(RunResult::VersionSummary {
                     name: "podway",
@@ -556,7 +554,10 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
             )))
         }
         Command::Completions { shell } => {
-            reject_local_flags(local_flags, "completions accepts no worktree request flags")?;
+            reject_local_workspace_options(
+                &workspace_options,
+                "completions runs locally and opens no workspace",
+            )?;
             Ok(Some(local_result(
                 "completions",
                 json!({ "shell": format!("{shell:?}").to_lowercase(), "script": shell.script() }),
@@ -564,16 +565,16 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
             )))
         }
         Command::Preset { command } => {
-            reject_local_flags(
-                local_flags,
-                "preset commands accept no worktree request flags",
+            reject_local_workspace_options(
+                &workspace_options,
+                "preset commands run locally and open no workspace",
             )?;
             Ok(Some(execute_preset(command)?))
         }
         Command::Procedure { command } => {
-            reject_local_flags(
-                local_flags,
-                "procedure commands accept no worktree request flags",
+            reject_local_workspace_options(
+                &workspace_options,
+                "procedure commands run locally and open no workspace",
             )?;
             Ok(Some(execute_procedure(command)?))
         }
@@ -581,11 +582,38 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
     }
 }
 
-fn reject_local_flags(has_flags: bool, message: &'static str) -> Result<(), LocalFailure> {
-    if has_flags {
-        Err(LocalFailure::request_invalid(message))
-    } else {
+/// The worktree request options a local command must reject, in the fixed order
+/// its rejection message names them.
+fn supplied_workspace_options(cli: &Cli) -> Vec<&'static str> {
+    [
+        ("--worktree", cli.worktree.is_some()),
+        ("--timeout", cli.timeout.is_some()),
+        ("--idempotency-key", cli.idempotency_key.is_some()),
+        ("--if-workspace-uuid", cli.if_workspace_uuid.is_some()),
+        ("--if-session-id", cli.if_session_id.is_some()),
+        ("--if-session-revision", cli.if_session_revision.is_some()),
+        ("--if-attempt", cli.if_attempt.is_some()),
+        ("--if-item-revision", cli.if_item_revision.is_some()),
+        ("--if-goal-revision", cli.if_goal_revision.is_some()),
+        ("--yes", cli.yes),
+    ]
+    .into_iter()
+    .filter(|(_, supplied)| *supplied)
+    .map(|(option, _)| option)
+    .collect()
+}
+
+fn reject_local_workspace_options(
+    supplied: &[&'static str],
+    subject: &'static str,
+) -> Result<(), LocalFailure> {
+    if supplied.is_empty() {
         Ok(())
+    } else {
+        Err(LocalFailure::request_invalid(format!(
+            "{subject}; omit {}",
+            supplied.join(", ")
+        )))
     }
 }
 

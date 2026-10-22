@@ -39,8 +39,10 @@ skill. Route Procedure source work to `$create-podway-procedure`.
 5. Without a current session, continue external work. Create a session only when
    the workflow explicitly authorizes it.
 
-Use `--worktree <path>` to preserve the owning worktree on every command. `--json`
-is global. `--timeout <duration>` defaults to `5s`; unsigned `ms`, `s` or `m` values
+Use `--worktree <path>` to preserve the owning worktree on every workspace
+command; local commands (`help`, `version`, `completions`, `preset`, `procedure`)
+accept no worktree request options. `--json` is global. `--timeout <duration>`
+defaults to `5s`; unsigned `ms`, `s` or `m` values
 may be at most `60m`. It supplies one admission-wait budget across maintenance
 leases, the connection gate and SQLite locks. Input, preparation and confirmation
 consume that budget without renewing it; each boundary tries once even at `0ms`,

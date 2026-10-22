@@ -918,6 +918,220 @@ fn bound005_format_refuses_symlinks_without_changing_the_victim() {
 }
 
 #[test]
+fn guide002_local_commands_reject_every_worktree_request_option() {
+    struct Family {
+        argv: &'static [&'static str],
+        route: &'static str,
+        subject: &'static str,
+    }
+    let families = [
+        Family {
+            argv: &["help"],
+            route: "help",
+            subject: "help runs locally and opens no workspace",
+        },
+        Family {
+            argv: &["version"],
+            route: "version",
+            subject: "version runs locally and opens no workspace",
+        },
+        Family {
+            argv: &["completions", "bash"],
+            route: "completions",
+            subject: "completions runs locally and opens no workspace",
+        },
+        Family {
+            argv: &["preset", "list"],
+            route: "preset.list",
+            subject: "preset commands run locally and open no workspace",
+        },
+        Family {
+            argv: &["procedure", "scaffold"],
+            route: "procedure.scaffold",
+            subject: "procedure commands run locally and open no workspace",
+        },
+    ];
+    // The ten worktree request options in the fixed reporting order; the
+    // --worktree value is the fixture root.
+    let options: [(&str, Option<&str>); 10] = [
+        ("--worktree", None),
+        ("--timeout", Some("5s")),
+        ("--idempotency-key", Some("guide002-key")),
+        (
+            "--if-workspace-uuid",
+            Some("1f0e0d0c-0b0a-4908-8706-050403020100"),
+        ),
+        (
+            "--if-session-id",
+            Some("1f0e0d0c-0b0a-4908-8706-050403020100"),
+        ),
+        ("--if-session-revision", Some("12")),
+        ("--if-attempt", Some("1f0e0d0c-0b0a-4908-8706-050403020100")),
+        ("--if-item-revision", Some("3")),
+        ("--if-goal-revision", Some("4")),
+        ("--yes", None),
+    ];
+
+    fn assert_rejected(
+        failures: &mut Vec<String>,
+        fixture: &Fixture,
+        arguments: &[String],
+        expected_command: &str,
+        expected_message: &str,
+    ) {
+        let output = fixture.run(arguments);
+        let label = format!("{arguments:?}: ");
+        if output.status.code() != Some(2) {
+            failures.push(format!(
+                "{label}exit was {:?}, stdout {:?}, stderr {:?}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            ));
+            return;
+        }
+        let error = one_json(&output);
+        for (field, actual, expected) in [
+            ("code", error["code"].as_str(), Some("REQUEST_INVALID")),
+            ("command", error["command"].as_str(), Some(expected_command)),
+            ("message", error["message"].as_str(), Some(expected_message)),
+        ] {
+            if actual != expected {
+                failures.push(format!(
+                    "{label}{field} was {actual:?}, expected {expected:?}"
+                ));
+            }
+        }
+        if error["retryable"] != json!(false) {
+            failures.push(format!("{label}retryable was {}", error["retryable"]));
+        }
+        if error["exit_code"] != json!(2) {
+            failures.push(format!("{label}exit_code was {}", error["exit_code"]));
+        }
+    }
+
+    let mut failures = Vec::new();
+    for family in &families {
+        let fixture = Fixture::new();
+        for (option, value) in options.iter().copied() {
+            let mut arguments = vec!["--json".to_owned()];
+            arguments.extend(family.argv.iter().map(|word| (*word).to_owned()));
+            arguments.push(option.to_owned());
+            if option == "--worktree" {
+                arguments.push(fixture.root.display().to_string());
+            } else if let Some(value) = value {
+                arguments.push(value.to_owned());
+            }
+            let expected_message = format!("{}; omit {}", family.subject, option);
+            assert_rejected(
+                &mut failures,
+                &fixture,
+                &arguments,
+                family.route,
+                &expected_message,
+            );
+        }
+    }
+
+    // A scrambled supply order still reports the fixed order.
+    let fixture = Fixture::new();
+    let mut arguments = vec![
+        "--json".to_owned(),
+        "version".to_owned(),
+        "--yes".to_owned(),
+        "--if-goal-revision".to_owned(),
+        "4".to_owned(),
+        "--worktree".to_owned(),
+    ];
+    arguments.push(fixture.root.display().to_string());
+    assert_rejected(
+        &mut failures,
+        &fixture,
+        &arguments,
+        "version",
+        "version runs locally and opens no workspace; omit --worktree, --if-goal-revision, --yes",
+    );
+
+    // Every option at once reports the complete fixed order.
+    let fixture = Fixture::new();
+    let root = fixture.root.display().to_string();
+    let arguments = vec![
+        "--json".to_owned(),
+        "version".to_owned(),
+        "--yes".to_owned(),
+        "--if-item-revision".to_owned(),
+        "3".to_owned(),
+        "--timeout".to_owned(),
+        "5s".to_owned(),
+        "--if-goal-revision".to_owned(),
+        "4".to_owned(),
+        "--if-attempt".to_owned(),
+        "1f0e0d0c-0b0a-4908-8706-050403020100".to_owned(),
+        "--worktree".to_owned(),
+        root,
+        "--if-session-revision".to_owned(),
+        "12".to_owned(),
+        "--idempotency-key".to_owned(),
+        "guide002-key".to_owned(),
+        "--if-workspace-uuid".to_owned(),
+        "1f0e0d0c-0b0a-4908-8706-050403020100".to_owned(),
+        "--if-session-id".to_owned(),
+        "1f0e0d0c-0b0a-4908-8706-050403020100".to_owned(),
+    ];
+    assert_rejected(
+        &mut failures,
+        &fixture,
+        &arguments,
+        "version",
+        "version runs locally and opens no workspace; omit --worktree, --timeout, --idempotency-key, --if-workspace-uuid, --if-session-id, --if-session-revision, --if-attempt, --if-item-revision, --if-goal-revision, --yes",
+    );
+
+    // The rejection precedes every other local failure, including the
+    // "version --identity requires --json" check.
+    let fixture = Fixture::new();
+    let mut arguments = vec![
+        "--json".to_owned(),
+        "version".to_owned(),
+        "--identity".to_owned(),
+        "--worktree".to_owned(),
+    ];
+    arguments.push(fixture.root.display().to_string());
+    assert_rejected(
+        &mut failures,
+        &fixture,
+        &arguments,
+        "version",
+        "version runs locally and opens no workspace; omit --worktree",
+    );
+    let fixture = Fixture::new();
+    let mut arguments = vec![
+        "version".to_owned(),
+        "--identity".to_owned(),
+        "--worktree".to_owned(),
+    ];
+    arguments.push(fixture.root.display().to_string());
+    let output = fixture.run(&arguments);
+    let stderr = "error: version runs locally and opens no workspace; omit --worktree\n";
+    if output.status.code() != Some(2)
+        || !output.stdout.is_empty()
+        || output.stderr != stderr.as_bytes()
+    {
+        failures.push(format!(
+            "human precedence cell: exit {:?}, stdout {:?}, stderr {:?}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        ));
+    }
+
+    assert!(
+        failures.is_empty(),
+        "GUIDE-002 local-option rejection mismatches:\n{}",
+        failures.join("\n")
+    );
+}
+
+#[test]
 fn bound005_fresh_preset_preview_remains_offline() {
     let fixture = Fixture::new();
     let output = fixture.run(

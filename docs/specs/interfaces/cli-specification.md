@@ -34,7 +34,13 @@ help flags. JSON help retains command identity `help`.
 Angle brackets denote required values; brackets denote optional syntax. Global
 options may surround the command, but their identities and confirmation flags are
 accepted only by applicable routes. Non-applicable or duplicate stdin identity
-fields return `REQUEST_INVALID`.
+fields return `REQUEST_INVALID`. The worktree request options — `--worktree`,
+`--timeout`, `--idempotency-key`, `--if-workspace-uuid`, `--if-session-id`,
+`--if-session-revision`, `--if-attempt`, `--if-item-revision`,
+`--if-goal-revision` and `--yes` — apply to workspace routes only: the local
+families `help`, `version`, `completions`, `preset` and `procedure` run
+in-process, open no workspace, and reject every one of them with exit-2
+`REQUEST_INVALID` naming each supplied option.
 
 | Global option | Meaning and applicability |
 |---|---|

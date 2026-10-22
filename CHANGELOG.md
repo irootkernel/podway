@@ -4,6 +4,11 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.2.15 - Unreleased
 
+### Fixed
+
+- Reject every worktree request option, including `--if-goal-revision`, on local
+  commands with a message naming each option to omit.
+
 ## v0.2.14 - 2026-10-13
 
 ### Changed
