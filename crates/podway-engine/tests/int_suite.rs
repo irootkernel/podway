@@ -69,3 +69,6 @@ mod int_optim001_engine_overflow;
 
 #[path = "int_optim001_direct_identity.rs"]
 mod int_optim001_direct_identity;
+
+#[path = "int_guide006_generation1_baselines.rs"]
+mod int_guide006_generation1_baselines;

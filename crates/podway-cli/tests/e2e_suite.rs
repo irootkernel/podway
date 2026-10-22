@@ -1,5 +1,7 @@
 #[path = "test_support/cli.rs"]
 mod cli_fixture;
+#[path = "e2e_guide006_generation1_baselines.rs"]
+mod e2e_guide006_generation1_baselines;
 #[path = "e2e_phase5_user_environment.rs"]
 mod e2e_phase5_user_environment;
 #[path = "e2e_v2_native_qualification.rs"]
