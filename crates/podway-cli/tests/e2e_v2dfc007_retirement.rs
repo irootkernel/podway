@@ -63,6 +63,7 @@ fn retired_surface_returns_valid_guidance_without_reading_open_stdin_or_worktree
         vec!["observe", "--after-job"],
         vec!["status", "--dev=false"],
         vec!["--socket"],
+        vec!["help", "goal", "define", "--detach"],
     ] {
         let mut command = Command::new(super::cli_fixture::podway_binary());
         if !arguments.contains(&"--json") {
@@ -99,6 +100,9 @@ fn retired_surface_returns_valid_guidance_without_reading_open_stdin_or_worktree
         let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
         let value = error.as_value();
         assert_eq!(value["code"], "COMMAND_RETIRED", "{arguments:?}");
+        if arguments == ["help", "goal", "define", "--detach"] {
+            assert_eq!(value["command"], "help", "{arguments:?}");
+        }
         assert_eq!(value["retryable"], false);
         assert!(output.stdout.ends_with(b"\n"));
         let details = value["details"].as_object().unwrap();

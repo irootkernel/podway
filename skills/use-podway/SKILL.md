@@ -16,7 +16,8 @@ only that operation, not item recording or progression.
 
 Podway guards one task in one Git worktree. It records caller results and formal
 progression, not external execution or semantic truth. Use JSON fields and stable
-error codes for decisions, and `podway help <route>` for exact command grammar.
+error codes for decisions, and `podway help <route or command words>` for exact
+command grammar.
 Do not install it, change project guidance or author a Procedure through this
 skill. Route Procedure source work to `$create-podway-procedure`.
 

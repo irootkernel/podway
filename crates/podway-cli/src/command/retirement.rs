@@ -254,9 +254,16 @@ pub(super) fn classify(
             scope = child;
             positional = 0;
             retained.push(argument.clone());
-        } else if scope.get_positionals().nth(positional).is_some() {
-            positional += 1;
+        } else if let Some(positional_arg) = scope.get_positionals().nth(positional) {
+            // A positional accepting multiple values keeps consuming topic words, so a
+            // later retired flag still classifies against the full command context.
             retained.push(argument.clone());
+            if !positional_arg
+                .get_num_args()
+                .is_some_and(|range| range.max_values() > 1)
+            {
+                positional += 1;
+            }
         } else {
             unknown_syntax = true;
         }
@@ -401,6 +408,21 @@ mod tests {
             vec!["status", "--unknown", "--idempotency-key", "--json"],
         ] {
             assert!(!classified(&arguments).json_requested, "{arguments:?}");
+        }
+    }
+
+    #[test]
+    fn guide003_retired_flags_after_multi_word_help_topics_stay_command_retired() {
+        for (arguments, flag) in [
+            (vec!["help", "goal", "define", "--detach"], "--detach"),
+            (vec!["help", "rework", "--dev=false"], "--dev"),
+        ] {
+            let result = classified(&arguments);
+            let retired = result
+                .retired
+                .expect("a retired flag after help topic words still classifies");
+            assert_eq!(retired.name, flag, "{arguments:?}");
+            assert_eq!(retired.command, "help", "{arguments:?}");
         }
     }
 

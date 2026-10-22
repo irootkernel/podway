@@ -251,7 +251,8 @@ podway status
 podway status --verbose
 ```
 
-Use `podway help <command>` for the exact grammar of a command.
+Use `podway help <command words>` (for example `podway help goal define`) for
+the exact grammar of a command; `podway help` prints the topic index.
 
 ## Procedures and rework
 

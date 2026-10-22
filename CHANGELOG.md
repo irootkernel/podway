@@ -8,6 +8,8 @@ This file records concise shipped outcomes and the planned next stable release.
 
 - Reject every worktree request option, including `--if-goal-revision`, on local
   commands with a message naming each option to omit.
+- Resolve `podway help` topics from command words, multi-word commands, command
+  groups and retired families, and list every topic in the help overview.
 
 ## v0.2.14 - 2026-10-13
 

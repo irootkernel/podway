@@ -27,7 +27,9 @@ The [command catalog](../../../assets/specifications/command-catalog.yaml),
 [route contract](../../../contracts/command-routes.json), and CLI clap grammar
 own exact routes, result families, and options. `podway -h` and `podway --help`
 are aliases for the overview from `podway help`; they do not enable subcommand
-help flags. JSON help retains command identity `help`.
+help flags. JSON help retains command identity `help`. Help topic words are
+joined with single spaces in the JSON `topic` field, which is null when no
+topic is supplied.
 
 ## Grammar and global options
 
@@ -59,7 +61,7 @@ in-process, open no workspace, and reject every one of them with exit-2
 
 | Route grammar | Command-specific constraints |
 |---|---|
-| `help [TOPIC]` | Canonical dotted route or documented topic; `-h`/`--help` alias only the top-level overview |
+| `help [<TOPIC>...]` | One or more topic words: overview, a guide, a dotted route identifier, executable command words, a command-group word, or a retired family; the overview prints the complete topic index and unknown topics return exit-2 `REQUEST_INVALID` naming `podway help`; `-h`/`--help` alias only the top-level overview |
 | `version [--identity]` | `--identity` requires `--json` |
 | `completions <bash\|zsh\|fish>` | Emits the selected shell script; dynamic candidates use bounded read-only queries |
 | `preset list`, `preset show <NAME>`, `preset explain <NAME>` | Offline built-in catalog |

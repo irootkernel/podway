@@ -521,7 +521,12 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
                 &workspace_options,
                 "help runs locally and opens no workspace",
             )?;
-            let text = help_text(topic.as_deref())?;
+            let text = help_text(topic)?;
+            let topic = if topic.is_empty() {
+                None
+            } else {
+                Some(topic.join(" "))
+            };
             Ok(Some(local_result(
                 "help",
                 json!({ "topic": topic, "text": text }),
@@ -1717,7 +1722,7 @@ mod tests {
             assert!(validate_direct_flags(&command).is_err());
         }
         assert!(
-            super::help_text(Some("workspace.remove"))
+            super::help_text(&["workspace.remove".to_owned()])
                 .unwrap()
                 .contains("preserving the Git worktree")
         );

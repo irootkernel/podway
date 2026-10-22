@@ -84,7 +84,7 @@ pub(super) enum Command {
     /// Show offline help and examples.
     Help {
         #[arg(value_name = "TOPIC")]
-        topic: Option<String>,
+        topic: Vec<String>,
     },
     /// Print the CLI version.
     Version {
@@ -1128,28 +1128,154 @@ fn parse_positive_u64(value: &str) -> Result<u64, String> {
     Ok(value)
 }
 
-pub(super) fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
-    let topic = topic.unwrap_or("overview");
-    if topic == "overview" {
-        let preset_ids = podway_presets::list()
-            .iter()
-            .map(|preset| preset.metadata.id)
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Ok(format!(
-            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes reading and writing local workspace state.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDirect execution:\n  Worktree commands execute in this process.\n  Use --worktree <path> to select a Git worktree and --timeout <duration> to bound lock waiting.\n  Worktree request options apply to workspace routes only; help, version, completions, preset and procedure run locally, open no workspace and accept none of them.\n  Automation mutations require an explicit --idempotency-key; recover lost output with outcome lookup.\n\nUsage:\n  podway help [<route>]\n  podway -h\n  podway --help\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff' --idempotency-key start-example\n  podway begin --idempotency-key begin-example\n  podway status --json\n  podway observe --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold\n  session.begin, session.terminal_disposition, session.decide, session.rework\n  goal.define, goal.revise, goal.assess_criterion\n  evidence read\n  delegation package|accept|receipt\n\nShipped presets: {preset_ids}. Start prepares a session; begin creates its first active attempt. Contributors use disposable Git worktrees for isolated development; see help workflow."
+/// Guide topics shared by topic resolution and the overview index.
+const GUIDE_TOPICS: &[&str] = &["workflow", "automation", "procedures", "artifacts"];
+
+/// Retired family topics the overview index lists; each resolves through the
+/// retirement table.
+const RETIRED_FAMILY_TOPICS: &[&str] = &["daemon", "runtime reset", "workspace mode", "job"];
+
+/// Flag-selected routes the overview index lists after their base command,
+/// resolved through the same parse-failure context as plain word paths. Each
+/// entry names the base command word, the displayed spelling and the exact
+/// flag words used for the route lookup.
+const FLAG_SELECTED_TOPICS: &[(&str, &str, &[&str])] = &[
+    (
+        "start",
+        "start --on-existing",
+        &["--on-existing", "preserve"],
+    ),
+    ("reset", "reset --all", &["--all"]),
+];
+
+/// Maps one word path, including flag-selected spellings, to its route through
+/// the parse-failure command context.
+fn word_route(words: &[String]) -> Option<&'static str> {
+    let mut argv: Vec<OsString> = Vec::with_capacity(words.len() + 1);
+    argv.push(OsString::from("podway"));
+    argv.extend(words.iter().cloned().map(OsString::from));
+    parse_failure_command_context(&argv).map(|context| context.route)
+}
+
+/// Resolves executable command words and group words against the clap tree,
+/// walking only non-hidden subcommands.
+fn command_word_topic(words: &[String]) -> Option<String> {
+    let mut grammar = Cli::command();
+    grammar.build();
+    let mut scope = &grammar;
+    for word in words {
+        scope = scope
+            .find_subcommand(word.as_str())
+            .filter(|child| !child.is_hide_set())?;
+    }
+    if scope.is_subcommand_required_set() {
+        let mut lines = Vec::new();
+        for child in scope.get_subcommands().filter(|child| !child.is_hide_set()) {
+            let mut child_words = words.to_vec();
+            child_words.push(child.get_name().to_owned());
+            let route = word_route(&child_words).expect("every listed group child maps to a route");
+            lines.push(format!("  {} -> {route}", child_words.join(" ")));
+        }
+        return Some(format!(
+            "{} command group:\n{}",
+            words.join(" "),
+            lines.join("\n")
         ));
     }
-    if let Some(guidance) = retirement::help_guidance(topic)
+    word_route(words).and_then(route_topic).map(str::to_owned)
+}
+
+fn collect_executable_lines(
+    scope: &clap::Command,
+    path: &mut Vec<String>,
+    lines: &mut Vec<String>,
+) {
+    for child in scope.get_subcommands().filter(|child| !child.is_hide_set()) {
+        path.push(child.get_name().to_owned());
+        if !child.is_subcommand_required_set() {
+            let words = path.join(" ");
+            let route = word_route(path).expect("every executable word path maps to a route");
+            lines.push(format!("  {words} -> {route}"));
+            for (_, display, flags) in FLAG_SELECTED_TOPICS
+                .iter()
+                .filter(|(name, _, _)| path.len() == 1 && path[0] == *name)
+            {
+                let mut selected = path.clone();
+                selected.extend(flags.iter().map(|flag| flag.to_string()));
+                let route = word_route(&selected).expect("flag-selected words map to a route");
+                lines.push(format!("  {display} -> {route}"));
+            }
+            collect_executable_lines(child, path, lines);
+        } else {
+            collect_executable_lines(child, path, lines);
+        }
+        path.pop();
+    }
+}
+
+/// Generates the overview topic index: every executable word path in clap
+/// declaration order with the flag-selected routes, then the guide, group and
+/// retired-family lines.
+fn overview_topic_lines(grammar: &clap::Command) -> Vec<String> {
+    let mut lines = Vec::new();
+    collect_executable_lines(grammar, &mut Vec::new(), &mut lines);
+    lines.push(format!("  guides: {}", GUIDE_TOPICS.join(", ")));
+    let groups: Vec<&str> = grammar
+        .get_subcommands()
+        .filter(|child| !child.is_hide_set() && child.is_subcommand_required_set())
+        .map(|child| child.get_name())
+        .collect();
+    lines.push(format!("  command groups: {}", groups.join(", ")));
+    lines.push(format!(
+        "  retired families: {}",
+        RETIRED_FAMILY_TOPICS.join(", ")
+    ));
+    lines
+}
+
+fn overview_text() -> String {
+    let preset_ids = podway_presets::list()
+        .iter()
+        .map(|preset| preset.metadata.id)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut grammar = Cli::command();
+    grammar.build();
+    let topics = overview_topic_lines(&grammar).join("\n");
+    format!(
+        "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes reading and writing local workspace state.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDirect execution:\n  Worktree commands execute in this process.\n  Use --worktree <path> to select a Git worktree and --timeout <duration> to bound lock waiting.\n  Worktree request options apply to workspace routes only; help, version, completions, preset and procedure run locally, open no workspace and accept none of them.\n  Automation mutations require an explicit --idempotency-key; recover lost output with outcome lookup.\n\nUsage:\n  podway help [<topic>...]\n  podway -h\n  podway --help\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff' --idempotency-key start-example\n  podway begin --idempotency-key begin-example\n  podway status --json\n  podway observe --json\n\nTopics:\n{topics}\n\nShipped presets: {preset_ids}. Start prepares a session; begin creates its first active attempt. Contributors use disposable Git worktrees for isolated development; see help workflow."
+    )
+}
+
+pub(super) fn help_text(words: &[String]) -> Result<String, LocalFailure> {
+    if words.is_empty() || (words.len() == 1 && words[0] == "overview") {
+        return Ok(overview_text());
+    }
+    if let Some(guidance) = retirement::help_guidance(&words.join("."))
         .map_err(|_| LocalFailure::internal("the embedded retirement table is invalid"))?
     {
         return Ok(guidance);
     }
+    if words.len() == 1
+        && let Some(text) = route_topic(&words[0])
+    {
+        return Ok(text.to_owned());
+    }
+    if let Some(text) = command_word_topic(words) {
+        return Ok(text);
+    }
+    Err(LocalFailure::request_invalid(
+        "unknown help topic; run podway help to list topics",
+    ))
+}
+
+/// The exact-topic table shared by single-word resolution and the command-word
+/// walk: guides, local words and dotted route identifiers.
+fn route_topic(topic: &str) -> Option<&'static str> {
     let text = match topic {
         "workflow" => {
             "Procedure v2 workflow:\n  podway init --idempotency-key init-example\n  podway --json preset show bug-fix-v2\n  podway --json start --preset bug-fix-v2 --task 'inspect the workflow' --idempotency-key start-example\n  podway --json begin --goal 'Verify the requested behavior.' --criterion verified='Relevant checks pass.' --actor developer --idempotency-key begin-example\n  podway --json observe\n\nAdd --dry-run to start for read-only Procedure inspection without creating a session. A successful start creates a prepared session; begin atomically creates the first attempt and optional goal. Follow the allowed item, option, evidence, and rework identifiers returned by observe. Contributors use a disposable Git worktree with its own .podway state. See docs/examples/v2-workflow.md for the complete executable sequence. Podway records caller assertions; it does not establish their semantic truth."
         }
-        "rework" => "Rework:\n  podway rework --to implement --reason 'review found a gap'",
         "automation" => {
             "Automation:\n  podway complete --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 12 --if-attempt <uuid> --idempotency-key task-42 --json"
         }
@@ -1159,7 +1285,7 @@ pub(super) fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         "artifacts" => {
             "Artifacts:\n  podway attach verification-reference report.md --media-type text/markdown\n  podway attach verification-reference --reference build:42 --digest sha256:<hex> --size 42 --media-type text/plain"
         }
-        "help" => "Usage:\n  podway help [<route>]\n\nExample:\n  podway help session.start",
+        "help" => "Usage:\n  podway help [<topic>...]\n\nExample:\n  podway help session.start",
         "version" => {
             "Usage:\n  podway version [--json] [--identity]\n\nExamples:\n  podway version\n  podway version --json\n  podway version --json --identity"
         }
@@ -1324,7 +1450,245 @@ pub(super) fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         "outcome.lookup" => {
             "Usage:\n  podway outcome lookup --idempotency-key <key> [--if-workspace-uuid <uuid>] [--json]\n\nRead the original committed success response without replaying or admitting a mutation."
         }
-        _ => return Err(LocalFailure::request_invalid("unknown help topic")),
+        _ => return None,
     };
-    Ok(text.to_owned())
+    Some(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EXECUTABLE_WORD_ROUTES: &[(&[&str], &str)] = &[
+        (&["help"], "help"),
+        (&["version"], "version"),
+        (&["completions"], "completions"),
+        (&["procedure", "validate"], "procedure.validate"),
+        (&["procedure", "show"], "procedure.show"),
+        (&["procedure", "format"], "procedure.format"),
+        (&["procedure", "vet"], "procedure.vet"),
+        (&["procedure", "graph"], "procedure.graph"),
+        (&["procedure", "preview"], "procedure.preview"),
+        (&["procedure", "lint"], "procedure.lint"),
+        (&["procedure", "check"], "procedure.check"),
+        (&["procedure", "scaffold"], "procedure.scaffold"),
+        (&["preset", "list"], "preset.list"),
+        (&["preset", "show"], "preset.show"),
+        (&["preset", "explain"], "preset.explain"),
+        (&["init"], "workspace.init"),
+        (&["doctor"], "workspace.doctor"),
+        (&["workspace", "show"], "workspace.show"),
+        (&["workspace", "repair"], "workspace.repair"),
+        (&["workspace", "remove"], "workspace.remove"),
+        (&["start"], "session.start"),
+        (&["begin"], "session.begin"),
+        (&["status"], "session.status"),
+        (&["next"], "session.next"),
+        (&["observe"], "session.observe"),
+        (&["evidence", "read"], "evidence.read"),
+        (&["delegation", "package"], "delegation.package"),
+        (&["delegation", "accept"], "delegation.accept"),
+        (&["delegation", "receipt"], "delegation.receipt"),
+        (&["complete"], "session.complete"),
+        (&["decide"], "session.decide"),
+        (&["rework"], "session.rework"),
+        (&["goal", "define"], "goal.define"),
+        (&["goal", "revise"], "goal.revise"),
+        (&["goal", "assess-criterion"], "goal.assess_criterion"),
+        (&["skip"], "session.skip"),
+        (&["retry"], "session.retry"),
+        (&["block"], "session.block"),
+        (&["unblock"], "session.unblock"),
+        (&["cancel"], "session.cancel"),
+        (
+            &["disposition", "handed-off"],
+            "session.terminal_disposition",
+        ),
+        (
+            &["disposition", "not-required"],
+            "session.terminal_disposition",
+        ),
+        (&["archive"], "session.archive"),
+        (&["archive", "list"], "session.archive_list"),
+        (&["archive", "show"], "session.archive_show"),
+        (&["archive", "purge"], "session.archive_purge"),
+        (&["reset"], "session.reset"),
+        (&["check"], "item.check"),
+        (&["uncheck"], "item.uncheck"),
+        (&["set"], "item.set"),
+        (&["add"], "item.add"),
+        (&["remove"], "item.remove"),
+        (&["attach"], "item.attach"),
+        (&["clear"], "item.clear"),
+        (&["record"], "item.record_many"),
+        (&["outcome", "lookup"], "outcome.lookup"),
+    ];
+
+    const GROUP_WORDS: &[&str] = &[
+        "procedure",
+        "preset",
+        "workspace",
+        "evidence",
+        "delegation",
+        "goal",
+        "disposition",
+        "outcome",
+    ];
+
+    const FLAG_SELECTED_ROUTES: &[(&[&str], &str)] = &[
+        (
+            &["start", "--on-existing", "preserve"],
+            "session.start_replace",
+        ),
+        (&["reset", "--all"], "workspace.reset_all"),
+    ];
+
+    fn owned(words: &[&str]) -> Vec<String> {
+        words.iter().copied().map(|word| word.to_owned()).collect()
+    }
+
+    fn tree_executable_paths(
+        scope: &clap::Command,
+        path: &mut Vec<String>,
+        paths: &mut Vec<Vec<String>>,
+    ) {
+        for child in scope.get_subcommands().filter(|child| !child.is_hide_set()) {
+            path.push(child.get_name().to_owned());
+            if child.is_subcommand_required_set() {
+                tree_executable_paths(child, path, paths);
+            } else {
+                paths.push(path.clone());
+                tree_executable_paths(child, path, paths);
+            }
+            path.pop();
+        }
+    }
+
+    #[test]
+    fn guide003_word_routes_match_the_clap_tree() {
+        let mut grammar = Cli::command();
+        grammar.build();
+        let mut tree_paths = Vec::new();
+        tree_executable_paths(&grammar, &mut Vec::new(), &mut tree_paths);
+        let mut expected: Vec<Vec<String>> = EXECUTABLE_WORD_ROUTES
+            .iter()
+            .map(|(words, _)| owned(words))
+            .collect();
+        tree_paths.sort();
+        expected.sort();
+        assert_eq!(tree_paths, expected);
+
+        let groups: Vec<&str> = grammar
+            .get_subcommands()
+            .filter(|child| !child.is_hide_set() && child.is_subcommand_required_set())
+            .map(|child| child.get_name())
+            .collect();
+        assert_eq!(groups, GROUP_WORDS);
+
+        for (words, route) in EXECUTABLE_WORD_ROUTES {
+            let via_words = help_text(&owned(words)).unwrap();
+            let via_route = help_text(&[route.to_string()]).unwrap();
+            assert_eq!(via_words, via_route, "{words:?}");
+        }
+        for (words, route) in FLAG_SELECTED_ROUTES {
+            let argv: Vec<OsString> = std::iter::once("podway")
+                .chain(words.iter().copied())
+                .map(OsString::from)
+                .collect();
+            assert_eq!(
+                parse_failure_command_context(&argv)
+                    .expect("flag-selected words parse")
+                    .route,
+                *route,
+                "{words:?}"
+            );
+            assert!(help_text(&[route.to_string()]).is_ok(), "{route}");
+        }
+        for guide in GUIDE_TOPICS {
+            assert!(help_text(&[guide.to_string()]).is_ok(), "{guide}");
+        }
+    }
+
+    #[test]
+    fn guide003_help_topics_resolve_words_groups_and_unknown_topics() {
+        for (words, route) in [
+            (&["goal", "define"][..], "goal.define"),
+            (&["record"][..], "item.record_many"),
+            (&["init"][..], "workspace.init"),
+            (&["rework"][..], "session.rework"),
+            (
+                &["disposition", "not-required"][..],
+                "session.terminal_disposition",
+            ),
+        ] {
+            assert_eq!(
+                help_text(&owned(words)).unwrap(),
+                help_text(&[route.to_string()]).unwrap(),
+                "{words:?}"
+            );
+        }
+        let rework = help_text(&["rework".to_owned()]).unwrap();
+        assert!(rework.contains("Usage:") && rework.contains("--to <graph-node-id>"));
+
+        let goal = help_text(&["goal".to_owned()]).unwrap();
+        assert_eq!(
+            goal,
+            "goal command group:\n  goal define -> goal.define\n  goal revise -> goal.revise\n  goal assess-criterion -> goal.assess_criterion"
+        );
+        for group in GROUP_WORDS {
+            let listing = help_text(&[group.to_string()]).unwrap();
+            assert!(
+                listing.starts_with(&format!("{group} command group:")),
+                "{group}"
+            );
+        }
+        let disposition = help_text(&["disposition".to_owned()]).unwrap();
+        assert!(disposition.contains("disposition not-required -> session.terminal_disposition"));
+
+        assert!(
+            help_text(&["daemon".to_owned()])
+                .unwrap()
+                .contains("retired")
+        );
+        assert!(
+            help_text(&owned(&["runtime", "reset"]))
+                .unwrap()
+                .contains("retired")
+        );
+        assert!(
+            help_text(&owned(&["job", "lookup"]))
+                .unwrap()
+                .contains("outcome.lookup")
+        );
+
+        for words in [&["bogus"][..], &["goal", "bogus"][..], &["__complete"][..]] {
+            let failure = help_text(&owned(words)).unwrap_err();
+            assert_eq!(failure.code, "REQUEST_INVALID", "{words:?}");
+            assert!(failure.message.contains("podway help"), "{words:?}");
+        }
+    }
+
+    #[test]
+    fn guide003_overview_lists_the_complete_topic_index() {
+        let overview = help_text(&[]).unwrap();
+        assert_eq!(overview, help_text(&["overview".to_owned()]).unwrap());
+        assert!(overview.contains("Direct execution:"));
+        assert!(overview.contains("podway --help"));
+        for (words, route) in EXECUTABLE_WORD_ROUTES {
+            assert!(
+                overview.contains(&format!("  {} -> {route}", words.join(" "))),
+                "{words:?}"
+            );
+        }
+        assert!(overview.contains("  archive -> session.archive"));
+        assert!(overview.contains("  archive list -> session.archive_list"));
+        assert!(overview.contains("  start --on-existing -> session.start_replace"));
+        assert!(overview.contains("  reset --all -> workspace.reset_all"));
+        assert!(overview.contains(&format!("  guides: {}", GUIDE_TOPICS.join(", "))));
+        assert!(overview.contains(&format!("  command groups: {}", GROUP_WORDS.join(", "))));
+        assert!(overview.contains(&format!(
+            "  retired families: {}",
+            RETIRED_FAMILY_TOPICS.join(", ")
+        )));
+    }
 }

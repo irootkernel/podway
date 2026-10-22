@@ -846,6 +846,178 @@ fn top_level_help_flags_alias_the_canonical_help_command_only() {
 }
 
 #[test]
+fn guide003_help_topics_resolve_command_words_and_groups() {
+    let executable: &[(&[&str], &str)] = &[
+        (&["help"], "help"),
+        (&["version"], "version"),
+        (&["completions"], "completions"),
+        (&["procedure", "validate"], "procedure.validate"),
+        (&["procedure", "show"], "procedure.show"),
+        (&["procedure", "format"], "procedure.format"),
+        (&["procedure", "vet"], "procedure.vet"),
+        (&["procedure", "graph"], "procedure.graph"),
+        (&["procedure", "preview"], "procedure.preview"),
+        (&["procedure", "lint"], "procedure.lint"),
+        (&["procedure", "check"], "procedure.check"),
+        (&["procedure", "scaffold"], "procedure.scaffold"),
+        (&["preset", "list"], "preset.list"),
+        (&["preset", "show"], "preset.show"),
+        (&["preset", "explain"], "preset.explain"),
+        (&["init"], "workspace.init"),
+        (&["doctor"], "workspace.doctor"),
+        (&["workspace", "show"], "workspace.show"),
+        (&["workspace", "repair"], "workspace.repair"),
+        (&["workspace", "remove"], "workspace.remove"),
+        (&["start"], "session.start"),
+        (&["begin"], "session.begin"),
+        (&["status"], "session.status"),
+        (&["next"], "session.next"),
+        (&["observe"], "session.observe"),
+        (&["evidence", "read"], "evidence.read"),
+        (&["delegation", "package"], "delegation.package"),
+        (&["delegation", "accept"], "delegation.accept"),
+        (&["delegation", "receipt"], "delegation.receipt"),
+        (&["complete"], "session.complete"),
+        (&["decide"], "session.decide"),
+        (&["rework"], "session.rework"),
+        (&["goal", "define"], "goal.define"),
+        (&["goal", "revise"], "goal.revise"),
+        (&["goal", "assess-criterion"], "goal.assess_criterion"),
+        (&["skip"], "session.skip"),
+        (&["retry"], "session.retry"),
+        (&["block"], "session.block"),
+        (&["unblock"], "session.unblock"),
+        (&["cancel"], "session.cancel"),
+        (
+            &["disposition", "handed-off"],
+            "session.terminal_disposition",
+        ),
+        (
+            &["disposition", "not-required"],
+            "session.terminal_disposition",
+        ),
+        (&["archive"], "session.archive"),
+        (&["archive", "list"], "session.archive_list"),
+        (&["archive", "show"], "session.archive_show"),
+        (&["archive", "purge"], "session.archive_purge"),
+        (&["reset"], "session.reset"),
+        (&["check"], "item.check"),
+        (&["uncheck"], "item.uncheck"),
+        (&["set"], "item.set"),
+        (&["add"], "item.add"),
+        (&["remove"], "item.remove"),
+        (&["attach"], "item.attach"),
+        (&["clear"], "item.clear"),
+        (&["record"], "item.record_many"),
+        (&["outcome", "lookup"], "outcome.lookup"),
+    ];
+    let fixture = Fixture::new();
+    for (words, _route) in executable {
+        let mut arguments = vec!["--json".to_owned(), "help".to_owned()];
+        arguments.extend(words.iter().map(|word| word.to_string()));
+        let output = fixture.run(&arguments);
+        assert_eq!(output.status.code(), Some(0), "{arguments:?}: {output:?}");
+        let envelope = one_json(&output);
+        assert_eq!(envelope["command"], "help", "{words:?}");
+        assert_eq!(envelope["result"]["topic"], words.join(" "), "{words:?}");
+        assert!(
+            envelope["result"]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Usage:"),
+            "{words:?}"
+        );
+    }
+
+    let group_children: &[(&str, &[(&str, &str)])] = &[
+        (
+            "goal",
+            &[
+                ("goal define", "goal.define"),
+                ("goal revise", "goal.revise"),
+                ("goal assess-criterion", "goal.assess_criterion"),
+            ],
+        ),
+        (
+            "disposition",
+            &[
+                ("disposition handed-off", "session.terminal_disposition"),
+                ("disposition not-required", "session.terminal_disposition"),
+            ],
+        ),
+        ("outcome", &[("outcome lookup", "outcome.lookup")]),
+    ];
+    for (group, children) in group_children {
+        let output = fixture.run(&["--json".to_owned(), "help".to_owned(), group.to_string()]);
+        assert_eq!(output.status.code(), Some(0), "{group}: {output:?}");
+        let envelope = one_json(&output);
+        assert_eq!(envelope["result"]["topic"], *group, "{group}");
+        let text = envelope["result"]["text"].as_str().unwrap();
+        assert!(
+            text.starts_with(&format!("{group} command group:")),
+            "{group}"
+        );
+        for (words, route) in *children {
+            assert!(text.contains(&format!("{words} -> {route}")), "{group}");
+        }
+    }
+
+    let replacement = fixture.run(&[
+        "--json".to_owned(),
+        "help".to_owned(),
+        "session.start_replace".to_owned(),
+    ]);
+    assert_eq!(replacement.status.code(), Some(0), "{replacement:?}");
+    let replacement = one_json(&replacement);
+    assert_eq!(replacement["result"]["topic"], "session.start_replace");
+    assert!(
+        replacement["result"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("no replace command or replace flags")
+    );
+    let reset_all = fixture.run(&[
+        "--json".to_owned(),
+        "help".to_owned(),
+        "workspace.reset_all".to_owned(),
+    ]);
+    assert_eq!(reset_all.status.code(), Some(0), "{reset_all:?}");
+    assert!(
+        one_json(&reset_all)["result"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Usage:")
+    );
+
+    let overview = fixture.run(&["--json".to_owned(), "help".to_owned()]);
+    let overview_text = one_json(&overview)["result"]["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(overview_text.contains("  archive -> session.archive"));
+    assert!(overview_text.contains("  archive list -> session.archive_list"));
+    assert!(overview_text.contains("  start --on-existing -> session.start_replace"));
+    assert!(overview_text.contains("  reset --all -> workspace.reset_all"));
+    assert_eq!(one_json(&overview)["result"]["topic"], Value::Null);
+
+    let explicit = fixture.run(&[
+        "--json".to_owned(),
+        "help".to_owned(),
+        "overview".to_owned(),
+    ]);
+    assert_eq!(explicit.status.code(), Some(0), "{explicit:?}");
+    assert_eq!(one_json(&explicit)["result"]["topic"], "overview");
+
+    let unknown = fixture.run(&["--json".to_owned(), "help".to_owned(), "bogus".to_owned()]);
+    assert_eq!(unknown.status.code(), Some(2), "{unknown:?}");
+    let error = one_json(&unknown);
+    assert_eq!(error["code"], "REQUEST_INVALID");
+    assert_eq!(error["command"], "help");
+    assert!(error["message"].as_str().unwrap().contains("podway help"));
+    assert!(unknown.stderr.is_empty(), "{unknown:?}");
+}
+
+#[test]
 fn bound005_format_write_preserves_permissions_and_canonical_noop() {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let fixture = Fixture::new();
