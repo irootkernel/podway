@@ -14,6 +14,10 @@ This file records concise shipped outcomes and the planned next stable release.
   `session.observe` as `podway.observation-result/v6` with executable fenced
   lifecycle and archive templates; the default generation 1 JSON output is
   unchanged.
+- Under `--contract-generation 2`, enrich the details of `CRITERION_CITATION_INVALID`
+  with the citable evidence source nodes and recorded item ids, and of
+  `WORKSPACE_CONTRACT_MISMATCH` with the stored writer's release when its digest is
+  known.
 
 ### Changed
 

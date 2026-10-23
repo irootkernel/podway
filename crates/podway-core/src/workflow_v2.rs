@@ -164,6 +164,8 @@ pub enum GraphMutationErrorV2 {
     CriterionCitationInvalid {
         criterion_id: CriterionId,
         citation: CriterionCitationV2,
+        citable_evidence_source_nodes: Vec<GraphNodeId>,
+        citable_item_ids: Vec<ItemId>,
     },
     CriterionResultMissing {
         missing_criterion_ids: Vec<CriterionId>,

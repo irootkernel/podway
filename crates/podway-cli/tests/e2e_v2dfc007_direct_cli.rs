@@ -3599,3 +3599,325 @@ fn guide004_human_citation_hint_states_the_admission_rule() {
          hint: cite only resolved guidance.references[] sources and recorded items of the decision attempt, each once, at most four citations\n"
     );
 }
+
+const GUIDE010_KNOWN_WRITER_REASON: &str = "Inspect writer identity. Restore access or use the original v0.2.14 writer. To discard invalid state, retire other writers and confirm an unfenced reset --all with a new key; unfenced removal needs a terminal and exact path.";
+const GUIDE010_UNKNOWN_WRITER_REASON: &str = "Inspect writer identity. Restore access or use the original writer matching the stored digest. To discard invalid state, retire other writers and confirm an unfenced reset --all with a new key; unfenced removal needs a terminal and exact path.";
+const GUIDE010_CITATION_RULE_LINE: &str = "hint: cite only resolved guidance.references[] sources and recorded items of the decision attempt, each once, at most four citations\n";
+const GUIDE010_CITATION_ERROR_LINE: &str = "error: CRITERION_CITATION_INVALID: A criterion citation does not name resolved attempt state.\n";
+
+/// GUIDE-010: under generation 2 the writer mismatch maps the stored digest
+/// through the released-manifest table (`v0.2.14` reports `"v0.2.14"`, an
+/// unknown digest reports null) with the mismatch-specific recovery reason and
+/// an exact human leg; the default and an explicit generation 1 stay
+/// byte-identical to the GUIDE-004 baseline, including the human leg.
+#[test]
+fn guide010_generation2_writer_mismatch_reports_released_and_unknown_writers() {
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    let identity = fixture.run(&["version", "--identity"]);
+    let current = identity["result"]["contract_manifest_digest"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let store_digest = |stored: &str| {
+        let connection =
+            rusqlite::Connection::open(fixture.0.join(".podway/runtime/state.sqlite3")).unwrap();
+        connection
+            .execute(
+                "UPDATE writer_contract SET contract_manifest_digest=?1 WHERE singleton=1",
+                [stored],
+            )
+            .unwrap();
+        connection
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .unwrap();
+    };
+    let released = "sha256:c699977dd232891041f4063d66295b94004702875855baace876f8a7e0c6391d";
+    let unknown = format!("sha256:{}", "f".repeat(64));
+
+    for (stored, release, reason, release_line) in [
+        (
+            released,
+            json!("v0.2.14"),
+            GUIDE010_KNOWN_WRITER_REASON,
+            "stored writer release: v0.2.14",
+        ),
+        (
+            unknown.as_str(),
+            Value::Null,
+            GUIDE010_UNKNOWN_WRITER_REASON,
+            "stored writer release: unknown",
+        ),
+    ] {
+        store_digest(stored);
+        let refusal = fixture.raw_output(&["--json", "--contract-generation", "2", "status"]);
+        assert_eq!(refusal.status.code(), Some(5), "{refusal:?}");
+        assert!(refusal.stderr.is_empty(), "{refusal:?}");
+        // The validated envelope type re-runs schema and release-agreement
+        // validation on the emitted generation-2 details.
+        let validated: ErrorEnvelopeV2 = serde_json::from_slice(&refusal.stdout).unwrap();
+        let details = &validated.as_value()["details"];
+        assert_eq!(
+            validated.as_value()["code"],
+            json!("WORKSPACE_CONTRACT_MISMATCH")
+        );
+        assert_eq!(
+            details["schema"],
+            json!("podway.workspace-contract-mismatch-details/v2")
+        );
+        assert_eq!(details["actual_contract_manifest_digest"], json!(stored));
+        assert_eq!(details["expected_contract_manifest_digest"], json!(current));
+        assert_eq!(details["actual_product_version"], release);
+        assert_eq!(details["recovery"]["action"], json!("diagnose_writer"));
+        assert_eq!(details["recovery"]["reason"], json!(reason));
+
+        let human = fixture.raw_output(&["--contract-generation", "2", "status"]);
+        assert_eq!(human.status.code(), Some(5), "{human:?}");
+        let stderr = String::from_utf8(human.stderr.clone()).unwrap();
+        assert_eq!(
+            stderr,
+            format!(
+                "error: WORKSPACE_CONTRACT_MISMATCH: The Store writer contract is not supported by this binary.\n\
+                 hint: stored writer manifest digest: {stored}\n\
+                 hint: this binary manifest digest: {current}\n\
+                 hint: {release_line}\n\
+                 hint: continue with the writer whose version --identity reports the stored digest, or explicitly confirm an unfenced reset --all\n\
+                 reason: {reason}\n"
+            ),
+            "{stderr}"
+        );
+    }
+
+    // Generation 1 unchanged: the unknown digest is the GUIDE-004 baseline's
+    // stored digest, so the default and an explicit generation 1 normalize to
+    // the frozen envelope and the human leg equals the GUIDE-004 text.
+    for arguments in [
+        vec!["--json", "status"],
+        vec!["--json", "--contract-generation", "1", "status"],
+    ] {
+        let refusal = fixture.raw_output(&arguments);
+        assert_eq!(refusal.status.code(), Some(5), "{refusal:?}");
+        let normalized = guide004_normalized_error_stdout(&refusal.stdout).replace(
+            &format!("\"expected_contract_manifest_digest\":\"{current}\""),
+            "\"expected_contract_manifest_digest\":\"<expected-digest>\"",
+        );
+        assert_eq!(normalized, GUIDE004_WRITER_MISMATCH_JSON_BASELINE);
+    }
+    let human = fixture.raw_output(&["--contract-generation", "1", "status"]);
+    assert_eq!(human.status.code(), Some(5), "{human:?}");
+    let stderr = String::from_utf8(human.stderr.clone()).unwrap();
+    assert_eq!(
+        stderr,
+        format!(
+            "error: WORKSPACE_CONTRACT_MISMATCH: The Store writer contract is not supported by this binary.\n\
+             hint: stored writer manifest digest: {unknown}\n\
+             hint: this binary manifest digest: {current}\n\
+             hint: continue with the writer whose version --identity reports the stored digest, or explicitly confirm an unfenced reset --all\n\
+             reason: Inspect writer identity. Restore access or use the original writer. To discard invalid state, retire other writers and confirm an unfenced reset --all with a new key; unfenced removal needs a terminal and exact path. Newer generations stay refused.\n"
+        ),
+        "{stderr}"
+    );
+}
+
+/// The GUIDE-004 goal fixture (`goal-outcomes.yaml` plus an optional
+/// decision-local `assessment-note` item), driven to the active goal
+/// assessment. `with_evidence` keeps the `perform` evidence reference and
+/// `record_note` records the decision-local item.
+fn guide010_goal_fixture(with_evidence: bool, record_note: bool) -> Fixture {
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    let mut source = include_str!("../../../tests/fixtures/v2/procedures/goal-outcomes.yaml")
+        .replace(
+            "    options:\n",
+            concat!(
+                "    items:\n",
+                "      - id: assessment-note\n",
+                "        type: text\n",
+                "        prompt: Record local criterion evidence.\n",
+                "        required: false\n",
+                "        max_length: 100\n",
+                "    options:\n",
+            ),
+        );
+    if !with_evidence {
+        let evidence = concat!(
+            "      evidence_from:\n",
+            "        - node: perform\n",
+            "          required: true\n",
+            "          items:\n",
+            "            - result\n",
+        );
+        assert!(
+            source.contains(evidence),
+            "the fixture evidence block changed"
+        );
+        source = source.replace(evidence, "");
+    }
+    fs::write(fixture.0.join("goal.yaml"), source).unwrap();
+    let preview = fixture.run(&["procedure", "preview", "goal.yaml"]);
+    fixture.run(&[
+        "start",
+        "--procedure",
+        "goal.yaml",
+        "--expect-procedure-digest",
+        preview["result"]["procedure_digest"].as_str().unwrap(),
+        "--task",
+        "guide010 citation details",
+        "--idempotency-key",
+        "start",
+    ]);
+    fixture.run(&[
+        "begin",
+        "--idempotency-key",
+        "begin",
+        "--goal",
+        "Verify the retained goal.",
+        "--criterion",
+        "correct=The result is correct.",
+        "--criterion",
+        "tested=The result is tested.",
+        "--actor",
+        "owner",
+    ]);
+    fixture.run(&[
+        "set",
+        "result",
+        "Evidence supports this result.",
+        "--idempotency-key",
+        "evidence",
+    ]);
+    fixture.run(&["complete", "--idempotency-key", "complete-work"]);
+    if record_note {
+        fixture.run(&[
+            "set",
+            "assessment-note",
+            "Decision-local evidence.",
+            "--idempotency-key",
+            "assessment-note",
+        ]);
+    }
+    fixture
+}
+
+fn guide010_assess_arguments(item: &str) -> Vec<&str> {
+    vec![
+        "goal",
+        "assess-criterion",
+        "correct",
+        "--status",
+        "satisfied",
+        "--reason",
+        "The cited item has no recorded value.",
+        "--item",
+        item,
+        "--idempotency-key",
+        "guide010-citation",
+    ]
+}
+
+/// GUIDE-010: under generation 2 the rejected citation carries the citable
+/// lists (populated and empty) with exact human legs; the default and an
+/// explicit generation 1 stay byte-identical to the GUIDE-004 baseline.
+#[test]
+fn guide010_generation2_citation_details_list_citable_sources() {
+    // Populated lists: the resolved `perform` reference and the recorded
+    // decision-local item, exactly the GUIDE-004 scenario.
+    let populated = guide010_goal_fixture(true, true);
+    let assess = guide010_assess_arguments("unrecorded-note");
+    let mut json_arguments = vec!["--json", "--contract-generation", "2"];
+    json_arguments.extend(assess.iter().copied());
+    let refusal = populated.raw_output(&json_arguments);
+    assert_eq!(refusal.status.code(), Some(1), "{refusal:?}");
+    assert!(refusal.stderr.is_empty(), "{refusal:?}");
+    let validated: ErrorEnvelopeV2 = serde_json::from_slice(&refusal.stdout).unwrap();
+    let details = &validated.as_value()["details"];
+    assert_eq!(
+        validated.as_value()["code"],
+        json!("CRITERION_CITATION_INVALID")
+    );
+    assert_eq!(
+        details["schema"],
+        json!("podway.criterion-citation-invalid-details/v1")
+    );
+    assert_eq!(details["criterion_id"], json!("correct"));
+    assert_eq!(
+        details["citation"],
+        json!({"local_item_id": "unrecorded-note"})
+    );
+    assert_eq!(details["citable_evidence_source_nodes"], json!(["perform"]));
+    assert_eq!(details["citable_item_ids"], json!(["assessment-note"]));
+    assert!(details.get("kind").is_none());
+
+    let mut human_arguments = vec!["--contract-generation", "2"];
+    human_arguments.extend(assess.iter().copied());
+    let human = populated.raw_output(&human_arguments);
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    let stderr = String::from_utf8(human.stderr.clone()).unwrap();
+    assert_eq!(
+        stderr,
+        format!(
+            "{GUIDE010_CITATION_ERROR_LINE}{GUIDE010_CITATION_RULE_LINE}\
+             hint: citable evidence source nodes: perform\n\
+             hint: citable item ids: assessment-note\n"
+        ),
+        "{stderr}"
+    );
+
+    // Generation 1 unchanged: the default and an explicit generation 1
+    // normalize to the frozen GUIDE-004 envelope, and the human leg is the
+    // single admission-rule line.
+    for prefix in [vec!["--json"], vec!["--json", "--contract-generation", "1"]] {
+        let mut arguments = prefix;
+        arguments.extend(assess.iter().copied());
+        let refusal = populated.raw_output(&arguments);
+        assert_eq!(refusal.status.code(), Some(1), "{refusal:?}");
+        assert_eq!(
+            guide004_normalized_error_stdout(&refusal.stdout),
+            GUIDE004_CRITERION_CITATION_JSON_BASELINE
+        );
+    }
+    let mut generation1 = vec!["--contract-generation", "1"];
+    generation1.extend(assess.iter().copied());
+    let human = populated.raw_output(&generation1);
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    assert_eq!(
+        String::from_utf8(human.stderr.clone()).unwrap(),
+        format!("{GUIDE010_CITATION_ERROR_LINE}{GUIDE010_CITATION_RULE_LINE}")
+    );
+
+    // Empty lists: no evidence reference and no recorded decision-local item;
+    // the declared but unrecorded item is the rejected citation.
+    let empty = guide010_goal_fixture(false, false);
+    let assess = guide010_assess_arguments("assessment-note");
+    let mut json_arguments = vec!["--json", "--contract-generation", "2"];
+    json_arguments.extend(assess.iter().copied());
+    let refusal = empty.raw_output(&json_arguments);
+    assert_eq!(refusal.status.code(), Some(1), "{refusal:?}");
+    let validated: ErrorEnvelopeV2 = serde_json::from_slice(&refusal.stdout).unwrap();
+    let details = &validated.as_value()["details"];
+    assert_eq!(
+        details["schema"],
+        json!("podway.criterion-citation-invalid-details/v1")
+    );
+    assert_eq!(
+        details["citation"],
+        json!({"local_item_id": "assessment-note"})
+    );
+    assert_eq!(details["citable_evidence_source_nodes"], json!([]));
+    assert_eq!(details["citable_item_ids"], json!([]));
+
+    let mut human_arguments = vec!["--contract-generation", "2"];
+    human_arguments.extend(assess.iter().copied());
+    let human = empty.raw_output(&human_arguments);
+    assert_eq!(human.status.code(), Some(1), "{human:?}");
+    let stderr = String::from_utf8(human.stderr.clone()).unwrap();
+    assert_eq!(
+        stderr,
+        format!(
+            "{GUIDE010_CITATION_ERROR_LINE}{GUIDE010_CITATION_RULE_LINE}\
+             hint: citable evidence source nodes: (none)\n\
+             hint: citable item ids: (none)\n"
+        ),
+        "{stderr}"
+    );
+}

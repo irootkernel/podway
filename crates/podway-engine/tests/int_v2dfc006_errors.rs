@@ -906,6 +906,8 @@ fn direct_failure_catalog_preserves_store_fences_domain_and_recovery() {
             graph(GraphMutationErrorV2::CriterionCitationInvalid {
                 criterion_id: CriterionId::new("verified").unwrap(),
                 citation: podway_core::CriterionCitationV2::Item(ItemId::new("report").unwrap()),
+                citable_evidence_source_nodes: Vec::new(),
+                citable_item_ids: Vec::new(),
             }),
             "CRITERION_CITATION_INVALID",
         ),

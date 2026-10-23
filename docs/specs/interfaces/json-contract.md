@@ -277,14 +277,12 @@ point and its status from the closed set `reserved`, `supported`, `deprecated`
 and `retired`. Generation 1 is the direct contract shipped since `v0.2.13`,
 `supported` and the default. Generation 2 is `supported`: under
 `--contract-generation 2`, `session.observe` serves
-`podway.observation-result/v6`, while the two error-detail substitutions
-(`podway.criterion-citation-invalid-details/v1`,
-`podway.workspace-contract-mismatch-details/v2`) remain declared in
-`contract-generations.json` and validatable in the schema registry but are not
-yet emitted; runtime error rendering returns the generation-1 detail families
-for both codes in both generations until the successors are emitted. The error
-catalog keeps naming the default generation's families in `details_schema`, so
-its bytes are unchanged.
+`podway.observation-result/v6`, `CRITERION_CITATION_INVALID` serves
+`podway.criterion-citation-invalid-details/v1`, and
+`WORKSPACE_CONTRACT_MISMATCH` serves
+`podway.workspace-contract-mismatch-details/v2`. The error catalog keeps
+naming the default generation's families in `details_schema`, so its bytes are
+unchanged.
 
 A global `--contract-generation <1|2>` option selects the generation for one
 invocation. The default is 1 while generation 1 is supported. The value is

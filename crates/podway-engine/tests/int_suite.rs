@@ -78,3 +78,6 @@ mod int_guide008_fenced_plain_start;
 
 #[path = "int_guide009_generation2_observation.rs"]
 mod int_guide009_generation2_observation;
+
+#[path = "int_guide010_generation2_error_details.rs"]
+mod int_guide010_generation2_error_details;

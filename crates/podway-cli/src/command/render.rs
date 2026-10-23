@@ -327,9 +327,10 @@ pub(super) fn render_human_error_direct(
     Ok(())
 }
 
-/// Generation-1 human recovery hints for a stored writer contract this binary
-/// does not support. GUIDE-010 appends generation-2 detail fields (for example
-/// the stored writer release) inside this helper; call sites stay fixed.
+/// Human recovery hints for a stored writer contract this binary does not
+/// support. The stored writer release line appears only when the details
+/// carry the generation-2 `actual_product_version` field, so generation-1
+/// stderr stays byte-identical.
 fn workspace_contract_mismatch_hint_lines(details: &Value) -> Vec<String> {
     let mut lines = Vec::new();
     if let Some(stored) = details
@@ -344,6 +345,11 @@ fn workspace_contract_mismatch_hint_lines(details: &Value) -> Vec<String> {
     {
         lines.push(format!("this binary manifest digest: {current}"));
     }
+    match details.get("actual_product_version") {
+        Some(Value::String(release)) => lines.push(format!("stored writer release: {release}")),
+        Some(Value::Null) => lines.push("stored writer release: unknown".to_owned()),
+        _ => {}
+    }
     if !lines.is_empty() {
         lines.push(
             "continue with the writer whose version --identity reports the stored digest, or explicitly confirm an unfenced reset --all"
@@ -353,13 +359,35 @@ fn workspace_contract_mismatch_hint_lines(details: &Value) -> Vec<String> {
     lines
 }
 
-/// Generation-1 human hint for a rejected goal-criterion citation. GUIDE-010
-/// appends generation-2 citable-source lines inside this helper.
-fn criterion_citation_hint_lines(_details: &Value) -> Vec<String> {
-    vec![
+/// Human hint for a rejected goal-criterion citation. The citable-source
+/// lines appear only when the details carry the generation-2 lists, so
+/// generation-1 stderr stays the single admission-rule line.
+fn criterion_citation_hint_lines(details: &Value) -> Vec<String> {
+    let mut lines = vec![
         "cite only resolved guidance.references[] sources and recorded items of the decision attempt, each once, at most four citations"
             .to_owned(),
-    ]
+    ];
+    for (field, label) in [
+        (
+            "citable_evidence_source_nodes",
+            "citable evidence source nodes",
+        ),
+        ("citable_item_ids", "citable item ids"),
+    ] {
+        if let Some(values) = details.get(field).and_then(Value::as_array) {
+            let joined = if values.is_empty() {
+                "(none)".to_owned()
+            } else {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            lines.push(format!("{label}: {joined}"));
+        }
+    }
+    lines
 }
 
 fn render_human_output_direct(

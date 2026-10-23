@@ -5,9 +5,9 @@ use crate::goal_state_v2::{
     validate_goal_revision_target_v2, validate_goal_state_v2,
 };
 use crate::workflow_v2::{
-    ActiveItemMutationRequestV2, ActiveItemMutationV2, EvidenceLookupErrorV2, EvidenceReadbackV2,
-    GraphMutationErrorV2, SelectedEvidenceItemV2, SnapshotMemoryModelV2, WorkflowMemoryStateV2,
-    validate_workflow_memory_v2,
+    ActiveItemMutationRequestV2, ActiveItemMutationV2, AttemptWorkflowMemoryV2,
+    EvidenceLookupErrorV2, EvidenceReadbackV2, GraphMutationErrorV2, SelectedEvidenceItemV2,
+    SnapshotMemoryModelV2, WorkflowMemoryStateV2, validate_workflow_memory_v2,
 };
 use crate::{
     ActorAttributionV2, AdvanceTerminalV2, AttemptId, AttemptLifecycle, BlockerId,
@@ -2283,6 +2283,44 @@ impl GraphSessionStateV2 {
         Ok(GraphGoalDefinitionOutcomeV2 { state, revision })
     }
 
+    /// Bounded citable sources of the active assessment attempt, computed with
+    /// the same rule that admits citations (ADR-0039 decision 5): the first
+    /// declared reference decides a source node, and an item is citable when
+    /// the attempt holds a recorded value for it. The domain limits (eight
+    /// evidence references and 128 definition items per attempt) bound both
+    /// lists, so no truncation is needed.
+    fn citable_assessment_sources_v2(
+        &self,
+        active_memory: &AttemptWorkflowMemoryV2,
+    ) -> (Vec<GraphNodeId>, Vec<ItemId>) {
+        let mut evidence_source_nodes = Vec::new();
+        let mut seen = BTreeSet::new();
+        for reference in active_memory.evidence() {
+            let source_node = reference.resolution().source_node();
+            if !seen.insert(source_node.clone()) {
+                continue;
+            }
+            let citable = matches!(
+                reference.resolution(),
+                crate::ResolvedEvidenceReferenceV2::Resolved(snapshot)
+                    if self.trace.attempts().iter().any(|source| {
+                        source.attempt_id() == snapshot.source_attempt_id()
+                            && source.validity() == crate::AttemptValidityV2::Valid
+                    })
+            );
+            if citable {
+                evidence_source_nodes.push(source_node.clone());
+            }
+        }
+        let item_ids = active_memory
+            .item_slots()
+            .iter()
+            .filter(|slot| slot.value().is_some())
+            .map(|slot| slot.item_id().clone())
+            .collect();
+        (evidence_source_nodes, item_ids)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn assess_goal_criterion_v2(
         &self,
@@ -2382,9 +2420,13 @@ impl GraphSessionStateV2 {
             });
         }
         if result.citations().iter().collect::<BTreeSet<_>>().len() != result.citations().len() {
+            let (citable_evidence_source_nodes, citable_item_ids) =
+                self.citable_assessment_sources_v2(active_memory);
             return Err(GraphMutationErrorV2::CriterionCitationInvalid {
                 criterion_id: result.criterion_id().clone(),
                 citation: result.citations()[0].clone(),
+                citable_evidence_source_nodes,
+                citable_item_ids,
             });
         }
         for citation in result.citations() {
@@ -2412,9 +2454,13 @@ impl GraphSessionStateV2 {
                     .any(|slot| slot.item_id() == item_id && slot.value().is_some()),
             };
             if !valid {
+                let (citable_evidence_source_nodes, citable_item_ids) =
+                    self.citable_assessment_sources_v2(active_memory);
                 return Err(GraphMutationErrorV2::CriterionCitationInvalid {
                     criterion_id: result.criterion_id().clone(),
                     citation: citation.clone(),
+                    citable_evidence_source_nodes,
+                    citable_item_ids,
                 });
             }
         }
@@ -3186,5 +3232,288 @@ mod boundary_tests {
             );
             assert!(!node.has_delegation());
         }
+    }
+}
+
+/// The citable-list carrier of `CriterionCitationInvalid` (GUIDE-010), proven
+/// on the admission failure path. The duplicate-detection failure path keeps
+/// the same carrier but is unreachable by construction:
+/// `CriterionAssessmentResultV2::new` already rejects duplicated citations
+/// (`goal_record_v2.rs`), and the typed Direct Engine refuses them earlier as
+/// `REQUEST_INVALID`.
+#[cfg(test)]
+mod criterion_citation_carrier_tests {
+    use super::*;
+    use crate::{
+        AttemptLifecycle, AttemptMetadataV2, AttemptNumberV2, AttemptValidityV2,
+        AttemptWorkflowMemoryV2, CriterionAssessmentReasonV2, CriterionId, CriterionStatusV2,
+        EvidenceReferenceSnapshotV2, EvidenceResolutionStateV2, GoalCriterionV2, GoalDefinitionV2,
+        GoalRevisionNumberV2, GoalRevisionRecordV2, GoalStateV2, GoalStatementV2,
+        GraphNodeCounterV2, ItemSlotStateV2, ItemTypeV1, RecordedItemValueV2,
+        ResolvedEvidenceReferenceV2, SessionAttemptV2, SessionLifecycle, WorkflowMemoryStateV2,
+    };
+    use serde_json::json;
+
+    fn node(value: &str) -> GraphNodeId {
+        GraphNodeId::new(value).unwrap()
+    }
+
+    fn item(value: &str) -> ItemId {
+        ItemId::new(value).unwrap()
+    }
+
+    fn attempt_id(number: u64) -> AttemptId {
+        AttemptId::new(format!("00000000-0000-4000-8000-{number:012x}")).unwrap()
+    }
+
+    fn citation_snapshot() -> ProcedureSnapshotV2 {
+        let document = json!({
+            "schema": "podway.procedure/v2",
+            "id": "citation-carrier",
+            "version": "1",
+            "name": "Citation carrier",
+            "purpose": "Prove the citable-list carrier on both citation failure paths.",
+            "goal_tracking": true,
+            "node_definitions": {
+                "source-def": {"type": "action", "title": "Source", "intent": "Record evidence.",
+                    "items": [{"id":"proof","type":"text","prompt":"Proof","required":true}]},
+                "assess-def": {"type": "decision", "title": "Assess",
+                    "objective": "Assess the session goal.", "prompt": "Which outcome?",
+                    "items": [{"id":"assessment-note","type":"text","prompt":"Note","required":false}],
+                    "options": [{"id":"achieved","label":"Achieved"},
+                        {"id":"not-achieved","label":"Not achieved"}],
+                    "reason": {"required": true},
+                    "assessment": {"target":"session_goal","outcomes":{
+                        "achieved":"achieved","not-achieved":"not_achieved"}}},
+                "finish-def": {"type": "action", "title": "Finish", "intent": "Finish."}
+            },
+            "graph": {"entry":"source","nodes":[
+                {"id":"source","use":"source-def","next":"assess"},
+                {"id":"assess","use":"assess-def",
+                    "evidence_from":[{"node":"source","required":true}],
+                    "routes":{"achieved":{"to":"finish","effect":"advance"},
+                        "not-achieved":{"to":"finish","effect":"advance"}}},
+                {"id":"finish","use":"finish-def","terminal":true}]},
+            "manual_rework": {"allowed_targets": ["source"]}
+        });
+        let canonical = canonicalize_json_v1(&document).unwrap();
+        let digest =
+            Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())))
+                .unwrap();
+        ProcedureSnapshotV2::from_admitted_document(
+            ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000810").unwrap(),
+            CanonicalProcedureDocumentV2::new(
+                CanonicalProcedureJsonV1::new(canonical).unwrap(),
+                digest,
+            )
+            .unwrap(),
+            ProcedureSourceLabelV1::file("carrier.yaml").unwrap(),
+            UnixMillis::new(5),
+        )
+        .unwrap()
+    }
+
+    fn source_memory() -> AttemptWorkflowMemoryV2 {
+        AttemptWorkflowMemoryV2::new(
+            attempt_id(1),
+            vec![
+                ItemSlotStateV2::new(
+                    attempt_id(1),
+                    item("proof"),
+                    ItemTypeV1::Text,
+                    Revision::new(1),
+                    Some(RecordedItemValueV2::text("recorded proof").unwrap()),
+                    UnixMillis::new(10),
+                    UnixMillis::new(11),
+                )
+                .unwrap(),
+            ],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap()
+    }
+
+    fn assess_memory(source: &AttemptWorkflowMemoryV2) -> AttemptWorkflowMemoryV2 {
+        AttemptWorkflowMemoryV2::new(
+            attempt_id(2),
+            vec![
+                ItemSlotStateV2::new(
+                    attempt_id(2),
+                    item("assessment-note"),
+                    ItemTypeV1::Text,
+                    Revision::new(1),
+                    Some(RecordedItemValueV2::text("reviewed evidence").unwrap()),
+                    UnixMillis::new(30),
+                    UnixMillis::new(31),
+                )
+                .unwrap(),
+            ],
+            Vec::new(),
+            vec![
+                EvidenceResolutionStateV2::new(
+                    0,
+                    true,
+                    Vec::new(),
+                    ResolvedEvidenceReferenceV2::resolved(
+                        EvidenceReferenceSnapshotV2::new(
+                            node("source"),
+                            attempt_id(1),
+                            AttemptNumberV2::FIRST,
+                            source.recorded_items_digest().unwrap(),
+                            UnixMillis::new(30),
+                        )
+                        .unwrap(),
+                    ),
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn carrier_state() -> GraphSessionStateV2 {
+        let source = source_memory();
+        let assess = assess_memory(&source);
+        GraphSessionStateV2::new_with_goal_state(
+            Revision::new(2),
+            "Citation carrier",
+            citation_snapshot(),
+            SessionTraceV2::from_parts(
+                SessionId::new("00000000-0000-4000-8000-000000000820").unwrap(),
+                SessionLifecycle::Running,
+                Revision::new(2),
+                vec![
+                    SessionAttemptV2::new(
+                        attempt_id(1),
+                        node("source"),
+                        AttemptNumberV2::FIRST,
+                        TraceSequenceV2::new(1),
+                        AttemptLifecycle::Completed,
+                        AttemptValidityV2::Valid,
+                        Some(GoalRevisionNumberV2::FIRST),
+                    )
+                    .unwrap(),
+                    SessionAttemptV2::new(
+                        attempt_id(2),
+                        node("assess"),
+                        AttemptNumberV2::FIRST,
+                        TraceSequenceV2::new(2),
+                        AttemptLifecycle::Active,
+                        AttemptValidityV2::Valid,
+                        Some(GoalRevisionNumberV2::FIRST),
+                    )
+                    .unwrap(),
+                ],
+            )
+            .unwrap(),
+            vec![
+                GraphNodeCounterV2::new(node("source"), 1, 0),
+                GraphNodeCounterV2::new(node("assess"), 1, 0),
+                GraphNodeCounterV2::new(node("finish"), 0, 0),
+            ],
+            vec![
+                AttemptMetadataV2::new(
+                    attempt_id(1),
+                    UnixMillis::new(10),
+                    Some(UnixMillis::new(29)),
+                    None,
+                )
+                .unwrap(),
+                AttemptMetadataV2::new(attempt_id(2), UnixMillis::new(30), None, None).unwrap(),
+            ],
+            WorkflowMemoryStateV2::new(vec![source, assess], Vec::new(), Vec::new()).unwrap(),
+            GoalStateV2::new(
+                Some(GoalRevisionNumberV2::FIRST),
+                vec![
+                    GoalRevisionRecordV2::new(
+                        GoalRevisionNumberV2::FIRST,
+                        None,
+                        GoalStatementV2::new("The carrier lists stay complete.").unwrap(),
+                        GoalDefinitionV2::new(vec![
+                            GoalCriterionV2::new(
+                                CriterionId::new("safety").unwrap(),
+                                "The recorded evidence supports the criterion.",
+                            )
+                            .unwrap(),
+                        ])
+                        .unwrap(),
+                        None,
+                        None,
+                        false,
+                        Some(ActorAttributionV2::new("planner").unwrap()),
+                        TraceSequenceV2::FIRST,
+                        UnixMillis::new(20),
+                    )
+                    .unwrap(),
+                ],
+                Vec::new(),
+                Vec::new(),
+            )
+            .unwrap(),
+            UnixMillis::new(10),
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+    }
+
+    fn assess(citations: Vec<CriterionCitationV2>) -> CriterionAssessmentResultV2 {
+        CriterionAssessmentResultV2::new(
+            CriterionId::new("safety").unwrap(),
+            CriterionStatusV2::Satisfied,
+            CriterionAssessmentReasonV2::new("The cited state is recorded.").unwrap(),
+            citations,
+        )
+        .unwrap()
+    }
+
+    fn assert_carrier(error: GraphMutationErrorV2) {
+        match error {
+            GraphMutationErrorV2::CriterionCitationInvalid {
+                citable_evidence_source_nodes,
+                citable_item_ids,
+                ..
+            } => {
+                assert_eq!(citable_evidence_source_nodes, vec![node("source")]);
+                assert_eq!(citable_item_ids, vec![item("assessment-note")]);
+            }
+            other => panic!("the citation must fail with its citable lists: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_admission_failure_path_carries_the_citable_lists() {
+        let state = carrier_state();
+        for citation in [
+            CriterionCitationV2::Item(item("absent")),
+            CriterionCitationV2::Evidence(node("finish")),
+        ] {
+            let rejected = state
+                .assess_goal_criterion_v2(
+                    Revision::new(2),
+                    &attempt_id(2),
+                    GoalRevisionNumberV2::FIRST,
+                    assess(vec![citation]),
+                    None,
+                    UnixMillis::new(40),
+                )
+                .unwrap_err();
+            assert_carrier(rejected);
+        }
+        // A duplicated citation never reaches the admission loop.
+        assert!(
+            CriterionAssessmentResultV2::new(
+                CriterionId::new("safety").unwrap(),
+                CriterionStatusV2::Satisfied,
+                CriterionAssessmentReasonV2::new("Duplicated.").unwrap(),
+                vec![
+                    CriterionCitationV2::Evidence(node("source")),
+                    CriterionCitationV2::Evidence(node("source")),
+                ],
+            )
+            .is_err()
+        );
     }
 }

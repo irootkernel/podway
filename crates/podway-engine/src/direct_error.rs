@@ -6,6 +6,7 @@ use podway_core::{DomainError, SessionLifecycle};
 use podway_protocol::{
     CommandNameV1, ContractGenerationV1, ErrorCodeV1, ErrorEnvelopeInputV2, ErrorEnvelopeV2,
     ExitCodeV1, ProtocolError, RecoveryRecipeV2, RequestIdV1, Rfc3339MillisV1,
+    released_writer_release_v1,
 };
 use podway_store::{
     GraphMutationErrorV2, IdempotencyKeyV1, StoreErrorV1, direct_store::DirectStoreErrorV1,
@@ -94,6 +95,19 @@ fn diagnose_invalid_workspace() -> Value {
     diagnose_writer(
         "Inspect writer identity. Restore access or use the original writer. To discard invalid state, retire other writers and confirm an unfenced reset --all with a new key; unfenced removal needs a terminal and exact path. Newer generations stay refused.",
     )
+}
+
+/// Generation-2 mismatch recovery reason (ADR-0039 decision 5). It names the
+/// original writer by release when the compiled table knows the stored digest,
+/// and otherwise by the stored digest itself; both fit the 256-character
+/// recovery bound. Unlike the shared generation-1 reason it drops "Newer
+/// generations stay refused.", which never applies here: the generation check
+/// refuses newer Stores before the writer check runs.
+fn writer_mismatch_generation2_reason(release: Option<&str>) -> String {
+    match release {
+        Some(release) => format!("Inspect writer identity. Restore access or use the original {release} writer. To discard invalid state, retire other writers and confirm an unfenced reset --all with a new key; unfenced removal needs a terminal and exact path."),
+        None => "Inspect writer identity. Restore access or use the original writer matching the stored digest. To discard invalid state, retire other writers and confirm an unfenced reset --all with a new key; unfenced removal needs a terminal and exact path.".to_owned(),
+    }
 }
 
 fn recovery(code: &'static str) -> Presentation {
@@ -366,10 +380,29 @@ fn graph(error: &GraphMutationErrorV2, context: &DirectErrorContextV1) -> Presen
         E::CriterionCitationInvalid {
             criterion_id,
             citation,
-        } => runtime(
-            "CRITERION_CITATION_INVALID",
-            json!({"criterion_id":criterion_id,"citation":match citation { podway_core::CriterionCitationV2::Evidence(node) => json!({"reference_graph_node_id":node}), podway_core::CriterionCitationV2::Item(item) => json!({"local_item_id":item}) }}),
-        ),
+            citable_evidence_source_nodes,
+            citable_item_ids,
+        } => {
+            let citation = match citation {
+                podway_core::CriterionCitationV2::Evidence(node) => {
+                    json!({"reference_graph_node_id":node})
+                }
+                podway_core::CriterionCitationV2::Item(item) => json!({"local_item_id":item}),
+            };
+            match context.generation {
+                ContractGenerationV1::Generation1 => runtime(
+                    "CRITERION_CITATION_INVALID",
+                    json!({"criterion_id":criterion_id,"citation":citation}),
+                ),
+                ContractGenerationV1::Generation2 => Presentation {
+                    code: "CRITERION_CITATION_INVALID",
+                    details: json!({"schema":"podway.criterion-citation-invalid-details/v1",
+                    "criterion_id":criterion_id,"citation":citation,
+                    "citable_evidence_source_nodes":citable_evidence_source_nodes,
+                    "citable_item_ids":citable_item_ids}),
+                },
+            }
+        }
         E::CriterionResultMissing {
             missing_criterion_ids,
         } => runtime(
@@ -627,11 +660,23 @@ fn store(error: &DirectStoreErrorV1, context: &DirectErrorContextV1) -> Presenta
         E::Unreadable | E::SchemaMismatch | E::Storage(_) | E::Sqlite(_) => {
             recovery("WORKSPACE_STATE_UNREADABLE")
         }
-        E::WriterMismatch { expected, actual } => Presentation {
-            code: "WORKSPACE_CONTRACT_MISMATCH",
-            details: json!({
-            "schema":"podway.workspace-contract-mismatch-details/v1", "expected_contract_manifest_digest":expected,
-            "actual_contract_manifest_digest":actual,"recovery":diagnose_invalid_workspace()}),
+        E::WriterMismatch { expected, actual } => match context.generation {
+            ContractGenerationV1::Generation1 => Presentation {
+                code: "WORKSPACE_CONTRACT_MISMATCH",
+                details: json!({
+                "schema":"podway.workspace-contract-mismatch-details/v1", "expected_contract_manifest_digest":expected,
+                "actual_contract_manifest_digest":actual,"recovery":diagnose_invalid_workspace()}),
+            },
+            ContractGenerationV1::Generation2 => {
+                let release = released_writer_release_v1(actual);
+                Presentation {
+                    code: "WORKSPACE_CONTRACT_MISMATCH",
+                    details: json!({
+                    "schema":"podway.workspace-contract-mismatch-details/v2", "expected_contract_manifest_digest":expected,
+                    "actual_contract_manifest_digest":actual,"actual_product_version":release,
+                    "recovery":diagnose_writer(&writer_mismatch_generation2_reason(release))}),
+                }
+            }
         },
         E::BindingMismatch => simple("WORKSPACE_ID_CONFLICT"),
         E::ExpectedWorkspaceUuidMismatch { expected, actual } => workspace(expected, actual),
