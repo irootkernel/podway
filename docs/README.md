@@ -25,10 +25,16 @@ write-free snapshot reads are the current product boundaries.
 
 Current adopted work is tracked by the [active roadmap](roadmap/).
 The [GUIDE epic](roadmap/README.md#guide-agent-guidance-and-contract-generation-2)
-and its [design dossier](todo/TODO-podway-agent-guidance.md) adopt agent-facing
-guidance fixes and the opt-in contract generation 2 accepted by
-[ADR-0039](architecture-decision-records/0039-opt-in-contract-generations.md),
-with a conditional `v0.2.15` release target.
+is completed and owner-accepted. It delivered agent-facing guidance fixes and
+the opt-in contract generation 2 accepted by
+[ADR-0039](architecture-decision-records/0039-opt-in-contract-generations.md):
+fenced plain start, observation v6 with executable lifecycle templates,
+enriched generation-2 error details, and the generation-1 deprecation of
+[ADR-0040](architecture-decision-records/0040-deprecation-in-changelog-changed-section.md).
+Delivered behavior lives in the [contract generations](specs/interfaces/json-contract.md#contract-generations)
+specifications and the [functional regression owners](implementation-tips/testing.md#functional-regression-owners);
+its dossier is retired and the roadmap alone owns status. Inclusion in
+`v0.2.15` still requires a separately authorized release.
 The [structural simplification program](roadmap/README.md#structural-simplification-program)
 delivers projection construction, document admission, same-snapshot state and
 request admission reuse in the sequence `VIEWS -> PARSE -> STATE -> ADMIT`.

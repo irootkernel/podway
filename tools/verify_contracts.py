@@ -1554,7 +1554,7 @@ def run_sentinels(root: Path) -> list[str]:
         )
         completed.append("contract_generations_default_catalog_disagreement")
         mutate_declaration(
-            lambda value: value.update(default=2),
+            lambda value: value["generations"][0].update(status="reserved"),
             "default naming a reserved generation",
         )
         completed.append("contract_generations_default_reserved")

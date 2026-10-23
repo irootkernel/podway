@@ -38,5 +38,5 @@
       }
     }
   },
-  "$comment": "Generation-2 detail contract under ADR-0039; reserved by GUIDE-007 without emission."
+  "$comment": "Generation-2 detail contract under ADR-0039; emitted under --contract-generation 2."
 }

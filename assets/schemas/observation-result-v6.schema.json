@@ -1503,5 +1503,5 @@
       ]
     }
   },
-  "$comment": "Generation-2 observation contract under ADR-0039; reserved by GUIDE-007 without emission. Fence, key-token and placeholder rules apply to the lifecycle templates of the prepared and terminal windows; running templates keep the v5 shapes."
+  "$comment": "Generation-2 observation contract under ADR-0039; emitted under --contract-generation 2. Fence, key-token and placeholder rules apply to the lifecycle templates of the prepared and terminal windows; running templates keep the v5 shapes."
 }

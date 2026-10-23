@@ -1084,7 +1084,7 @@
       {
         "id": "urn:podway:schema:criterion-citation-invalid-details:v1",
         "path": "schemas/criterion-citation-invalid-details-v1.schema.json",
-        "sha256": "sha256:56a0d80a95be44e78986ed576ecbf118ee8671ed06f4ffb9a078c11996950729"
+        "sha256": "sha256:30230a7fc311283420bccd14b51724b746cdb4ce7df9abd89e9dd1ee427fb441"
       },
       {
         "id": "urn:podway:schema:decision-result:v2",
@@ -1204,7 +1204,7 @@
       {
         "id": "urn:podway:schema:observation-result:v6",
         "path": "schemas/observation-result-v6.schema.json",
-        "sha256": "sha256:d71a1a6254166bdcf432397c1de75ca729efe81efb96e2eed0eb5fec2fb705f5"
+        "sha256": "sha256:c57f8ebc0fa6125acebff4234260938adabf231cb62042012bab53ab4ceaf653"
       },
       {
         "id": "urn:podway:schema:outcome-lookup-result:v1",
@@ -1424,7 +1424,7 @@
       {
         "id": "urn:podway:schema:workspace-contract-mismatch-details:v2",
         "path": "schemas/workspace-contract-mismatch-details-v2.schema.json",
-        "sha256": "sha256:8a1041bbc1ddb47c7541eab8842d352ac616ba2ef97315d51db48bee599efaa7"
+        "sha256": "sha256:73edc707c90193eb8554d7d096bd8cd3e792b23bed79d70a65624a516dddecc0"
       },
       {
         "id": "urn:podway:schema:workspace-init-result:v2",

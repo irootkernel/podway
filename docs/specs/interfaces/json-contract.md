@@ -313,10 +313,13 @@ Error v2 selections in generation order, against the command catalog's
 `podway.observation-result/v6` family specifies executable lifecycle templates:
 running templates keep the v5 shapes, while the prepared and terminal templates
 carry the session fences and the idempotency-key placeholder and use the closed
-placeholder vocabulary of ADR-0039. Consumers re-pin on every release; the
-manifest, the Output v4 and Error v2 schema bytes and the Dolgorae adapter
-schema pins change with this reservation, so Dolgorae must re-pin when a release
-ships it.
+placeholder vocabulary of ADR-0039. `session.next` and prepared guidance
+suggestions stay bare in both generations; templates are the executable
+surface. A template whose argv disagrees with its preconditions is a projection
+failure, so inconsistent templates are never emitted. Consumers re-pin on every
+release; the manifest, the Output v4 and Error v2 schema bytes and the Dolgorae
+adapter schema pins change with generation 2, so Dolgorae must re-pin when a
+release ships it.
 
 ## Evidence paging
 

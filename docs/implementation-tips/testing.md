@@ -447,6 +447,57 @@ Existing private-token debug counters support CLI wiring evidence only and are
 absent from release builds and ordinary output. Query/decode counts still need
 the source inspection described above.
 
+GUIDE agent-guidance and contract-generation checks use these registered owners:
+
+- Socket-fixture independence from the ambient temporary directory is owned by
+  the [long-TMPDIR regression](../../crates/podway-git/tests/int_guide001_socket_roots.rs)
+  `socket_fixtures_pass_with_a_long_tmpdir` with the per-file `socket_fixture_root`
+  helpers of the two podway-git socket tests; the fallback design is recorded
+  above. The helpers never change the process working directory, because tests
+  run concurrently, and keep every socket inside the worktree fixture, because
+  the resolver validates containment.
+- Local-command option rejection and command-word help topics are owned by the
+  [local CLI checks](../../crates/podway-cli/tests/e2e_v2dfc007_local_cli.rs)
+  `guide002_local_commands_reject_every_worktree_request_option` and
+  `guide003_help_topics_resolve_command_words_and_groups`.
+- Record-field help and human recovery hints with byte-identical JSON are owned
+  by the [direct CLI checks](../../crates/podway-cli/tests/e2e_v2dfc007_direct_cli.rs)
+  `guide004_human_writer_mismatch_hint_names_digests_and_recovery` and
+  `guide004_human_citation_hint_states_the_admission_rule`, whose
+  `GUIDE004_WRITER_MISMATCH_JSON_BASELINE` and
+  `GUIDE004_CRITERION_CITATION_JSON_BASELINE` constants pin the generation-1
+  error envelopes.
+- The GUIDE-006 baselines are the byte-level regression owners of the default
+  generation: the Engine [baseline suite](../../crates/podway-engine/tests/int_guide006_generation1_baselines.rs)
+  `int_guide006_generation1_baselines` and the CLI [baseline suite](../../crates/podway-cli/tests/e2e_guide006_generation1_baselines.rs)
+  `e2e_guide006_generation1_baselines`, with the exact expected bytes under
+  `tests/guide006_baselines/`. Their expected values change only through an
+  owner decision such as generation-1 removal. The two suites normalize
+  differently: the Engine suite injects deterministic identifiers and
+  timestamps and replaces only the worktree root, while the CLI suite applies
+  first-appearance normalization to the request id, generation timestamp,
+  worktree root and every remaining generated UUID and timestamp literal.
+- Generation reservation and selection are owned by the protocol
+  [contract suite](../../crates/podway-protocol/tests/int_guide007_contract_generations.rs)
+  (`guide007_*`), the `guide007_released_manifest_table_pins_published_digests`
+  unit pin in `crates/podway-protocol/src/result_contract.rs`, and
+  `tools/verify_contracts.py --check/--sentinels`.
+- Fenced plain start is owned by the Engine
+  [start suite](../../crates/podway-engine/tests/int_guide008_fenced_plain_start.rs)
+  (`guide008_*`, five cases) and the five `guide008_cli_*` cases of the
+  [runtime CLI checks](../../crates/podway-cli/tests/e2e_v2dfc007_runtime_cli.rs).
+- Observation v6 and generation selection through the real CLI are owned by the
+  Engine [observation suite](../../crates/podway-engine/tests/int_guide009_generation2_observation.rs)
+  (`generation2_*`), which also pins an explicit generation 1 equal to the
+  frozen GUIDE-006 baselines, and the packaged scenario
+  `e2e_guide009_generation2_lifecycle::generation2_lifecycle_conformance`.
+- Generation-2 error details are owned by the core citation carrier tests in
+  [`graph_v2.rs`](../../crates/podway-core/src/graph_v2.rs), the Engine
+  [details suite](../../crates/podway-engine/tests/int_guide010_generation2_error_details.rs)
+  (`generation2_*`) and the direct CLI `guide010_generation2_*` cases.
+- The deprecation help text is owned by the grammar unit test
+  `guide011_contract_generation_deprecation_topic_and_overview`.
+
 ## Structural simplification verification
 
 The [VIEWS, PARSE, STATE and ADMIT program](../roadmap/README.md#structural-simplification-program)

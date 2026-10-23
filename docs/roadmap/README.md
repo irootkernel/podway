@@ -22,8 +22,9 @@ identifiers. Do not rename completed work to apply the new convention.
 
 ## GUIDE — Agent Guidance and Contract Generation 2
 
-Dependencies: none; prior epics are Completed. Status: In Progress. Design:
-[GUIDE dossier](../todo/TODO-podway-agent-guidance.md).
+Dependencies: none; prior epics are Completed. Status: Completed. Implemented
+ownership: [ADR-0039](../architecture-decision-records/0039-opt-in-contract-generations.md)
+with [contract generations](../specs/interfaces/json-contract.md#contract-generations).
 
 On 2026-10-22 the owner adopted GUIDE from hands-on agent sessions against the
 `v0.2.15` candidate. GUIDE-001 through GUIDE-005 repair the socket test harness,
@@ -43,18 +44,45 @@ owner starts the epic.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `GUIDE-001` | Keep socket fixtures within sun_path | Completed | Bind the two socket fixtures under a short temporary root when the inherited TMPDIR leaves no room in the 104-byte socket address, proven by a long-TMPDIR regression. | [Socket fixture roots](../todo/TODO-podway-agent-guidance.md#guide-001-socket-fixture-roots) |
-| `GUIDE-002` | Reject every workspace option on local commands | Completed | Reject `--if-goal-revision` like the other workspace options on local commands, name every option to omit, and correct worktree guidance. | [Local command options](../todo/TODO-podway-agent-guidance.md#guide-002-local-command-options) |
-| `GUIDE-003` | Resolve help topics from command words | Completed | Resolve command words, multi-word commands and groups as help topics, publish a complete topic index, and point unknown topics to it. | [Help topic resolution](../todo/TODO-podway-agent-guidance.md#guide-003-help-topic-resolution) |
-| `GUIDE-004` | Explain record fields, observe/init help and human recovery hints | Completed | Document every record field with its observation source and an example, explain observation and init help, and add human hints without JSON changes. | [Record and recovery guidance](../todo/TODO-podway-agent-guidance.md#guide-004-record-observation-and-recovery-guidance) |
-| `GUIDE-005` | Teach recording, citation and workspace boundaries in the runtime skill | Completed | Teach tracked files, uninitialized workspaces, record fields, citation rules and released writer digests. | [Runtime skill guidance](../todo/TODO-podway-agent-guidance.md#guide-005-runtime-skill-guidance) |
-| `GUIDE-006` | Freeze generation-1 outputs | Completed | Pin normalized generation-1 observation, status, next and error-detail outputs before any generation-2 change. | [Generation-1 baselines](../todo/TODO-podway-agent-guidance.md#guide-006-generation-1-baselines) |
-| `GUIDE-007` | Reserve generation-2 contracts without emitting them | Completed | Add the generation-2 schemas, selections, generation declaration, protocol registration and contract tooling without emitting them. | [Contract reservation](../todo/TODO-podway-agent-guidance.md#guide-007-generation-2-contract-reservation) |
-| `GUIDE-008` | Fence plain start inside the Engine | Completed | Accept session fences on plain `start`, verify them in the start transaction after the idempotency lookup, and keep unfenced requests byte-identical. | [Fenced plain start](../todo/TODO-podway-agent-guidance.md#guide-008-fenced-plain-start) |
-| `GUIDE-009` | Select the generation and emit observation v6 | Completed | Add `--contract-generation` and project observation v6 with executable fenced lifecycle and archive templates. | [Selection and observation v6](../todo/TODO-podway-agent-guidance.md#guide-009-generation-selection-and-observation-v6) |
-| `GUIDE-010` | Emit generation-2 error details | Completed | Emit citable sources and the recorded writer release in generation-2 error details. | [Generation-2 details](../todo/TODO-podway-agent-guidance.md#guide-010-generation-2-error-details) |
-| `GUIDE-011` | Declare generation 2 and the deprecation; align guidance | Completed | Declare generation 2 and the generation-1 deprecation across release policy, the AGENTS.md upgrade-QA rule, README, skill, examples and packaged scenarios. | [Declaration and alignment](../todo/TODO-podway-agent-guidance.md#guide-011-declaration-and-guidance-alignment) |
-| `GUIDE-012` | Qualify and close GUIDE | Planned | Complete integration review, VM re-verification and `make test`, promote regression owners, retire the dossier and record acceptance. | [Qualification and closeout](../todo/TODO-podway-agent-guidance.md#guide-012-qualification-and-closeout) |
+| `GUIDE-001` | Keep socket fixtures within sun_path | Completed | Bind the two socket fixtures under a short temporary root when the inherited TMPDIR leaves no room in the 104-byte socket address, proven by a long-TMPDIR regression. | [Socket fixture roots](../implementation-tips/testing.md#functional-regression-owners) |
+| `GUIDE-002` | Reject every workspace option on local commands | Completed | Reject `--if-goal-revision` like the other workspace options on local commands, name every option to omit, and correct worktree guidance. | [Local command options](../specs/interfaces/cli-specification.md#grammar-and-global-options) |
+| `GUIDE-003` | Resolve help topics from command words | Completed | Resolve command words, multi-word commands and groups as help topics, publish a complete topic index, and point unknown topics to it. | [Help topic resolution](../specs/interfaces/cli-specification.md#grammar-and-global-options) |
+| `GUIDE-004` | Explain record fields, observe/init help and human recovery hints | Completed | Document every record field with its observation source and an example, explain observation and init help, and add human hints without JSON changes. | [Record and recovery guidance](../specs/interfaces/errors-and-exit-codes.md#error-redaction-and-internal-failures) |
+| `GUIDE-005` | Teach recording, citation and workspace boundaries in the runtime skill | Completed | Teach tracked files, uninitialized workspaces, record fields, citation rules and released writer digests. | [Runtime skill guidance](../../skills/use-podway/SKILL.md) |
+| `GUIDE-006` | Freeze generation-1 outputs | Completed | Pin normalized generation-1 observation, status, next and error-detail outputs before any generation-2 change. | [Generation-1 baselines](../implementation-tips/testing.md#functional-regression-owners) |
+| `GUIDE-007` | Reserve generation-2 contracts without emitting them | Completed | Add the generation-2 schemas, selections, generation declaration, protocol registration and contract tooling without emitting them. | [Contract reservation](../specs/interfaces/json-contract.md#contract-generations) |
+| `GUIDE-008` | Fence plain start inside the Engine | Completed | Accept session fences on plain `start`, verify them in the start transaction after the idempotency lookup, and keep unfenced requests byte-identical. | [Fenced plain start](../specs/interfaces/automation-client-contract.md#retained-procedure-and-lifecycle-requirements) |
+| `GUIDE-009` | Select the generation and emit observation v6 | Completed | Add `--contract-generation` and project observation v6 with executable fenced lifecycle and archive templates. | [Selection and observation v6](../specs/interfaces/automation-client-contract.md#retained-reconciliation-observation-and-evidence-requirements) |
+| `GUIDE-010` | Emit generation-2 error details | Completed | Emit citable sources and the recorded writer release in generation-2 error details. | [Generation-2 details](../specs/interfaces/automation-client-contract.md#retained-json-error-and-release-requirements) |
+| `GUIDE-011` | Declare generation 2 and the deprecation; align guidance | Completed | Declare generation 2 and the generation-1 deprecation across release policy, the AGENTS.md upgrade-QA rule, README, skill, examples and packaged scenarios. | [Declaration and alignment](../specs/operations/release-and-packaging.md#contract-generations) |
+| `GUIDE-012` | Qualify and close GUIDE | Completed | Complete integration review, VM re-verification and `make test`, promote regression owners, retire the dossier and record acceptance. | [Qualification and closeout](../implementation-tips/testing.md#functional-regression-owners) |
+
+GUIDE is owner-accepted. GUIDE-001 through GUIDE-005 repaired the socket test
+harness, local-command option rejection, command-word help topics, record and
+observation guidance with human recovery hints, and the runtime skill, without
+changing any JSON contract. GUIDE-006 through GUIDE-011 delivered ADR-0039:
+the frozen generation-1 baselines, the reserved-then-supported generation-2
+contracts, fenced plain start, observation v6 with executable lifecycle
+templates, enriched generation-2 error details, and the generation-1
+deprecation recorded by ADR-0040. GUIDE-012's integration review passed and a
+fresh `make test` on the final candidate passed. The intended default-output
+deltas are exactly: help and completion text; local-command messages;
+`--if-goal-revision` rejection on local commands; paired-fence acceptance on
+plain start; human-mode hints for `WORKSPACE_CONTRACT_MISMATCH` and
+`CRITERION_CITATION_INVALID`; and contract-manifest digests in identity,
+workspace views and mismatch details. UTM VM re-verification on a release
+build of the final candidate passed. Its 42-invocation default-generation
+differential against `v0.2.14`, with digests and versions normalized, differed
+only in help text and local-command messages, including the new
+`--if-goal-revision` rejection, all within that allowance; the
+contract-manifest identity difference is recorded separately in the identity
+table. Fenced plain-start acceptance and the human hints were exercised by the
+generation-2 lifecycle walk and its probes, not by the differential: the walk,
+which executed every lifecycle template, passed all 107 checks, including the
+writer checks against an authentic `v0.2.14` Store, and the seven probes
+passed. Claude Code reruns of `small-change-v2` and
+`bug-fix-v2` completed without recurrence of the original failure points. The
+dossier is retired under the [TODO lifecycle](../todo/README.md#lifecycle).
 
 ## Structural simplification program
 

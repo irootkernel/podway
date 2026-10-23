@@ -1,8 +1,7 @@
 //! GUIDE-008: fenced plain start verified inside the Engine.
 //!
 //! Plain `session.start` accepts the paired optional `--if-session-id` and
-//! `--if-session-revision` fences (dossier
-//! `docs/todo/TODO-podway-agent-guidance.md` GUIDE-008, ADR-0039 decision 6).
+//! `--if-session-revision` fences (`AUT-LIF-016`, ADR-0039 decision 6).
 //! The Engine verifies supplied fences inside the start writer transaction
 //! after the idempotency lookup, so an exact replay returns its original
 //! success even after the original session was archived or replaced, and a
