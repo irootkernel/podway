@@ -147,3 +147,20 @@ It uses one CLI binary and deterministic external fixtures. It proves neither a
 live executor/model nor arbitrary external effect settlement, and it does not
 qualify a legacy-to-current release upgrade. Its native lost-response coverage
 and deterministic transaction-interior failpoints establish separate boundaries.
+
+## Contract generation ownership and proof
+
+[ADR-0039](../../architecture-decision-records/0039-opt-in-contract-generations.md)
+owns the contract-generation decisions; the
+[automation contract](../interfaces/automation-client-contract.md#direct-execution-requirements)
+defines `AUT-GEN-001`–`003`, `AUT-OBS-013`–`017`, `AUT-LIF-016` and
+`AUT-ERR-006`–`007`. Generation 1 is deprecated and remains the default;
+[ADR-0040](../../architecture-decision-records/0040-deprecation-in-changelog-changed-section.md)
+records the CHANGELOG placement of the deprecation.
+
+| Requirement | Production owner | Executable proof |
+| --- | --- | --- |
+| `AUT-GEN-001`–`003`: selection, presentation-only scope and declaration statuses | [Direct generation parsing](../../../crates/podway-cli/src/command/direct.rs); [ContractGenerationV1](../../../crates/podway-protocol/src/result_contract.rs); the canonical [`contract-generations.json`](../../../assets/specifications/contract-generations.json) declaration | CLI grammar unit tests; `e2e_guide009_generation2_lifecycle::generation2_lifecycle_conformance` (packaged scenario); `tools/verify_contracts.py --check/--sentinels` |
+| `AUT-OBS-013`–`017`: generation-2 observation windows and templates | [Observation projection](../../../crates/podway-engine/src/direct_read_service.rs) and the v6 lifecycle builders of the Engine read service | Engine `int_guide009_generation2_observation`; the packaged `e2e_guide009_generation2_lifecycle::generation2_lifecycle_conformance` |
+| `AUT-LIF-016`: paired plain-start fences in both generations | [Start fence verification](../../../crates/podway-engine/src/direct_start.rs) inside the start writer transaction | Engine `int_guide008_fenced_plain_start`; the packaged `e2e_guide009_generation2_lifecycle::generation2_lifecycle_conformance` |
+| `AUT-ERR-006`–`007`: generation-2 error details | [Citable source admission](../../../crates/podway-core/src/graph_v2.rs); [RELEASED_CONTRACT_MANIFESTS_V1](../../../crates/podway-protocol/src/result_contract.rs); [error rendering](../../../crates/podway-engine/src/direct_error.rs); [CLI human hints](../../../crates/podway-cli/src/command/render.rs) | Core citation carrier tests; Engine `int_guide010_generation2_error_details`; CLI `guide010_*` end-to-end cases |

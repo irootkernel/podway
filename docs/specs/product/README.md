@@ -36,7 +36,9 @@ The public product accepts only `podway.procedure/v2`, emits successful results
 through `podway.output/v4`, and ships exactly `analysis-v2`, `bug-fix-v2`,
 `small-change-v2`, and `sw-dev-v2`.
 Failures use `podway.error/v2`. Version identity and the contract manifest use
-their v2 families, and every Procedure uses `podway.observation-result/v5`.
+their v2 families. Every Procedure observes through `podway.observation-result/v5`
+in the deprecated default generation 1, and through
+`podway.observation-result/v6` under `--contract-generation 2`.
 Workspace configuration and other result families retain their own versions;
 Procedure support is identified by `podway.procedure/v2`.
 

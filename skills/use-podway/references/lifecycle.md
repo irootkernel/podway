@@ -30,6 +30,20 @@ actual task. For custom source, use `$create-podway-procedure`, then copy previe
 exact start suggestion and `--expect-procedure-digest`. Missing custom digest
 fails with `DIGEST_CONFIRMATION_REQUIRED`; presets do not use it.
 
+Under `--contract-generation 2`, observation offers each lifecycle window as
+fenced templates: a prepared session offers `session.begin`, `session.reset`
+and two replacement starts; an undisposed terminal session offers the two
+`session.terminal_disposition` variants; a disposed terminal session offers
+`session.archive`, `session.reset` and two fenced plain `session.start`
+variants. Templates and recovery recipes never embed
+`--contract-generation`. When executing one, add `--contract-generation 2`,
+keep every option it already supplies, and add other applicable caller options
+only where they are absent: `--json` for machine output, and
+`--worktree <path>` only on workspace commands (local commands accept no
+worktree request options). Fill only its declared placeholders, keep any
+concrete idempotency key it carries, and keep every supplied fence. The
+deprecated generation 1 keeps the bare v5 templates.
+
 A plain `start --dry-run` previews the Procedure only. Add
 `--dry-run --on-existing preserve|delete` to inspect an existing-session policy.
 The real start always revalidates; a dry run is not authorization.

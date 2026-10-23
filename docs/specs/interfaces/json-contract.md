@@ -14,7 +14,10 @@ stderr and exit 6 replace JSON, without partial output or process abort. This
 exception does not permit emitting an invalid Error v2 envelope.
 
 Direct and delegated Procedures share status, compact status, running next,
-and observation v5, with prepared next v3. The success envelope has no job or
+and the default (generation 1) observation v5, with prepared next v3; under
+`--contract-generation 2`, observation serves
+`podway.observation-result/v6` instead (see
+[Contract generations](#contract-generations)). The success envelope has no job or
 admission fields. Retired commands and flags return `COMMAND_RETIRED` before
 workspace resolution or effects. The
 [command catalog](../../../assets/specifications/command-catalog.yaml) owns
@@ -192,7 +195,9 @@ in `V2DFC-007`. The current direct validators enforce this generation.
 
 The new result and detail generations remove admission, job, queue, endpoint,
 registry, and runtime-mode metadata. Direct and delegated status, compact status,
-next, and observation converge on v5; prepared next converges on v3. Session
+next, and observation converge on v5; observation v5 is the default
+generation-1 family (see [Contract generations](#contract-generations) for
+observation v6), and prepared next converges on v3. Session
 start becomes v4. Families without a daemon-dependent shape keep their current
 identifier. Author-authored item content remains valid even when it contains
 words or object keys such as `job`; removed metadata is rejected at protocol
@@ -274,8 +279,11 @@ Store layout and the writer identity. The canonical declaration
 (`podway.contract-generations/v1`, enrolled in the manifest) declares the
 `default` generation and, for each generation, its selection for every variable
 point and its status from the closed set `reserved`, `supported`, `deprecated`
-and `retired`. Generation 1 is the direct contract shipped since `v0.2.13`,
-`supported` and the default. Generation 2 is `supported`: under
+and `retired`. Generation 1 is the direct contract shipped since `v0.2.13`; it
+is `deprecated` from the first release that ships generation 2 and remains the
+default until removal
+([ADR-0039](../../architecture-decision-records/0039-opt-in-contract-generations.md)
+decision 7). No runtime warning is emitted. Generation 2 is `supported`: under
 `--contract-generation 2`, `session.observe` serves
 `podway.observation-result/v6`, `CRITERION_CITATION_INVALID` serves
 `podway.criterion-citation-invalid-details/v1`, and
@@ -285,7 +293,8 @@ naming the default generation's families in `details_schema`, so its bytes are
 unchanged.
 
 A global `--contract-generation <1|2>` option selects the generation for one
-invocation. The default is 1 while generation 1 is supported. The value is
+invocation. The default is 1; it changes only with the removal decision
+(ADR-0039 decision 8). The value is
 validated after parsing and before local execution or reading stdin; every
 other value, including an empty value, fails with exit-2 `REQUEST_INVALID`
 attributed to the parsed route, and retired syntax keeps `COMMAND_RETIRED`

@@ -43,6 +43,7 @@ PACKAGED_CONFORMANCE_SCENARIOS = [
     "e2e_v2dfc007_runtime_cli::bare_terminal_archive_uses_no_active_attempt_and_replays_after_current_session_removal",
     "e2e_v2dfc007_retirement::retired_surface_returns_valid_guidance_without_reading_open_stdin_or_worktree",
     "e2e_v2sdg008_qualification::supervised_delegation_preserves_documented_example_hosts_and_recovery",
+    "e2e_guide009_generation2_lifecycle::generation2_lifecycle_conformance",
     "e2e_v2_native_qualification::release_binary_ignores_every_debug_maintenance_hook",
 ]
 

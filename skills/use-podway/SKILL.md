@@ -26,14 +26,23 @@ skill. Route Procedure source work to `$create-podway-procedure`.
    `.podway` files are `.podway/config.yaml`, `.podway/procedures/` and
    `.podway/.gitignore`, which ignores `runtime/`; authoritative task state and
    maintenance locks live under `.podway/runtime/` and are never tracked.
-2. Run `podway observe --json` in the authorized worktree. Require
-   `podway.output/v4` and `podway.observation-result/v5`. Error output uses
-   `podway.error/v2`; `SESSION_NOT_FOUND` means no current session;
-   `WORKSPACE_NOT_INITIALIZED` means this worktree has no workspace, so report
-   it and initialize only with explicit intent.
+2. Run `podway observe --json` in the authorized worktree, passing
+   `--contract-generation 2` on every command. Require `podway.output/v4` and
+   `podway.observation-result/v6`; the deprecated generation-1 default still
+   serves `podway.observation-result/v5` to consumers that have not adopted
+   generation 2. Error output uses `podway.error/v2`; `SESSION_NOT_FOUND` means
+   no current session; `WORKSPACE_NOT_INITIALIZED` means this worktree has no
+   workspace, so report it and initialize only with explicit intent.
 3. Read identities and lifecycle from `status`, current work from `guidance`,
    declarations from `active_items`, and fenced requests from `mutation_templates`.
-   Prepared state has no active attempt; null guidance denotes terminal state.
+   Templates and recovery recipes never embed `--contract-generation`. When
+   executing one, add `--contract-generation 2`, keep every option it already
+   supplies, and add other applicable caller options only where they are absent:
+   `--json` for machine output, and `--worktree <path>` only on workspace
+   commands (local commands accept no worktree request options). Fill only its
+   declared placeholders, keep any concrete idempotency key it carries, and keep
+   every supplied fence. Prepared state has no active attempt; null guidance
+   denotes terminal state.
    An undisposed terminal revision needs disposition before archive or replacement.
    Use `status --verbose` for history and `next` for narrower guidance.
 4. Once per workflow entry, run `podway archive list --json` and require
@@ -47,8 +56,9 @@ skill. Route Procedure source work to `$create-podway-procedure`.
 
 Use `--worktree <path>` to preserve the owning worktree on every workspace
 command; local commands (`help`, `version`, `completions`, `preset`, `procedure`)
-accept no worktree request options. `--json` is global, and local commands also
-accept `--contract-generation`. `--timeout <duration>`
+accept no worktree request options. `--json` is global, and every command
+accepts `--contract-generation`; pass `--contract-generation 2` on every
+command, including the local families where it has no effect. `--timeout <duration>`
 defaults to `5s`; unsigned `ms`, `s` or `m` values
 may be at most `60m`. It supplies one admission-wait budget across maintenance
 leases, the connection gate and SQLite locks. Input, preparation and confirmation

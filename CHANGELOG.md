@@ -23,6 +23,10 @@ This file records concise shipped outcomes and the planned next stable release.
 
 - Teach the runtime skill tracked `.podway` files, uninitialized workspaces,
   record-field observation sources, the criterion citation rule and released writer digests.
+- Deprecate contract generation 1. The default stays generation 1 and no runtime
+  warning is emitted; `--contract-generation 2` is the opt-in for observation v6
+  and the enriched citation and writer-mismatch error details, and the agent
+  guidance now teaches passing it on every command.
 
 ### Fixed
 

@@ -94,9 +94,11 @@ The following table explains the runtime operations executed by the isolated
 helper. These are command tails, not commands to paste into an active workspace.
 For manual use in a separately authorized workspace, preserve its exact CLI
 and worktree selector and derive every mutation from fresh observation. Run
-`observe --json` after each mutation. Every Procedure uses
-`podway.observation-result/v5`, including delegated and Direct placements;
-observation is one committed snapshot, not a queue barrier.
+`observe --json` after each mutation. Every Procedure observes
+`podway.observation-result/v6` under `--contract-generation 2`, including
+delegated and Direct placements; the deprecated generation-1 default serves
+`podway.observation-result/v5`. Observation is one committed snapshot, not a
+queue barrier.
 
 | Step | Command tail or external responsibility | Expected observation |
 | --- | --- | --- |

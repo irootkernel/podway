@@ -590,8 +590,8 @@ pub const DAEMON_FREE_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
 ];
 
 /// Opt-in contract generation of ADR-0039. The default remains generation 1
-/// while generation 1 is supported; selection is presentation-only and never
-/// part of request identity, idempotency or stored outcomes.
+/// until its removal; selection is presentation-only and never part of request
+/// identity, idempotency or stored outcomes.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ContractGenerationV1 {
     #[default]

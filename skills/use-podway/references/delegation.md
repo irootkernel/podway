@@ -12,7 +12,8 @@ managed Primaries use their respective authorized integration paths;
 
 ## Package, supervise, record, accept, complete
 
-1. Observe (`podway.observation-result/v5`) and confirm the active action/attempt,
+1. Observe (`podway.observation-result/v6` under `--contract-generation 2`; the
+   deprecated default serves v5) and confirm the active action/attempt,
    declaration and `status.delegation.state`. Ordinary Direct placements still use
    the normal item/progression rules.
 2. Read `podway delegation package --json`; require

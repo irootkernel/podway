@@ -4,7 +4,7 @@
   "generations": [
     {
       "generation": 1,
-      "status": "supported",
+      "status": "deprecated",
       "selections": {
         "session.observe": "podway.observation-result/v5",
         "CRITERION_CITATION_INVALID": "podway.v2-runtime-error-details/v2",

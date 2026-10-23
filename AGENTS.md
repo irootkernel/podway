@@ -300,10 +300,15 @@ trivial changes with no meaningful decision context.
   authentic fixture evidence is `INCOMPLETE`, not permission to run an old daemon.
   The cutover declares no predecessor; later direct migrations require an explicit
   release-owned predecessor declaration.
-- Run only the exact candidate CLI in standalone Git fixtures below the assigned
-  evidence root, with explicit worktree paths and bounded child cleanup. Do not
-  install it, use named modes or account namespaces, launch/control old installed
-  services, or touch Aquarium's persistent development runtime.
+- Run only the exact candidate CLI — and, in a direct-to-direct pass, the
+  checksum- and provenance-verified previous-release CLI under the owner
+  exception recorded 2026-10-22 — in standalone Git fixtures below the assigned
+  evidence root, with explicit worktree paths and bounded child cleanup. The
+  previous CLI may run against owned fixtures only, for exactly two purposes:
+  creating authentic previous-release Stores, and confirming that it refuses
+  the new Store. It runs without daemons, installation or account state. Do not
+  install either CLI, use named modes or account namespaces, launch/control old
+  installed services, or touch Aquarium's persistent development runtime.
 - Treat missing prerequisites or safe-execution gaps as `INCOMPLETE` and reproducible
   expected-behavior mismatches as findings. A confirmation pass reruns this cluster
   only when it belongs to the frozen full-pass matrix.

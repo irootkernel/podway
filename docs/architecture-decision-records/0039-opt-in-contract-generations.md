@@ -9,6 +9,7 @@
 - Design: [GUIDE dossier](../todo/TODO-podway-agent-guidance.md)
 - Preserves: [ADR-0010](0010-generic-cli-json-integration.md), [ADR-0019](0019-procedure-v2-only-product.md), [ADR-0038](0038-remove-the-daemon.md)
 - Extends: [ADR-0027](0027-state-aware-session-start.md) with optional session fences on plain start
+- Superseded in part by: [ADR-0040](0040-deprecation-in-changelog-changed-section.md)
 
 This ADR accepts an opt-in successor contract generation, the deprecation of the
 current one, and fenced plain start. Delivery follows the roadmap order, and the

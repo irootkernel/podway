@@ -521,8 +521,11 @@ computed with the admission rule:
 
 ### GUIDE-011 Declaration and guidance alignment
 
-- Add a CHANGELOG `Deprecated` entry for generation 1, and set generation 1 to
-  `deprecated` in the declaration.
+- Add a CHANGELOG `### Changed` entry for generation 1 (owner decision
+  2026-10-22: the Aquarium release-notes inspector accepts only Added, Changed,
+  Fixed and Removed, and ADR-0040 supersedes in part ADR-0039 decision 7's
+  CHANGELOG `Deprecated` section clause), and set generation 1 to `deprecated`
+  in the declaration.
 - [Release and packaging](../specs/operations/release-and-packaging.md): generation
   policy, consumer adoption (re-pin, then adopt generation 2) and the removal
   criteria.

@@ -124,6 +124,39 @@ HEAD and unrelated files survive. Reinitialize through the supported CLI and
 require a new working current workspace. Do not manually delete runtime files to
 stand in for these public operations.
 
+## Direct-to-direct upgrades
+
+When the selected previous release and the candidate are both direct
+generations (SQLite generation 15, `v0.2.13` or later), upgrade QA additionally
+covers the writer-refusal boundary in both directions. The candidate declares
+no writer predecessor, so each release's manifest digest differs and each
+binary refuses the other's Store. The coordinator's verified previous-release
+CLI (see Safety boundary) may run against owned fixtures only, for exactly two
+purposes: creating authentic previous-release Stores, and confirming that it
+refuses the new Store. It runs without daemons, installation or account state;
+extracted previous assets stay inspect-only otherwise.
+
+1. **Refusal leaves the Store unchanged.** Start from a Store written by the
+   previous CLI in an owned fixture. Record the full `.podway` tree's names,
+   bytes, modes and file identities, then run candidate read and mutation
+   commands. Require validated Error v2 `WORKSPACE_CONTRACT_MISMATCH` with no
+   outcome, no state effect, no new files and no SQLite sidecars.
+2. **Confirmed unfenced reset, with exact replay.** After read-only diagnosis
+   and explicit discard authorization, run the candidate's
+   `reset --all --yes --idempotency-key <new-key>` and require a fresh UUID and
+   current writer digest with user files preserved; replay the same key and
+   request and require the original full response with no second identity
+   change (as in Scenario 2).
+3. **A fresh lifecycle.** In the reset worktree, run one complete current
+   lifecycle — start, begin, record, advance, disposition and archive — with
+   exact replay across processes (as in Scenario 3).
+4. **The previous CLI refuses the new Store.** Point the verified
+   previous-release CLI at a worktree whose Store the candidate wrote. Require
+   its fail-closed writer refusal with no destructive reset, no marker and no
+   byte change. Invoke only ordinary read and session-mutation commands for
+   this refusal check; never invoke the previous CLI's reset, removal or
+   migration routes.
+
 ## Cleanup and evidence
 
 Bound and reap every candidate/fixture child and prove no owned process or lock

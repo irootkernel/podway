@@ -12,6 +12,14 @@ RecoveryRecipe v2 has exactly `action`, `command`, `argv`, `reason` and
 schema; preserve the owning worktree and fill only declared placeholders from
 supported facts. Reject extra fields, unsupported commands and weakened fences.
 
+Templates and recovery recipes never embed `--contract-generation`. When
+executing one, add `--contract-generation 2`, keep every option it already
+supplies, and add other applicable caller options only where they are absent:
+`--json` for machine output, and `--worktree <path>` only on workspace
+commands (local commands accept no worktree request options). Fill only its
+declared placeholders, keep any concrete idempotency key it carries, and keep
+every supplied fence.
+
 - Read-only recipes use `session.observe`, `outcome.lookup`, `workspace.doctor`
   or `version`, with `requires_explicit_authorization=false`.
 - Initialization resumes use `workspace.init`; destructive recipes use
@@ -87,7 +95,10 @@ inspect that outcome rather than overwriting its identity.
   the same semver. Its `version --json --identity` `contract_manifest_digest` must equal
   that recorded digest; the released-writer table below maps it to a release. For
   discard, use the separately authorized reset-all path above. Use disposable
-  worktrees for development with changed contract bytes.
+  worktrees for development with changed contract bytes. Under
+  `--contract-generation 2`, the error's details carry `actual_product_version`
+  naming the stored writer's release (null when unknown) and the recovery
+  reason names the original writer.
 - Initialization resumes keep the original key and `--repair` policy. Foreign
   writer/root markers and predecessor intents require supported read-only writer
   diagnosis. Resume only with the original writer and owning worktree.

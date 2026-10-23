@@ -50,6 +50,21 @@ Missing confirmation, unrelated changes, or a failed check stops the release;
 there is no automatic fallback to the full gate. Patch evidence omits fuzzing and
 packaged conformance rather than recording invented `skipped` results.
 
+In the open-development commit after each stable release is published, append
+that release's contract-manifest digest to both
+`RELEASED_CONTRACT_MANIFESTS_V1`
+([`crates/podway-protocol/src/result_contract.rs`](../../crates/podway-protocol/src/result_contract.rs))
+and the released-writer table of the runtime skill
+([`recovery.md`](../../skills/use-podway/references/recovery.md)). Both tables
+stay aligned; the append follows ADR-0039 decision 5 and feeds
+`actual_product_version` for generation-2 writer-mismatch details. No digest is
+appended for an unreleased candidate. The same commit co-updates the pinned
+expectations: the exact-contents unit test
+`guide007_released_manifest_table_pins_published_digests` in
+`crates/podway-protocol/src/result_contract.rs`, the length assertion in
+`crates/podway-protocol/tests/int_guide007_contract_generations.rs`, and a rerun
+of the known- and unknown-digest mismatch checks.
+
 ## Non-distribution development qualification
 
 V2DFC-009 requires a native dry run before delegated acceptance and its normal

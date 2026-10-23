@@ -41,7 +41,12 @@ cited work. Supply an English reason describing what was observed. Cite only
 resolved `guidance.references[]` sources and recorded items of the decision
 attempt, each once, with at most four citations per result; `not_applicable`
 carries no citations. On `CRITERION_CITATION_INVALID`, re-observe before
-assessing again and cite only currently admitted sources.
+assessing again and cite only currently admitted sources. Under
+`--contract-generation 2`, its details
+(`podway.criterion-citation-invalid-details/v1`) list the active attempt's
+`citable_evidence_source_nodes` and `citable_item_ids`; cite only from those
+lists, and still re-observe before assessing again. The deprecated
+generation-1 default keeps `podway.v2-runtime-error-details/v2`.
 
 The complete current result set derives:
 

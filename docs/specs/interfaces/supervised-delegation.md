@@ -406,7 +406,8 @@ families below are emitted, not reserved placeholders.
 | `podway.delegation-accept-result/v2` | Synchronous committed acceptance success |
 | `podway.delegation-receipt/v1`, `podway.delegation-receipt-result/v1` | Immutable receipt value and explicit exact-attempt read |
 | `podway.status-result/v5`, `podway.compact-status-result/v5` | All Direct and delegated session snapshots |
-| `podway.next-result/v5`, `podway.observation-result/v5` | Current running guidance and prepared/running/terminal observation |
+| `podway.next-result/v5`, `podway.observation-result/v5` | Current running guidance; prepared/running/terminal observation in generation 1, the deprecated default |
+| `podway.observation-result/v6` | Prepared/running/terminal observation under `--contract-generation 2`, with executable fenced lifecycle templates |
 | `podway.prepared-next-result/v3` | Cursor-free prepared guidance |
 | `podway.procedure-preview-result/v2`, `podway.procedure-graph-result/v2` | Delegated documents; non-delegated documents retain v1 |
 | `podway.session-archive-show-result/v3` | All retained session snapshots, with conditional delegated receipt summaries |

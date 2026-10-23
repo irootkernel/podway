@@ -486,7 +486,10 @@ The scope covers seven Direct entries: `project_direct_status_v1`;
 `project_direct_evidence_v1` on branches that need Procedure declarations;
 `project_direct_receipt_v1`; and `project_direct_delegation_package_v1` for
 work-package construction and package-result projection. Archive-show and
-prepared or running nested projections share that one scope.
+prepared or running nested projections share that one scope. The observation
+projection takes the invocation's contract generation and selects the v5 or v6
+result family (ADR-0039); the selection is presentation-only and changes no
+stored identity.
 
 Reuse follows the current request's snapshot, session, Procedure snapshot
 identifier, and stored digest. Core keeps the immutable `SnapshotMemoryModelV2`

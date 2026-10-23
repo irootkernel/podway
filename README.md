@@ -38,6 +38,11 @@ next from the worktree instead of from its conversation history. Sessions surviv
 loss and transfer between actors mid-task, and mutations accept explicit
 preconditions and idempotency keys so retried or concurrent callers cannot
 corrupt state. See the [Procedure v2 workflow](docs/examples/v2-workflow.md).
+Pass `--contract-generation 2` on every command to select contract generation 2,
+whose observation v6 offers executable fenced lifecycle templates and whose
+citation and writer-mismatch errors carry enriched details; generation 1
+remains the deprecated default and the option is accepted everywhere, including
+the local commands.
 
 ## Requirements
 
@@ -139,7 +144,7 @@ For a small project-wide policy, add this template to the project's `AGENTS.md`:
 ## Podway
 
 - Podway supports Procedure v2 only. Preserve incompatible workspace state and follow its structured recovery guidance; reset or removal requires explicit intent for the exact deletion boundary. Before discard, confirm that no other Podway writer still uses that worktree; retiring one needs its owner's separate authority.
-- When the current workflow authorizes Podway use and `.podway/config.yaml` exists, read `podway observe --json` before task work. Require Output v4 and `podway.observation-result/v5` for every Procedure, and re-read after every mutation.
+- When the current workflow authorizes Podway use and `.podway/config.yaml` exists, read `podway observe --json` before task work, passing `--contract-generation 2` on every command. Require Output v4 and `podway.observation-result/v6` for every Procedure, and re-read after every mutation. Generation 1 stays the deprecated default and serves `podway.observation-result/v5` to consumers that have not adopted generation 2.
 - Treat the active Podway graph node and attempt as the current work boundary. Perform the work before recording an item. Side work may run outside Podway, but record only conclusions supported by current evidence on the active attempt.
 - Use JSON fields, stable error codes, explicit preconditions, and idempotency keys for mutations. Never parse human-readable output as an API.
 - You may update items and advance an existing active v2 session when the work supports it. Do not run `podway init`, start or replace a session, cancel or reset state, remove a workspace, or reactivate a completed session through `rework` or `goal revise --reactivate` unless the user explicitly requests it.
@@ -185,8 +190,9 @@ The authoring skill produces and validates declarative source, then hands off pr
 
 The CLI archive does not include these skills. Installing or resetting Podway
 does not update them; replace the complete skill directories separately. They
-describe the current Direct model with Output v4, Error v2, observation v5 and
-success-only outcome lookup.
+describe the current Direct model and teach passing `--contract-generation 2`
+on every command (Output v4, Error v2, observation v6, success-only outcome
+lookup), keeping generation-1 notes for deprecated consumers.
 
 Before replacing an existing CLI or resetting workspace state, read
 [Upgrade and uninstall](#upgrade-and-uninstall). Skill installation does not grant

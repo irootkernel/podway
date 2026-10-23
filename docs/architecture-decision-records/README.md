@@ -52,4 +52,5 @@ narrative architecture and specifications when sources conflict.
 - [ADR-0036](0036-use-canonical-git-paths-for-workspace-identity.md): canonical-path workspace identity with schema-v13 migration and reset recovery (superseded in part by ADR-0038)
 - [ADR-0037](0037-bound-procedure-graphs-at-1024-nodes.md): bounded 1,024-node Procedure graphs
 - [ADR-0038](0038-remove-the-daemon.md): accepted daemon-free core with in-process Store transactions
-- [ADR-0039](0039-opt-in-contract-generations.md): opt-in contract generations with deprecation
+- [ADR-0039](0039-opt-in-contract-generations.md): opt-in contract generations with deprecation (superseded in part by ADR-0040)
+- [ADR-0040](0040-deprecation-in-changelog-changed-section.md): record generation deprecation in the CHANGELOG Changed section

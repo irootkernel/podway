@@ -15,14 +15,18 @@ source passage in English and record its digest or stable reference instead of
 copying it into Podway. This is an authoring policy, not runtime validation:
 Podway remains locale-neutral and accepts bounded Unicode.
 
+Every `podway` invocation below passes the global `--contract-generation 2`
+option; automation consumers should do the same on every invocation, including
+the local families where the option has no effect.
+
 ## Prepare the workspace
 
 Initialize Podway state, then inspect the shipped preset and its pinned digest:
 
 ```bash
-podway init
-podway --json preset show bug-fix-v2
-podway --json start \
+podway --contract-generation 2 init
+podway --contract-generation 2 --json preset show bug-fix-v2
+podway --contract-generation 2 --json start \
   --preset bug-fix-v2 \
   --task "fix duplicate session creation" \
   --dry-run
@@ -34,7 +38,7 @@ shipped `result.procedure_digest`; it creates no session. Remove `--dry-run` to
 create a prepared session, then begin it with the optional initial goal:
 
 ```bash
-podway --json begin \
+podway --contract-generation 2 --json begin \
   --goal "Prevent duplicate sessions without regressing login." \
   --criterion reproduced="The original defect is recorded." \
   --criterion verified="Fresh verification supports the correction." \
@@ -45,15 +49,15 @@ For a smaller change that does not require a tracked goal, inspect and start the
 lightweight preset without `--goal` or `--criterion`:
 
 ```bash
-podway --json preset explain small-change-v2
-podway --json start \
+podway --contract-generation 2 --json preset explain small-change-v2
+podway --contract-generation 2 --json start \
   --preset small-change-v2 \
   --task "update one validation rule" \
   --dry-run
-podway --json start \
+podway --contract-generation 2 --json start \
   --preset small-change-v2 \
   --task "update one validation rule"
-podway --json begin
+podway --contract-generation 2 --json begin
 ```
 
 `podway init` configures `sw-dev-v2` as the default for later new sessions; it
@@ -179,11 +183,12 @@ The source must still be a dominating `required: true` evidence reference with
 ## Read stable state before each mutation
 
 ```bash
-podway --json observe
+podway --contract-generation 2 --json observe
 ```
 
 Automation uses the JSON contract, never human-readable text. The observation
-returns `podway.observation-result/v5` for every Procedure; read these stable fields:
+returns `podway.observation-result/v6` for every Procedure; the deprecated
+generation-1 default serves `podway.observation-result/v5`. Read these stable fields:
 
 | JSON field | CLI precondition or use |
 |---|---|
@@ -202,8 +207,8 @@ digest, and total size. Observation guidance is metadata only: it never carries 
 itself through the paged query and follow `next_page_token` until `truncated` is `false`:
 
 ```bash
-podway --json evidence read --source review --item review-findings
-podway --json evidence read --source review --item review-findings \
+podway --contract-generation 2 --json evidence read --source review --item review-findings
+podway --contract-generation 2 --json evidence read --source review --item review-findings \
   --page-token <next-page-token>
 ```
 
@@ -217,10 +222,20 @@ the recorded value changed: re-read observe and restart that item from its first
 `result.mutation_templates[]` supplies the applicable optimistic-concurrency
 fences and states whether explicit authorization is required. Templates still
 contain semantic and idempotency placeholders; callers must fill them from
-performed work and their own stable key. A read has no queue barrier and reflects
+performed work and their own stable key. Under generation 2, lifecycle templates
+arrive with their fence tail: the current `--if-workspace-uuid`,
+`--if-session-id` and `--if-session-revision` values followed by
+`--idempotency-key <idempotency-key>`. Templates and recovery recipes never
+embed `--contract-generation`. When executing one, add `--contract-generation 2`,
+keep every option it already supplies, and add other applicable caller options
+only where they are absent: `--json` for machine output, and `--worktree <path>`
+only on workspace commands (local commands accept no worktree request options).
+Fill only its declared placeholders, keep any concrete idempotency key it
+carries, and keep every supplied fence. The deprecated generation 1 keeps bare
+templates with fences only in `preconditions`. A read has no queue barrier and reflects
 one committed snapshot. Before another mutation, re-observe and derive its fences.
 After response loss or an uncertain COMMIT, use
-`podway --json outcome lookup --idempotency-key <original-key>` and preserve the
+`podway --contract-generation 2 --json outcome lookup --idempotency-key <original-key>` and preserve the
 exact original request. Reconcile any original writer still in progress before
 identical retry; a retained success returns its complete original response. Human-readable wording is not an
 automation key.
@@ -229,14 +244,14 @@ Pass all applicable fences for a direct mutation. The examples below abbreviate
 UUIDs and revisions only for readability:
 
 ```bash
-podway --json set reproduction-status reproduced \
+podway --contract-generation 2 --json set reproduction-status reproduced \
   --if-workspace-uuid <workspace-uuid> \
   --if-session-id <session-id> \
   --if-attempt <attempt-id> \
   --if-item-revision 0 \
   --idempotency-key bug-42-reproduction-status
 
-podway --json set observed-behavior \
+podway --contract-generation 2 --json set observed-behavior \
   "Concurrent callbacks create two sessions." \
   --if-workspace-uuid <workspace-uuid> \
   --if-session-id <session-id> \
@@ -250,7 +265,7 @@ atomic mutation. Put all fences in the closed stdin document; do not repeat
 identity, revision, or idempotency flags on the command line:
 
 ```bash
-podway --json record --stdin <<'JSON'
+podway --contract-generation 2 --json record --stdin <<'JSON'
 {
   "schema": "podway.item-record-many-input/v1",
   "workspace_uuid": "<workspace-uuid>",
@@ -303,7 +318,7 @@ operation ran:
 }
 ```
 
-Save this document and pass it to `podway --json record --stdin`; JSON shown in a
+Save this document and pass it to `podway --contract-generation 2 --json record --stdin`; JSON shown in a
 documentation block is not shell input by itself.
 
 Re-read observe after every successful mutation and use the returned revisions.
@@ -315,7 +330,7 @@ After recording all required items for an action node, complete it with the
 current fences:
 
 ```bash
-podway --json complete \
+podway --contract-generation 2 --json complete \
   --if-workspace-uuid <workspace-uuid> \
   --if-session-id <session-id> \
   --if-session-revision <session-revision> \
@@ -325,10 +340,10 @@ podway --json complete \
 
 If an action or decision attempt must be discarded and repeated, use retry. A
 successful retry creates a fresh attempt. Before recording any new item, re-run
-`podway observe --json`:
+`podway --contract-generation 2 --json observe`:
 
 ```bash
-podway --json retry \
+podway --contract-generation 2 --json retry \
   --reason "verification used the wrong feature flags" \
   --if-workspace-uuid <workspace-uuid> \
   --if-session-id <session-id> \
@@ -342,7 +357,7 @@ At `evaluate-verification`, select only an ID from
 a truth determination made by Podway:
 
 ```bash
-podway --json decide \
+podway --contract-generation 2 --json decide \
   --option passed \
   --reason "The structurally bound result records a passing outcome for the current input basis." \
   --actor verifier \
@@ -355,7 +370,7 @@ podway --json decide \
 
 The success result exposes `result.effect`, `result.target_graph_node_id`,
 `result.target_attempt_id`, and `result.revision`. Do not infer later state from
-these fields alone; instead, re-run `podway observe --json`.
+these fields alone; instead, re-run `podway --contract-generation 2 --json observe`.
 
 ## Rework and revise the goal
 
@@ -363,7 +378,7 @@ Manual graph rework is a Procedure v2 command. It is not the v1 `return` or
 `reopen` command:
 
 ```bash
-podway --json rework \
+podway --contract-generation 2 --json rework \
   --to implement \
   --reason "Independent review found an unresolved cancellation path." \
   --actor reviewer \
@@ -385,7 +400,7 @@ If the desired outcome itself changes, create a new immutable goal revision and
 declare its rework target:
 
 ```bash
-podway --json goal revise \
+podway --contract-generation 2 --json goal revise \
   --goal "Prevent duplicate and leaked login sessions." \
   --criterion reproduced="The original defect is recorded." \
   --criterion verified="Fresh verification covers duplication and cleanup." \
@@ -406,7 +421,7 @@ At `assess-goal`, record one assessment per criterion. Evidence and item
 citations identify recorded Podway state; they do not validate an external test:
 
 ```bash
-podway --json goal assess-criterion verified \
+podway --contract-generation 2 --json goal assess-criterion verified \
   --status satisfied \
   --reason "The fresh regression and cleanup checks passed." \
   --evidence verify \
@@ -432,14 +447,14 @@ exact current terminal revision has a disposition. Record either a handoff or th
 fact that no handoff is required, then use the fresh observation's reset template:
 
 ```bash
-podway --json disposition not-required \
+podway --contract-generation 2 --json disposition not-required \
   --reason "No external handoff is required." \
   --if-workspace-uuid <workspace-uuid> \
   --if-session-id <session-id> \
   --if-session-revision <session-revision> \
   --idempotency-key bug-42-disposition
 
-podway --json reset \
+podway --contract-generation 2 --json reset \
   --if-workspace-uuid <workspace-uuid> \
   --if-session-id <session-id> \
   --if-session-revision <disposed-session-revision> \

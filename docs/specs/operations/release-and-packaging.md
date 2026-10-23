@@ -23,6 +23,41 @@ schemas are retired by V2DFC-009. No replacement Aquarium publication or activat
 contract is adopted. Development qualification below is a nonpublishable Podway
 verification artifact, not a managed development service generation.
 
+## Contract generations
+
+[ADR-0039](../../architecture-decision-records/0039-opt-in-contract-generations.md)
+defines a contract generation as a closed, named selection of result and
+error-detail families over the shared Output v4 and Error v2 envelopes, routes,
+error codes and Store identity. The canonical
+[`contract-generations.json`](../../../assets/specifications/contract-generations.json)
+declares each generation's status from the closed set `reserved`, `supported`,
+`deprecated` and `retired`. Generation 2 is `supported`. Generation 1, the
+direct contract shipped since `v0.2.13`, is `deprecated` from the first release
+that ships generation 2 and remains the default until removal; no runtime
+warning is emitted, and
+[ADR-0040](../../architecture-decision-records/0040-deprecation-in-changelog-changed-section.md)
+records the CHANGELOG placement of the deprecation.
+
+Consumers that pin Podway's contract manifest re-pin on every release
+(ADR-0039). After re-pinning, an automation consumer adopts generation 2 by
+passing `--contract-generation 2` on every invocation and consuming
+`podway.observation-result/v6` plus the generation-2 detail families of
+`CRITERION_CITATION_INVALID` and `WORKSPACE_CONTRACT_MISMATCH`. The selection
+is presentation-only and never changes request identity, idempotency, stored
+outcomes, replay, Store state or writer identity. Consumers that have not
+adopted generation 2 keep working unchanged on the deprecated default.
+
+Generation 1 is removed only when every criterion of ADR-0039 decision 8 holds:
+Aquarium and Dolgorae have published, qualified releases that select generation
+2 on every invocation and consume its families; at least one stable Podway
+release has shipped generation 2 as an opt-in with packaged conformance
+evidence; no open feedback remains against the generation-2 shapes; and the
+owner records the removal decision on the roadmap. The planned removal release
+is `v0.3.0`. Removal makes generation 2 the default, adds a value-aware
+retirement entry so `--contract-generation 1` returns `COMMAND_RETIRED` naming
+its replacement, deletes the families only generation 1 uses, and marks
+generation 1 `retired` in the declaration.
+
 ## Target architectures
 
 The sole supported target is `aarch64-apple-darwin`. Validation runs on native

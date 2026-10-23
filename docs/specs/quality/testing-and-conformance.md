@@ -203,7 +203,10 @@ contracts, Rust suites, the feature-gated offline contract verifier, serial
 actual-binary E2E, and preset tooling checks. Current E2E covers direct lifecycle,
 item and delegation stdin, exact replay/lookup, stale fences, legacy refusal,
 writer mismatch, bounded SQLite contention, maintenance recovery, artifact
-paging, native worktree identity, and early retired-command classification.
+paging, native worktree identity, early retired-command classification, and
+generation selection with the executable observation-v6 lifecycle templates
+(`e2e_guide009_generation2_lifecycle::generation2_lifecycle_conformance`, also
+a registered packaged conformance scenario).
 
 The release-hook case
 `e2e_v2_native_qualification::release_binary_ignores_every_debug_maintenance_hook`

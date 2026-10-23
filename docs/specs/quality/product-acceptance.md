@@ -47,7 +47,8 @@ Distribution qualification in `make dist` adds native packaging evidence.
   [CLI failure-rendering boundary](../interfaces/cli-specification.md#output-and-exits)
   explicitly permits bounded stderr and exit 6, without partial JSON or abort,
   when a valid timestamp or rebuilt error envelope cannot be supplied. Every
-  Procedure observation uses result v5.
+  Procedure observation uses result v5 in the deprecated default generation 1
+  and result v6 under `--contract-generation 2`.
 - v1-only lifecycle commands, routes, presets, result schemas, and completions are
   absent.
 - Machine fields, command bindings, schemas, limits, and error codes match the

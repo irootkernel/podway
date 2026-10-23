@@ -1265,7 +1265,7 @@ fn overview_text() -> String {
     grammar.build();
     let topics = overview_topic_lines(&grammar).join("\n");
     format!(
-        "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes reading and writing local workspace state.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDirect execution:\n  Worktree commands execute in this process.\n  Use --worktree <path> to select a Git worktree and --timeout <duration> to bound lock waiting.\n  Worktree request options apply to workspace routes only; help, version, completions, preset and procedure run locally, open no workspace and accept none of them.\n  Local commands also accept --contract-generation.\n  Automation mutations require an explicit --idempotency-key; recover lost output with outcome lookup.\n\nContract generations:\n  --contract-generation <1|2> selects the contract generation for one invocation;\n  the default is 1. Generation 2 serves observe as podway.observation-result/v6\n  and the generation-2 error details of CRITERION_CITATION_INVALID and\n  WORKSPACE_CONTRACT_MISMATCH.\n\nUsage:\n  podway help [<topic>...]\n  podway -h\n  podway --help\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff' --idempotency-key start-example\n  podway begin --idempotency-key begin-example\n  podway status --json\n  podway observe --json\n\nTopics:\n{topics}\n\nShipped presets: {preset_ids}. Start prepares a session; begin creates its first active attempt. Contributors use disposable Git worktrees for isolated development; see help workflow."
+        "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes reading and writing local workspace state.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDirect execution:\n  Worktree commands execute in this process.\n  Use --worktree <path> to select a Git worktree and --timeout <duration> to bound lock waiting.\n  Worktree request options apply to workspace routes only; help, version, completions, preset and procedure run locally, open no workspace and accept none of them.\n  Local commands also accept --contract-generation.\n  Automation mutations require an explicit --idempotency-key; recover lost output with outcome lookup.\n\nContract generations:\n  --contract-generation <1|2> selects the contract generation for one invocation.\n  Generation 1 is the default and is deprecated; no runtime warning is emitted.\n  Generation 2 serves observe as podway.observation-result/v6 and the\n  generation-2 error details of CRITERION_CITATION_INVALID and\n  WORKSPACE_CONTRACT_MISMATCH.\n\nUsage:\n  podway help [<topic>...]\n  podway -h\n  podway --help\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff' --idempotency-key start-example\n  podway begin --idempotency-key begin-example\n  podway status --json\n  podway observe --json\n\nTopics:\n{topics}\n\nShipped presets: {preset_ids}. Start prepares a session; begin creates its first active attempt. Contributors use disposable Git worktrees for isolated development; see help workflow."
     )
 }
 
@@ -1308,7 +1308,7 @@ fn route_topic(topic: &str) -> Option<&'static str> {
             "Artifacts:\n  podway attach verification-reference report.md --media-type text/markdown\n  podway attach verification-reference --reference build:42 --digest sha256:<hex> --size 42 --media-type text/plain"
         }
         "contract-generations" => {
-            "Contract generations:\n  podway --contract-generation <1|2> <command>\n  Generation 1 is the default while it stays supported. Generation 2 serves\n  session.observe as podway.observation-result/v6 with executable fenced\n  lifecycle and archive templates, and serves the generation-2 error details\n  of CRITERION_CITATION_INVALID and WORKSPACE_CONTRACT_MISMATCH.\n  Selection applies to one invocation only and never changes request identity,\n  idempotency, stored outcomes, replay, outcome lookup, Store state or writer\n  identity. No environment or configuration channel selects a generation."
+            "Contract generations:\n  podway --contract-generation <1|2> <command>\n  Generation 1 is the default and is deprecated; no runtime warning is emitted.\n  Generation 2 serves session.observe as podway.observation-result/v6 with\n  executable fenced lifecycle and archive templates, and serves the\n  generation-2 error details of CRITERION_CITATION_INVALID and\n  WORKSPACE_CONTRACT_MISMATCH.\n  Selection applies to one invocation only and never changes request identity,\n  idempotency, stored outcomes, replay, outcome lookup, Store state or writer\n  identity. No environment or configuration channel selects a generation."
         }
         "help" => "Usage:\n  podway help [<topic>...]\n\nExample:\n  podway help session.start",
         "version" => {
@@ -1395,7 +1395,7 @@ fn route_topic(topic: &str) -> Option<&'static str> {
             "Usage:\n  podway next [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nExample:\n  podway next"
         }
         "session.observe" => {
-            "Usage:\n  podway observe [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nReturns one bounded, self-contained status and guidance observation with typed active-item descriptors and fenced mutation templates.\nObservation fields map to mutation fences: workspace.uuid feeds --if-workspace-uuid; result.status.session (id, revision) feeds --if-session-id and --if-session-revision; result.status.current.attempt.attempt_id feeds --if-attempt; active_items[].revision feeds --if-item-revision.\nguidance is null once the session is terminal (completed or cancelled).\nTemplates are guidance, not runnable commands: copy preconditions into the matching --if-* flags, supply required arguments a template omits (for example the disposition subcommand), and add your own --idempotency-key; running templates embed fenced argv with placeholders such as <idempotency-key> and <text> to replace; an item.record_many template adds a stdin_template whose expected_item_revision equals preconditions.item_revision — fill it and pass it on stdin.\nSESSION_NOT_FOUND means this workspace has no current task session; a fenced session id that differs from the current session fails as SESSION_ID_MISMATCH, and a stale fenced session revision fails as SESSION_REVISION_CONFLICT.\nWORKSPACE_NOT_INITIALIZED means this worktree has no workspace, so report it and run init only with explicit intent.\n\nExample:\n  podway --json observe"
+            "Usage:\n  podway observe [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nReturns one bounded, self-contained status and guidance observation with typed active-item descriptors and fenced mutation templates.\nObservation fields map to mutation fences: workspace.uuid feeds --if-workspace-uuid; result.status.session (id, revision) feeds --if-session-id and --if-session-revision; result.status.current.attempt.attempt_id feeds --if-attempt; active_items[].revision feeds --if-item-revision.\nguidance is null once the session is terminal (completed or cancelled).\nIn generation 1, lifecycle templates are guidance, not runnable commands: copy preconditions into the matching --if-* flags, supply required arguments a template omits (for example the disposition subcommand), and add your own --idempotency-key; running templates embed fenced argv with placeholders such as <idempotency-key> and <text> to replace; an item.record_many template adds a stdin_template whose expected_item_revision equals preconditions.item_revision — fill it and pass it on stdin. Under --contract-generation 2, lifecycle templates carry their command syntax and fence tail. Templates never embed --contract-generation, so add it, keep every supplied option and fence, and fill only the declared placeholders.\nSESSION_NOT_FOUND means this workspace has no current task session; a fenced session id that differs from the current session fails as SESSION_ID_MISMATCH, and a stale fenced session revision fails as SESSION_REVISION_CONFLICT.\nWORKSPACE_NOT_INITIALIZED means this worktree has no workspace, so report it and run init only with explicit intent.\n\nExample:\n  podway --json observe"
         }
         "evidence.read" => {
             "Usage:\n  podway evidence read --source <graph-node-id> --item <item-id> [--page-token <token>] [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nReturns one bounded page of an item selected by a currently resolved, declared evidence reference of the current attempt. It changes no session revision. Text offsets count Unicode scalars, list offsets count entries, and other item types return one terminal page. The page token is opaque and is not an authorization credential.\n\nExample:\n  podway --json evidence read --source implement --item notes"
@@ -1773,6 +1773,25 @@ mod tests {
             };
             assert!(offered, "{shell:?} omits the contract generation flag");
         }
+    }
+
+    #[test]
+    fn guide011_contract_generation_deprecation_topic_and_overview() {
+        let topic = help_text(&["contract-generations".to_owned()]).unwrap();
+        assert!(topic.contains("Generation 1 is the default and is deprecated"));
+        assert!(topic.contains("no runtime warning is emitted"));
+        assert!(!topic.contains("while it stays supported"));
+
+        let overview = help_text(&[]).unwrap();
+        assert!(overview.contains("Generation 1 is the default and is deprecated"));
+        assert!(overview.contains("no runtime warning is emitted"));
+        assert!(!overview.contains("the default is 1."));
+
+        let observation = help_text(&["session.observe".to_owned()]).unwrap();
+        assert!(observation.contains("In generation 1, lifecycle templates are guidance"));
+        assert!(observation.contains(
+            "Under --contract-generation 2, lifecycle templates carry their command syntax and fence tail"
+        ));
     }
 
     #[test]

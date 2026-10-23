@@ -28,7 +28,8 @@ The implementation continuously enforces:
 - no Git mutation, network request, configured-command execution, or artifact bytes.
 
 Public result-family versions are independent of Procedure support. Current
-Output v4, Error v2, manifest v2 and observation v5 describe the direct product;
+Output v4, Error v2, manifest v2 and observation v5 (observation v6 under
+`--contract-generation 2`) describe the direct product;
 IPC and daemon/job contracts are retired. Only successful mutations retain
 outcomes. Rejected fences, unsupported identities and illegal transitions change
 neither state nor outcome records. One absolute invocation deadline bounds waits,

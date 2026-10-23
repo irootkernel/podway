@@ -169,9 +169,9 @@ retain one usable template for every offered command.
 
 | ID | Normative requirement |
 |---|---|
-| `AUT-GEN-001` | A global `--contract-generation <1\|2>` option MUST select the contract generation for one invocation; the default MUST be 1 while generation 1 is supported. The value MUST be validated after parsing and before local execution or reading stdin; every other value, including an empty value, MUST fail with exit-2 `REQUEST_INVALID` attributed to the parsed route, and retired syntax MUST keep `COMMAND_RETIRED` precedence. Every route MUST accept the option — including the local families, where it has no effect, and a top-level `-h`/`--help` that follows it — and human mode MUST honor the same selection. No environment variable, workspace configuration or stored preference MAY select a generation. |
+| `AUT-GEN-001` | A global `--contract-generation <1\|2>` option MUST select the contract generation for one invocation; the default MUST stay 1 until generation 1 is removed. The value MUST be validated after parsing and before local execution or reading stdin; every other value, including an empty value, MUST fail with exit-2 `REQUEST_INVALID` attributed to the parsed route, and retired syntax MUST keep `COMMAND_RETIRED` precedence. Every route MUST accept the option — including the local families, where it has no effect, and a top-level `-h`/`--help` that follows it — and human mode MUST honor the same selection. No environment variable, workspace configuration or stored preference MAY select a generation. |
 | `AUT-GEN-002` | The selection MUST be presentation only: it MUST NOT be part of canonical request identity, idempotency, stored outcomes, exact replay, outcome lookup, Store state or writer identity. |
-| `AUT-GEN-003` | Generation 2 is `supported` in [`contract-generations.json`](../../../assets/specifications/contract-generations.json): under `--contract-generation 2`, `session.observe` MUST serve `podway.observation-result/v6`, `CRITERION_CITATION_INVALID` MUST serve `podway.criterion-citation-invalid-details/v1` and `WORKSPACE_CONTRACT_MISMATCH` MUST serve `podway.workspace-contract-mismatch-details/v2`, and the default output MUST equal an explicit generation 1. |
+| `AUT-GEN-003` | Generation 1 is `deprecated` and generation 2 is `supported` in [`contract-generations.json`](../../../assets/specifications/contract-generations.json); no runtime warning is emitted. Under `--contract-generation 2`, `session.observe` MUST serve `podway.observation-result/v6`, `CRITERION_CITATION_INVALID` MUST serve `podway.criterion-citation-invalid-details/v1` and `WORKSPACE_CONTRACT_MISMATCH` MUST serve `podway.workspace-contract-mismatch-details/v2`, and the default output MUST equal an explicit generation 1. |
 
 ### Bounded evidence scale and paging (AUT-EVR-001–008)
 
@@ -292,9 +292,9 @@ packaged scenarios are mapped in the
 |---|---|---|
 | `AUT-PATH-001`, `AUT-HOME-004`, `AUT-CONTRACT-002` | RPATH/CONID; `V2DFC-007`–`009` | `AUT-T-PATH`, `AUT-T-CONTRACT` |
 | `AUT-ID-001`–`009` | CASID/V2LIF; `V2DFC-006`–`007` | `AUT-T-ID`, `AUT-T-LIF` |
-| `AUT-START-001`, `004`, `AUT-LIF-001`–`015` | PSTRT/V2LIF; `V2DFC-006`–`007` | `AUT-T-START`, `AUT-T-LIF` |
+| `AUT-START-001`, `004`, `AUT-LIF-001`–`016` | PSTRT/V2LIF; `V2DFC-006`–`007` | `AUT-T-START`, `AUT-T-LIF` |
 | `AUT-RECON-004`, `AUT-OBS-003`–`004`, `006`–`017` | RECON/MCONT/V2SCL; `V2DFC-006`–`007` | `AUT-T-RECON`, `AUT-T-OBS`, `AUT-T-EVR` |
-| `AUT-GEN-001`–`003` | ADR-0039; `V2DFC-006`–`007` | `AUT-T-OBS`, `AUT-T-JSON` |
+| `AUT-GEN-001`–`003` | ADR-0039; `V2DFC-006`–`007` | `AUT-T-OBS`, `AUT-T-JSON`, `AUT-T-DIST` |
 | `AUT-ERR-006`–`007` | ADR-0039; `V2DFC-006`–`007` | `AUT-T-JSON` |
 | `AUT-EVR-001`–`008`, `AUT-CHK-001`–`009`, `AUT-GRD-001`–`010` | V2SCL/V2AST/V2GRD, ADR-0033; `V2DFC-006`–`007` | `AUT-T-EVR`, `AUT-T-CHK`, `AUT-T-GRD` |
 | Active `AUT-JSON-001`–`004`, `AUT-ERR-005`, `AUT-REL-001` | MCONT/V2AGT/REL; `V2DFC-007`–`009` | `AUT-T-JSON`, `AUT-T-DIST` |
