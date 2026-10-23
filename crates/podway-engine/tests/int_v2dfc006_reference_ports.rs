@@ -15,7 +15,8 @@ use podway_protocol::{
     GoalAssessCriterionV2, GoalCriterionWireV2, InitialGoalWireV2, ItemMutationPreconditionsWireV1,
     ItemRecordManyV1, ItemSetV1, ProcedureV2MutationCommandV1, ReworkPreconditionsWireV2,
     SessionBeginV1, SessionCompleteV1, SessionDecideV2, SessionIdentityPreconditionsWireV1,
-    SessionReworkV2, SessionStartSourceV1, SessionStartV1, decode_item_record_many_operations_v1,
+    SessionReworkV2, SessionStartCommandV1, SessionStartSourceV1, SessionStartV1,
+    decode_item_record_many_operations_v1,
 };
 use serde_json::{Map, Value, json};
 
@@ -46,13 +47,16 @@ impl Session {
             criterion,
         };
         let start = session.mutate(
-            DirectCommandV1::Start(DirectStartCommandV1::Start(SessionStartV1 {
-                source: SessionStartSourceV1::Preset {
-                    preset: preset.into(),
+            DirectCommandV1::Start(DirectStartCommandV1::Start(SessionStartCommandV1 {
+                start: SessionStartV1 {
+                    source: SessionStartSourceV1::Preset {
+                        preset: preset.into(),
+                    },
+                    expected_procedure_digest: Some(source.digest().clone()),
+                    task_title: "Retained canonical preset reference path".into(),
+                    dry_run: false,
                 },
-                expected_procedure_digest: Some(source.digest().clone()),
-                task_title: "Retained canonical preset reference path".into(),
-                dry_run: false,
+                preconditions: None,
             })),
             "start",
         );

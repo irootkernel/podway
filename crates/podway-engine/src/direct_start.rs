@@ -9,9 +9,9 @@ use podway_core::{
 use podway_git::{GitResolverContractV1, WorktreeSelectorV1};
 use podway_protocol::{
     CommandNameV1, DirectSessionOutputV1, OutputEnvelopeInputV4, OutputEnvelopeV4, RequestIdV1,
-    Rfc3339MillisV1, SessionDeletionModeV1, SessionStartReplaceV1, SessionStartSourceV1,
-    SessionStartV1, SliceCommandV1, TerminalDispositionInputV1, WorkspaceOutputV1,
-    canonical_direct_start_identity_v1,
+    Rfc3339MillisV1, SessionDeletionModeV1, SessionStartCommandV1, SessionStartReplaceV1,
+    SessionStartSourceV1, SessionStartV1, SliceCommandV1, TerminalDispositionInputV1,
+    WorkspaceOutputV1, canonical_direct_start_identity_v1,
 };
 use podway_store::{
     CanonicalExecutionJsonV1, GraphMutationErrorV2, GraphSessionStateV2, IdempotencyKeyV1,
@@ -34,19 +34,19 @@ use crate::{
 
 #[derive(Clone, Debug)]
 pub enum DirectStartCommandV1 {
-    Start(SessionStartV1),
+    Start(SessionStartCommandV1),
     Replace(SessionStartReplaceV1),
 }
 impl DirectStartCommandV1 {
     pub(crate) fn input(&self) -> &SessionStartV1 {
         match self {
-            Self::Start(input) => input,
+            Self::Start(command) => &command.start,
             Self::Replace(input) => &input.start,
         }
     }
     pub(crate) fn slice(&self) -> SliceCommandV1 {
         match self {
-            Self::Start(input) => SliceCommandV1::SessionStart(input.clone()),
+            Self::Start(command) => SliceCommandV1::SessionStart(command.clone()),
             Self::Replace(input) => SliceCommandV1::SessionStartReplace(input.clone()),
         }
     }
@@ -111,6 +111,7 @@ pub(crate) fn start_session_with_context_v1<R: GitResolverContractV1>(
                         record.terminal_session_revision() == graph.trace().revision()
                     })
                 });
+                verify_start_fences(&request.command, view.graph())?;
                 let policy = current_policy(&request.command, view.graph(), disposed, true)?;
                 let mut body = prepared_start_result(&source, true);
                 if let (Some(graph), Some(policy)) = (view.graph(), policy) {
@@ -199,6 +200,7 @@ pub(crate) fn start_session_with_context_v1<R: GitResolverContractV1>(
         |transaction| -> Result<_, DirectExecutionErrorV1> {
             let prior = transaction.use_prepared_graph(prepared_graph.as_ref())?;
             let prior = prior.as_deref();
+            verify_start_fences(&request.command, prior)?;
             if let (Some(graph), DirectStartCommandV1::Replace(replace)) = (prior, &request.command)
             {
                 check_session_fences(
@@ -430,6 +432,36 @@ enum Policy {
     Supersede,
     Dispose,
 }
+
+/// Verifies supplied plain-start fences against the current session inside the
+/// caller's authoritative view. `None` fences keep the unfenced behavior, and
+/// the errors match the fenced replacement path for the same state.
+fn verify_start_fences(
+    command: &DirectStartCommandV1,
+    prior: Option<&GraphSessionStateV2>,
+) -> Result<(), DirectExecutionErrorV1> {
+    let DirectStartCommandV1::Start(start) = command else {
+        return Ok(());
+    };
+    let Some(preconditions) = &start.preconditions else {
+        return Ok(());
+    };
+    match prior {
+        Some(graph) => check_session_fences(
+            graph,
+            &preconditions.expected_session_id,
+            preconditions.expected_session_revision,
+        )
+        .map_err(DirectExecutionErrorV1::Store),
+        None => Err(DirectExecutionErrorV1::Domain(
+            podway_core::DomainError::SessionIdentityMismatch {
+                expected: preconditions.expected_session_id.clone(),
+                actual: None,
+            },
+        )),
+    }
+}
+
 fn current_policy(
     command: &DirectStartCommandV1,
     graph: Option<&GraphSessionStateV2>,

@@ -4,6 +4,13 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.2.15 - Unreleased
 
+### Added
+
+- Accept the paired optional `--if-session-id` and `--if-session-revision` fences
+  on plain `start`. A stale fence returns `SESSION_ID_MISMATCH` or
+  `SESSION_REVISION_CONFLICT` without effect, an exact retry replays after
+  archival, and a fenced start never prompts.
+
 ### Changed
 
 - Teach the runtime skill tracked `.podway` files, uninitialized workspaces,

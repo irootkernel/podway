@@ -1365,7 +1365,7 @@ fn removal_force_and_original_workspace_fence_are_required_for_exact_marker_retr
     use podway_engine::direct_start::{
         DirectStartCommandV1, DirectStartRequestV1, start_session_v1,
     };
-    use podway_protocol::{SessionStartSourceV1, SessionStartV1};
+    use podway_protocol::{SessionStartCommandV1, SessionStartSourceV1, SessionStartV1};
     let root = fixture();
     let old = initialize(root.path());
     let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
@@ -1377,13 +1377,16 @@ fn removal_force_and_original_workspace_fence_are_required_for_exact_marker_retr
             request_id: RequestIdV1::new(RESPONSE).unwrap(),
             key: Some(IdempotencyKeyV1::new("start").unwrap()),
             deadline: deadline(),
-            command: DirectStartCommandV1::Start(SessionStartV1 {
-                source: SessionStartSourceV1::Preset {
-                    preset: "sw-dev-v2".into(),
+            command: DirectStartCommandV1::Start(SessionStartCommandV1 {
+                start: SessionStartV1 {
+                    source: SessionStartSourceV1::Preset {
+                        preset: "sw-dev-v2".into(),
+                    },
+                    expected_procedure_digest: None,
+                    task_title: "Active removal authorization".into(),
+                    dry_run: false,
                 },
-                expected_procedure_digest: None,
-                task_title: "Active removal authorization".into(),
-                dry_run: false,
+                preconditions: None,
             }),
         },
         &Clock,

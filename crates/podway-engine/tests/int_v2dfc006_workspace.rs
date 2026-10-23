@@ -748,7 +748,8 @@ fn deep_doctor_detects_changed_required_artifact_without_writing_or_reading_cloc
     };
     use podway_protocol::{
         ItemAttachSourceV1, ItemAttachV1, ItemMutationPreconditionsWireV1, SessionBeginV1,
-        SessionIdentityPreconditionsWireV1, SessionStartSourceV1, SessionStartV1,
+        SessionIdentityPreconditionsWireV1, SessionStartCommandV1, SessionStartSourceV1,
+        SessionStartV1,
     };
     let root = fixture();
     let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
@@ -775,13 +776,16 @@ fn deep_doctor_detects_changed_required_artifact_without_writing_or_reading_cloc
             request_id: RequestIdV1::new(RESPONSE).unwrap(),
             key: Some(IdempotencyKeyV1::new("start").unwrap()),
             deadline: deadline(),
-            command: DirectStartCommandV1::Start(SessionStartV1 {
-                source: SessionStartSourceV1::Procedure {
-                    procedure: "procedure.json".into(),
+            command: DirectStartCommandV1::Start(SessionStartCommandV1 {
+                start: SessionStartV1 {
+                    source: SessionStartSourceV1::Procedure {
+                        procedure: "procedure.json".into(),
+                    },
+                    expected_procedure_digest: Some(prepared.digest().clone()),
+                    task_title: "Diagnose current evidence".into(),
+                    dry_run: false,
                 },
-                expected_procedure_digest: Some(prepared.digest().clone()),
-                task_title: "Diagnose current evidence".into(),
-                dry_run: false,
+                preconditions: None,
             }),
         },
         &clock,
@@ -1048,7 +1052,8 @@ fn state002_doctor_reuses_verifier_admission_deep_and_non_deep() {
     };
     use podway_protocol::{
         ItemAttachSourceV1, ItemAttachV1, ItemMutationPreconditionsWireV1, SessionBeginV1,
-        SessionIdentityPreconditionsWireV1, SessionStartSourceV1, SessionStartV1,
+        SessionIdentityPreconditionsWireV1, SessionStartCommandV1, SessionStartSourceV1,
+        SessionStartV1,
     };
     use podway_store::test_support::query_account::QueryAccountant;
     // Fixture: one current running session with one required local artifact
@@ -1078,13 +1083,16 @@ fn state002_doctor_reuses_verifier_admission_deep_and_non_deep() {
             request_id: RequestIdV1::new(RESPONSE).unwrap(),
             key: Some(IdempotencyKeyV1::new("state002-start").unwrap()),
             deadline: deadline(),
-            command: DirectStartCommandV1::Start(SessionStartV1 {
-                source: SessionStartSourceV1::Procedure {
-                    procedure: "procedure.json".into(),
+            command: DirectStartCommandV1::Start(SessionStartCommandV1 {
+                start: SessionStartV1 {
+                    source: SessionStartSourceV1::Procedure {
+                        procedure: "procedure.json".into(),
+                    },
+                    expected_procedure_digest: Some(prepared.digest().clone()),
+                    task_title: "Diagnose shared admitted state".into(),
+                    dry_run: false,
                 },
-                expected_procedure_digest: Some(prepared.digest().clone()),
-                task_title: "Diagnose shared admitted state".into(),
-                dry_run: false,
+                preconditions: None,
             }),
         },
         &clock,

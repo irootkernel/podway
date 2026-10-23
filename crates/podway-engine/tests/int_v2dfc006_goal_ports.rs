@@ -23,8 +23,8 @@ use podway_protocol::{
     GoalAssessCriterionV2, GoalCriterionWireV2, GoalDefineV2, GoalReviseV2,
     GoalRevisionPreconditionsWireV2, InitialGoalWireV2, ProcedureV2MutationCommandV1 as P,
     SessionBeginV1, SessionCancelV1, SessionDecideV2, SessionDeletionModeV1,
-    SessionIdentityPreconditionsWireV1, SessionStartReplaceV1, SessionStartSourceV1,
-    SessionStartV1,
+    SessionIdentityPreconditionsWireV1, SessionStartCommandV1, SessionStartReplaceV1,
+    SessionStartSourceV1, SessionStartV1,
 };
 use podway_store::IdempotencyKeyV1;
 use serde_json::{Value, json};
@@ -89,7 +89,10 @@ fn prepared(source: &str) -> (Engine, podway_engine::direct_api::DirectRequestV1
         resolver: DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest()),
     };
     let request = engine.request(
-        DirectCommandV1::Start(DirectStartCommandV1::Start(start_input(source))),
+        DirectCommandV1::Start(DirectStartCommandV1::Start(SessionStartCommandV1 {
+            start: start_input(source),
+            preconditions: None,
+        })),
         "start",
     );
     let response = engine.output(engine.execute(request.clone(), &Clock));

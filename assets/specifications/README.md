@@ -20,7 +20,10 @@ variants are closed. The
 transition matrix binds each state-changing route to its terminal `result_schema`
 and uses `none` where no closed terminal result is defined. A
 `procedure_digest_file_source_only` precondition is an optional caller guard that
-applies to Procedure-file starts and is invalid for preset starts.
+applies to Procedure-file starts and is invalid for preset starts. A
+`session_fence_optional_paired` precondition is the optional paired
+`--if-session-id` and `--if-session-revision` session fence on plain `start`;
+one without the other is `REQUEST_INVALID`.
 The `cli` field identifies one representative route spelling; it is not an
 exhaustive inventory of mutually exclusive flags. The CLI specification and
 generated help own the complete command grammar.

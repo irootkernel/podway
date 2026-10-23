@@ -148,6 +148,17 @@ pub struct SessionStartV1 {
     pub dry_run: bool,
 }
 
+/// The plain-start command variant carrying its optional paired session fences.
+///
+/// `SessionStartV1` stays fence-free because `SessionStartReplaceV1` embeds it
+/// with its own required preconditions.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionStartCommandV1 {
+    pub start: SessionStartV1,
+    pub preconditions: Option<SessionIdentityPreconditionsWireV1>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionStartReplaceV1 {
@@ -574,7 +585,7 @@ impl ProcedureV2MutationCommandV1 {
 pub enum SliceCommandV1 {
     WorkspaceInit(WorkspaceInitV1),
     WorkspaceRepair(WorkspaceRepairV1),
-    SessionStart(SessionStartV1),
+    SessionStart(SessionStartCommandV1),
     SessionStartReplace(SessionStartReplaceV1),
     DelegationAccept(DelegationAcceptV1),
     SessionComplete(SessionCompleteV1),
@@ -1179,7 +1190,7 @@ pub fn canonical_direct_start_identity_v1(
     resolved_procedure_digest: &Sha256Digest,
 ) -> Result<String, SliceErrorV1> {
     let expected_procedure_digest = match command {
-        SliceCommandV1::SessionStart(start) => start.expected_procedure_digest.as_ref(),
+        SliceCommandV1::SessionStart(start) => start.start.expected_procedure_digest.as_ref(),
         SliceCommandV1::SessionStartReplace(start) => {
             start.start.expected_procedure_digest.as_ref()
         }
@@ -1350,7 +1361,13 @@ pub fn canonical_direct_slice_mutation_identity_v1(
             json!({"session_id":purge.session_id,"session_revision":purge.expected_session_revision}),
             json!({"confirmed":purge.confirmed}),
         ),
-        SliceCommandV1::SessionStart(start) => (json!({}), start_payload_json_v1(start)),
+        SliceCommandV1::SessionStart(start) => (
+            start
+                .preconditions
+                .as_ref()
+                .map_or_else(|| json!({}), session_identity_preconditions_json),
+            start_payload_json_v1(&start.start),
+        ),
         SliceCommandV1::SessionStartReplace(start) => {
             (session_identity_preconditions_json(&start.preconditions), {
                 let mut payload = start_payload_json_v1(&start.start);
@@ -1454,7 +1471,7 @@ pub fn canonical_direct_slice_mutation_identity_v1(
 
 pub const fn is_direct_slice_mutation_v1(command: &SliceCommandV1) -> bool {
     match command {
-        SliceCommandV1::SessionStart(input) => !input.dry_run,
+        SliceCommandV1::SessionStart(input) => !input.start.dry_run,
         SliceCommandV1::SessionStartReplace(input) => !input.start.dry_run,
         SliceCommandV1::SessionReset(input) => !input.dry_run,
         SliceCommandV1::WorkspaceInit(_)

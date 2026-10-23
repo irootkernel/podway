@@ -52,7 +52,7 @@ in-process, open no workspace, and reject every one of them with exit-2
 | `--no-color`, `--quiet` | Human rendering controls; quiet never enables prompts |
 | `--idempotency-key <KEY>` | Caller-owned mutation key or `outcome lookup` key |
 | `--if-workspace-uuid <UUID>` | Expected workspace generation on supported runtime routes |
-| `--if-session-id <UUID>` | Expected current session on applicable reads/transitions |
+| `--if-session-id <UUID>` | Expected current session on applicable reads/transitions; on plain `start` it pairs with `--if-session-revision` |
 | `--if-session-revision <N>` | Session transition/record-many/archive-purge revision; not a single-item fence |
 | `--if-attempt <UUID>` | Current action/decision/evidence identity; not start/begin/disposition/reset |
 | `--if-item-revision <N>` | Single-item mutation revision; not another route's fence |
@@ -73,7 +73,7 @@ in-process, open no workspace, and reject every one of them with exit-2
 | `procedure scaffold [--template minimal]` | `minimal` is the only accepted template |
 | `init [--repair]`, `doctor [--deep]`, `workspace show\|repair` | Local initialization, diagnosis, or explicit repair; Doctor uses the retained generic result object |
 | `workspace remove [--force] [--yes]` | Confirmed complete `.podway` removal and workspace fencing below |
-| `start (--preset <NAME>\|--procedure <FILE>) --task <TITLE>` | Optional file-only digest, policy, reason/actor/summary, and dry-run controls below |
+| `start (--preset <NAME>\|--procedure <FILE>) --task <TITLE>` | Optional file-only digest, policy, reason/actor/summary, paired session fences, and dry-run controls below |
 | `begin [--goal <TEXT> --criterion <ID=STATEMENT>...] [--actor <TEXT>]` | Goal and criteria require each other; actor requires goal |
 | `status [--compact\|--verbose [--history-before <N>]]` | Compact conflicts with verbose/history; history requires verbose and a positive trace sequence |
 | `next`, `observe` | `--verbose` is rejected; no read barrier or job wait |
@@ -291,6 +291,14 @@ non-TTY, and policy invocations never prompt. Automation uses
 include `--actor`, while deleting a running session requires
 `--progress-summary` and `--yes`. Missing policy returns
 `SESSION_START_DECISION_REQUIRED` with no mutation.
+Plain `start` also accepts the paired optional `--if-session-id` and
+`--if-session-revision` session fences: supply both or neither, and `--if-attempt`
+stays rejected. The Engine verifies the pair inside the start transaction after
+the idempotency lookup, so an exact retry replays its original success even after
+the original session was archived or replaced, and a fresh mismatch returns
+`SESSION_ID_MISMATCH` or `SESSION_REVISION_CONFLICT` with no effect. A fenced
+start never prompts and never enters the start interview; omitted fences are not
+auto-filled for plain start.
 An interactive continue result performs a fresh committed-snapshot read and renders
 current guidance after stating that no session was created. Prepared and running
 sessions use `session.next`; completed and cancelled sessions use the terminal-safe
@@ -314,9 +322,11 @@ replay. `archive list` can additionally confirm absence, but absence alone does
 not identify which caller completed deletion.
 No archive command restores or mutates inactive state.
 
-Plain `start --dry-run` without an existing-session policy remains a local
-Procedure preview. A policy dry run reads the selected Store and returns the observed
-session identity, revision, lifecycle, and proposed action without mutation.
+Plain `start --dry-run` without an existing-session policy or session fences
+remains a local Procedure preview. A policy or fenced dry run reads the selected
+Store and returns the observed session identity, revision, lifecycle, and
+proposed action without mutation; a fenced dry run verifies the fences read-only
+and reports the same refusals.
 
 `record --stdin` is the only multi-item mutation grammar. It reads at most 1 MiB
 of closed `podway.item-record-many-input/v1` JSON. The document supplies the

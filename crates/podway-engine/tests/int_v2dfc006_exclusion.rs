@@ -25,8 +25,8 @@ use podway_git::{
 };
 use podway_protocol::{
     ProcedureV2MutationCommandV1, RequestIdV1, Rfc3339MillisV1, SessionBeginV1,
-    SessionIdentityPreconditionsWireV1, SessionStartSourceV1, SessionStartV1,
-    validate_daemon_free_document_v1,
+    SessionIdentityPreconditionsWireV1, SessionStartCommandV1, SessionStartSourceV1,
+    SessionStartV1, validate_daemon_free_document_v1,
 };
 use podway_store::{
     IdempotencyKeyV1, ValidatedWorkspaceRootV1,
@@ -577,18 +577,21 @@ fn operation(
 }
 fn seed(engine: &Engine, source: &str, generation: usize) {
     engine.success(
-        DirectCommandV1::Start(DirectStartCommandV1::Start(SessionStartV1 {
-            source: SessionStartSourceV1::Procedure {
-                procedure: "source.yaml".into(),
+        DirectCommandV1::Start(DirectStartCommandV1::Start(SessionStartCommandV1 {
+            start: SessionStartV1 {
+                source: SessionStartSourceV1::Procedure {
+                    procedure: "source.yaml".into(),
+                },
+                expected_procedure_digest: Some(
+                    prepare_workspace_procedure_source_v2("source.yaml", source.as_bytes())
+                        .unwrap()
+                        .digest()
+                        .clone(),
+                ),
+                task_title: "G5 fresh same Procedure".into(),
+                dry_run: false,
             },
-            expected_procedure_digest: Some(
-                prepare_workspace_procedure_source_v2("source.yaml", source.as_bytes())
-                    .unwrap()
-                    .digest()
-                    .clone(),
-            ),
-            task_title: "G5 fresh same Procedure".into(),
-            dry_run: false,
+            preconditions: None,
         })),
         &format!("g5-seed-start-{generation}"),
     );

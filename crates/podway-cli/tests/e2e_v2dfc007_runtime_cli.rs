@@ -1407,3 +1407,326 @@ fn bound005_fresh_and_stateful_previews_keep_distinct_admission() {
     drop(paused);
     fixture.assert_podway_snapshot(&before);
 }
+
+/// Drives the STATE fixture to a completed session without a disposition.
+fn guide008_terminal_fixture() -> Fixture {
+    let fixture = running_fixture(STATE);
+    fixture.run(&["check", "ready", "--idempotency-key", "guide008-ready"]);
+    fixture.run(&["complete", "--idempotency-key", "guide008-work-complete"]);
+    fixture.run(&["complete", "--idempotency-key", "guide008-finish-complete"]);
+    fixture
+}
+
+/// Drives the STATE fixture to a disposed terminal session.
+fn guide008_disposed_terminal_fixture() -> Fixture {
+    let fixture = guide008_terminal_fixture();
+    transition(
+        &fixture,
+        &[
+            "disposition",
+            "not-required",
+            "--reason",
+            "No external handoff is required.",
+        ],
+        "guide008-disposition",
+        false,
+        false,
+        true,
+    );
+    fixture
+}
+
+fn guide008_fenced_start_argv<'a>(session: &'a str, revision: &'a str) -> Vec<&'a str> {
+    vec![
+        "start",
+        "--preset",
+        "small-change-v2",
+        "--task",
+        "successor",
+        "--if-session-id",
+        session,
+        "--if-session-revision",
+        revision,
+    ]
+}
+
+#[test]
+fn guide008_cli_fenced_plain_start_archives_disposed_terminal_with_replay_and_lookup() {
+    let fixture = guide008_disposed_terminal_fixture();
+    let terminal = fixture.run(&["status"]);
+    let session = terminal["result"]["session"]["id"].as_str().unwrap();
+    let revision = terminal["result"]["session"]["revision"]
+        .as_u64()
+        .unwrap()
+        .to_string();
+    let mut argv = guide008_fenced_start_argv(session, &revision);
+    argv.extend_from_slice(&["--idempotency-key", "guide008-start"]);
+    let successor = fixture.run(&argv);
+    assert_eq!(successor["command"], "session.start");
+    assert_eq!(successor["result"]["existing_session"]["action"], "archive");
+    assert_eq!(
+        successor["result"]["existing_session"]["session_id"],
+        session
+    );
+    assert_eq!(fixture.run(&argv), successor, "exact replay after archival");
+    let lookup = fixture.run(&["outcome", "lookup", "--idempotency-key", "guide008-start"]);
+    assert_eq!(lookup["result"]["found"], true);
+    assert_eq!(lookup["result"]["outcome"]["response"], successor);
+    let list = fixture.run(&["archive", "list"]);
+    assert_eq!(list["result"]["count"], 1);
+    assert_eq!(list["result"]["sessions"][0]["session_id"], session);
+
+    // Reusing the key with different fences fails as key reuse before any
+    // live fence check, keeps the state, and the original still replays.
+    let state_before_reuse = fixture.run(&["status"]);
+    let stale_revision = (revision.parse::<u64>().unwrap() + 1).to_string();
+    let mut reused = guide008_fenced_start_argv(session, &stale_revision);
+    reused.extend_from_slice(&["--idempotency-key", "guide008-start"]);
+    let output = fixture.output(&reused);
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(error["code"], "IDEMPOTENCY_KEY_REUSED");
+    assert_eq!(
+        fixture.run(&["status"])["result"],
+        state_before_reuse["result"]
+    );
+    assert_eq!(fixture.run(&argv), successor);
+}
+
+#[test]
+fn guide008_cli_fenced_plain_start_refuses_nonterminal_states_without_deletion() {
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    let seeded = fixture.run(&[
+        "start",
+        "--preset",
+        "small-change-v2",
+        "--task",
+        "original",
+        "--idempotency-key",
+        "seed",
+    ]);
+    let session = seeded["session"]["id"].as_str().unwrap();
+    let before = fixture.run(&["observe"]);
+    let mut prepared = guide008_fenced_start_argv(session, "0");
+    prepared.extend_from_slice(&["--idempotency-key", "guide008-prepared"]);
+    let output = fixture.output(&prepared);
+    assert_eq!(output.status.code(), Some(5), "{output:?}");
+    let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(error["code"], "SESSION_START_DECISION_REQUIRED");
+    assert_eq!(error["details"]["lifecycle"], "prepared");
+    assert_eq!(fixture.run(&["observe"])["result"], before["result"]);
+
+    let fixture = running_fixture(STATE);
+    let status = fixture.run(&["status"]);
+    let session = status["result"]["session"]["id"].as_str().unwrap();
+    let revision = status["result"]["session"]["revision"]
+        .as_u64()
+        .unwrap()
+        .to_string();
+    let before = fixture.run(&["observe"]);
+    let mut running = guide008_fenced_start_argv(session, &revision);
+    running.extend_from_slice(&["--idempotency-key", "guide008-running"]);
+    let output = fixture.output(&running);
+    assert_eq!(output.status.code(), Some(5), "{output:?}");
+    let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(error["code"], "SESSION_START_DECISION_REQUIRED");
+    assert_eq!(error["details"]["lifecycle"], "running");
+    assert_eq!(fixture.run(&["observe"])["result"], before["result"]);
+
+    let fixture = guide008_terminal_fixture();
+    let terminal = fixture.run(&["status"]);
+    let session = terminal["result"]["session"]["id"].as_str().unwrap();
+    let revision = terminal["result"]["session"]["revision"]
+        .as_u64()
+        .unwrap()
+        .to_string();
+    let before = fixture.run(&["observe"]);
+    let mut terminal = guide008_fenced_start_argv(session, &revision);
+    terminal.extend_from_slice(&["--idempotency-key", "guide008-terminal"]);
+    let output = fixture.output(&terminal);
+    assert_eq!(output.status.code(), Some(5), "{output:?}");
+    let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(error["code"], "SESSION_START_DECISION_REQUIRED");
+    assert_eq!(error["details"]["current_terminal_disposition"], false);
+    assert_eq!(fixture.run(&["observe"])["result"], before["result"]);
+    assert_eq!(
+        fixture.run(&[
+            "outcome",
+            "lookup",
+            "--idempotency-key",
+            "guide008-terminal"
+        ])["result"]["found"],
+        false
+    );
+}
+
+#[test]
+fn guide008_cli_fenced_plain_start_rejects_partial_and_stale_fences() {
+    let fixture = guide008_disposed_terminal_fixture();
+    let terminal = fixture.run(&["status"]);
+    let session = terminal["result"]["session"]["id"].as_str().unwrap();
+    let workspace = terminal["workspace"]["uuid"].as_str().unwrap();
+    let revision = terminal["result"]["session"]["revision"]
+        .as_u64()
+        .unwrap()
+        .to_string();
+    let base = [
+        "start",
+        "--preset",
+        "small-change-v2",
+        "--task",
+        "successor",
+    ];
+
+    let mut lone_id = base.to_vec();
+    lone_id.extend_from_slice(&["--if-session-id", session]);
+    let output = fixture.output(&lone_id);
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(error["code"], "REQUEST_INVALID");
+    assert_eq!(error["command"], "session.start");
+    assert_eq!(
+        error["message"],
+        "plain start requires --if-session-id and --if-session-revision together"
+    );
+    reject(&fixture, &lone_id, "guide008-lone-id", "REQUEST_INVALID");
+    let mut lone_revision = base.to_vec();
+    lone_revision.extend_from_slice(&["--if-session-revision", &revision]);
+    reject(
+        &fixture,
+        &lone_revision,
+        "guide008-lone-revision",
+        "REQUEST_INVALID",
+    );
+    let mut attempt = base.to_vec();
+    attempt.extend_from_slice(&[
+        "--if-session-id",
+        session,
+        "--if-session-revision",
+        &revision,
+        "--if-attempt",
+        "00000000-0000-4000-8000-0000000000e8",
+    ]);
+    reject(&fixture, &attempt, "guide008-attempt", "REQUEST_INVALID");
+
+    let stale_id = guide008_fenced_start_argv(workspace, &revision);
+    reject(
+        &fixture,
+        &stale_id,
+        "guide008-stale-id",
+        "SESSION_ID_MISMATCH",
+    );
+    let stale_revision = (revision.parse::<u64>().unwrap() + 1).to_string();
+    let stale_revision = guide008_fenced_start_argv(session, &stale_revision);
+    reject(
+        &fixture,
+        &stale_revision,
+        "guide008-stale-revision",
+        "SESSION_REVISION_CONFLICT",
+    );
+}
+
+#[test]
+fn guide008_cli_fenced_plain_start_dry_run_never_takes_the_offline_shortcut() {
+    let fixture = guide008_disposed_terminal_fixture();
+    let before = fixture.run(&["observe"]);
+    let terminal = fixture.run(&["status"]);
+    let session = terminal["result"]["session"]["id"].as_str().unwrap();
+    let revision = terminal["result"]["session"]["revision"]
+        .as_u64()
+        .unwrap()
+        .to_string();
+    let mut preview = guide008_fenced_start_argv(session, &revision);
+    preview.push("--dry-run");
+    let previewed = fixture.run(&preview);
+    assert_eq!(previewed["command"], "session.start");
+    assert_eq!(previewed["result"]["dry_run"], true);
+    assert_eq!(previewed["result"]["existing_session"]["action"], "archive");
+    assert_eq!(fixture.run(&["observe"])["result"], before["result"]);
+
+    let stale_revision = (revision.parse::<u64>().unwrap() + 1).to_string();
+    let mut stale = guide008_fenced_start_argv(session, &stale_revision);
+    stale.push("--dry-run");
+    let output = fixture.output(&stale);
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+    let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(error["code"], "SESSION_REVISION_CONFLICT");
+    assert_eq!(fixture.run(&["observe"])["result"], before["result"]);
+}
+
+#[test]
+fn guide008_cli_fenced_start_from_a_terminal_never_interviews() {
+    // Primary case: an undisposed terminal session, whose interview choices
+    // disposition, archive and replace.
+    let fixture = guide008_terminal_fixture();
+    let terminal = fixture.run(&["status"]);
+    let session = terminal["result"]["session"]["id"].as_str().unwrap();
+    let revision = terminal["result"]["session"]["revision"]
+        .as_u64()
+        .unwrap()
+        .to_string();
+    let before = fixture.run(&["status"]);
+    let output = fixture.fenced_start_in_pty(session, &revision, "guide008-terminal");
+    let rendered = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        rendered.matches("podway-test-pty-exit:5").count(),
+        1,
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("SESSION_START_DECISION_REQUIRED"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("Choose ["), "{rendered}");
+    assert_eq!(fixture.run(&["status"])["result"], before["result"]);
+    assert_eq!(
+        fixture.run(&[
+            "outcome",
+            "lookup",
+            "--idempotency-key",
+            "guide008-terminal"
+        ])["result"]["found"],
+        false
+    );
+
+    // Second case: a prepared session.
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    let seeded = fixture.run(&[
+        "start",
+        "--preset",
+        "small-change-v2",
+        "--task",
+        "original",
+        "--idempotency-key",
+        "seed",
+    ]);
+    let session = seeded["session"]["id"].as_str().unwrap();
+    let before = fixture.run(&["status"]);
+    let output = fixture.fenced_start_in_pty(session, "0", "guide008-prepared");
+    let rendered = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        rendered.matches("podway-test-pty-exit:5").count(),
+        1,
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("SESSION_START_DECISION_REQUIRED"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("Choose ["), "{rendered}");
+    assert_eq!(fixture.run(&["status"])["result"], before["result"]);
+}

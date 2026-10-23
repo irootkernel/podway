@@ -57,8 +57,8 @@ use podway_protocol::{
     GoalAssessCriterionV2, GoalCriterionWireV2, InitialGoalWireV2, ItemCheckV1,
     ItemMutationPreconditionsWireV1, ItemSetV1, ProcedureV2MutationCommandV1, RequestIdV1,
     Rfc3339MillisV1, SessionBeginV1, SessionCancelV1, SessionCompleteV1,
-    SessionIdentityPreconditionsWireV1, SessionMutationPreconditionsWireV1, SessionStartSourceV1,
-    SessionStartV1, SessionTerminalDispositionV1, TerminalDispositionInputV1,
+    SessionIdentityPreconditionsWireV1, SessionMutationPreconditionsWireV1, SessionStartCommandV1,
+    SessionStartSourceV1, SessionStartV1, SessionTerminalDispositionV1, TerminalDispositionInputV1,
 };
 use podway_store::{GraphSessionStateV2, IdempotencyKeyV1, direct_store::DirectStoreV1};
 use serde_json::{Value, json};
@@ -369,13 +369,16 @@ impl Guide006Engine {
     ) {
         let admitted = prepare_workspace_procedure_source_v2(path, source).unwrap();
         self.success(
-            DirectCommandV1::Start(DirectStartCommandV1::Start(SessionStartV1 {
-                source: SessionStartSourceV1::Procedure {
-                    procedure: path.into(),
+            DirectCommandV1::Start(DirectStartCommandV1::Start(SessionStartCommandV1 {
+                start: SessionStartV1 {
+                    source: SessionStartSourceV1::Procedure {
+                        procedure: path.into(),
+                    },
+                    expected_procedure_digest: Some(admitted.digest().clone()),
+                    task_title: "Guide006 generation-1 baseline".into(),
+                    dry_run: false,
                 },
-                expected_procedure_digest: Some(admitted.digest().clone()),
-                task_title: "Guide006 generation-1 baseline".into(),
-                dry_run: false,
+                preconditions: None,
             })),
             key,
             adjust,

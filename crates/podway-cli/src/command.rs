@@ -716,8 +716,24 @@ fn validate_direct_flags(cli: &Cli) -> Result<(), LocalFailure> {
             "--if-session-id does not apply to this command",
         ));
     }
+    // A plain start carries the paired optional session fences; the Engine
+    // verifies them inside the start writer transaction.
+    let plain_start = matches!(
+        command,
+        Command::Start(args)
+            if args.on_existing.is_none()
+                && !args.auto_archive_terminal
+                && args.terminal_disposition.is_none()
+    );
+    if plain_start && (cli.if_session_id.is_some() != cli.if_session_revision.is_some()) {
+        return Err(LocalFailure::request_invalid(
+            "plain start requires --if-session-id and --if-session-revision together",
+        ));
+    }
+    let plain_start_fenced = plain_start && cli.if_session_id.is_some();
     if explicit.any_transition()
         && !command.needs_preflight()
+        && !plain_start_fenced
         && !(matches!(command, Command::Evidence { .. }) && explicit.session_revision.is_none())
         && !matches!(
             command,

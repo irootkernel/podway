@@ -238,6 +238,9 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     apply_record_input(&mut cli)?;
     validate_direct_flags(&cli)?;
     validate_command_shape(&cli.command)?;
+    // The offline preview applies only to unfenced plain dry runs; a fenced
+    // dry run verifies the fences and the lifecycle read-only through the
+    // Engine, like a workspace-fenced dry run.
     if matches!(
         &cli.command,
         Command::Start(StartArgs {
@@ -246,6 +249,7 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             ..
         })
     ) && cli.if_workspace_uuid.is_none()
+        && cli.if_session_id.is_none()
     {
         return execute_start_dry_run(&cli);
     }
@@ -323,6 +327,8 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
         None
     };
     let response = invocation.execute(command, fences.workspace_id.clone(), key.clone())?;
+    // A fenced plain start never enters the interactive interview, so a
+    // terminal user cannot turn it into a deletion.
     let interactive_start = matches!(
         &cli.command,
         Command::Start(StartArgs {
@@ -330,7 +336,8 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             on_existing: None,
             ..
         })
-    ) && !cli.json
+    ) && cli.if_session_id.is_none()
+        && !cli.json
         && !cli.quiet
         && io::stdin().is_terminal()
         && io::stdout().is_terminal();
@@ -552,7 +559,13 @@ pub(super) fn typed_command(
                     mode,
                     preconditions: identity(fences)?,
                 }),
-                None => StartCommand::Start(start),
+                None => StartCommand::Start(protocol::SessionStartCommandV1 {
+                    start,
+                    preconditions: match fences.session_id {
+                        Some(_) => Some(identity(fences)?),
+                        None => None,
+                    },
+                }),
             })
         }
         Command::Status(args) => read(ReadCommand::Status {

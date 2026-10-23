@@ -37,8 +37,8 @@ use podway_protocol::{
     ItemSetV1, ProcedureV2MutationCommandV1, RequestIdV1, Rfc3339MillisV1, SessionArchiveV1,
     SessionBeginV1, SessionCancelV1, SessionCompleteV1, SessionDeletionModeV1,
     SessionIdentityPreconditionsWireV1, SessionMutationPreconditionsWireV1, SessionResetV1,
-    SessionStartReplaceV1, SessionStartSourceV1, SessionStartV1, SessionTerminalDispositionV1,
-    TerminalDispositionInputV1, validate_daemon_free_document_v1,
+    SessionStartCommandV1, SessionStartReplaceV1, SessionStartSourceV1, SessionStartV1,
+    SessionTerminalDispositionV1, TerminalDispositionInputV1, validate_daemon_free_document_v1,
 };
 use podway_store::{
     GraphSessionStateV2, IdempotencyKeyV1,
@@ -252,18 +252,21 @@ pub(super) fn prepare_fixture() -> (tempfile::TempDir, WorktreeSelectorV1, Direc
         b"original fixture artifact\n",
     )
     .unwrap();
-    let start = DirectCommandV1::Start(DirectStartCommandV1::Start(SessionStartV1 {
-        source: SessionStartSourceV1::Procedure {
-            procedure: "race.json".into(),
+    let start = DirectCommandV1::Start(DirectStartCommandV1::Start(SessionStartCommandV1 {
+        start: SessionStartV1 {
+            source: SessionStartSourceV1::Procedure {
+                procedure: "race.json".into(),
+            },
+            expected_procedure_digest: Some(
+                prepare_workspace_procedure_source_v2("race.json", &source)
+                    .unwrap()
+                    .digest()
+                    .clone(),
+            ),
+            task_title: "Actual G6 preparation races".into(),
+            dry_run: false,
         },
-        expected_procedure_digest: Some(
-            prepare_workspace_procedure_source_v2("race.json", &source)
-                .unwrap()
-                .digest()
-                .clone(),
-        ),
-        task_title: "Actual G6 preparation races".into(),
-        dry_run: false,
+        preconditions: None,
     }));
     success(
         execute_direct_v1(
@@ -475,18 +478,21 @@ fn competing_child_resolves_a_symlinked_temporary_parent() {
 
 fn plain_start(root: &std::path::Path) -> DirectCommandV1 {
     let source = std::fs::read(root.join("race.json")).unwrap();
-    DirectCommandV1::Start(DirectStartCommandV1::Start(SessionStartV1 {
-        source: SessionStartSourceV1::Procedure {
-            procedure: "race.json".into(),
+    DirectCommandV1::Start(DirectStartCommandV1::Start(SessionStartCommandV1 {
+        start: SessionStartV1 {
+            source: SessionStartSourceV1::Procedure {
+                procedure: "race.json".into(),
+            },
+            expected_procedure_digest: Some(
+                prepare_workspace_procedure_source_v2("race.json", &source)
+                    .unwrap()
+                    .digest()
+                    .clone(),
+            ),
+            task_title: "Concurrent plain start".into(),
+            dry_run: false,
         },
-        expected_procedure_digest: Some(
-            prepare_workspace_procedure_source_v2("race.json", &source)
-                .unwrap()
-                .digest()
-                .clone(),
-        ),
-        task_title: "Concurrent plain start".into(),
-        dry_run: false,
+        preconditions: None,
     }))
 }
 
@@ -919,7 +925,10 @@ fn typed_revalidation_command(
             preconditions: identity(&current),
         })),
         "start" => {
-            let DirectCommandV1::Start(DirectStartCommandV1::Start(start)) = plain_start(root)
+            let DirectCommandV1::Start(DirectStartCommandV1::Start(SessionStartCommandV1 {
+                start,
+                ..
+            })) = plain_start(root)
             else {
                 unreachable!()
             };

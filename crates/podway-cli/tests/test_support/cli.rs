@@ -359,6 +359,31 @@ impl Fixture {
         .0
     }
 
+    /// Runs one fenced plain start on a real TTY without waiting for any
+    /// prompt, so an interview would surface as both a `Choose [` prompt and
+    /// a stdin read that never happens.
+    pub(super) fn fenced_start_in_pty(&self, session: &str, revision: &str, key: &str) -> Output {
+        self.respond_in_pty_after_prompt(
+            &[
+                "start",
+                "--preset",
+                "small-change-v2",
+                "--task",
+                "successor",
+                "--if-session-id",
+                session,
+                "--if-session-revision",
+                revision,
+                "--idempotency-key",
+                key,
+            ],
+            None,
+            b"",
+            Duration::ZERO,
+        )
+        .0
+    }
+
     pub(super) fn removal_recipe_in_pty(&self, arguments: &[&str]) -> Output {
         self.respond_in_pty_after_prompt(
             arguments,

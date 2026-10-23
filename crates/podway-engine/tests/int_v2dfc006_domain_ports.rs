@@ -292,7 +292,13 @@ fn start(engine: &Engine, dry_run: bool) -> SessionStartV1 {
 }
 fn prepared(source: &str) -> Engine {
     let engine = empty(source);
-    engine.success(D::Start(T::Start(start(&engine, false))), "start");
+    engine.success(
+        D::Start(T::Start(SessionStartCommandV1 {
+            start: start(&engine, false),
+            preconditions: None,
+        })),
+        "start",
+    );
     engine
 }
 fn identity(engine: &Engine) -> SessionIdentityPreconditionsWireV1 {
@@ -972,7 +978,13 @@ fn v2lif005_eligible_replacement_dry_run_uses_current_reset_eligibility() {
         "absent-preview",
         "SESSION_ID_MISMATCH",
     );
-    engine.success(D::Start(T::Start(start(&engine, false))), "start");
+    engine.success(
+        D::Start(T::Start(SessionStartCommandV1 {
+            start: start(&engine, false),
+            preconditions: None,
+        })),
+        "start",
+    );
     let before = engine.graph();
     let sequence = engine.sequence();
     assert_eq!(
@@ -1207,14 +1219,23 @@ fn unknown_preset_start_and_replace_fail_without_admission_or_state_change() {
     for dry_run in [true, false] {
         let error = reject(
             &engine,
-            D::Start(T::Start(unknown(dry_run))),
+            D::Start(T::Start(SessionStartCommandV1 {
+                start: unknown(dry_run),
+                preconditions: None,
+            })),
             "unknown-start",
             "PRESET_NOT_FOUND",
         );
         assert_eq!(error["command"], "session.start");
         assert_eq!(error["exit_code"], 1);
     }
-    engine.success(D::Start(T::Start(start(&engine, false))), "start");
+    engine.success(
+        D::Start(T::Start(SessionStartCommandV1 {
+            start: start(&engine, false),
+            preconditions: None,
+        })),
+        "start",
+    );
     begin(&engine, "begin");
     for dry_run in [true, false] {
         let error = reject(
@@ -1580,7 +1601,13 @@ fn v2lif008_prepared_item_mutations_fail_before_attempt_and_item_fences() {
 #[test]
 fn v2rel003_detached_start_lookup_and_terminal_replay_use_common_automation_pipeline() {
     let mut engine = empty(ACTION_READBACK_PROCEDURE);
-    let request = engine.request(D::Start(T::Start(start(&engine, false))), "start");
+    let request = engine.request(
+        D::Start(T::Start(SessionStartCommandV1 {
+            start: start(&engine, false),
+            preconditions: None,
+        })),
+        "start",
+    );
     let once = engine.output(engine.execute(request.clone(), &Clock));
     assert_eq!(once["result"]["session_state"], "prepared");
     std::fs::remove_file(engine.temporary.path().join("source.yaml")).unwrap();

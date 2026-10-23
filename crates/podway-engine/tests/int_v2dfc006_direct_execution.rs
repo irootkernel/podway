@@ -66,7 +66,7 @@ fn direct_start_confirms_source_and_replays_without_source_clock_or_identifiers(
         direct_start::{DirectStartCommandV1, DirectStartRequestV1, start_session_v1},
         execution::{ProcedureV2StartPreparationErrorV1, prepare_workspace_procedure_source_v2},
     };
-    use podway_protocol::{SessionStartSourceV1, SessionStartV1};
+    use podway_protocol::{SessionStartCommandV1, SessionStartSourceV1, SessionStartV1};
     use podway_store::direct_store::DirectStoreErrorV1;
     struct NoEffects;
     impl ExecutionClockV1 for NoEffects {
@@ -104,13 +104,16 @@ fn direct_start_confirms_source_and_replays_without_source_clock_or_identifiers(
         expected_workspace_id: None,
         request_id: RequestIdV1::new(ORIGINAL_RESPONSE).unwrap(),
         key: key.map(|key| IdempotencyKeyV1::new(key).unwrap()),
-        command: DirectStartCommandV1::Start(SessionStartV1 {
-            source: SessionStartSourceV1::Procedure {
-                procedure: "start.json".into(),
+        command: DirectStartCommandV1::Start(SessionStartCommandV1 {
+            start: SessionStartV1 {
+                source: SessionStartSourceV1::Procedure {
+                    procedure: "start.json".into(),
+                },
+                expected_procedure_digest: guard,
+                task_title: "Actual start".into(),
+                dry_run,
             },
-            expected_procedure_digest: guard,
-            task_title: "Actual start".into(),
-            dry_run,
+            preconditions: None,
         }),
         deadline: deadline(),
     };
@@ -160,7 +163,7 @@ fn direct_start_confirms_source_and_replays_without_source_clock_or_identifiers(
     let DirectStartCommandV1::Start(input) = &mut changed_request.command else {
         unreachable!()
     };
-    input.task_title = "Different semantic request".into();
+    input.start.task_title = "Different semantic request".into();
     assert!(matches!(
         start_session_v1(&resolver, changed_request, &NoEffects, &NoEffects),
         Err(DirectExecutionErrorV1::Store(
@@ -218,7 +221,8 @@ fn typed_direct_api_returns_validated_success_and_rejection_without_effects() {
     use podway_protocol::{
         ItemAttachSourceV1, ItemAttachV1, ItemMutationPreconditionsWireV1, ItemSetV1,
         ProcedureV2MutationCommandV1, Rfc3339MillisV1, SessionBeginV1,
-        SessionIdentityPreconditionsWireV1, SessionStartSourceV1, SessionStartV1,
+        SessionIdentityPreconditionsWireV1, SessionStartCommandV1, SessionStartSourceV1,
+        SessionStartV1,
     };
     struct NoClock;
     impl ExecutionClockV1 for NoClock {
@@ -267,7 +271,10 @@ fn typed_direct_api_returns_validated_success_and_rejection_without_effects() {
         task_title: "Unified API".into(),
         dry_run: false,
     };
-    let start = DirectCommandV1::Start(DirectStartCommandV1::Start(input));
+    let start = DirectCommandV1::Start(DirectStartCommandV1::Start(SessionStartCommandV1 {
+        start: input,
+        preconditions: None,
+    }));
     rejection(
         execute_direct_v1(
             &resolver,
@@ -545,8 +552,9 @@ fn direct_start_replacement_preserves_terminal_and_superseded_history_atomically
     use podway_protocol::{
         ProcedureV2MutationCommandV1, SessionBeginV1, SessionCancelV1,
         SessionDeletionModeV1 as Mode, SessionIdentityPreconditionsWireV1,
-        SessionMutationPreconditionsWireV1, SessionStartReplaceV1, SessionStartSourceV1,
-        SessionStartV1, SessionTerminalDispositionV1, TerminalDispositionInputV1,
+        SessionMutationPreconditionsWireV1, SessionStartCommandV1, SessionStartReplaceV1,
+        SessionStartSourceV1, SessionStartV1, SessionTerminalDispositionV1,
+        TerminalDispositionInputV1,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
     struct CountClock(AtomicUsize);
@@ -581,7 +589,13 @@ fn direct_start_replacement_preserves_terminal_and_superseded_history_atomically
         };
         start_session_v1(
             &resolver,
-            start_request("original-start", C::Start(payload())),
+            start_request(
+                "original-start",
+                C::Start(SessionStartCommandV1 {
+                    start: payload(),
+                    preconditions: None,
+                }),
+            ),
             &clock,
             &ids,
         )
@@ -673,7 +687,10 @@ fn direct_start_replacement_preserves_terminal_and_superseded_history_atomically
         }
         let old = current();
         let command = match case {
-            4 => C::Start(payload()),
+            4 => C::Start(SessionStartCommandV1 {
+                start: payload(),
+                preconditions: None,
+            }),
             _ => C::Replace(SessionStartReplaceV1 {
                 start: payload(),
                 preconditions: identity_fences(),
@@ -704,7 +721,7 @@ fn direct_start_replacement_preserves_terminal_and_superseded_history_atomically
         };
         let mut preview_command = command.clone();
         match &mut preview_command {
-            C::Start(input) => input.dry_run = true,
+            C::Start(input) => input.start.dry_run = true,
             C::Replace(input) => input.start.dry_run = true,
         }
         let before = store
@@ -2267,7 +2284,7 @@ fn direct_goal_decision_rework_completion_and_disposition_preserve_records_and_r
     use podway_engine::direct_start::{
         DirectStartCommandV1, DirectStartRequestV1, start_session_v1,
     };
-    use podway_protocol::{SessionStartSourceV1, SessionStartV1};
+    use podway_protocol::{SessionStartCommandV1, SessionStartSourceV1, SessionStartV1};
     start_session_v1(
         &resolver,
         DirectStartRequestV1 {
@@ -2275,13 +2292,16 @@ fn direct_goal_decision_rework_completion_and_disposition_preserve_records_and_r
             expected_workspace_id: Some(WorkspaceId::new(WORKSPACE).unwrap()),
             request_id: RequestIdV1::new(ORIGINAL_RESPONSE).unwrap(),
             key: Some(IdempotencyKeyV1::new("after-retention").unwrap()),
-            command: DirectStartCommandV1::Start(SessionStartV1 {
-                source: SessionStartSourceV1::Preset {
-                    preset: "small-change-v2".into(),
+            command: DirectStartCommandV1::Start(SessionStartCommandV1 {
+                start: SessionStartV1 {
+                    source: SessionStartSourceV1::Preset {
+                        preset: "small-change-v2".into(),
+                    },
+                    expected_procedure_digest: None,
+                    task_title: "After workspace retention".into(),
+                    dry_run: false,
                 },
-                expected_procedure_digest: None,
-                task_title: "After workspace retention".into(),
-                dry_run: false,
+                preconditions: None,
             }),
             deadline: deadline(),
         },

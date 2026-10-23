@@ -14,8 +14,8 @@ use podway_git::{NativeGitResolverV1, WorktreeSelectorV1};
 use podway_protocol::{
     ItemMutationPreconditionsWireV1, ItemSetV1, ProcedureV2MutationCommandV1, RequestIdV1,
     Rfc3339MillisV1, SessionBeginV1, SessionCompleteV1, SessionIdentityPreconditionsWireV1,
-    SessionMutationPreconditionsWireV1, SessionRetryV1, SessionSkipV1, SessionStartSourceV1,
-    SessionStartV1, validate_daemon_free_document_v1,
+    SessionMutationPreconditionsWireV1, SessionRetryV1, SessionSkipV1, SessionStartCommandV1,
+    SessionStartSourceV1, SessionStartV1, validate_daemon_free_document_v1,
 };
 use podway_store::{GraphSessionStateV2, IdempotencyKeyV1, direct_store::DirectStoreV1};
 use serde_json::Value;
@@ -52,18 +52,21 @@ impl Engine {
             resolver: DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest()),
         };
         engine.success(
-            DirectCommandV1::Start(DirectStartCommandV1::Start(SessionStartV1 {
-                source: SessionStartSourceV1::Procedure {
-                    procedure: "source.yaml".into(),
+            DirectCommandV1::Start(DirectStartCommandV1::Start(SessionStartCommandV1 {
+                start: SessionStartV1 {
+                    source: SessionStartSourceV1::Procedure {
+                        procedure: "source.yaml".into(),
+                    },
+                    expected_procedure_digest: Some(
+                        prepare_workspace_procedure_source_v2("source.yaml", source.as_bytes())
+                            .unwrap()
+                            .digest()
+                            .clone(),
+                    ),
+                    task_title: "Retained runtime port".into(),
+                    dry_run: false,
                 },
-                expected_procedure_digest: Some(
-                    prepare_workspace_procedure_source_v2("source.yaml", source.as_bytes())
-                        .unwrap()
-                        .digest()
-                        .clone(),
-                ),
-                task_title: "Retained runtime port".into(),
-                dry_run: false,
+                preconditions: None,
             })),
             "start",
         );

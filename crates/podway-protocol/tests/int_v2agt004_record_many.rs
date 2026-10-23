@@ -495,7 +495,8 @@ fn v2scl003_record_many_schema_and_decoder_share_the_scale_envelope() {
 fn direct_start_identity_preserves_the_exact_preimage_and_both_digest_fences() {
     use podway_core::{Sha256Digest, WorkspaceId};
     use podway_protocol::{
-        SessionStartSourceV1, SessionStartV1, canonical_direct_start_identity_v1,
+        SessionStartCommandV1, SessionStartSourceV1, SessionStartV1,
+        canonical_direct_start_identity_v1,
     };
     let workspace = WorkspaceId::new("00000000-0000-4000-8000-000000000001").unwrap();
     let digest = Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap();
@@ -508,7 +509,10 @@ fn direct_start_identity_preserves_the_exact_preimage_and_both_digest_fences() {
         task_title: "Implement protocol".to_owned(),
         dry_run: false,
     };
-    let command = SliceCommandV1::SessionStart(start.clone());
+    let command = SliceCommandV1::SessionStart(SessionStartCommandV1 {
+        start: start.clone(),
+        preconditions: None,
+    });
     let base = canonical_direct_slice_mutation_identity_v1(&command, &workspace).unwrap();
     assert_eq!(
         base,
@@ -527,12 +531,83 @@ fn direct_start_identity_preserves_the_exact_preimage_and_both_digest_fences() {
     );
     let mut guarded = start;
     guarded.expected_procedure_digest = Some(digest.clone());
-    let guarded = SliceCommandV1::SessionStart(guarded);
+    let guarded = SliceCommandV1::SessionStart(SessionStartCommandV1 {
+        start: guarded,
+        preconditions: None,
+    });
     let guard_identity = canonical_direct_start_identity_v1(&guarded, &workspace, &digest).unwrap();
     assert_ne!(identity, guard_identity);
     assert_eq!(
         serde_json::from_str::<Value>(&guard_identity).unwrap()["preconditions"]["expected_procedure_digest"],
         digest.as_str()
+    );
+}
+
+#[test]
+fn direct_start_identity_joins_paired_session_fences_and_keeps_unfenced_bytes() {
+    use podway_core::{Revision, SessionId, Sha256Digest, WorkspaceId};
+    use podway_protocol::{
+        SessionIdentityPreconditionsWireV1, SessionStartCommandV1, SessionStartSourceV1,
+        SessionStartV1, SliceCommandV1, canonical_direct_start_identity_v1,
+    };
+    let workspace = WorkspaceId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let session = SessionId::new("00000000-0000-4000-8000-000000000002").unwrap();
+    let digest = Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap();
+    let plain = SessionStartV1 {
+        source: SessionStartSourceV1::Procedure {
+            procedure: "workflow.yaml".to_owned(),
+        },
+        expected_procedure_digest: None,
+        task_title: "Implement protocol".to_owned(),
+        dry_run: false,
+    };
+    let unfenced = SliceCommandV1::SessionStart(SessionStartCommandV1 {
+        start: plain.clone(),
+        preconditions: None,
+    });
+    let fenced = SliceCommandV1::SessionStart(SessionStartCommandV1 {
+        start: plain,
+        preconditions: Some(SessionIdentityPreconditionsWireV1 {
+            expected_session_id: session,
+            expected_session_revision: Revision::new(3),
+        }),
+    });
+    let unfenced_identity =
+        canonical_direct_start_identity_v1(&unfenced, &workspace, &digest).unwrap();
+    assert_eq!(
+        unfenced_identity,
+        format!(
+            "{{\"command\":\"session.start\",\"payload\":{{\"source\":{{\"procedure\":\"workflow.yaml\"}},\"task_title\":\"Implement protocol\"}},\"preconditions\":{{\"expected_procedure_digest\":null,\"procedure_digest\":\"{}\"}},\"protocol_major\":1,\"workspace_id\":\"00000000-0000-4000-8000-000000000001\"}}",
+            digest.as_str()
+        )
+    );
+    let fenced_identity = canonical_direct_start_identity_v1(&fenced, &workspace, &digest).unwrap();
+    assert_eq!(
+        fenced_identity,
+        format!(
+            "{{\"command\":\"session.start\",\"payload\":{{\"source\":{{\"procedure\":\"workflow.yaml\"}},\"task_title\":\"Implement protocol\"}},\"preconditions\":{{\"expected_procedure_digest\":null,\"procedure_digest\":\"{}\",\"session_id\":\"00000000-0000-4000-8000-000000000002\",\"session_revision\":3}},\"protocol_major\":1,\"workspace_id\":\"00000000-0000-4000-8000-000000000001\"}}",
+            digest.as_str()
+        )
+    );
+    assert_ne!(fenced_identity, unfenced_identity);
+    let other_session = SessionId::new("00000000-0000-4000-8000-000000000003").unwrap();
+    let other = SliceCommandV1::SessionStart(SessionStartCommandV1 {
+        start: SessionStartV1 {
+            source: SessionStartSourceV1::Procedure {
+                procedure: "workflow.yaml".to_owned(),
+            },
+            expected_procedure_digest: None,
+            task_title: "Implement protocol".to_owned(),
+            dry_run: false,
+        },
+        preconditions: Some(SessionIdentityPreconditionsWireV1 {
+            expected_session_id: other_session,
+            expected_session_revision: Revision::new(3),
+        }),
+    });
+    assert_ne!(
+        fenced_identity,
+        canonical_direct_start_identity_v1(&other, &workspace, &digest).unwrap()
     );
 }
 

@@ -138,6 +138,7 @@ commands:
   preconditions:
   - workspace_uuid
   - procedure_digest_file_source_only
+  - session_fence_optional_paired
   idempotency_scope: session
   maintenance_barrier: false
   result_schemas:
