@@ -4,8 +4,8 @@ use std::sync::OnceLock;
 
 use podway_core::{DomainError, SessionLifecycle};
 use podway_protocol::{
-    CommandNameV1, ErrorCodeV1, ErrorEnvelopeInputV2, ErrorEnvelopeV2, ExitCodeV1, ProtocolError,
-    RecoveryRecipeV2, RequestIdV1, Rfc3339MillisV1,
+    CommandNameV1, ContractGenerationV1, ErrorCodeV1, ErrorEnvelopeInputV2, ErrorEnvelopeV2,
+    ExitCodeV1, ProtocolError, RecoveryRecipeV2, RequestIdV1, Rfc3339MillisV1,
 };
 use podway_store::{
     GraphMutationErrorV2, IdempotencyKeyV1, StoreErrorV1, direct_store::DirectStoreErrorV1,
@@ -32,6 +32,9 @@ pub struct DirectErrorContextV1 {
     pub observed_at: Rfc3339MillisV1,
     pub idempotency_key: Option<IdempotencyKeyV1>,
     pub timeout_ms: u64,
+    /// Presentation-only contract generation (ADR-0039); selects detail
+    /// families when generation-2 error details are emitted.
+    pub generation: ContractGenerationV1,
     pub maintenance: Option<DirectMaintenanceRecoveryV1>,
 }
 

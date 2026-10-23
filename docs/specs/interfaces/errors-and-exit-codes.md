@@ -156,7 +156,7 @@ Named details contain no admission or job facts.
 | `WORKSPACE_MAINTENANCE` | `workspace-maintenance-details/v1` | 1, 2 | Boundary, timeout, boundary-specific recovery |
 | `LEGACY_RUNTIME_STATE_UNSUPPORTED` | `legacy-runtime-state-unsupported-details/v1` | 1, 2 | Store generation, marker names, authorized reset |
 | `WORKSPACE_CONTRACT_MISMATCH` | `workspace-contract-mismatch-details/v1` | 1 | Expected/actual writer manifest digest, diagnosis |
-| `WORKSPACE_CONTRACT_MISMATCH` (generation 2) | `workspace-contract-mismatch-details/v2` | 2 (reserved) | Adds `actual_product_version` from the released-manifest table (null for an unknown digest); the recovery reason names the original writer |
+| `WORKSPACE_CONTRACT_MISMATCH` (generation 2) | `workspace-contract-mismatch-details/v2` | 2 (declared, not yet emitted) | Adds `actual_product_version` from the released-manifest table (null for an unknown digest); the recovery reason names the original writer |
 | `COMMAND_RETIRED` | `command-retired-details/v1` | 1, 2 | `retired`, nullable `replacement`, bounded `guidance` |
 | `WORKSPACE_UUID_MISMATCH` | `workspace-uuid-mismatch-details/v3` | 1, 2 | Expected/actual UUID, diagnosis |
 | `SESSION_ID_MISMATCH` | `session-id-mismatch-details/v3` | 1, 2 | Expected ID, nullable actual ID, refresh |
@@ -165,7 +165,7 @@ Named details contain no admission or job facts.
 | `ATTEMPT_NOT_CURRENT` | `attempt-conflict-details/v3` | 1, 2 | Expected/actual attempt, refresh |
 | `EVIDENCE_REFERENCE_STALE`, `GOAL_REVISION_STALE`, `EVIDENCE_PAGE_TOKEN_STALE` | `recoverable-v2-runtime-error-details/v2` | 1, 2 | Code-bound `kind`, bounded facts, refresh |
 | `CRITERION_CITATION_INVALID` | `v2-runtime-error-details/v2` | 1 | Code-bound `kind`, rejected criterion and citation |
-| `CRITERION_CITATION_INVALID` (generation 2) | `criterion-citation-invalid-details/v1` | 2 (reserved) | Adds the citable evidence source nodes (at most eight) and item identifiers (at most 128) computed with the citation admission rule |
+| `CRITERION_CITATION_INVALID` (generation 2) | `criterion-citation-invalid-details/v1` | 2 (declared, not yet emitted) | Adds the citable evidence source nodes (at most eight) and item identifiers (at most 128) computed with the citation admission rule |
 | Other typed graph/goal/guard/Procedure-v2/evidence errors | `v2-runtime-error-details/v2` | 1, 2 | `kind` equals outer code; closed code-specific fields |
 | `BLOCKER_LIMIT_REACHED` | `blocker-limit-details/v2` | 1, 2 | `maximum_open_blockers: 64` |
 | `IDEMPOTENCY_KEY_REUSED` | `idempotency-key-reused-details/v2` | 1, 2 | Closed schema marker |
@@ -185,11 +185,12 @@ The Gen column records which contract generations select the family
 ([ADR-0039](../../architecture-decision-records/0039-opt-in-contract-generations.md);
 the declaration is
 [`contract-generations.json`](../../../assets/specifications/contract-generations.json)).
-Families marked `1, 2` are shared by both generations. The two `2 (reserved)`
-families are validatable but emitted by no runtime path until generation 2 is
-selected and supported; the generation-1 families of `WORKSPACE_CONTRACT_MISMATCH`
-and `CRITERION_CITATION_INVALID` remain the emitted and catalog-named
-(`details_schema`) ones until then.
+Families marked `1, 2` are shared by both generations. The two detail families
+marked `2 (declared, not yet emitted)` are declared in the declaration and
+validatable in the schema registry, but runtime error rendering returns the
+generation-1 families of `WORKSPACE_CONTRACT_MISMATCH` and
+`CRITERION_CITATION_INVALID` in both generations until the successors are
+emitted.
 
 `ITEM_CONSTRAINT_FAILED` may use a generic object; if its details include a parsed
 `field`, the envelope selects the closed named-bound branch. Typed v2 runtime

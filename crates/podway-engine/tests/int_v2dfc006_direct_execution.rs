@@ -242,6 +242,7 @@ fn typed_direct_api_returns_validated_success_and_rejection_without_effects() {
         deadline: deadline(),
         observed_at: Rfc3339MillisV1::from_unix_millis(NOW).unwrap(),
         timeout_ms: 5000,
+        generation: podway_protocol::ContractGenerationV1::Generation1,
     };
     let success = |response| match response {
         DirectResponseV1::Success(output) => output,
@@ -510,6 +511,7 @@ fn marked_reads_return_the_original_maintenance_key_without_resuming_or_writing(
             observed_at: Rfc3339MillisV1::from_unix_millis(NOW).unwrap(),
             timeout_ms: 5000,
             deadline: deadline(),
+            generation: podway_protocol::ContractGenerationV1::Generation1,
         };
         let DirectResponseV1::Failure(error) =
             execute_direct_v1(&resolver, request, &NoClock, &NativeDirectIdSourceV1).unwrap()
@@ -919,6 +921,7 @@ fn delegated_acceptance_recomputes_package_and_blocks_changed_items_before_clock
                 request_id: RequestIdV1::new(LOOKUP_RESPONSE).unwrap(),
                 command,
                 deadline: deadline(),
+                generation: podway_protocol::ContractGenerationV1::Generation1,
             },
             &Clock,
         )
@@ -1102,6 +1105,7 @@ fn state001_changed_items_report_items_changed_through_view_with_in_window_recei
                 request_id: RequestIdV1::new(ORIGINAL_RESPONSE).unwrap(),
                 command,
                 deadline: deadline(),
+                generation: podway_protocol::ContractGenerationV1::Generation1,
             },
             &Clock,
         )
@@ -1779,6 +1783,7 @@ fn record_many_enforces_aggregate_encoded_input_bound_without_effects_and_preser
                         deadline: deadline(),
                         observed_at,
                         timeout_ms: 5000,
+                        generation: podway_protocol::ContractGenerationV1::Generation1,
                     },
                     &clock,
                     &NativeDirectIdSourceV1,
@@ -1791,6 +1796,7 @@ fn record_many_enforces_aggregate_encoded_input_bound_without_effects_and_preser
                     observed_at,
                     idempotency_key: Some(key.clone()),
                     timeout_ms: 5000,
+                    generation: podway_protocol::ContractGenerationV1::Generation1,
                     maintenance: None,
                 };
                 match record_many_v1(
@@ -2183,6 +2189,7 @@ fn direct_goal_decision_rework_completion_and_disposition_preserve_records_and_r
                 request_id: RequestIdV1::new(LOOKUP_RESPONSE).unwrap(),
                 command,
                 deadline: deadline(),
+                generation: podway_protocol::ContractGenerationV1::Generation1,
             },
             &Clock,
         )
@@ -2697,7 +2704,11 @@ fn direct_projection_families_validate_prepared_running_and_terminal_snapshots()
                         let status = project_direct_status_v1(&view, tier, None).unwrap();
                         assert!(!status.contains_key("queue"));
                     }
-                    let observation = project_direct_observation_v1(&view).unwrap();
+                    let observation = project_direct_observation_v1(
+                        &view,
+                        podway_protocol::ContractGenerationV1::Generation1,
+                    )
+                    .unwrap();
                     assert!(observation["status"].get("queue").is_none());
                     assert!(observation["guidance"].get("queue").is_none());
                     if lifecycle == "cancelled" {
@@ -2738,6 +2749,7 @@ fn direct_projection_families_validate_prepared_running_and_terminal_snapshots()
                         expected_session_id: Some(SessionId::new(LOOKUP_RESPONSE).unwrap()),
                         command,
                         deadline: deadline(),
+                        generation: podway_protocol::ContractGenerationV1::Generation1,
                     },
                     &Clock,
                 )
@@ -2760,6 +2772,7 @@ fn direct_projection_families_validate_prepared_running_and_terminal_snapshots()
                     expected_session_id: Some(SessionId::new(ORIGINAL_RESPONSE).unwrap()),
                     command: DirectReadCommandV1::Observe,
                     deadline: deadline(),
+                    generation: podway_protocol::ContractGenerationV1::Generation1,
                 },
                 &Clock,
             );

@@ -300,6 +300,7 @@ impl Harness {
             deadline: deadline(),
             observed_at: Rfc3339MillisV1::from_unix_millis(NOW).unwrap(),
             timeout_ms: 5000,
+            generation: podway_protocol::ContractGenerationV1::Generation1,
         }
     }
     fn execute(&self, request: DirectRequestV1, clock: &impl ExecutionClockV1) -> DirectResponseV1 {

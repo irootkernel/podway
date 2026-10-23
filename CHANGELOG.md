@@ -10,6 +10,10 @@ This file records concise shipped outcomes and the planned next stable release.
   on plain `start`. A stale fence returns `SESSION_ID_MISMATCH` or
   `SESSION_REVISION_CONFLICT` without effect, an exact retry replays after
   archival, and a fenced start never prompts.
+- Add the global `--contract-generation <1|2>` option. Generation 2 serves
+  `session.observe` as `podway.observation-result/v6` with executable fenced
+  lifecycle and archive templates; the default generation 1 JSON output is
+  unchanged.
 
 ### Changed
 

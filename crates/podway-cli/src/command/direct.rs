@@ -24,6 +24,7 @@ pub(super) struct Invocation {
     deadline: Instant,
     timeout_ms: u64,
     observed_at: Rfc3339MillisV1,
+    generation: protocol::ContractGenerationV1,
 }
 
 use podway_engine::direct_api as protocol_boundary;
@@ -33,6 +34,7 @@ impl Invocation {
         target: &WorkspaceTarget,
         timeout_ms: u64,
         started: Instant,
+        generation: protocol::ContractGenerationV1,
     ) -> Result<Self, LocalFailure> {
         let selector = protocol_boundary::WorktreeSelectorV1::new(
             protocol_boundary::WORKTREE_SELECTOR_VERSION_V1,
@@ -63,6 +65,7 @@ impl Invocation {
                 })?,
             timeout_ms,
             observed_at: local_generated_at(&SystemLocalEnvelopeClock)?,
+            generation,
         })
     }
 
@@ -81,6 +84,7 @@ impl Invocation {
             deadline: self.deadline,
             observed_at: self.observed_at.clone(),
             timeout_ms: self.timeout_ms,
+            generation: self.generation,
         };
         #[cfg(test)]
         self.request_ids.push(request.request_id.clone());
@@ -126,6 +130,7 @@ impl Invocation {
             deadline: self.deadline,
             observed_at: self.observed_at.clone(),
             timeout_ms: self.timeout_ms,
+            generation: self.generation,
         };
         #[cfg(test)]
         self.request_ids.push(request.request_id.clone());
@@ -200,12 +205,19 @@ fn qualification_pause(
 
 pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     let started = Instant::now();
+    // Generation selection is validated after parsing and before local
+    // execution, stdin preparation or workspace access (ADR-0039).
+    let generation = match cli.contract_generation.as_deref() {
+        None => protocol::ContractGenerationV1::Generation1,
+        Some(value) => protocol::ContractGenerationV1::parse_generation_value_v1(value)
+            .ok_or_else(|| LocalFailure::request_invalid("--contract-generation accepts 1 or 2"))?,
+    };
     if let Command::CompleteDynamic { kind } = &cli.command {
         let target = match workspace_target(cli.worktree.clone()) {
             Ok(target) => target,
             Err(_) => return Ok(empty_dynamic_completion()),
         };
-        let mut invocation = Invocation::new(&target, 500, started)?;
+        let mut invocation = Invocation::new(&target, 500, started, generation)?;
         return match invocation.execute(
             Direct::Read {
                 command: ReadCommand::Status {
@@ -265,7 +277,8 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     confirm_if_required(&cli, route, &target)?;
     let mut fences = ExplicitPreconditions::parse(&cli)?;
     apply_archive_purge_revision(&mut cli.command, &fences)?;
-    let mut invocation = Invocation::new(&target, cli.timeout.unwrap_or(5_000), started)?;
+    let mut invocation =
+        Invocation::new(&target, cli.timeout.unwrap_or(5_000), started, generation)?;
     let preflight = match preflight::prepare(&mut invocation, &cli, &mut fences)? {
         ControlFlow::Continue(facts) => facts,
         ControlFlow::Break(result) => return Ok(result),
@@ -910,7 +923,13 @@ mod admit003_tests {
                 .success()
         );
         let target = workspace_target(Some(temporary.0.clone())).unwrap();
-        let mut invocation = Invocation::new(&target, 5000, Instant::now()).unwrap();
+        let mut invocation = Invocation::new(
+            &target,
+            5000,
+            Instant::now(),
+            protocol::ContractGenerationV1::Generation1,
+        )
+        .unwrap();
         let key = |value: &str| Some(protocol_boundary::IdempotencyKeyV1::new(value).unwrap());
         assert!(matches!(
             invocation
@@ -971,7 +990,13 @@ mod admit003_tests {
         );
         assert_eq!(invocation.deadline, deadline);
         assert_eq!(invocation.observed_at, observed_at);
-        let fresh = Invocation::new(&target, 5000, Instant::now()).unwrap();
+        let fresh = Invocation::new(
+            &target,
+            5000,
+            Instant::now(),
+            protocol::ContractGenerationV1::Generation1,
+        )
+        .unwrap();
         assert!(fresh.request_ids.is_empty());
     }
 }

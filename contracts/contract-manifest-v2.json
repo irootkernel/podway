@@ -488,7 +488,7 @@
     {
       "kind": "catalog",
       "path": "spec/contract-generations.json",
-      "sha256": "sha256:88a1d4a5c619c1a5eb8101d388539b31fdcf27fd7c265770b3856b1825d9366f"
+      "sha256": "sha256:acfad631e1f15af5f8c85d3be076f0834a4ebe0894985826448304532d656ce1"
     },
     {
       "kind": "catalog",
@@ -621,7 +621,7 @@
       "sha256": "sha256:7de5f4f024eb795ae7fb73594d4847b833016bea6be9f2737c567b524ae5466e"
     }
   ],
-  "digest": "sha256:362b41355423e5cc99f056ae1da46999fbbbb5604e5e3a34a6b9294b50ef5c0b",
+  "digest": "sha256:c15a21f7f193e11281bd2deab23289612b4a5f2c4fba4dd3fbbe4997b2aa3d18",
   "product": "podway",
   "product_version": "0.2.14",
   "schema_version": "podway.contract-manifest/v2"

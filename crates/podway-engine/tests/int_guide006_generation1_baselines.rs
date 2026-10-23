@@ -400,6 +400,7 @@ impl Guide006Engine {
             deadline: deadline(),
             observed_at: Rfc3339MillisV1::new(GUIDE006_OBSERVED_AT).unwrap(),
             timeout_ms: 5000,
+            generation: podway_protocol::ContractGenerationV1::Generation1,
         };
         adjust(&mut request);
         request

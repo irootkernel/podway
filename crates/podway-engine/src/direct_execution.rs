@@ -10,11 +10,11 @@ use podway_core::{
 };
 use podway_git::{GitResolverContractV1, WorktreeSelectorV1};
 use podway_protocol::{
-    CommandNameV1, ErrorEnvelopeV2, EvidencePageTokenV1, MAX_DIRECT_OUTPUT_BYTES_V1,
-    MAX_JSON_DEPTH_V1, OutputEnvelopeInputV4, OutputEnvelopeV4, ProcedureV2MutationCommandV1,
-    ProtocolError, RequestIdV1, Rfc3339MillisV1, SessionBeginV1, SessionBlockV1, SessionCancelV1,
-    SessionCompleteV1, SessionMutationPreconditionsWireV1, SessionRetryV1, SessionSkipV1,
-    SessionUnblockV1, SliceCommandV1, WorkspaceOutputV1,
+    CommandNameV1, ContractGenerationV1, ErrorEnvelopeV2, EvidencePageTokenV1,
+    MAX_DIRECT_OUTPUT_BYTES_V1, MAX_JSON_DEPTH_V1, OutputEnvelopeInputV4, OutputEnvelopeV4,
+    ProcedureV2MutationCommandV1, ProtocolError, RequestIdV1, Rfc3339MillisV1, SessionBeginV1,
+    SessionBlockV1, SessionCancelV1, SessionCompleteV1, SessionMutationPreconditionsWireV1,
+    SessionRetryV1, SessionSkipV1, SessionUnblockV1, SliceCommandV1, WorkspaceOutputV1,
     canonical_direct_slice_mutation_identity_v1, canonical_procedure_v2_command_identity_v1,
 };
 use podway_store::{
@@ -485,6 +485,8 @@ pub struct DirectReadRequestV1 {
     pub expected_session_id: Option<SessionId>,
     pub command: DirectReadCommandV1,
     pub deadline: Instant,
+    /// Presentation-only contract generation (ADR-0039).
+    pub generation: ContractGenerationV1,
 }
 
 pub fn execute_read_v1<R: GitResolverContractV1>(
@@ -627,7 +629,9 @@ pub fn execute_read_v1<R: GitResolverContractV1>(
                     history_before,
                 } => project_direct_status_v1(&view, *tier, *history_before)?,
                 DirectReadCommandV1::Next => project_direct_next_v1(&view)?,
-                DirectReadCommandV1::Observe => project_direct_observation_v1(&view)?,
+                DirectReadCommandV1::Observe => {
+                    project_direct_observation_v1(&view, request.generation)?
+                }
                 DirectReadCommandV1::Evidence {
                     source,
                     item_id,
@@ -691,6 +695,8 @@ pub struct DirectPreflightFactsRequestV1 {
     pub deadline: Instant,
     pub observed_at: Rfc3339MillisV1,
     pub timeout_ms: u64,
+    /// Presentation-only contract generation (ADR-0039).
+    pub generation: ContractGenerationV1,
 }
 
 /// Owned fence-preflight facts assembled from validated typed state.

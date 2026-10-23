@@ -202,6 +202,7 @@ fn bound001_deferred_memory_error_keeps_public_mapping_and_fence_priority() {
         observed_at: Rfc3339MillisV1::new("2023-11-14T22:13:20.000Z").unwrap(),
         idempotency_key: Some(IdempotencyKeyV1::new("deferred-invalid").unwrap()),
         timeout_ms: 5000,
+        generation: podway_protocol::ContractGenerationV1::Generation1,
         maintenance: None,
     };
     let render = |revision| {

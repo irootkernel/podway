@@ -96,10 +96,28 @@ impl Fixture {
     pub(super) fn raw_output(&self, arguments: &[&str]) -> Output {
         assert_packaged_fixture(&self.0);
         let mut command = Command::new(podway_binary());
-        let route = arguments
-            .iter()
-            .copied()
-            .find(|argument| !matches!(*argument, "--json" | "--quiet" | "--no-color"));
+        // Advance past the render globals and the valued generation flag (both
+        // spellings) so the first route word decides whether --worktree is
+        // injected; otherwise local commands would trigger GUIDE-002 rejection.
+        let mut skip_generation_value = false;
+        let mut route = None;
+        for argument in arguments.iter().copied() {
+            if skip_generation_value {
+                skip_generation_value = false;
+                continue;
+            }
+            if argument == "--contract-generation" {
+                skip_generation_value = true;
+                continue;
+            }
+            if argument.starts_with("--contract-generation=") {
+                continue;
+            }
+            if !matches!(argument, "--json" | "--quiet" | "--no-color") {
+                route = Some(argument);
+                break;
+            }
+        }
         if !matches!(
             route,
             Some("help" | "--help" | "-h" | "version" | "completions" | "procedure" | "preset")

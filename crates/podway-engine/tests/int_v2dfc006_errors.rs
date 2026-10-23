@@ -93,6 +93,7 @@ fn admit001_read_error<R: podway_git::GitResolverContractV1>(
                     history_before: None,
                 },
                 deadline: deadline(),
+                generation: podway_protocol::ContractGenerationV1::Generation1,
             },
             clock,
         )
@@ -466,6 +467,7 @@ fn admit001_cold_preparation_rejects_unstamped_post_preflight_corruption() {
                 deadline: deadline(),
                 observed_at: Rfc3339MillisV1::new("2023-11-14T22:13:20.001Z").unwrap(),
                 timeout_ms: 5000,
+                generation: podway_protocol::ContractGenerationV1::Generation1,
             },
             &Clock,
             &NativeDirectIdSourceV1,
@@ -570,6 +572,7 @@ fn context(command: &str) -> DirectErrorContextV1 {
         observed_at: Rfc3339MillisV1::new("2023-11-14T22:13:20.000Z").unwrap(),
         idempotency_key: Some(IdempotencyKeyV1::new("original-key").unwrap()),
         timeout_ms: 5000,
+        generation: podway_protocol::ContractGenerationV1::Generation1,
         maintenance: None,
     }
 }
@@ -715,6 +718,7 @@ fn actual_connection_gate_contention_returns_a_valid_public_error() {
                 deadline: started + Duration::from_millis(timeout),
                 observed_at: Rfc3339MillisV1::new("2023-11-14T22:13:20.001Z").unwrap(),
                 timeout_ms: timeout,
+                generation: podway_protocol::ContractGenerationV1::Generation1,
             },
             &Clock,
             &NativeDirectIdSourceV1,
@@ -1069,6 +1073,7 @@ mod reads004_equivalence {
             deadline: deadline(),
             observed_at: Rfc3339MillisV1::new("2023-11-14T22:13:20.001Z").unwrap(),
             timeout_ms: 5000,
+            generation: podway_protocol::ContractGenerationV1::Generation1,
         }
     }
 
@@ -1636,6 +1641,7 @@ mod admit002 {
                         "archives" => DirectReadCommandV1::ArchiveList,
                         _ => panic!("unknown composed route"),
                     },
+                    generation: podway_protocol::ContractGenerationV1::Generation1,
                 },
                 clock,
             ),
@@ -2123,6 +2129,7 @@ fn admit003_failed_final_preflight_witness_cannot_publish_or_keep_a_hint() {
             deadline: deadline(),
             observed_at: Rfc3339MillisV1::new("2023-11-14T22:13:20.001Z").unwrap(),
             timeout_ms: 5000,
+            generation: podway_protocol::ContractGenerationV1::Generation1,
         },
         &Clock,
         &NativeDirectIdSourceV1,

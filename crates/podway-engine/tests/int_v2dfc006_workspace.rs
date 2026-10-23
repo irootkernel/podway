@@ -911,6 +911,7 @@ fn direct_config_admission_rejects_nonprod_and_invalid_bytes_before_store_or_eff
                     deadline: deadline(),
                     observed_at: Rfc3339MillisV1::new("2026-10-07T00:00:00.000Z").unwrap(),
                     timeout_ms: 5000,
+                    generation: podway_protocol::ContractGenerationV1::Generation1,
                 },
                 &NoEffects,
                 &NoEffects,

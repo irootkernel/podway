@@ -13,7 +13,7 @@
     },
     {
       "generation": 2,
-      "status": "reserved",
+      "status": "supported",
       "selections": {
         "session.observe": "podway.observation-result/v6",
         "CRITERION_CITATION_INVALID": "podway.criterion-citation-invalid-details/v1",

@@ -61,7 +61,8 @@ use podway_core::{
     canonicalize_json_v1,
 };
 use podway_protocol::{
-    EVIDENCE_PAGE_TOKEN_VERSION_V1, EvidencePageTokenV1, serialized_json_len_v1,
+    ContractGenerationV1, EVIDENCE_PAGE_TOKEN_VERSION_V1, EvidencePageTokenV1,
+    serialized_json_len_v1,
 };
 use podway_store::direct_store::DirectWorkspaceViewV1;
 use podway_store::v2_delegation::{
@@ -1264,11 +1265,15 @@ fn project_running_next(
 pub fn project_graph_observation_v1(
     view: &GraphWorkspaceViewV2,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
-    project_graph_observation_in(&ReadScope::from_graph(view))
+    project_graph_observation_in(
+        &ReadScope::from_graph(view),
+        ContractGenerationV1::Generation1,
+    )
 }
 
 pub(crate) fn project_graph_observation_in(
     scope: &ReadScope<'_>,
+    generation: ContractGenerationV1,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
     let state = scope.graph()?;
     let procedure = scope.procedure()?;
@@ -1314,7 +1319,11 @@ pub(crate) fn project_graph_observation_in(
     )?;
 
     let mut result = Map::new();
-    result.insert("schema".to_owned(), json!("podway.observation-result/v5"));
+    let observation_schema = match generation {
+        ContractGenerationV1::Generation1 => "podway.observation-result/v5",
+        ContractGenerationV1::Generation2 => "podway.observation-result/v6",
+    };
+    result.insert("schema".to_owned(), json!(observation_schema));
     result.insert("status".to_owned(), status);
     result.insert("guidance".to_owned(), guidance);
     let active_items = current
@@ -1335,12 +1344,18 @@ pub(crate) fn project_graph_observation_in(
     );
     result.insert("active_items".to_owned(), Value::Array(active_items));
     let mutation_templates = if state.trace().lifecycle() == SessionLifecycle::Prepared {
-        prepared_mutation_templates(scope, state)
+        match generation {
+            ContractGenerationV1::Generation1 => prepared_mutation_templates(scope, state),
+            ContractGenerationV1::Generation2 => prepared_mutation_templates_v6(scope, state),
+        }
     } else if matches!(
         state.trace().lifecycle(),
         SessionLifecycle::Completed | SessionLifecycle::Cancelled
     ) {
-        terminal_mutation_templates(scope, state)
+        match generation {
+            ContractGenerationV1::Generation1 => terminal_mutation_templates(scope, state),
+            ContractGenerationV1::Generation2 => terminal_mutation_templates_v6(scope, state),
+        }
     } else {
         current
             .as_ref()
@@ -1632,6 +1647,162 @@ fn terminal_mutation_templates(scope: &ReadScope<'_>, state: &GraphSessionStateV
             "session.terminal_disposition",
             vec!["podway", "disposition"],
         )]
+    }
+}
+
+/// One generation-2 lifecycle template (ADR-0039): the semantic argv first,
+/// then the fence tail with current values and the idempotency-key
+/// placeholder. The tail equals the R1 correlation exactly, and the revision
+/// token is the canonical JSON-number text of the preconditions value.
+fn lifecycle_template_v6(
+    scope: &ReadScope<'_>,
+    state: &GraphSessionStateV2,
+    command: &str,
+    argv: &[&str],
+    requires_explicit_authorization: bool,
+) -> Value {
+    let revision = state.trace().revision().get();
+    let revision_text = revision.to_string();
+    let mut fenced = argv.to_vec();
+    fenced.extend([
+        "--if-workspace-uuid",
+        scope.identity().workspace_uuid().as_str(),
+        "--if-session-id",
+        state.trace().session_id().as_str(),
+        "--if-session-revision",
+        revision_text.as_str(),
+        "--idempotency-key",
+        "<idempotency-key>",
+    ]);
+    json!({
+        "command": command,
+        "argv": fenced,
+        "preconditions": {
+            "workspace_uuid": scope.identity().workspace_uuid(),
+            "session_id": state.trace().session_id(),
+            "session_revision": revision,
+        },
+        "authority": "optimistic_concurrency_only",
+        "idempotency_key_required": true,
+        "requires_explicit_authorization": requires_explicit_authorization,
+    })
+}
+
+fn prepared_mutation_templates_v6(
+    scope: &ReadScope<'_>,
+    state: &GraphSessionStateV2,
+) -> Vec<Value> {
+    vec![
+        lifecycle_template_v6(scope, state, "session.begin", &["podway", "begin"], false),
+        lifecycle_template_v6(scope, state, "session.reset", &["podway", "reset"], true),
+        lifecycle_template_v6(
+            scope,
+            state,
+            "session.start_replace",
+            &[
+                "podway",
+                "start",
+                "--on-existing",
+                "delete",
+                "--preset",
+                "<preset>",
+                "--task",
+                "<task>",
+            ],
+            true,
+        ),
+        lifecycle_template_v6(
+            scope,
+            state,
+            "session.start_replace",
+            &[
+                "podway",
+                "start",
+                "--on-existing",
+                "delete",
+                "--procedure",
+                "<procedure-file>",
+                "--expect-procedure-digest",
+                "<procedure-digest>",
+                "--task",
+                "<task>",
+            ],
+            true,
+        ),
+    ]
+}
+
+fn terminal_mutation_templates_v6(
+    scope: &ReadScope<'_>,
+    state: &GraphSessionStateV2,
+) -> Vec<Value> {
+    if scope.current_terminal_disposition() {
+        vec![
+            lifecycle_template_v6(
+                scope,
+                state,
+                "session.archive",
+                &["podway", "archive"],
+                true,
+            ),
+            lifecycle_template_v6(scope, state, "session.reset", &["podway", "reset"], true),
+            lifecycle_template_v6(
+                scope,
+                state,
+                "session.start",
+                &[
+                    "podway", "start", "--preset", "<preset>", "--task", "<task>",
+                ],
+                true,
+            ),
+            lifecycle_template_v6(
+                scope,
+                state,
+                "session.start",
+                &[
+                    "podway",
+                    "start",
+                    "--procedure",
+                    "<procedure-file>",
+                    "--expect-procedure-digest",
+                    "<procedure-digest>",
+                    "--task",
+                    "<task>",
+                ],
+                true,
+            ),
+        ]
+    } else {
+        vec![
+            lifecycle_template_v6(
+                scope,
+                state,
+                "session.terminal_disposition",
+                &[
+                    "podway",
+                    "disposition",
+                    "handed-off",
+                    "--summary",
+                    "<summary>",
+                    "--reference",
+                    "<reference>",
+                ],
+                false,
+            ),
+            lifecycle_template_v6(
+                scope,
+                state,
+                "session.terminal_disposition",
+                &[
+                    "podway",
+                    "disposition",
+                    "not-required",
+                    "--reason",
+                    "<reason>",
+                ],
+                false,
+            ),
+        ]
     }
 }
 

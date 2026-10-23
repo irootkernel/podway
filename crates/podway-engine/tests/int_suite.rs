@@ -75,3 +75,6 @@ mod int_guide006_generation1_baselines;
 
 #[path = "int_guide008_fenced_plain_start.rs"]
 mod int_guide008_fenced_plain_start;
+
+#[path = "int_guide009_generation2_observation.rs"]
+mod int_guide009_generation2_observation;

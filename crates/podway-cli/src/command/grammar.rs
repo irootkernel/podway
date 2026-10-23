@@ -75,6 +75,10 @@ pub(super) struct Cli {
     #[arg(long, global = true, action = ArgAction::SetTrue)]
     pub(super) yes: bool,
 
+    /// Select the closed contract generation for this invocation.
+    #[arg(long, global = true, value_name = "1|2")]
+    pub(super) contract_generation: Option<String>,
+
     #[command(subcommand)]
     pub(super) command: Command,
 }
@@ -1071,13 +1075,27 @@ fn nested_parse_failure_context(
 
 pub(super) fn normalize_top_level_help_alias(arguments: &mut [OsString]) {
     let mut help_index = None;
+    // `--contract-generation` is the only valued global flag admitted before
+    // the help alias, so its value token is skipped alongside it.
+    let mut skip_generation_value = false;
     for (index, argument) in arguments.iter().enumerate().skip(1) {
+        if skip_generation_value {
+            skip_generation_value = false;
+            continue;
+        }
         match argument.as_os_str() {
             value if value == OsStr::new("-h") || value == OsStr::new("--help") => {
                 if help_index.replace(index).is_some() {
                     return;
                 }
             }
+            value if value == OsStr::new("--contract-generation") => {
+                skip_generation_value = true;
+            }
+            value
+                if value
+                    .to_str()
+                    .is_some_and(|text| text.starts_with("--contract-generation=")) => {}
             value
                 if value == OsStr::new("--json")
                     || value == OsStr::new("--no-color")
@@ -1127,7 +1145,13 @@ fn parse_positive_u64(value: &str) -> Result<u64, String> {
 }
 
 /// Guide topics shared by topic resolution and the overview index.
-const GUIDE_TOPICS: &[&str] = &["workflow", "automation", "procedures", "artifacts"];
+const GUIDE_TOPICS: &[&str] = &[
+    "workflow",
+    "automation",
+    "procedures",
+    "artifacts",
+    "contract-generations",
+];
 
 /// Retired family topics the overview index lists; each resolves through the
 /// retirement table.
@@ -1241,7 +1265,7 @@ fn overview_text() -> String {
     grammar.build();
     let topics = overview_topic_lines(&grammar).join("\n");
     format!(
-        "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes reading and writing local workspace state.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDirect execution:\n  Worktree commands execute in this process.\n  Use --worktree <path> to select a Git worktree and --timeout <duration> to bound lock waiting.\n  Worktree request options apply to workspace routes only; help, version, completions, preset and procedure run locally, open no workspace and accept none of them.\n  Automation mutations require an explicit --idempotency-key; recover lost output with outcome lookup.\n\nUsage:\n  podway help [<topic>...]\n  podway -h\n  podway --help\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff' --idempotency-key start-example\n  podway begin --idempotency-key begin-example\n  podway status --json\n  podway observe --json\n\nTopics:\n{topics}\n\nShipped presets: {preset_ids}. Start prepares a session; begin creates its first active attempt. Contributors use disposable Git worktrees for isolated development; see help workflow."
+        "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes reading and writing local workspace state.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDirect execution:\n  Worktree commands execute in this process.\n  Use --worktree <path> to select a Git worktree and --timeout <duration> to bound lock waiting.\n  Worktree request options apply to workspace routes only; help, version, completions, preset and procedure run locally, open no workspace and accept none of them.\n  Local commands also accept --contract-generation.\n  Automation mutations require an explicit --idempotency-key; recover lost output with outcome lookup.\n\nContract generations:\n  --contract-generation <1|2> selects the contract generation for one invocation;\n  the default is 1. Generation 2 serves observe as podway.observation-result/v6;\n  error details currently keep their generation-1 families.\n\nUsage:\n  podway help [<topic>...]\n  podway -h\n  podway --help\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff' --idempotency-key start-example\n  podway begin --idempotency-key begin-example\n  podway status --json\n  podway observe --json\n\nTopics:\n{topics}\n\nShipped presets: {preset_ids}. Start prepares a session; begin creates its first active attempt. Contributors use disposable Git worktrees for isolated development; see help workflow."
     )
 }
 
@@ -1282,6 +1306,9 @@ fn route_topic(topic: &str) -> Option<&'static str> {
         }
         "artifacts" => {
             "Artifacts:\n  podway attach verification-reference report.md --media-type text/markdown\n  podway attach verification-reference --reference build:42 --digest sha256:<hex> --size 42 --media-type text/plain"
+        }
+        "contract-generations" => {
+            "Contract generations:\n  podway --contract-generation <1|2> <command>\n  Generation 1 is the default while it stays supported. Generation 2 serves\n  session.observe as podway.observation-result/v6 with executable fenced\n  lifecycle and archive templates. Error details currently keep their\n  generation-1 families in both generations.\n  Selection applies to one invocation only and never changes request identity,\n  idempotency, stored outcomes, replay, outcome lookup, Store state or writer\n  identity. No environment or configuration channel selects a generation."
         }
         "help" => "Usage:\n  podway help [<topic>...]\n\nExample:\n  podway help session.start",
         "version" => {
@@ -1688,6 +1715,56 @@ mod tests {
             "  retired families: {}",
             RETIRED_FAMILY_TOPICS.join(", ")
         )));
+    }
+
+    #[test]
+    fn guide009_contract_generation_topic_alias_and_overview() {
+        let topic = help_text(&["contract-generations".to_owned()]).unwrap();
+        assert!(topic.contains("Contract generations:"));
+        assert!(topic.contains("--contract-generation <1|2>"));
+        assert!(topic.contains("podway.observation-result/v6"));
+        assert!(topic.contains("Error details currently keep their"));
+        assert!(topic.contains("No environment or configuration channel"));
+
+        let overview = help_text(&[]).unwrap();
+        assert!(overview.contains("Contract generations:"));
+        assert!(overview.contains("Local commands also accept --contract-generation."));
+        assert!(overview.contains(&format!("  guides: {}", GUIDE_TOPICS.join(", "))));
+
+        // The alias rewrites only the help token; the valued generation pair
+        // survives, so an invalid value before -h still reaches validation.
+        let mut arguments = vec![
+            OsString::from("podway"),
+            OsString::from("--contract-generation"),
+            OsString::from("3"),
+            OsString::from("-h"),
+        ];
+        normalize_top_level_help_alias(&mut arguments);
+        assert_eq!(
+            arguments,
+            vec![
+                OsString::from("podway"),
+                OsString::from("--contract-generation"),
+                OsString::from("3"),
+                OsString::from("help"),
+            ]
+        );
+        let mut equals_form = vec![
+            OsString::from("podway"),
+            OsString::from("--contract-generation=2"),
+            OsString::from("--json"),
+            OsString::from("--help"),
+        ];
+        normalize_top_level_help_alias(&mut equals_form);
+        assert_eq!(equals_form[3], OsString::from("help"));
+
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let offered = match shell {
+                Shell::Bash | Shell::Zsh => shell.script().contains("--contract-generation"),
+                Shell::Fish => shell.script().contains("-l contract-generation"),
+            };
+            assert!(offered, "{shell:?} omits the contract generation flag");
+        }
     }
 
     #[test]

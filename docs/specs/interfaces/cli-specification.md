@@ -42,7 +42,11 @@ fields return `REQUEST_INVALID`. The worktree request options — `--worktree`,
 `--if-goal-revision` and `--yes` — apply to workspace routes only: the local
 families `help`, `version`, `completions`, `preset` and `procedure` run
 in-process, open no workspace, and reject every one of them with exit-2
-`REQUEST_INVALID` naming each supplied option.
+`REQUEST_INVALID` naming each supplied option. Local commands also accept
+`--contract-generation`: every command accepts that global option, its value is
+validated after parsing and before local execution or reading stdin, and an
+invalid value fails with exit-2 `REQUEST_INVALID` attributed to the parsed
+route while retired syntax keeps `COMMAND_RETIRED` precedence.
 
 | Global option | Meaning and applicability |
 |---|---|
@@ -50,6 +54,7 @@ in-process, open no workspace, and reject every one of them with exit-2
 | `--worktree <PATH>` | Select the Git worktree explicitly |
 | `--timeout <DURATION>` | Combined direct lock-wait budget described below |
 | `--no-color`, `--quiet` | Human rendering controls; quiet never enables prompts |
+| `--contract-generation <1\|2>` | Selects the closed contract generation for one invocation; accepted by every route, including the local families |
 | `--idempotency-key <KEY>` | Caller-owned mutation key or `outcome lookup` key |
 | `--if-workspace-uuid <UUID>` | Expected workspace generation on supported runtime routes |
 | `--if-session-id <UUID>` | Expected current session on applicable reads/transitions; on plain `start` it pairs with `--if-session-revision` |

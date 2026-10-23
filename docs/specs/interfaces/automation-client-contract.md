@@ -119,7 +119,7 @@ that fence does not replace session revision or attempt identity.
 | `AUT-LIF-006` | Default reset MUST delete only prepared sessions or terminal sessions with a disposition for the current revision. Start MUST archive disposed terminal sessions automatically; prepared deletion MUST be an explicit interactive choice or `--on-existing delete`. |
 | `AUT-LIF-007` | Force reset and start-time deletion of a running session MUST require destructive confirmation and a non-blank progress summary bounded to 4,000 Unicode scalars. |
 | `AUT-LIF-008` | Reset eligibility MUST NOT depend on Git cleanliness, roadmap status, process state, external reference reachability, or any network request. |
-| `AUT-LIF-009` | Prepared `status`, compact status, next, and observation MUST expose the lifecycle without inventing cursor, attempt, goal, item, blocker, or history values; observation MUST provide only fenced begin, eligible-reset, and eligible-replacement templates. |
+| `AUT-LIF-009` | In generation 1, prepared `status`, compact status, next, and observation MUST expose the lifecycle without inventing cursor, attempt, goal, item, blocker, or history values; observation MUST provide only fenced begin, eligible-reset, and eligible-replacement templates. |
 | `AUT-LIF-010` | Exact idempotent replay and uncertain-outcome reconciliation MUST cover begin, disposition, eligible and force reset, and every state-aware start resolution without weakening identity or revision fences. |
 | `AUT-LIF-011` | Archival MUST retain the complete disposed terminal session as immutable inactive state, MUST NOT evict inactive sessions automatically, and MUST NOT fail archival or start because of inactive count. |
 | `AUT-LIF-012` | Start MUST atomically archive a disposed terminal current session before creating the new prepared session. Preserving running work MUST atomically cancel it, record a successor-linked `superseded` disposition, archive it, and create the successor; terminal disposition choices MUST likewise disposition, archive, and start atomically. |
@@ -144,19 +144,34 @@ available under `AUT-DIRECT-010`.
 
 | ID | Normative requirement |
 |---|---|
-| `AUT-OBS-006` | Prepared and running observations MUST use closed `podway.observation-result/v5` for both Direct and delegated Procedures. Running contains a bounded value-free compact status projection, current next guidance, active item declarations with type-specific constraints and bounded typed value projections, and applicable mutation templates. Prepared contains that compact projection, cursor-free prepared guidance, no active items, and only begin, eligible-reset, and eligible-replacement templates. |
-| `AUT-OBS-007` | Every mutation template MUST carry exact current workspace, session, and applicable revision/attempt/item/goal fences, mark the idempotency-key requirement, and classify whether an explicit user request is required. Templates MUST NOT invent semantic values or an idempotency key, and fences MUST NOT be represented as authentication or authorization. |
-| `AUT-OBS-008` | A completed or cancelled observation MUST succeed with prepared-aware terminal status, null guidance, no active items, and only a terminal-disposition template when the current terminal revision has no disposition; a disposed terminal state MUST instead offer only eligible reset and replacement templates. Existing `next` terminal behavior remains unchanged. |
+| `AUT-OBS-006` | In generation 1, prepared and running observations MUST use closed `podway.observation-result/v5` for both Direct and delegated Procedures. Running contains a bounded value-free compact status projection, current next guidance, active item declarations with type-specific constraints and bounded typed value projections, and applicable mutation templates. Prepared contains that compact projection, cursor-free prepared guidance, no active items, and only begin, eligible-reset, and eligible-replacement templates. |
+| `AUT-OBS-007` | In generation 1, every mutation template MUST carry exact current workspace, session, and applicable revision/attempt/item/goal fences, mark the idempotency-key requirement, and classify whether an explicit user request is required. Templates MUST NOT invent semantic values or an idempotency key, and fences MUST NOT be represented as authentication or authorization. |
+| `AUT-OBS-008` | In generation 1, a completed or cancelled observation MUST succeed with prepared-aware terminal status, null guidance, no active items, and only a terminal-disposition template when the current terminal revision has no disposition; a disposed terminal state MUST instead offer only eligible reset and replacement templates. Existing `next` terminal behavior remains unchanged. |
 | `AUT-OBS-009` | Observation MUST omit history and compose four bounded allocations within a 1,048,576-byte complete JSON envelope: complete compact status plus running `podway.next-result/v5` or cursor-free prepared `podway.prepared-next-result/v3` guidance share 786,432 bytes. Active items have 131,072 bytes, mutation templates have 65,536 bytes, and 65,536 bytes remain for serialization and the outer envelope. Status and guidance retain the complete graph-wide counters and MUST be measured together. Item and template windows MUST report their exact total and truncation; complete-member or envelope overflow MUST fail closed. |
 | `AUT-OBS-010` | Observation guidance MUST emit evidence metadata only, with no preview data and no page token. Active-item choice constraints MUST expose at most eight choices with the exact choice count and a truncation flag, and template argv elements MUST NOT exceed 4,096 Unicode scalars. |
 | `AUT-OBS-011` | Reducing the observation status member from the standard tier to the compact projection removes `purpose`, `item_values`, and the other standard-only fields from observation. Current progression guidance and active-item mutation information MUST remain self-contained in observation; a consumer that needs the removed fields, or trace history, MUST use `session.status`. |
 | `AUT-OBS-012` | A truncated mutation-template window MUST still carry the first template of every command it would otherwise have offered, so no action named by `allowed_actions` is left without a template. |
+| `AUT-OBS-013` | In generation 2, the prepared observation window MUST offer exactly four lifecycle templates: `session.begin` without explicit authorization, plus `session.reset` and two `session.start_replace` variants (one `--preset`, one `--procedure` with `--expect-procedure-digest`), each of the latter three with explicit authorization (`requires_explicit_authorization` `true`). Every template carries `preconditions` equal to the status session and an argv ending with the current `--if-workspace-uuid`, `--if-session-id` and `--if-session-revision` values followed by `--idempotency-key <idempotency-key>`. |
+| `AUT-OBS-014` | In generation 2, an undisposed completed or cancelled observation MUST offer exactly two `session.terminal_disposition` templates — handed-off with `--summary <summary>` and `--reference <reference>`, and not-required with `--reason <reason>` — neither requiring explicit authorization, both ending with the same fence tail and key placeholder. |
+| `AUT-OBS-015` | In generation 2, a disposed terminal observation MUST offer exactly four templates with explicit authorization — `session.archive`, `session.reset`, and two fenced plain `session.start` variants (by preset and by Procedure); the two start variants' execution, exact replay and outcome lookup MUST record the `session.start` command. |
+| `AUT-OBS-016` | In generation 2, running observation templates MUST stay identical to generation 1, and the observation MUST validate against the selected generation's family (`podway.observation-result/v5` or `podway.observation-result/v6`). |
+| `AUT-OBS-017` | Generation-2 lifecycle templates MUST use only the closed placeholder vocabulary `<preset>`, `<procedure-file>`, `<procedure-digest>`, `<task>`, `<summary>`, `<reference>`, `<reason>` and `<idempotency-key>`, MUST NOT invent semantic values, and MUST NOT embed `--contract-generation`. |
 
-Both Direct and delegated snapshots use status/compact/observation v5, running
-next v5, and prepared next v3. Delegation data remains conditional and truthful;
-there is no invented worker on a Direct placement or cursor on prepared state.
+In generation 1, both Direct and delegated snapshots use
+status/compact/observation v5, running next v5, and prepared next v3;
+generation 2 substitutes observation v6 on `session.observe`. Delegation data
+remains conditional and truthful; there is no invented worker on a Direct
+placement or cursor on prepared state.
 The active-item allocation covers the validated maximum; template truncation must
 retain one usable template for every offered command.
+
+### Contract generation selection (AUT-GEN-001–003)
+
+| ID | Normative requirement |
+|---|---|
+| `AUT-GEN-001` | A global `--contract-generation <1\|2>` option MUST select the contract generation for one invocation; the default MUST be 1 while generation 1 is supported. The value MUST be validated after parsing and before local execution or reading stdin; every other value, including an empty value, MUST fail with exit-2 `REQUEST_INVALID` attributed to the parsed route, and retired syntax MUST keep `COMMAND_RETIRED` precedence. Every route MUST accept the option — including the local families, where it has no effect, and a top-level `-h`/`--help` that follows it — and human mode MUST honor the same selection. No environment variable, workspace configuration or stored preference MAY select a generation. |
+| `AUT-GEN-002` | The selection MUST be presentation only: it MUST NOT be part of canonical request identity, idempotency, stored outcomes, exact replay, outcome lookup, Store state or writer identity. |
+| `AUT-GEN-003` | Generation 2 is `supported` in [`contract-generations.json`](../../../assets/specifications/contract-generations.json): under `--contract-generation 2`, `session.observe` MUST serve `podway.observation-result/v6`, and the default output MUST equal an explicit generation 1. The two error-detail successors (`podway.criterion-citation-invalid-details/v1`, `podway.workspace-contract-mismatch-details/v2`) are declared in the declaration but not yet emitted, so runtime error rendering MUST return the generation-1 detail families for `CRITERION_CITATION_INVALID` and `WORKSPACE_CONTRACT_MISMATCH` in both generations until the successors are emitted. |
 
 ### Bounded evidence scale and paging (AUT-EVR-001–008)
 
@@ -276,7 +291,8 @@ packaged scenarios are mapped in the
 | `AUT-PATH-001`, `AUT-HOME-004`, `AUT-CONTRACT-002` | RPATH/CONID; `V2DFC-007`–`009` | `AUT-T-PATH`, `AUT-T-CONTRACT` |
 | `AUT-ID-001`–`009` | CASID/V2LIF; `V2DFC-006`–`007` | `AUT-T-ID`, `AUT-T-LIF` |
 | `AUT-START-001`, `004`, `AUT-LIF-001`–`015` | PSTRT/V2LIF; `V2DFC-006`–`007` | `AUT-T-START`, `AUT-T-LIF` |
-| `AUT-RECON-004`, `AUT-OBS-003`–`004`, `006`–`012` | RECON/MCONT/V2SCL; `V2DFC-006`–`007` | `AUT-T-RECON`, `AUT-T-OBS`, `AUT-T-EVR` |
+| `AUT-RECON-004`, `AUT-OBS-003`–`004`, `006`–`017` | RECON/MCONT/V2SCL; `V2DFC-006`–`007` | `AUT-T-RECON`, `AUT-T-OBS`, `AUT-T-EVR` |
+| `AUT-GEN-001`–`003` | ADR-0039; `V2DFC-006`–`007` | `AUT-T-OBS`, `AUT-T-JSON` |
 | `AUT-EVR-001`–`008`, `AUT-CHK-001`–`009`, `AUT-GRD-001`–`010` | V2SCL/V2AST/V2GRD, ADR-0033; `V2DFC-006`–`007` | `AUT-T-EVR`, `AUT-T-CHK`, `AUT-T-GRD` |
 | Active `AUT-JSON-001`–`004`, `AUT-ERR-005`, `AUT-REL-001` | MCONT/V2AGT/REL; `V2DFC-007`–`009` | `AUT-T-JSON`, `AUT-T-DIST` |
 | `AUT-DIRECT-001`–`020` | ADR-0038, `V2DFC-001`–`010` | Direct native/Store/protocol and packaged evidence mapped by current traceability |

@@ -395,7 +395,9 @@ fn assert_projection_identity(
         Err(GraphViewErrorV2::TerminalSessionHasNoNext) => {}
         Err(error) => panic!("unexpected next error: {error:?}"),
     }
-    let observation = project_direct_observation_v1(view).unwrap();
+    let observation =
+        project_direct_observation_v1(view, podway_protocol::ContractGenerationV1::Generation1)
+            .unwrap();
     assert_eq!(observation["status"]["procedure"]["digest"], stored_digest);
     assert_eq!(
         view.graph().unwrap().snapshot().canonical_json().as_str(),
@@ -598,7 +600,9 @@ fn optim001_direct_prepared_identity_keeps_stored_bytes() {
         let next = project_direct_next_v1(view).unwrap();
         assert_eq!(next["schema"], "podway.prepared-next-result/v3");
         assert_eq!(next["procedure_digest"], stored);
-        let observation = project_direct_observation_v1(view).unwrap();
+        let observation =
+            project_direct_observation_v1(view, podway_protocol::ContractGenerationV1::Generation1)
+                .unwrap();
         assert_eq!(observation["status"]["procedure"]["digest"], stored);
         assert_eq!(
             view.graph().unwrap().snapshot().canonical_json().as_str(),
@@ -634,7 +638,9 @@ fn optim001_direct_prepared_identity_keeps_stored_bytes() {
         assert_ne!(stored, differing_validated.digest().as_str());
         let next = project_direct_next_v1(view).unwrap();
         assert_eq!(next["procedure_digest"], stored);
-        let observation = project_direct_observation_v1(view).unwrap();
+        let observation =
+            project_direct_observation_v1(view, podway_protocol::ContractGenerationV1::Generation1)
+                .unwrap();
         assert_eq!(observation["status"]["procedure"]["digest"], stored);
         assert_eq!(
             view.graph().unwrap().snapshot().canonical_json().as_str(),

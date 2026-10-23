@@ -275,20 +275,34 @@ Store layout and the writer identity. The canonical declaration
 `default` generation and, for each generation, its selection for every variable
 point and its status from the closed set `reserved`, `supported`, `deprecated`
 and `retired`. Generation 1 is the direct contract shipped since `v0.2.13`,
-`supported` and the default. Generation 2 substitutes
-`podway.observation-result/v6` for `session.observe`,
-`podway.criterion-citation-invalid-details/v1` for `CRITERION_CITATION_INVALID`
-and `podway.workspace-contract-mismatch-details/v2` for
-`WORKSPACE_CONTRACT_MISMATCH`, and is `reserved`: the Output v4 `session.observe`
-selection and the two Error v2 details rules list the reserved families next to
-the generation-1 families, but no runtime path emits them until generation 2 is
-selected and supported. The error catalog keeps naming the default generation's
-families in `details_schema`, so its bytes are unchanged.
+`supported` and the default. Generation 2 is `supported`: under
+`--contract-generation 2`, `session.observe` serves
+`podway.observation-result/v6`, while the two error-detail substitutions
+(`podway.criterion-citation-invalid-details/v1`,
+`podway.workspace-contract-mismatch-details/v2`) remain declared in
+`contract-generations.json` and validatable in the schema registry but are not
+yet emitted; runtime error rendering returns the generation-1 detail families
+for both codes in both generations until the successors are emitted. The error
+catalog keeps naming the default generation's families in `details_schema`, so
+its bytes are unchanged.
+
+A global `--contract-generation <1|2>` option selects the generation for one
+invocation. The default is 1 while generation 1 is supported. The value is
+validated after parsing and before local execution or reading stdin; every
+other value, including an empty value, fails with exit-2 `REQUEST_INVALID`
+attributed to the parsed route, and retired syntax keeps `COMMAND_RETIRED`
+precedence. Every command accepts the option, including the local families
+where it has no effect and a top-level `-h`/`--help` that follows it, and human
+mode honors the same selection. Selection is presentation only: it is never
+part of canonical request identity, idempotency, stored outcomes, exact
+replay, outcome lookup, Store state or writer identity. No environment
+variable, workspace configuration or stored preference selects a generation,
+and templates and recovery recipes never embed the option.
 
 `tools/verify_contracts.py` checks the declaration against the Output v4 and
 Error v2 selections in generation order, against the command catalog's
 `session.observe` result schemas, and against the error catalog's
-`details_schema` for the default generation. The reserved
+`details_schema` for the default generation. The
 `podway.observation-result/v6` family specifies executable lifecycle templates:
 running templates keep the v5 shapes, while the prepared and terminal templates
 carry the session fences and the idempotency-key placeholder and use the closed

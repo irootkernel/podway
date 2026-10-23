@@ -10,8 +10,8 @@ pub use podway_git::{
     WorktreeSelectorV1,
 };
 use podway_protocol::{
-    CommandNameV1, DelegationAcceptV1, ErrorEnvelopeV2, ItemRecordManyV1, OutputEnvelopeV4,
-    ProcedureV2MutationCommandV1, ProtocolError, RequestIdV1, Rfc3339MillisV1,
+    CommandNameV1, ContractGenerationV1, DelegationAcceptV1, ErrorEnvelopeV2, ItemRecordManyV1,
+    OutputEnvelopeV4, ProcedureV2MutationCommandV1, ProtocolError, RequestIdV1, Rfc3339MillisV1,
 };
 pub use podway_store::IdempotencyKeyV1;
 use podway_store::direct_store::DirectStoreErrorV1;
@@ -144,6 +144,9 @@ pub struct DirectRequestV1 {
     /// Actual host observation time, independent of the mutation clock.
     pub observed_at: Rfc3339MillisV1,
     pub timeout_ms: u64,
+    /// Presentation-only contract generation (ADR-0039); never part of
+    /// request identity, idempotency or stored outcomes.
+    pub generation: ContractGenerationV1,
 }
 
 #[derive(Clone, Debug)]
@@ -301,6 +304,7 @@ fn execute_direct_inner_v1<R: GitResolverContractV1>(
         observed_at: request.observed_at.clone(),
         idempotency_key: request.idempotency_key.clone(),
         timeout_ms: request.timeout_ms,
+        generation: request.generation,
         maintenance: None,
     };
     let selector = request.selector.clone();
@@ -398,6 +402,7 @@ fn execute_direct_preflight_facts_inner_v1<R: GitResolverContractV1>(
         observed_at: request.observed_at.clone(),
         idempotency_key: None,
         timeout_ms: request.timeout_ms,
+        generation: request.generation,
         maintenance: None,
     };
     let selector = request.selector.clone();
@@ -634,6 +639,7 @@ fn dispatch<R: GitResolverContractV1>(
                     expected_session_id,
                     command,
                     deadline: request.deadline,
+                    generation: request.generation,
                 },
                 clock,
             )

@@ -47,7 +47,8 @@ skill. Route Procedure source work to `$create-podway-procedure`.
 
 Use `--worktree <path>` to preserve the owning worktree on every workspace
 command; local commands (`help`, `version`, `completions`, `preset`, `procedure`)
-accept no worktree request options. `--json` is global. `--timeout <duration>`
+accept no worktree request options. `--json` is global, and local commands also
+accept `--contract-generation`. `--timeout <duration>`
 defaults to `5s`; unsigned `ms`, `s` or `m` values
 may be at most `60m`. It supplies one admission-wait budget across maintenance
 leases, the connection gate and SQLite locks. Input, preparation and confirmation

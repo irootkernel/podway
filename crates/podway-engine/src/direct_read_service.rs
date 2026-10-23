@@ -4,7 +4,9 @@ use podway_core::{
     AttemptId, GraphNodeId, ItemId, SessionLifecycle, TerminalDispositionKindV2,
     TerminalDispositionV2, TraceSequenceV2,
 };
-use podway_protocol::{EvidencePageTokenV1, Rfc3339MillisV1, validate_daemon_free_document_v1};
+use podway_protocol::{
+    ContractGenerationV1, EvidencePageTokenV1, Rfc3339MillisV1, validate_daemon_free_document_v1,
+};
 use podway_store::direct_store::DirectWorkspaceViewV1;
 use serde_json::{Map, Value};
 
@@ -153,12 +155,14 @@ pub fn project_direct_next_v1(
 
 pub fn project_direct_observation_v1(
     view: &DirectWorkspaceViewV1,
+    generation: ContractGenerationV1,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
-    let mut result = project_graph_observation_in(&ReadScope::from_direct(view))?;
-    result.insert(
-        "schema".into(),
-        Value::String("podway.observation-result/v5".into()),
-    );
+    let schema = match generation {
+        ContractGenerationV1::Generation1 => "podway.observation-result/v5",
+        ContractGenerationV1::Generation2 => "podway.observation-result/v6",
+    };
+    let mut result = project_graph_observation_in(&ReadScope::from_direct(view), generation)?;
+    result.insert("schema".into(), Value::String(schema.into()));
     result
         .get("status")
         .and_then(Value::as_object)
@@ -171,7 +175,7 @@ pub fn project_direct_observation_v1(
             Value::String(direct_next_schema(view).into()),
         );
     }
-    validate_projection("podway.observation-result/v5", result)
+    validate_projection(schema, result)
 }
 
 pub fn project_direct_evidence_v1(
