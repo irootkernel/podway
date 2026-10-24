@@ -32,6 +32,10 @@ For a managed/distributed bundle, also read [distribution](references/distributi
 and identify the minimum immutable released manifest supporting every feature
 and those current identity families. Validate with that exact release binary.
 A local Procedure needs exact validation-binary provenance, not a new release pin.
+Authoring commands are local: they open no workspace and reject `--worktree`,
+`--timeout`, `--idempotency-key`, `--if-*` fences and `--yes`. Use the exact validating binary's
+grammar. Its local results are unchanged by the generation selector when
+supported; do not require `--contract-generation` on older release validators.
 
 Delegation requires explicit intent, an exact admitting schema and a reviewed
 integration mapping for all identities. It applies only to non-skippable action
@@ -55,14 +59,12 @@ narrative guidance in English. Review the complete canonical source diff.
 Run repository-required checks plus the following from the owning worktree root:
 
 ```bash
-podway procedure format <file> --check
-podway procedure validate <file>
-podway procedure vet <file>
-podway procedure lint <file> --warnings-as-errors
 podway procedure check <file> --warnings-as-errors
 podway --json procedure preview <worktree-relative-file>
 ```
 
+`check` already combines formatting, validation, graph vetting and lint. Use the
+individual commands only to diagnose a finding; retain repository-required checks.
 `podway procedure graph <file> --format mermaid` is a review projection; source and digest
 remain authoritative. For local source, these checks/preview suffice unless the
 repository requires more. Distributed accepted-path evidence needs separate runtime
@@ -71,5 +73,8 @@ authorization under [distribution](references/distribution.md).
 Report path, ID/version/digest, selection boundary, exact validation identity,
 checks/outcomes, evidence and correction decisions, compatibility and remaining
 uncertainty. Copy preview's exact start suggestion, including
-`--expect-procedure-digest`, without executing it. Keep structural validation,
-runtime qualification, released support and real integration proof distinct.
+`--expect-procedure-digest`, without executing it. The runtime caller completes
+this bare template with the task, applicable
+caller options, key and current start preconditions under `$use-podway`.
+Keep structural validation, runtime qualification, released support and real
+integration proof distinct.

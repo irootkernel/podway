@@ -29,7 +29,7 @@ managed Primaries use their respective authorized integration paths;
    the sources below, retain its exact bytes/key and submit:
 
    ```bash
-   podway delegation accept --stdin --json < acceptance.json
+   podway --contract-generation 2 --worktree <absolute-root> --json delegation accept --stdin < acceptance.json
    ```
 
    Input supplies all mutation identities; do not also pass identity, revision or
@@ -67,7 +67,8 @@ Exclude credentials, transcripts and host paths. Podway computes
 
 ## Inspect and recover
 
-Read `podway delegation receipt --json --session <session-id> --attempt <attempt-id>`;
+Read `podway --contract-generation 2 --worktree <absolute-root> --json delegation
+receipt --session <session-id> --attempt <attempt-id>`;
 require `podway.delegation-receipt-result/v1`. Compare its applicability with fresh
 observation; a historical receipt does not satisfy another attempt.
 
@@ -90,8 +91,10 @@ results through their integration owner before reassigning. Reused artifacts nee
 revalidation against current inputs and acknowledged task identity, not a copied
 receipt.
 
-The [supervised review example](https://github.com/irootkernel/podway/blob/v0.2.14/docs/examples/supervised-delegation.md)
-uses a synthetic executor and proves only isolated protocol behavior. Use source
-and instructions from that published tag, or the exact validating release's tag.
+After `v0.2.15` is published, its [supervised review example](https://github.com/irootkernel/podway/blob/v0.2.15/docs/examples/supervised-delegation.md)
+uses a synthetic executor and proves only isolated protocol behavior. Until then,
+use the source and instructions at the exact reviewed candidate commit. Keep
+the CLI, example and instructions at that same release or candidate identity;
+the `v0.2.14` walkthrough uses generation 1 and is not this edition's example.
 It supplies neither a
 live adapter nor permission to create a session.

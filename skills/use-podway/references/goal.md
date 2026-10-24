@@ -40,7 +40,10 @@ Assess only at the active goal-assessment decision attempt after performing the
 cited work. Supply an English reason describing what was observed. Cite only
 resolved `guidance.references[]` sources and recorded items of the decision
 attempt, each once, with at most four citations per result; `not_applicable`
-carries no citations. On `CRITERION_CITATION_INVALID`, re-observe before
+carries no citations. Templates omit optional citation arguments: append
+`--evidence <node>` and/or `--item <item>` for the supported citations, preserving
+the template's fences; use `--actor` only for actual attribution. On
+`CRITERION_CITATION_INVALID`, re-observe before
 assessing again and cite only currently admitted sources. Under
 `--contract-generation 2`, its details
 (`podway.criterion-citation-invalid-details/v1`) list the active attempt's

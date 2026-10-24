@@ -12,13 +12,8 @@ RecoveryRecipe v2 has exactly `action`, `command`, `argv`, `reason` and
 schema; preserve the owning worktree and fill only declared placeholders from
 supported facts. Reject extra fields, unsupported commands and weakened fences.
 
-Templates and recovery recipes never embed `--contract-generation`. When
-executing one, add `--contract-generation 2`, keep every option it already
-supplies, and add other applicable caller options only where they are absent:
-`--json` for machine output, and `--worktree <path>` only on workspace
-commands (local commands accept no worktree request options). Fill only its
-declared placeholders, keep any concrete idempotency key it carries, and keep
-every supplied fence.
+Apply the shared [command execution](../SKILL.md#command-execution) rules to a
+validated recipe, preserving its concrete key and every fence.
 
 - Read-only recipes use `session.observe`, `outcome.lookup`, `workspace.doctor`
   or `version`, with `requires_explicit_authorization=false`.
@@ -50,7 +45,8 @@ continued execution.
 1. Retain the original key, canonical request with resolved fences, exact worktree
    and known UUID. Arguments that previously autofilled fences may reconstruct a
    different request on a later invocation.
-2. Run `podway outcome lookup --idempotency-key <original-key> --json` and require
+2. Run `podway --contract-generation 2 --worktree <absolute-root> --json outcome
+   lookup --idempotency-key <original-key>` and require
    `podway.outcome-lookup-result/v1`.
 3. If `found`, compare the retained successful outcome with the request and intended
    effect. It proves historical success, not current readiness. Exact replay returns
@@ -93,8 +89,12 @@ inspect that outcome rather than overwriting its identity.
   migration; do not invent one. For non-destructive continuation, use the original
   writer matching `actual_contract_manifest_digest`, not an arbitrary binary with
   the same semver. Its `version --json --identity` `contract_manifest_digest` must equal
-  that recorded digest; the released-writer table below maps it to a release. For
-  discard, use the separately authorized reset-all path above. Use disposable
+  that recorded digest; the released-writer table below maps it to a release.
+  Follow that writer's exact release-tagged skill and help for continuation:
+  `v0.2.13` and `v0.2.14` do not accept `--contract-generation` and serve observation
+  v5, so do not apply this edition's generation-2 commands to them. A handoff to
+  that writer does not authorize downloading, installing or switching binaries.
+  For discard, use the separately authorized reset-all path above. Use disposable
   worktrees for development with changed contract bytes. Under
   `--contract-generation 2`, the error's details carry `actual_product_version`
   naming the stored writer's release (null when unknown) and the recovery

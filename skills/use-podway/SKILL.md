@@ -21,28 +21,28 @@ command grammar.
 Do not install it, change project guidance or author a Procedure through this
 skill. Route Procedure source work to `$create-podway-procedure`.
 
+This edition requires the generation-2 support introduced for `v0.2.15`, or a
+verified matching development build. If the CLI rejects `--contract-generation`,
+report the compatibility gap; do not silently fall back to generation 1. Recovery
+with an older original writer uses that release's own guidance and grammar.
+
 1. Resolve the owning worktree, available CLI and `.podway/config.yaml`. Report
-   missing prerequisites without initializing or installing anything. Tracked
-   `.podway` files are `.podway/config.yaml`, `.podway/procedures/` and
-   `.podway/.gitignore`, which ignores `runtime/`; authoritative task state and
-   maintenance locks live under `.podway/runtime/` and are never tracked.
-2. Run `podway observe --json` in the authorized worktree, passing
-   `--contract-generation 2` on every command. Require `podway.output/v4` and
-   `podway.observation-result/v6`; the deprecated generation-1 default still
+   missing prerequisites without initializing or installing anything. Reviewable
+   `.podway` content is `.podway/config.yaml`, Procedure files under
+   `.podway/procedures/` and `.podway/.gitignore`, which ignores `runtime/`;
+   authoritative task state and maintenance locks live under `.podway/runtime/`
+   and are never tracked.
+2. Run `podway --contract-generation 2 --worktree <absolute-root> --json observe`.
+   Require `podway.output/v4` and `podway.observation-result/v6`; the deprecated
+   generation-1 default still
    serves `podway.observation-result/v5` to consumers that have not adopted
    generation 2. Error output uses `podway.error/v2`; `SESSION_NOT_FOUND` means
    no current session; `WORKSPACE_NOT_INITIALIZED` means this worktree has no
    workspace, so report it and initialize only with explicit intent.
 3. Read identities and lifecycle from `status`, current work from `guidance`,
    declarations from `active_items`, and fenced requests from `mutation_templates`.
-   Templates and recovery recipes never embed `--contract-generation`. When
-   executing one, add `--contract-generation 2`, keep every option it already
-   supplies, and add other applicable caller options only where they are absent:
-   `--json` for machine output, and `--worktree <path>` only on workspace
-   commands (local commands accept no worktree request options). Fill only its
-   declared placeholders, keep any concrete idempotency key it carries, and keep
-   every supplied fence. Prepared state has no active attempt; null guidance
-   denotes terminal state.
+   Apply [command execution](#command-execution) when using a template.
+   Prepared state has no active attempt; null guidance denotes terminal state.
    An undisposed terminal revision needs disposition before archive or replacement.
    Use `status --verbose` for history and `next` for narrower guidance.
 4. Once per workflow entry, run `podway archive list --json` and require
@@ -54,12 +54,26 @@ skill. Route Procedure source work to `$create-podway-procedure`.
 5. Without a current session, continue external work. Create a session only when
    the workflow explicitly authorizes it.
 
-Use `--worktree <path>` to preserve the owning worktree on every workspace
-command; local commands (`help`, `version`, `completions`, `preset`, `procedure`)
-accept no worktree request options. `--json` is global, and every command
-accepts `--contract-generation`; pass `--contract-generation 2` on every
-command, including the local families where it has no effect. `--timeout <duration>`
-defaults to `5s`; unsigned `ms`, `s` or `m` values
+## Command execution
+
+Pass `--contract-generation 2` on every command with this compatible CLI. Use
+`--json` for machine output and `--worktree <absolute-root>` on every workspace
+command. Local commands (`help`, `version`, `completions`, `preset`, `procedure`)
+accept the generation selector but reject worktree request options: `--worktree`,
+`--timeout`, `--idempotency-key`, all `--if-*` fences and `--yes`.
+
+Templates and recovery recipes never embed `--contract-generation`. Add the
+caller options above only where absent. Replace declared placeholders with
+supported facts; preserve supplied options, fences and concrete idempotency keys.
+Observation mutation templates and preview start suggestions may append optional
+or repeatable semantic arguments admitted by command help, including additional
+`--criterion`, citations (`--evidence` / `--item`) and applicable `--actor`, within
+the authorized work. Recovery recipes keep their semantic argv unchanged: add
+only caller options and fill declared placeholders. A bare preview start
+suggestion also needs a caller-owned key and current start preconditions when
+applicable. Inputs that own identities on stdin keep those identities there.
+
+`--timeout <duration>` defaults to `5s`; unsigned `ms`, `s` or `m` values
 may be at most `60m`. It supplies one admission-wait budget across maintenance
 leases, the connection gate and SQLite locks. Input, preparation and confirmation
 consume that budget without renewing it; each boundary tries once even at `0ms`,
@@ -72,7 +86,9 @@ and admitted work may finish later. It is not an execution timer.
 2. For each mutation, use the latest workspace, session, attempt, goal and item
    identities/revisions required by its template. Supply one unique stable
    idempotency key, retain the canonical request, and add semantic arguments from
-   command help. Never omit a required mutation fence to make a request succeed;
+   command help. Some CLI commands can fill omitted fences from an internal
+   preflight, but automation must preserve the observed template fences so it
+   acts on the state it inspected. Never drop a fence to make a request succeed;
    separately authorized unfenced maintenance is described in
    [lifecycle](references/lifecycle.md).
 3. Record items with their typed command:
@@ -85,6 +101,14 @@ and admitted work may finish later. It is not an execution timer.
    | `artifact` | `attach` |
    | `check_result` | `record --stdin` with the declared operation identity |
    | Any recorded value | `clear` |
+
+   For `check_result`, start from the observed `item.record_many` template's
+   `stdin_template` when present. Its `record` requires `type: "check_result"`,
+   `operation_id`, `operation_digest`, `input_basis` with both `descriptor` and
+   `digest`, `executor` with both `name` and `version`, `outcome`, `summary` and
+   `output_digest`. Keep the declared operation identity; fill result fields from
+   the actual check. Hash retained check-output bytes reproducibly and identify
+   the checked inputs; never invent digests. Podway validates structure, not truth.
 
    Use `--actor` only on commands that admit it, such as goal-bearing `begin`,
    disposition, `decide`, `rework` and goal operations. Keep distinct actors distinct.
@@ -102,7 +126,8 @@ and admitted work may finish later. It is not an execution timer.
    `preconditions.item_revision`), and exactly one typed `record` or
    `clear: true`. Do not also pass identity, revision or key flags. Require
    `podway.item-record-many-result/v2`; any rejected operation changes none of
-   them.
+   them. The mutation result's `revision` is the session revision, not an item
+   revision; re-observe for current `active_items[].revision` before another write.
 5. Re-observe after every mutation. Never derive multiple mutations from a stale
    observation. Historical success does not establish current readiness.
 6. Use `complete`, `skip`, `retry`, `decide`, `rework`, `block` or `unblock` only
@@ -132,8 +157,9 @@ terminal session, not deletion of current work or inactive history.
 - Check reference/readback states together with `items_satisfied`, `unblocked`,
   `goal_ready` and `can_advance`. Required evidence must resolve and be fresh;
   an unresolved optional reference does not block progression.
-- Previews are excerpts. Read a complete selected value with `podway evidence read
-  --json --source <node> --item <item>` and follow `next_page_token` until
+- Previews are excerpts. Read a complete selected value with `podway
+  --contract-generation 2 --worktree <absolute-root> --json evidence read
+  --source <node> --item <item>`. Pass `next_page_token` back as `--page-token` until
   `truncated: false`. On `EVIDENCE_PAGE_TOKEN_STALE`, re-observe and restart at page
   one. On stale required evidence, rework its owner only when the graph requires it.
 - Before an explicitly delegated action, read [delegation](references/delegation.md).

@@ -42,9 +42,10 @@ completion are distinct; delivery/submission never advances the cursor alone.
 
 ## Example and handoff
 
-Use the [review YAML](https://github.com/irootkernel/podway/blob/v0.2.14/docs/examples/procedures/supervised-review-v2.yaml)
-and [walkthrough](https://github.com/irootkernel/podway/blob/v0.2.14/docs/examples/supervised-delegation.md)
-after that release is published. When validating another release, select both from
+Use the [review YAML](https://github.com/irootkernel/podway/blob/v0.2.15/docs/examples/procedures/supervised-review-v2.yaml)
+and [walkthrough](https://github.com/irootkernel/podway/blob/v0.2.15/docs/examples/supervised-delegation.md)
+after `v0.2.15` is published; before publication, use both from the exact reviewed
+candidate commit with its matching CLI. When validating another release, select both from
 its exact tag; keep example bytes and instructions at one pinned revision.
 This is custom source, not a preset. Its binding and
 synthetic Role digest apply only to the isolated fixture. Real use needs the

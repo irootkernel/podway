@@ -61,11 +61,14 @@ loops and terminal bypasses. Validation proves admissibility, not workflow meani
 ## Findings and handoff
 
 Inspect canonical rendering before `podway procedure format <file> --write`; review the
-result and repeat the complete authoring checks. Fix the owning declaration for
+result and repeat `procedure check --warnings-as-errors` and preview as described
+in the [authoring workflow](../SKILL.md#author-and-verify). Fix the owning declaration for
 validation/vet/lint/check findings rather than weakening bounds, guards, evidence
 or warnings.
 
 On `WORKSPACE_CONFIG_INVALID` or an excluded target, leave the candidate
 undistributed and hand off the prerequisite to `$use-podway` under separate intent.
 Preview's digest and exact start suggestion are the consumption handoff. Never
-reconstruct them manually or execute start as part of authoring.
+reconstruct them manually or execute start as part of authoring. The runtime
+caller preserves this payload and adds its applicable options, key and current
+start preconditions; authoring does not authorize that execution.

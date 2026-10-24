@@ -4,6 +4,9 @@ Read for an authorized initialization, start/replacement, archive/purge,
 cancel/reset, workspace removal or repair. Preserve the exact target and deletion
 boundary; one operation does not authorize another.
 
+Apply the shared [command execution](../SKILL.md#command-execution) rules to the
+command forms below; fenced templates do not supply semantic decisions.
+
 ## Inspect and initialize
 
 - When identity matters, run `podway version --json --identity`. Require Output v4,
@@ -14,7 +17,7 @@ boundary; one operation does not authorize another.
   <route>` for unfamiliar operations. Diagnostic failure is not repair authority.
 - `podway init` requires explicit initialization intent for that worktree. Do not
   initialize a side-work fixture as part of a session owned elsewhere. It creates
-  the tracked files `.podway/config.yaml`, `.podway/procedures/` and
+  the reviewable `.podway/config.yaml`, Procedure directory and
   `.podway/.gitignore`; that ignore rule keeps `runtime/` untracked, and the
   authoritative task state and maintenance locks under `.podway/runtime/` are
   never tracked. A new-key init refuses an initialized workspace; diagnosed
@@ -27,26 +30,25 @@ boundary; one operation does not authorize another.
 Inspect `podway preset list` and `podway preset explain <name>`. Supported built-ins
 are `analysis-v2`, `bug-fix-v2`, `small-change-v2` and `sw-dev-v2`; select from the
 actual task. For custom source, use `$create-podway-procedure`, then copy preview's
-exact start suggestion and `--expect-procedure-digest`. Missing custom digest
-fails with `DIGEST_CONFIRMATION_REQUIRED`; presets do not use it.
+exact start suggestion and `--expect-procedure-digest`. That suggestion is a bare
+handoff: retain its source and digest, fill the task, add caller options and a
+stable key, and obtain current applicable start fences before execution. Missing
+custom digest fails with `DIGEST_CONFIRMATION_REQUIRED`; presets do not use it.
 
 Under `--contract-generation 2`, observation offers each lifecycle window as
 fenced templates: a prepared session offers `session.begin`, `session.reset`
 and two replacement starts; an undisposed terminal session offers the two
 `session.terminal_disposition` variants; a disposed terminal session offers
 `session.archive`, `session.reset` and two fenced plain `session.start`
-variants. Templates and recovery recipes never embed
-`--contract-generation`. When executing one, add `--contract-generation 2`,
-keep every option it already supplies, and add other applicable caller options
-only where they are absent: `--json` for machine output, and
-`--worktree <path>` only on workspace commands (local commands accept no
-worktree request options). Fill only its declared placeholders, keep any
-concrete idempotency key it carries, and keep every supplied fence. The
-deprecated generation 1 keeps the bare v5 templates.
+variants. Execute them under the shared caller-option rule above. The deprecated
+generation 1 keeps the bare v5 lifecycle templates.
 
-A plain `start --dry-run` previews the Procedure only. Add
-`--dry-run --on-existing preserve|delete` to inspect an existing-session policy.
-The real start always revalidates; a dry run is not authorization.
+An unfenced plain `start --dry-run` previews only the Procedure. With paired
+`--if-session-id` and `--if-session-revision`, it also verifies the current
+session identity, revision and lifecycle read-only; a prepared, running or
+undisposed terminal session is refused. A policy dry run with
+`--on-existing preserve|delete` inspects that existing-session policy. The real
+start always revalidates; a dry run is not authorization.
 
 Human TTY start interviews only for an existing session. Enter or EOF continues
 that session without creating one. Prepared state offers continue/delete; running
@@ -83,6 +85,10 @@ Procedure permits `goal define` once later when begin omitted it.
 A terminal disposition applies to one exact session revision. `disposition
 handed-off` and `disposition not-required` make completed/cancelled sessions eligible;
 `superseded` is produced only by atomic running-session preservation at start.
+Choose `handed-off` when terminal work has been delivered: supply its actual
+summary and `--reference` to the commit, artifact or handoff target. Choose
+`not-required` when no handoff is needed and state why. Neither choice invents
+delivery or authorizes an external handoff.
 Inactive sessions are immutable and cannot reactivate. Completed current sessions
 can reactivate only under authorized rework or goal revision.
 
@@ -105,10 +111,10 @@ executing or blocking work:
 
 ```bash
 # Reinitialize all workspace runtime state.
-podway reset --all --yes --if-workspace-uuid <workspace-uuid> --idempotency-key <new-key>
+podway --contract-generation 2 --worktree <absolute-root> --json reset --all --yes --if-workspace-uuid <workspace-uuid> --idempotency-key <new-key>
 
 # Purge only the oldest inactive session from the same archive-list envelope.
-podway archive purge --session-id <oldest-session-id> --if-session-revision <revision> --yes --if-workspace-uuid <workspace-uuid> --idempotency-key <new-key>
+podway --contract-generation 2 --worktree <absolute-root> --json archive purge --session-id <oldest-session-id> --if-session-revision <revision> --yes --if-workspace-uuid <workspace-uuid> --idempotency-key <new-key>
 ```
 
 Both commands use `workspace.uuid` from the same archive-list envelope; purge also
@@ -152,7 +158,7 @@ authority. For these discard-eligible states, after read-only diagnosis, exact-t
 identification and explicit discard authorization, use:
 
 ```bash
-podway --worktree <absolute-root> --json reset --all --yes --idempotency-key <new-key>
+podway --contract-generation 2 --worktree <absolute-root> --json reset --all --yes --idempotency-key <new-key>
 ```
 
 This is a new unfenced discard request, not a weakened retry of a failed fenced
@@ -177,16 +183,17 @@ authority does not cover it.
 3. After authorization, re-read and require the same root and UUID. JSON/non-TTY use:
 
    ```bash
-   podway --worktree <absolute-root> workspace remove --force --if-workspace-uuid <workspace-uuid> --yes --idempotency-key <original-key>
+   podway --contract-generation 2 --worktree <absolute-root> --json workspace remove --force --if-workspace-uuid <workspace-uuid> --yes --idempotency-key <original-key>
    ```
 
    Unfenced human TTY removal must type the exact resolved root even with `--yes`;
    a UUID-fenced request can use `--yes` instead. Do not invent a missing UUID;
    invalid current-generation state needs human-terminal removal with exact-root
-   confirmation. Unsupported older or unrecognizable-header state requires an
-   authorized reset-all first. Do not add `--json` or invent a UUID for that path.
-4. Require `podway.workspace-removal-result/v2`. Report root, prior UUID,
-   `podway_directory_removed` and `already_absent`; verify only the selected
+   confirmation. For that human-terminal path, omit `--json` and do not invent a
+   UUID. Unsupported older or unrecognizable-header state requires an authorized
+   reset-all first.
+4. For JSON success, require `podway.workspace-removal-result/v2`. Report root,
+   prior UUID, `podway_directory_removed` and `already_absent`; verify only the selected
    `.podway` tree is absent and its Git worktree remains.
 5. For response loss/interruption, retain the original request/key/UUID. Follow
    marker-backed recovery for that same operation, root and filesystem identity.
