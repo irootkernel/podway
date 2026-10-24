@@ -21,6 +21,8 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Changed
 
+- Require consumer manifest re-pinning and fresh runtime state for `v0.2.14` workspaces; finish or abandon sessions with their original writer before upgrading,
+  then explicitly confirm an unfenced reset-all to discard runtime history without backup or conversion.
 - Teach the runtime skill tracked `.podway` files, uninitialized workspaces,
   record-field observation sources, the criterion citation rule and released writer digests.
 - Consolidate skill command rules, allow supported semantic arguments on templates,
