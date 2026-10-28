@@ -159,5 +159,5 @@ and the
 to replace the synthetic binding and Role identity with a qualified mapping and
 choose an appropriate round budget and worker disposition. Revalidate the exact
 modified file and use its new preview digest. Record supported-release evidence
-separately from source validation. The [real integration candidate](../todo/TODO-podway-supervised-delegation-integration.md)
+separately from source validation. The [real integration candidate](../todo/TODO-podway-executor-integration.md)
 tracks the remaining external and managed Primary prerequisites.

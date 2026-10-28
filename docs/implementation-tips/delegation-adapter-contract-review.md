@@ -7,7 +7,7 @@ This is the durable review worksheet for the
 It supports the pre-reservation check owned by `V2SDG-002`; delivery order and
 status remain in the [roadmap](../roadmap/README.md#v2sdg-host-neutral-supervised-delegation-foundation).
 It adds no adapter, provider dependency, capability, or authorization to run an
-agent. The [real integration candidate](../todo/TODO-podway-supervised-delegation-integration.md)
+agent. The [real integration candidate](../todo/TODO-podway-executor-integration.md)
 owns later implementation and live qualification.
 
 Field names alone are not a compatibility proof. For every Podway receipt

@@ -1,8 +1,9 @@
-# Podway Supervised Delegation: Real Executor Integration
+# Podway Executor Integration
 
 ## Status and authority
 
 - Document state: `Candidate`
+- Working label: INTEG
 - Dossier type: research and design candidate
 - Research baseline: September 16, 2026
 - Contract comparison refinement: September 17, 2026
@@ -173,12 +174,16 @@ different authority boundary. Any new Primary handoff or parallel model needs
 its own explicit architecture decision. Register implementation work only once
 these decisions and dependencies are closed.
 
+The local typed-boundary cleanup is tracked separately in
+[TYPED](TODO-podway-typed-boundary-ownership.md). It is not proof of a compatible
+live executor and is not made a mandatory dependency by this reorganization.
+
 ## 7. References
 
 - [ADR-0035](../architecture-decision-records/0035-host-neutral-supervised-delegation.md)
 - [Podway target contract](../specs/interfaces/supervised-delegation.md)
 - [Non-disruptive implementation guidance](../implementation-tips/supervised-delegation.md)
 - [Adapter field and digest review](../implementation-tips/delegation-adapter-contract-review.md)
-- [Graph engineering candidate](TODO-podway-graph-engineering-evolution.md)
+- [Graph evolution feasibility candidate](TODO-podway-graph-evolution-feasibility.md)
 - [Same-user trust](../architecture-decision-records/0006-same-user-local-trust.md)
 - [Generic CLI/JSON integration](../architecture-decision-records/0010-generic-cli-json-integration.md)

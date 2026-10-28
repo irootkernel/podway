@@ -66,6 +66,18 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 ## Lifecycle
 
 - Keep an adopted dossier here while any task in its owning epic is incomplete.
+- When only part of a candidate is adopted, promote only the selected findings
+  into their actual roadmap tasks. Retain unselected findings under a continuing
+  candidate owner; extracting a bounded adopted dossier can leave the original
+  candidate for the remainder. Do not implicitly adopt or resolve the rest.
+- Before converting or deleting a candidate or adopted dossier, preserve the
+  full details of every still-open DF entry in its continuing candidate or
+  independent register entry and update all references. Each Open entry keeps
+  one detailed owner, including its source, rationale and revisit condition;
+  duplicate detail tables and a second status authority are unnecessary.
+  Promotion closes the selected deferral, not implementation or acceptance;
+  the roadmap alone owns those states. For example, adopting DF-013 and DF-014
+  from TYPED leaves its other eleven entries Open under their continuing owner.
 - Update the dossier before implementation when a material design decision
   changes. During implementation, promote every lasting decision and behavior to
   its proper durable authority: accepted ADRs, canonical machine assets,
@@ -85,62 +97,43 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-No adopted dossier remains. The
-[GUIDE epic](../roadmap/README.md#guide-agent-guidance-and-contract-generation-2)
-is completed and owner-accepted; its dossier is retired under the lifecycle
-above. Delivered behavior lives in
-[ADR-0039](../architecture-decision-records/0039-opt-in-contract-generations.md),
-the [contract generations](../specs/interfaces/json-contract.md#contract-generations)
-specifications, the runtime skill and the
-[functional regression owners](../implementation-tips/testing.md#functional-regression-owners).
-The roadmap owns task status, and the `v0.2.15` release still requires a
-separately authorized release.
-
-The [structural simplification program](../roadmap/README.md#structural-simplification-program)
-is completed and owner-accepted in the sequence VIEWS, PARSE, STATE and ADMIT.
-All four dossiers are retired under the lifecycle above; no adopted dossier
-remains for this program. The roadmap owns task status.
-
-Delivered behavior lives in
-[projection composition](../architecture/system.md#request-scoped-read-composition),
-[document admission reuse](../architecture/system.md#document-admission-reuse),
-[staged snapshot state reuse](../architecture/system.md#staged-snapshot-state-reuse),
-[read admission](../architecture/system.md#read-path) and
-[invocation-local graph reuse](../architecture/system.md#invocation-local-prepared-graph-reuse), with
-[functional regression owners](../implementation-tips/testing.md#functional-regression-owners).
-No CLI/JSON interface, storage identity, release or external-consumer change is selected.
-Elapsed-time tests, latency percentiles, throughput benchmarks, performance
-baselines and thresholds remain excluded by
-[structural correctness verification](../implementation-tips/testing.md#structural-simplification-verification).
-CALLS remains a candidate, without roadmap tasks.
-
-### Completed preceding sequence
-
-The owner adopted three sequential internal-improvement epics on 2026-10-14
-with one shared goal and a fixed order, not parallel work. OPTIM and BOUND were
-accepted on 2026-10-17 and their dossiers are removed. The
-[roadmap](../roadmap/README.md#current-internal-improvements) alone owns order and
-status. READS was accepted on 2026-10-19 and its dossier is also retired; no
-adopted dossier remains for this sequence. These epics are not a release program
-and do not select a release version. Existing external/storage contracts
-and cold-read validation remain unchanged; archive-list retains its summary-only
-boundary. The owner withdrew OPTIM performance measurement on 2026-10-16
-and reaffirmed the exclusion of all READS performance measurement on 2026-10-19.
-Roadmap status is authoritative; a missing OPTIM baseline is not implementation
-evidence.
-
-READS behavior and correctness boundaries now live in the
-[system architecture](../architecture/system.md#request-scoped-read-composition)
-and [functional closeout guidance](../implementation-tips/direct-cli-performance-qualification.md#reads-005-functional-closeout).
-
-Each dossier is retired independently after its owning epic is accepted and its
-lasting information is promoted. References to a completed prerequisite use the
-durable roadmap and architecture rather than a removed dossier.
+No adopted dossier remains.
 
 ## Related candidates
 
-- [CLI interaction simplification (CALLS)](TODO-podway-cli-interaction-simplification.md): possible caller and public interface changes; no epic, tasks or implementation commitment is adopted.
-- [Real executor integration](TODO-podway-supervised-delegation-integration.md): live external/managed Primary adapters and qualification excluded from V2SDG.
-- [Graph engineering](TODO-podway-graph-engineering-evolution.md): separately motivated work-unit and parallel graph research. Rebased on the current Direct Engine; successor work units/leases/fan groups remain unadopted.
-- [Continuation generations](TODO-podway-versioned-continuation-generations.md): separately motivated topology replacement and plan lineage.
-- [Web operations console](TODO-podway-web-operations-console.md): human operations after its graph/runtime prerequisites are settled. Foreground-only exploration over the same Direct Engine and explicit worktree inventory; no resident/login/global control plane is adopted.
+These seven documents group possible epic scopes. Their working labels reserve
+no roadmap identifiers and establish no task order or implementation commitment.
+Each remains `Candidate`; adoption requires closing its decisions and registering
+bounded work in the active roadmap. CALLS is the recommended next design topic.
+
+Select work from a concrete product need and each finding's revisit condition.
+These groupings are not seven sequential implementation commitments: TYPED is
+not a prerequisite for INTEG, and independent improvements do not wait for the
+entire PROOF program. A selected scope carries its applicable correctness and
+verification obligations; grouping does not waive them.
+
+| Working label | Candidate | Proposed outcome | Source feedback |
+|---|---|---|---|
+| CALLS | [Agent workflow simplification](TODO-podway-agent-workflow-simplification.md) | Clear observation, input, recording, lifecycle and recovery flows | DF-044, DF-047, DF-048, DF-049, DF-051 |
+| TYPED | [Typed boundary ownership](TODO-podway-typed-boundary-ownership.md) | Explicit owners for existing values, bounds, extraction and validation reuse | DF-002, DF-003, DF-005, DF-011, DF-012, DF-013, DF-014, DF-016, DF-017, DF-022, DF-024, DF-025, DF-027 |
+| MAINT | [Maintenance and recovery safety](TODO-podway-maintenance-recovery-safety.md) | Bounded recovery policy, confirmation and fault verification | DF-029, DF-030, DF-031, DF-032, DF-033, DF-034, DF-036, DF-039, DF-040, DF-041, DF-042, DF-043 |
+| CNTRT | [Public contract consistency](TODO-podway-public-contract-consistency.md) | Diagnostic, command/schema and known-answer consistency | DF-004, DF-008, DF-046 |
+| INTEG | [Executor integration](TODO-podway-executor-integration.md) | Real adapter and selected-build qualification beyond the local foundation | Existing real executor candidate |
+| PROOF | [Graph evolution feasibility](TODO-podway-graph-evolution-feasibility.md) | Per-shape evidence for coordination and topology-lineage needs | Existing graph and continuation research |
+| WEBUI | [Operations console](TODO-podway-operations-console.md) | Foreground human operations after the graph direction is settled | Existing Web console candidate |
+
+The [deferred-feedback register](../deferred-feedback/README.md) retains each
+feedback ID and source. Candidate-owned details live in the linked candidate;
+grouping alone does not resolve a deferral or populate its promoted task.
+DF-026, DF-028, DF-045 and DF-050 retain their full independent entries there.
+
+## Supporting research notes
+
+The `references/` documents preserve dated research, rejected alternatives,
+illustrative models, risks and unresolved implementation questions. They are
+non-normative supporting material for PROOF, not additional epic candidates,
+adopted dossiers or competing experiment plans. Future designs must revalidate
+external comparisons and obtain accepted authority for any product change.
+
+- [Graph engineering research](references/graph-engineering-research.md)
+- [Continuation generations research](references/continuation-generations-research.md)

@@ -3,11 +3,12 @@
 ## Status and authority
 
 - Document state: `Candidate`
+- Working label: WEBUI
 - Owning roadmap epic: none
 - Target product release: undecided
 - Repository scope: Podway only
 - Related candidate:
-  [Podway Graph Engineering Evolution](TODO-podway-graph-engineering-evolution.md)
+  [Graph Evolution Feasibility](TODO-podway-graph-evolution-feasibility.md)
 
 [ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md) and the
 [System Architecture](../architecture/system.md) replace the historical
@@ -151,7 +152,7 @@ Promote only after:
 
 - [ADR-0038: Remove the Daemon](../architecture-decision-records/0038-remove-the-daemon.md)
 - [ADR-0004: Store Task State Inside the Worktree](../architecture-decision-records/0004-worktree-local-state.md)
-- [Podway Graph Engineering Evolution](TODO-podway-graph-engineering-evolution.md)
+- [Graph Evolution Feasibility](TODO-podway-graph-evolution-feasibility.md)
 - [System Architecture](../architecture/system.md)
 - [CLI Specification](../specs/interfaces/cli-specification.md)
 - [JSON Contract](../specs/interfaces/json-contract.md)

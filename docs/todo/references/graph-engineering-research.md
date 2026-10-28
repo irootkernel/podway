@@ -1,66 +1,42 @@
-# Podway Graph Engineering Evolution
+# Podway Graph Engineering Research
 
 ## Status and authority
 
-- Document state: `Candidate`
-- Dossier type: research and design candidate
+- Document role: supporting research notes
+- Candidate owner: [PROOF](../TODO-podway-graph-evolution-feasibility.md)
 - Owning roadmap epic: none
-- Target product release: undecided
-- Candidate contract target: a possible successor to `podway.procedure/v2`
-- Candidate scale: release-program scale, comparable to `PV2GA` or larger
-- Repository scope: Podway only
 - Research and planning baseline: August 17, 2026
-- Related implemented authority: [ADR-0025](../architecture-decision-records/0025-structurally-bound-external-check-results.md), epic `V2AST`
-- Related foundation: [Host-Neutral Supervised Delegation](../specs/interfaces/supervised-delegation.md)
-- Related integration candidate: [Real Executor Integration](TODO-podway-supervised-delegation-integration.md)
+- Repository scope: Podway only
+- Possible contract target: a successor to `podway.procedure/v2`; no identifier or release is reserved
 
-[ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md) and the
-[System Architecture](../architecture/system.md) establish the
-current Direct Engine: request-driven worktree transactions, success-only outcomes,
-no resident process, global registry, FIFO admission or daemon IPC. This candidate
-is rebased on that boundary. Proposed work claims, leases and joins would execute
-through the same Engine, never a new daemon or alternate Store writer. Historical
-daemon observations below are labeled context, not current runtime assumptions.
-A resident/login-start process requires a new ADR and is not a preferred direction.
+These notes preserve the exploratory models, dated external comparisons,
+preferred and rejected directions, illustrative shapes, risks and unresolved
+questions behind the PROOF candidate. They are non-normative reference material,
+not an adopted dossier, implementation commitment or source of current product
+contracts. Their historical comparisons retain their original baseline dates;
+reorganization does not revalidate an external product or installed runtime.
 
-The September 16 adoption of V2SDG covers a sequential Podway-side delegation
-foundation only. It neither adopts this graph candidate nor satisfies its
-shape-specific experiment and promotion conditions. Live adapters remain a
-separate candidate; they are not prerequisites for local V2SDG conformance.
+In the retained discussion, "candidate" refers to the exploratory implementation
+model. It does not designate another epic candidate alongside PROOF. Numbered
+model sections remain stable so their reasoning and cross-references survive;
+the experiment protocol itself has moved to PROOF.
 
-This document is the single repository location for the research, working
-decisions, rejected directions, unresolved questions, and promotion conditions
-associated with a possible graph-engineering evolution of Podway. It preserves
-planning knowledge so that later design work does not have to reconstruct the
-same context.
+The maximum model is release-program scale, comparable to PV2GA or larger: the
+open-decision ledger has 26 material questions and the scope inventory spans nine
+ownership areas. That breadth is not one adoptable epic. A validated subset needs
+its own closed implementation candidate and accepted architecture decisions.
 
-It is not an adopted design dossier, an accepted architecture decision, a
-roadmap commitment, or a specification of implemented behavior. The active
-[roadmap](../roadmap/README.md) does not own this work. Accepted ADRs, canonical
-assets, executable contracts, specifications, source, tests, and runtime evidence
-remain authoritative for the current product. No command, schema, lifecycle,
-storage table, adapter, or behavior described as a proposal below exists merely
-because it appears in this candidate.
+[ADR-0038](../../architecture-decision-records/0038-remove-the-daemon.md) and the
+[System Architecture](../../architecture/system.md) own the current Direct Engine,
+request-driven worktree transactions and success-only outcomes. No proposed
+claim, lease or join restores a daemon, registry, FIFO admission or alternate
+Store writer. A resident process needs separate architecture authority.
 
-Promotion to `Adopted` requires the material open decisions in this document to
-be closed, the necessary ADRs to be accepted, and one or more owning roadmap
-epics to be registered. Until then, terms such as *Procedure v3*, *fan group*,
-*work receipt*, and the illustrative command names are design vocabulary only.
-
-The phrase "a possible successor to `podway.procedure/v2`" understates what is
-proposed, so the scale is stated plainly here. Section 16.3 lists 26 material
-open decisions and section 17 spans nine ownership areas including a new storage
-generation, new protocol families, a new public CLI grammar, and several new
-ADRs. That is comparable to or larger than the `PV2GA` release program of ten
-epics that delivered Procedure v2 itself. This is Podway v3 in scale rather than
-a schema revision. That describes the candidate's maximum breadth and not an
-adoptable unit: section 21 bars wholesale promotion while material shapes remain
-unexercised, so any promotion proceeds as a validated subset.
-
-Section 3 records what the shipped product already permits, and section 20.1
-names the single precondition experiment. Both exist because the argument in
-sections 8 through 17 rests on a demand hypothesis this document has not yet
-tested.
+V2SDG supplies the sequential local delegation foundation only. It does not prove
+the graph hypothesis or a live adapter; real executor integration belongs to
+[INTEG](../TODO-podway-executor-integration.md). The structural check-result
+foundation is already implemented under ADR-0025. The S1-S6 protocol is owned by
+PROOF; this note retains the possible mechanisms and their future design limits.
 
 ## 1. Context and goal
 
@@ -139,11 +115,11 @@ already published v0.2.13 release.
 `podway record --stdin` consumes closed `podway.item-record-many-input/v1` JSON
 bounded to 1 MiB and 1 to 128 unique current-attempt item operations, and returns
 `podway.item-record-many-result/v2`. Requirement `AUT-ID-008` in the
-[Automation Client Contract](../specs/interfaces/automation-client-contract.md)
+[Automation Client Contract](../../specs/interfaces/automation-client-contract.md)
 requires the route to fence the workspace UUID, session ID, session revision,
 active attempt, and every selected item revision before atomically changing any
-selected item. Per [State Transitions](../specs/domain/state-transitions.md) and
-[Transactions, Concurrency, and Idempotency](../specs/storage/transactions-concurrency-and-idempotency.md),
+selected item. Per [State Transitions](../../specs/domain/state-transitions.md) and
+[Transactions, Concurrency, and Idempotency](../../specs/storage/transactions-concurrency-and-idempotency.md),
 the pure transition applies the complete set or returns no successor, commits one
 success outcome with its effect, advances the session revision exactly once when
 at least one item changes, and never advances the graph cursor.
@@ -153,7 +129,7 @@ many independent read-only agents or checks concurrently outside Podway, collect
 their bounded results, and record the complete set atomically under exact fences.
 That capability shipped with `V2AGT-003` and `V2AGT-004`.
 
-Concurrent external work is not a new permission. [ADR-0002](../architecture-decision-records/0002-single-active-stage.md)
+Concurrent external work is not a new permission. [ADR-0002](../../architecture-decision-records/0002-single-active-stage.md)
 already decided that multiple humans or agents may perform external work
 concurrently and update different items while Podway retains one authoritative
 current placement. The current Direct Engine serializes fenced transactions from
@@ -218,14 +194,14 @@ worktree-local authority, a same-user trust boundary, typed stage items rather
 than a general evidence ledger, and generic CLI/JSON integration. The first
 repository baseline commit, `88586d4`, was recorded on July 16, 2026.
 
-The initial Procedure model was intentionally linear. [ADR-0002](../architecture-decision-records/0002-single-active-stage.md)
+The initial Procedure model was intentionally linear. [ADR-0002](../../architecture-decision-records/0002-single-active-stage.md)
 allowed multiple humans or agents to perform external work concurrently, but
 retained one authoritative active stage attempt. This means that Podway's durable
 control-plane instincts predate its explicit graph model, while its original
 product did not yet express a general graph.
 
-On August 4, 2026, [ADR-0015](../architecture-decision-records/0015-constrained-single-cursor-graph.md)
-introduced the Procedure v2 graph. [ADR-0017](../architecture-decision-records/0017-single-cursor-convergence.md)
+On August 4, 2026, [ADR-0015](../../architecture-decision-records/0015-constrained-single-cursor-graph.md)
+introduced the Procedure v2 graph. [ADR-0017](../../architecture-decision-records/0017-single-cursor-convergence.md)
 then permitted alternative routes to converge on one placement without permitting
 parallel tokens or synchronization. The v2 work made action and decision nodes,
 declared routes, evidence readback, rework invalidation, graph vetting, and goal
@@ -256,7 +232,7 @@ The defensible historical conclusion is therefore limited:
 ### 5.1 Product identity
 
 The current product is a local procedure guard for one current task in one Git
-worktree. [Goals and Non-Goals](../specs/product/goals-and-non-goals.md) defines it
+worktree. [Goals and Non-Goals](../../specs/product/goals-and-non-goals.md) defines it
 as neither a project manager, CI system, command runner, Git mutation layer,
 arbitrary workflow engine, plugin host, remote collaboration service, artifact
 store, long-term evidence archive, AI runtime, nor same-user security boundary.
@@ -288,13 +264,13 @@ plan in a model's context.
 
 ### 5.3 Persistence and mutation strengths
 
-[ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md) supersedes
+[ADR-0038](../../architecture-decision-records/0038-remove-the-daemon.md) supersedes
 the daemon writer. Each command runs in its caller process; one SQLite IMMEDIATE
 transaction commits a mutation, validated success outcome and journal atomically.
 Ordinary opens share a maintenance lease; creation/reset/removal and declared
 predecessor migration take it exclusively. Independent worktrees remain separate.
 
-[Transactions, Concurrency, and Idempotency](../specs/storage/transactions-concurrency-and-idempotency.md)
+[Transactions, Concurrency, and Idempotency](../../specs/storage/transactions-concurrency-and-idempotency.md)
 distinguishes workspace sequence, session revision and item revision. Exact
 canonical success replay precedes fresh fences; rejection leaves no outcome.
 Response loss is reconciled by outcome lookup within retention, not job admission.
@@ -307,27 +283,24 @@ client exit and recorded rejection replay are retired guarantees.
 
 ### 5.4 Current assurance boundary
 
-[ADR-0016](../architecture-decision-records/0016-recorded-item-workflow-memory.md)
-and the [Domain Model](../specs/domain/domain-model.md) deliberately separate
+[ADR-0016](../../architecture-decision-records/0016-recorded-item-workflow-memory.md)
+and the [Domain Model](../../specs/domain/domain-model.md) deliberately separate
 formal validity from semantic truth. Podway can enforce that a required item has
 the correct type and a recorded value. It cannot decide that recorded text is
 true, that a confirmation corresponds to work actually performed, or that two
 external schemas are semantically compatible.
 
-This is honest, but it leaves an important gap. A confirmation that says "tests
-passed" and a structured report from a known check, bound to the exact attempted
-input, are not the same kind of evidence. Today they can collapse into similar
-recorded assertions.
-
-Unlike the parallelism boundary described next, this is a defect in the shipped
-product rather than a limit whose cost has yet to be demonstrated. It is
-therefore owned by the implemented
-[structurally bound external check-result authority](../architecture-decision-records/0025-structurally-bound-external-check-results.md), so
-that its remedy does not depend on the topology proposed here.
+The implemented `check_result` item distinguishes a confirmation from a
+structurally complete result bound to a declared operation and a caller-supplied
+input basis. [ADR-0025](../../architecture-decision-records/0025-structurally-bound-external-check-results.md)
+and the [item specification](../../specs/domain/procedure-and-item-specification.md)
+own that behavior. It does not prove that the check ran or that the supplied
+digests describe the claimed bytes. This foundation is outside the remaining
+candidate scope; only fan-specific extensions remain conditional work here.
 
 ### 5.5 Current parallelism boundary
 
-[ADR-0017](../architecture-decision-records/0017-single-cursor-convergence.md)
+[ADR-0017](../../architecture-decision-records/0017-single-cursor-convergence.md)
 permits several alternative routes to enter one placement, but only one route is
 traversed. It explicitly excludes simultaneous forks, multiple active tokens,
 parallel attempts, background graph execution, and synchronizing joins.
@@ -489,7 +462,7 @@ Podway should:
 - leave graph movement to an explicit mutation rather than treating worker
   completion as automatic stage completion.
 
-This retains the principle in [ADR-0010](../architecture-decision-records/0010-generic-cli-json-integration.md):
+This retains the principle in [ADR-0010](../../architecture-decision-records/0010-generic-cli-json-integration.md):
 generic CLI and versioned JSON are the canonical integration surface, and worker
 completion does not silently advance the procedure.
 
@@ -548,7 +521,7 @@ introduces no state change without a request, and needs no resident timer or
 queue entry. It does not remove time from the system. It relocates time from a
 background thread into the mutation path, where it becomes an input to a
 transition layer that
-[Transactions, Concurrency, and Idempotency](../specs/storage/transactions-concurrency-and-idempotency.md)
+[Transactions, Concurrency, and Idempotency](../../specs/storage/transactions-concurrency-and-idempotency.md)
 treats as pure. That addition should be stated rather than denied.
 
 The preferred evaluation rules follow the existing artifact completion race,
@@ -612,28 +585,11 @@ minutes and a one-hour maximum as examples, not accepted constants.
 
 ## 9. Improvement theme B: separate assertion from mechanical verification
 
-This theme is owned by
-[ADR-0025](../architecture-decision-records/0025-structurally-bound-external-check-results.md),
-implemented by epic `V2AST`.
-
-The reason for the split was evidence status, not lack of importance. The gap it
-describes exists in the shipped product, as section 5.4 records: a `confirm` item
-asserting that tests passed and a result bound to a named check against a named
-input can occupy the same formal slot and satisfy the same completion
-requirement. Nothing in that problem depends on fan groups, work claims, leases,
-or a parallel frontier. Keeping it inside this document would have made the
-cheapest and best-evidenced improvement wait behind the most expensive and
-least-evidenced one.
-
-That authority owns the assurance classes, the result binding, and the honest
-statement of what a result does not prove. It has also settled the question this
-document previously left open. A `check_result` binds to a declared operation
-identity and an exact input basis with no work-unit, map-instance, or lease
-identity, so the result is useful without any of them and the two documents do
-not merge back together.
-
-The fan-specific identities are therefore a conditional extension rather than a
-prerequisite. They enter scope only if the topology in section 10 is adopted:
+The base `check_result` behavior is implemented and owned by
+[ADR-0025](../../architecture-decision-records/0025-structurally-bound-external-check-results.md)
+and the [item specification](../../specs/domain/procedure-and-item-specification.md),
+as summarized in section 5.4. Only the following fan-specific extensions remain
+candidate work, conditional on adoption of the topology in section 10:
 
 - binding a receipt to fan-group, work-unit, and dynamic map instance identity;
 - binding a receipt to lease identity and generation;
@@ -934,7 +890,7 @@ outer placement. Rework must create a fresh attempt and make prior fan claims,
 leases, bases, and receipts ineligible for the new attempt unless a future rule
 explicitly preserves independently valid evidence.
 
-[Rework and Lifecycle](../specs/domain/rework-and-lifecycle.md) currently defines
+[Rework and Lifecycle](../../specs/domain/rework-and-lifecycle.md) currently defines
 a Procedure v2 session as running, completed, cancelled, or absent. A `failed`
 state is therefore an addition to a small closed set that every observation,
 projection, receipt, and consumer already switches on.
@@ -961,7 +917,7 @@ rules, and compatibility consequences require a separate decision.
 
 The improvement themes reinforce one another. Assurance typing appears here
 because the combined picture is easier to read with it, but it is owned by
-[ADR-0025](../architecture-decision-records/0025-structurally-bound-external-check-results.md)
+[ADR-0025](../../architecture-decision-records/0025-structurally-bound-external-check-results.md)
 and does not depend on the rest of this diagram:
 
 ```text
@@ -1098,7 +1054,7 @@ Unresolved questions exposed by this sketch include:
 
 The sketch also silently extends a released closed contract. The current
 `route.effect` enumeration in
-[`procedure-v2.schema.json`](../../assets/schemas/procedure-v2.schema.json) is
+[`procedure-v2.schema.json`](../../../assets/schemas/procedure-v2.schema.json) is
 exactly `advance` and `rework`. `finish_failed` is therefore a third effect, not
 a spelling choice, and it is the point where a route stops describing movement
 within the graph and starts describing session termination. Whether those belong
@@ -1160,19 +1116,17 @@ Each candidate feature needs its own verdict before a version decision is made:
 
 | Feature | Contracts it touches | Breaking for existing v2 consumers? |
 |---|---|---|
-| Assurance kind on recorded evidence | Item contracts, recording route, observation results | Decided by `V2AST`: additive through a new `check_result` item type, with the Procedure schema remaining `podway.procedure/v2` |
-| Mechanical result record | Existing `item.record_many` route, SQLite v6 item discriminator | Decided by `V2AST`: additive, with no separate result family and no second result table or lifecycle |
 | Work claim, lease, and report routes | New routes, new result families, Direct Engine transitions | Additive at the protocol level; no v2 document changes |
 | Fan placement and effects | Procedure schema topology, vetting, cursor semantics | Breaking; changes what a placement is |
 | Dynamic map expansion | Procedure schema, vetting, resource budgets, storage | Breaking; changes preparation-time boundedness proofs |
 | Join and group outcome | Cursor semantics, transitions, terminal derivation | Breaking; changes when and how the cursor moves |
 | `failed` session lifecycle | Session status set, observation, receipts, consumers | Breaking; extends a closed enumeration |
 
-The first two rows are no longer open. They are owned by
-[ADR-0025](../architecture-decision-records/0025-structurally-bound-external-check-results.md), which
-settled them additively without requiring a procedure generation. The remaining
-rows record the shape of the question rather than answers, and filling them in is
-prerequisite work.
+Base check-result recording is already implemented under
+[ADR-0025](../../architecture-decision-records/0025-structurally-bound-external-check-results.md)
+without requiring a procedure generation and is excluded from this inventory.
+The rows describe remaining candidate changes; their exact compatibility
+contracts must be closed before adoption.
 
 For whatever subset does require a new procedure version, three transition
 policies remain open. This document prefers none of them:
@@ -1187,7 +1141,7 @@ policies remain open. This document prefers none of them:
 
 Coexistence is not a neutral default in this repository. Podway 0.2.0 shipped
 Procedure v2 additively beside the released linear Procedure v1 model, and
-[ADR-0019](../architecture-decision-records/0019-procedure-v2-only-product.md)
+[ADR-0019](../../architecture-decision-records/0019-procedure-v2-only-product.md)
 then removed that arrangement because keeping both models duplicated parsing,
 domain, persistence, protocol, runtime, preset, documentation, and conformance
 paths. The `V2CUT` epic shipped that removal in v0.2.1. Policies 2 and 3
@@ -1226,7 +1180,7 @@ window, if any, a coexistence policy would declare.
 
 ## 16. Working decision ledger
 
-Everything in this section remains subordinate to Candidate status. "Preferred"
+Everything in this section remains non-normative supporting research. "Preferred"
 means the current discussion favored the direction; it does not mean the product
 has adopted it.
 
@@ -1236,7 +1190,6 @@ has adopted it.
 |---|---|---|
 | Product role | Durable graph authority, not executor | Preserves a narrow product and composes with mature runtimes |
 | Integration | Versioned CLI/JSON with thin adapters | Keeps one generic public surface and avoids provider coupling |
-| Assurance | Not a direction of this candidate; decided by [ADR-0025](../architecture-decision-records/0025-structurally-bound-external-check-results.md) | Listed only as a pointer, because a Candidate holds no preferred direction over implemented authority |
 | Trust | Structural and freshness assurance only | Matches the same-user trust model and avoids false security claims |
 | Lease expiry | Lazy evaluation inside the state transaction that next touches the unit, with an Engine-recorded instant, rather than a timer | Keeps the property that no domain state changes without a request, fixes one explicit evaluation point instead of two, and makes replay stable through the stored outcome |
 | Snapshot | Executor-owned immutable snapshot descriptor | Keeps snapshot bytes and execution infrastructure outside Podway |
@@ -1285,12 +1238,12 @@ below; it removes it. The numbered decisions are the ones that would matter if
 that question is answered affirmatively.
 
 Three decisions previously listed here have been removed because
-[ADR-0025](../architecture-decision-records/0025-structurally-bound-external-check-results.md) decided
+[ADR-0025](../../architecture-decision-records/0025-structurally-bound-external-check-results.md) decided
 them: the exact check-result schema, canonical digest, and size bounds; whether an
 operation definition carries only an opaque identifier and digest; and whether
 human approval is a third assurance class.
 
-The following issues prevent wholesale promotion of this Candidate. They do not
+The following issues prevent wholesale promotion of this research model. They do not
 all gate a validated subset extracted under condition 1 of section 21, which is
 scoped per shape:
 
@@ -1371,7 +1324,7 @@ promotion while material shapes remain unexercised.
 
 Assurance and receipt items appear below only where a fan group changes them.
 The base assurance work is owned by
-[ADR-0025](../architecture-decision-records/0025-structurally-bound-external-check-results.md) and
+[ADR-0025](../../architecture-decision-records/0025-structurally-bound-external-check-results.md) and
 must not be counted twice.
 
 - **Architecture authority:** new ADRs for executor neutrality and receipts,
@@ -1402,7 +1355,7 @@ must not be counted twice.
   compatibility, fuzzing, and packaged runtime scenarios appropriate to the
   eventual release claim.
 
-No implementation dependency order is established by this Candidate.
+No implementation dependency order is established by these notes.
 
 ## 18. Non-goals for the candidate direction
 
@@ -1477,151 +1430,10 @@ make Podway:
 
 ### 20.1 Precondition experiment
 
-One question ranks ahead of every other and should be answered before further
-design effort is spent, because a negative or weak result removes the motivation
-for sections 8 through 17: whether the gap described in section 3.3 survives a
-comparator that includes a durable executor.
-
-#### Preregistration
-
-Before the first run, and not revised after any result is seen, record the task
-selection, the shapes it covers, and the classification of every measure as
-gating or descriptive. Tasks are drawn from this repository's completed work
-rather than invented for the experiment, and each must be expressible as a
-Procedure the author would actually run from a shipped preset or a small authored
-procedure. No task count is prescribed. The set must cover every shape whose
-mechanisms the experiment intends to license.
-
-#### Arms
-
-A single-arm trial cannot answer the question. Comparing the shipped path against
-a stateless fan-out alone would show at most that a stateless fan-out loses
-state. Three arms are used, and they are run per shape rather than once:
-
-- **Arm A** is the shipped path described in section 3, driven by an executor
-  that keeps no durable coordination state.
-- **Arm B** is the same path with a durable executor of the checkpoint, replay,
-  and resume class listed in section 7.2, where the executor owns coordination.
-- **Arm C** is arm B with the minimum coordination metadata for the shape under
-  test additionally recorded as ordinary items through `podway record --stdin`:
-  the unit inventory, the claims, and the executor run identity in every shape;
-  the declared effect of each unit in S2 and S3; the immutable input basis in S3;
-  and the expansion source in S4. It approximates fan-group authority using
-  shipped code only, and is the cheapest arm, so it should be run first.
-
-Arm B must name the executor and its version, and should cover two executors of
-different families. Otherwise its result is scoped to the one executor tested,
-consistent with the snapshot rule stated in section 7.2.
-
-#### Work shapes
-
-Arms are run over each shape the preregistration covers:
-
-- **S1 read-only fan-out:** every unit is a snapshot read.
-- **S2 write-bearing fan-out:** at least one unit mutates the owning worktree.
-- **S3 overlap:** a read must observe a fixed input while a write proceeds.
-- **S4 expansion:** the unit count derives from an upstream recorded list.
-- **S5 outcome combination:** units produce pass, fail, or inconclusive results
-  that must combine into one group outcome.
-- **S6 failure and return:** a required unit fails and work must return to an
-  earlier placement.
-
-S1 through S4 are constructible today with shipped code, S2 and S3 by having one
-unit mutate a temporary worktree while others read it. Whether S5 and S6 can be
-exercised without first building a join mechanism is unresolved. If they cannot,
-they remain unexercised and the mechanisms they govern cannot be promoted on this
-experiment's evidence.
-
-#### Faults
-
-The same faults are injected in every arm and every shape: an executor killed
-before any result is recorded; an executor killed after some units finish but
-before recording; a lost response on the record mutation; two executors started
-against one task; and an executor replaced, or a human substituted for one unit,
-on resume.
-
-#### Gating invariants
-
-These are binary and observable within the recorded state of the system under
-test, and a failure is itself the finding. Podway does not observe external
-processes or the filesystem, so no invariant below asserts anything about what an
-executor actually did. Each is evaluated under each injected fault, in every
-shape:
-
-- no work unit had two concurrent owners, meaning no two live claims on one unit
-  coexisted at any instant;
-- at most one result was accepted per work attempt and lease generation;
-- no unit was reissued after an accepted terminal result;
-- the system under test had an authoritative answer for what work remained after
-  the fault, whichever component owned that answer;
-- resume did not redo units whose results had already been accepted; and
-- recovery is achievable using only documented read-only commands and declared
-  mutations.
-
-Additionally in S2 and S3:
-
-- no two workspace-write leases coexisted at any instant; and
-- every accepted result bound to the immutable input basis its unit declared, and
-  no incompatible lease was issued for the duration of that binding.
-
-Two of these are deliberately weaker than they might appear. Duplicate external
-execution is not gated, because Podway cannot prevent or observe it; section 19.2
-records it as a standing risk, and gating on it would make the experiment
-unrunnable. The remaining-work invariant is functional rather than
-Podway-specific: an executor that can authoritatively answer the question
-satisfies it. Requiring Podway to be the answering authority would make arm B
-fail by construction and would decide the comparison in advance.
-
-#### Descriptive metrics
-
-Recorded but never gating: which component owned the authoritative remaining-work
-answer in each arm; whether duplicate external execution was detected, which
-Podway cannot prevent; operator steps to recover; context duplication; model
-cost; merge work; and wall clock. A descriptive metric may narrow or order scope
-after a gating invariant has already admitted a mechanism, but may never admit
-one on its own. No threshold may be introduced after data collection.
-
-Which component owned the remaining-work answer is the datum that separates the
-arms once more than one of them satisfies the functional invariant. The
-substitution fault is what prices it: an answer that does not survive executor or
-human substitution is executor-local, and that cost appears in the substitution
-result rather than in a failed gate.
-
-#### Evidence-to-scope rule
-
-Each mechanism is evaluated against the shape that governs it, and the result is
-one of three states:
-
-- **Motivated.** The shape was exercised and at least one gating invariant failed
-  in arm C. Scope is limited to the specific invariant that failed, not to the
-  whole section containing it.
-- **Removed.** The shape was exercised and every gating invariant held in arm B
-  or arm C. The mechanism leaves scope.
-- **Unexercised.** The shape was not exercised. The mechanism is neither
-  motivated nor removed, and no result obtained in another shape may be
-  transferred to it.
-
-The arm rules are per shape. Within one shape, an arm A that satisfies every
-gating invariant means that shape has no gap. An arm B that satisfies every
-gating invariant settles that shape in favour of composing with a durable
-executor, and says nothing about any other shape.
-
-| Shape | Mechanisms it can license |
-|---|---|
-| S1 | Executor-neutral unit inventory, claims, and readiness for reads: section 8.2 and the read half of section 10.2 |
-| S2 | Workspace-write lease 10.1, effects 10.3, write ordering 10.4 |
-| S3 | Read and write overlap whitelist 10.5, snapshot ownership 10.6 |
-| S4 | Dynamic map expansion 10.7; ordered write maps require S2 and S4 together |
-| S5 | Join and group outcome 11.1 through 11.3 |
-| S6 | Rework and terminal failure 11.4 |
-
-The rule applies to mechanisms whose absence produces an observable fault.
-Section 10.4 states a static vetting rule, so its evidence is indirect: S2
-producing order-dependent outcomes is what motivates it. Section 10.8 records a
-non-decision and needs no evidence.
-
-This experiment needs no new Podway code for S1 through S4. It is the cheapest
-question in this document and the one the rest of the document depends on.
+The [PROOF candidate](../TODO-podway-graph-evolution-feasibility.md#s1-s6-coordination-comparison)
+owns the S1-S6 comparison protocol, preregistration, faults, gating invariants
+and evidence-to-scope rule. This note retains the exploratory model those
+experiments may motivate; it does not maintain a second experiment plan.
 
 ### 20.2 Design experiments
 
@@ -1660,34 +1472,30 @@ Experiments must use isolated fixtures or temporary worktrees. They must not
 modify a user's active Podway workspace, installed legacy runtime, Git state or
 LaunchAgent. No experiment authorizes old service control or a resident process.
 
-## 21. Roadmap promotion conditions
+## 21. Conditions proposed for future implementation
 
-This Candidate may be promoted only when all of the following are true:
+A future implementation candidate may be promoted only when all of the following
+proposed conditions are closed through its adopted design:
 
 1. The product problem and user workflows are written with concrete examples that
    cannot be adequately represented by Procedure v2 plus external orchestration.
    Section 3 is the current attempt at that comparison and concludes that the gap
    is executor-neutral authority over in-flight work rather than parallelism.
-   This condition is met only when the precondition experiment in section 20.1
-   has been run under a preregistration record that exists and was not revised
-   after any result was seen, and the evidence-to-scope rule has been applied per
-   shape. Within each shape, arm B must fail at least one gating invariant, since
-   an arm B that satisfies every gating invariant settles that shape in favour of
-   composing with a durable executor. Adopted scope must name, for every admitted
-   mechanism, the shape and the gating invariant that admitted it, and must record
-   which component owned the authoritative remaining-work answer in each arm,
-   since that invariant is functional and an executor may satisfy it. Mechanisms
-   whose shape was exercised and whose gating invariants held are removed from
-   scope rather than carried forward. A failure confined to arm A establishes
-   only that a stateless fan-out loses state and does not satisfy this condition,
-   and neither does this document's reasoning.
+   Apply the single
+   [PROOF evidence-to-scope rule](../TODO-podway-graph-evolution-feasibility.md#evidence-to-scope-rule)
+   to a preregistered comparison scoped to the relevant requirements. For each
+   admitted mechanism, identify the demonstrated gap, its cause, the tested
+   shape and executor/build, and the sufficient observations and alternatives
+   supporting that conclusion. Record which component owned the authoritative
+   remaining-work answer. A failed run alone does not establish a product gap;
+   these notes add no separate arm-failure predicate or full-matrix requirement.
 
    An unexercised shape cannot enter adopted scope. Because
-   [TODO and Adopted Design Dossiers](README.md) requires an adopted dossier to be
-   decision-complete for a closed set of work, this Candidate cannot be promoted
+   [TODO and Adopted Design Dossiers](../README.md) requires an adopted dossier to be
+   decision-complete for a closed set of work, this research model cannot be promoted
    wholesale while material shapes remain unexercised. Either the validated subset
    is extracted into its own adopted dossier with its own owning epic, or this
-   Candidate is first narrowed to that subset while the unexercised shapes remain
+   research model is first narrowed to that subset while the unexercised shapes remain
    in Candidate state pending their own experiment.
 2. The composite fan-group boundary is confirmed or replaced by a better bounded
    topology with explicit reasoning.
@@ -1719,46 +1527,46 @@ This Candidate may be promoted only when all of the following are true:
 
 Promotion should turn the resolved parts of this document into accepted ADRs,
 canonical schemas, specifications, executable contracts, and roadmap-owned work.
-This candidate should not remain a competing normative specification after that
+These notes must not compete with the normative authorities established by that
 promotion.
 
 ## 22. Repository references
 
 Current authority and implementation context:
 
-- [Contributor Documentation](../README.md)
-- [TODO and Adopted Design Dossiers](README.md)
-- [ADR-0025: Structurally Bound External Check Results](../architecture-decision-records/0025-structurally-bound-external-check-results.md)
-- [ADR-0001: Focus on One Current Task Session](../architecture-decision-records/0001-current-task-session-focus.md)
-- [ADR-0002: Keep One Active Stage](../architecture-decision-records/0002-single-active-stage.md)
-- [Historical ADR-0003, superseded by ADR-0038](../architecture-decision-records/0003-daemon-single-writer.md)
-- [ADR-0006: Use a Same-User Local Trust Boundary](../architecture-decision-records/0006-same-user-local-trust.md)
-- [ADR-0007: Keep Typed Stage Items Instead of a General Evidence Ledger](../architecture-decision-records/0007-stage-items-not-evidence-ledger.md)
-- [ADR-0009: Store Artifact Metadata, Not Artifact Bytes](../architecture-decision-records/0009-artifact-metadata-only.md)
-- [ADR-0010: Integrate External Tools Through Generic CLI and JSON](../architecture-decision-records/0010-generic-cli-json-integration.md)
-- [ADR-0015: Permit a Constrained Single-Cursor Graph](../architecture-decision-records/0015-constrained-single-cursor-graph.md)
-- [ADR-0016: Use Recorded Items for Workflow Memory](../architecture-decision-records/0016-recorded-item-workflow-memory.md)
-- [ADR-0017: Permit Single-Cursor Convergence](../architecture-decision-records/0017-single-cursor-convergence.md)
-- [ADR-0019: Make Procedure v2 the Only Product Model](../architecture-decision-records/0019-procedure-v2-only-product.md)
-- [Goals and Non-Goals](../specs/product/goals-and-non-goals.md)
-- [Terminology and Invariants](../specs/product/terminology-and-invariants.md)
-- [Domain Model](../specs/domain/domain-model.md)
-- [Procedure and Item Specification](../specs/domain/procedure-and-item-specification.md)
-- [State Transitions](../specs/domain/state-transitions.md)
-- [Rework and Lifecycle](../specs/domain/rework-and-lifecycle.md)
-- [Automation Client Contract](../specs/interfaces/automation-client-contract.md)
-- [Transactions, Concurrency, and Idempotency](../specs/storage/transactions-concurrency-and-idempotency.md)
-- [SQLite Model](../specs/storage/sqlite-model.md)
-- [System Architecture](../architecture/system.md)
-- [ADR-0038: Remove the Daemon](../architecture-decision-records/0038-remove-the-daemon.md)
+- [Contributor Documentation](../../README.md)
+- [TODO and Adopted Design Dossiers](../README.md)
+- [ADR-0025: Structurally Bound External Check Results](../../architecture-decision-records/0025-structurally-bound-external-check-results.md)
+- [ADR-0001: Focus on One Current Task Session](../../architecture-decision-records/0001-current-task-session-focus.md)
+- [ADR-0002: Keep One Active Stage](../../architecture-decision-records/0002-single-active-stage.md)
+- [Historical ADR-0003, superseded by ADR-0038](../../architecture-decision-records/0003-daemon-single-writer.md)
+- [ADR-0006: Use a Same-User Local Trust Boundary](../../architecture-decision-records/0006-same-user-local-trust.md)
+- [ADR-0007: Keep Typed Stage Items Instead of a General Evidence Ledger](../../architecture-decision-records/0007-stage-items-not-evidence-ledger.md)
+- [ADR-0009: Store Artifact Metadata, Not Artifact Bytes](../../architecture-decision-records/0009-artifact-metadata-only.md)
+- [ADR-0010: Integrate External Tools Through Generic CLI and JSON](../../architecture-decision-records/0010-generic-cli-json-integration.md)
+- [ADR-0015: Permit a Constrained Single-Cursor Graph](../../architecture-decision-records/0015-constrained-single-cursor-graph.md)
+- [ADR-0016: Use Recorded Items for Workflow Memory](../../architecture-decision-records/0016-recorded-item-workflow-memory.md)
+- [ADR-0017: Permit Single-Cursor Convergence](../../architecture-decision-records/0017-single-cursor-convergence.md)
+- [ADR-0019: Make Procedure v2 the Only Product Model](../../architecture-decision-records/0019-procedure-v2-only-product.md)
+- [Goals and Non-Goals](../../specs/product/goals-and-non-goals.md)
+- [Terminology and Invariants](../../specs/product/terminology-and-invariants.md)
+- [Domain Model](../../specs/domain/domain-model.md)
+- [Procedure and Item Specification](../../specs/domain/procedure-and-item-specification.md)
+- [State Transitions](../../specs/domain/state-transitions.md)
+- [Rework and Lifecycle](../../specs/domain/rework-and-lifecycle.md)
+- [Automation Client Contract](../../specs/interfaces/automation-client-contract.md)
+- [Transactions, Concurrency, and Idempotency](../../specs/storage/transactions-concurrency-and-idempotency.md)
+- [SQLite Model](../../specs/storage/sqlite-model.md)
+- [System Architecture](../../architecture/system.md)
+- [ADR-0038: Remove the Daemon](../../architecture-decision-records/0038-remove-the-daemon.md)
 
 Canonical assets relevant to any future promotion:
 
-- [`procedure-v2.schema.json`](../../assets/schemas/procedure-v2.schema.json)
-- [Frozen rejected daemon-generation DDL](../../tests/fixtures/storage/daemon-era-v2dfc/generation-1-to-13-ddl.json)
-- [`outcome-lookup-result-v1.schema.json`](../../assets/schemas/outcome-lookup-result-v1.schema.json)
-- [`procedure-graph-result-v1.schema.json`](../../assets/schemas/procedure-graph-result-v1.schema.json)
-- [`procedure-preview-result-v1.schema.json`](../../assets/schemas/procedure-preview-result-v1.schema.json)
+- [`procedure-v2.schema.json`](../../../assets/schemas/procedure-v2.schema.json)
+- [Frozen rejected daemon-generation DDL](../../../tests/fixtures/storage/daemon-era-v2dfc/generation-1-to-13-ddl.json)
+- [`outcome-lookup-result-v1.schema.json`](../../../assets/schemas/outcome-lookup-result-v1.schema.json)
+- [`procedure-graph-result-v1.schema.json`](../../../assets/schemas/procedure-graph-result-v1.schema.json)
+- [`procedure-preview-result-v1.schema.json`](../../../assets/schemas/procedure-preview-result-v1.schema.json)
 
 ## 23. External references
 

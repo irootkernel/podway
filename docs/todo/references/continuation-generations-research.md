@@ -1,35 +1,36 @@
-# Podway Versioned Continuation Generations
+# Podway Continuation Generations Research
 
 ## Status and authority
 
-- Document state: `Candidate`
-- Dossier type: research and design candidate
+- Document role: supporting research notes
+- Candidate owner: [PROOF](../TODO-podway-graph-evolution-feasibility.md)
 - Owning roadmap epic: none
-- Target product release: undecided
-- Candidate contract target: a possible successor to `podway.procedure/v2`
-- Repository scope: Podway only
 - Research and planning baseline: August 18, 2026
-- Related candidate: [Podway Graph Engineering Evolution](TODO-podway-graph-engineering-evolution.md)
+- Repository scope: Podway only
+- Possible contract target: a successor to `podway.procedure/v2`; no identifier or release is reserved
 
-This document preserves a candidate model for changing the execution topology of
-one task after planning without deleting earlier Procedure declarations or runtime
-history. It is not an adopted design dossier, accepted architecture decision,
-roadmap commitment, or specification of implemented behavior. No property,
-command, schema, storage shape, preset, or lifecycle described below exists merely
-because it appears here.
+These notes preserve the candidate model for plan-bound execution generations,
+its illustrative authoring shape, immutable identities, alternatives, risks and
+20 open design questions. They are non-normative research reference material,
+not an adopted dossier or an implementation epic. No property, command, storage
+shape or lifecycle described here exists because it appears in these notes.
 
-The current product authorities remain unchanged. In particular, each Procedure
-v2 session retains one immutable admitted snapshot and moves only through routes
-declared in that snapshot. Promotion of any part of this candidate requires the
-experiments, decisions, ADRs, adopted dossier, and roadmap ownership described
-below.
+In the retained discussion, "candidate" refers to this exploratory implementation
+model. It does not designate another epic candidate alongside PROOF. Numbered
+model sections remain stable; the S7 experiment protocol has moved to PROOF.
 
-[ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md) and the
-[System Architecture](../architecture/system.md) establish the current foreground
-Direct Engine and worktree-local Store. This candidate uses their serialized
-per-worktree mutation boundary, success-only outcomes, and caller-driven recovery
-without a resident process or daemon IPC. Its experiments must reopen the Store
-through a new foreground invocation after a caller exits or is killed.
+The base Procedure would remain immutable, with append-only execution-group
+definitions and activation lineage. That topology question is distinct from the
+fan-group work frontier described in the [graph research](graph-engineering-research.md).
+The PROOF candidate owns the S7 experiment used to test the need for this model.
+Implementation remains conditional on the experiment, closed design and accepted
+architecture authority; unexercised mechanisms cannot enter scope by analogy.
+
+[ADR-0038](../../architecture-decision-records/0038-remove-the-daemon.md) and the
+[System Architecture](../../architecture/system.md) retain the foreground Direct
+Engine, worktree-local Store, serialized mutations and success-only outcomes.
+Experiments reopen the Store through a new invocation after a caller exits or is
+killed; they assume no resident process or daemon IPC.
 
 ## 1. Context
 
@@ -39,11 +40,18 @@ show that the initial sequence is unsuitable, that a different preset-like
 execution shape is preferable, or that the task needs a purpose-built set of
 actions, decisions, checks, and rework routes.
 
-The current prepared-session lifecycle permits replacement before execution, but
-replacement creates a new session. Once execution begins, changing the Procedure
-requires destructive replacement. That preserves the immutability of one
-Procedure snapshot but cannot retain classification, planning, execution, and
-replanning as one inspectable session lineage.
+The admitted Procedure snapshot remains immutable within one session. The
+[current state-aware start lifecycle](../../specs/domain/rework-and-lifecycle.md#terminal-disposition-archival-and-reset-ownership)
+can preserve running work by atomically cancelling it, recording a successor-linked
+`superseded` disposition, archiving the previous session and creating a successor.
+This retains history across sessions; it does not provide plan-bound continuation
+activations within one session. Destructive replacement is a separate explicit
+option, not the only way to select a new Procedure after execution begins.
+
+The investigation must determine whether concrete workflows need plan-to-topology
+bindings, activation lineage or evidence-applicability relationships beyond what
+archived sessions, successor links and external durable planning already provide.
+Retaining history alone does not establish a need for continuation generations.
 
 A useful successor may instead retain an immutable base Procedure while allowing
 an explicitly authorized planning placement to bind one immutable continuation at
@@ -92,8 +100,7 @@ This candidate does not propose:
 - executing models, commands, tools, Git mutations, or snapshot creation in
   Podway;
 - judging whether a plan or execution group is semantically correct for the task;
-- changing the v0.3.0 adopted dossiers or reinterpreting existing Procedure v2
-  sessions; or
+- reinterpreting existing Procedure v2 sessions; or
 - adding a roadmap epic, release target, public command, or schema before this
   candidate is promoted through the repository's authority process.
 
@@ -277,12 +284,12 @@ selection boundary of `analysis-v2`, `small-change-v2`, `bug-fix-v2`, or
 `sw-dev-v2`. The exact
 relationship between a future successor's presets and group templates is open.
 
-## 5. Interaction with current TODO dossiers
+## 5. Interaction with current product foundations
 
 ### 5.1 Bounded evidence scale and read-back
 
-[ADR-0024](../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md)
-and the [current evidence paging](../specs/interfaces/json-contract.md#evidence-paging)
+[ADR-0024](../../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md)
+and the [current evidence paging](../../specs/interfaces/json-contract.md#evidence-paging)
 specification provide current-evidence paging and response-budget foundations while
 preserving one session, cursor, and active attempt. A generation design must not
 widen its `evidence.read` route into arbitrary stale history. It needs separate
@@ -296,7 +303,7 @@ budget.
 
 ### 5.2 External check result typing
 
-[ADR-0025](../architecture-decision-records/0025-structurally-bound-external-check-results.md)
+[ADR-0025](../../architecture-decision-records/0025-structurally-bound-external-check-results.md)
 is compatible. A `check_result` remains an attempt-local, structurally bound external
 result whose operation and input basis belong to an immutable group definition and
 activation. A successor may extend its runtime binding with continuation,
@@ -305,9 +312,9 @@ trust boundary or turning it into a separate evidence ledger.
 
 ### 5.3 Typed guards and diagnostics
 
-[ADR-0028](../architecture-decision-records/0028-bounded-typed-procedure-guards.md)
+[ADR-0028](../../architecture-decision-records/0028-bounded-typed-procedure-guards.md)
 explicitly excludes dynamic routes from Procedure v2 and the
-[Procedure specification](../specs/domain/procedure-and-item-specification.md)
+[Procedure specification](../../specs/domain/procedure-and-item-specification.md)
 statically validates
 guard sources, dominance, selection, and freshness. Those rules remain valid
 inside one immutable execution-group version.
@@ -319,8 +326,8 @@ mutation and must not be disguised as a Procedure v2 decision guard.
 
 ### 5.4 Reference Procedures and authoring guidance
 
-The completed [built-in preset contract](../specs/domain/built-in-presets.md) and
-[shipped reference-path evidence](../specs/quality/testing-and-conformance.md#shipped-reference-path-evidence)
+The completed [built-in preset contract](../../specs/domain/built-in-presets.md) and
+[shipped reference-path evidence](../../specs/quality/testing-and-conformance.md#shipped-reference-path-evidence)
 must remain the baseline before implementation of this candidate. They give
 Procedure v2 a stable reference, supply an actual planning and rework workflow
 for comparison, and complete the evidence, result, guard, and authoring
@@ -328,8 +335,8 @@ foundations a successor can reuse.
 
 The `sw-dev-v2` planning placement is a useful experiment source, but the current
 v0.2.x reference baseline's adopted Procedure graphs, preset identities, and
-digests must not be changed to anticipate this candidate. The future graph work
-remains reserved for v0.3.0.
+digests must not be changed to anticipate this candidate. No target release is
+assigned to this candidate.
 
 ## 6. Compatibility and sequencing direction
 
@@ -338,12 +345,15 @@ snapshot. Versioned continuation generations change admission-time topology
 proofs, runtime identity, persistence, observation, stale fencing, and history.
 They must not be added to v2 by implication.
 
-The preferred sequencing for investigation is:
+The evidence-scale, check-result, typed-guard and reference-Procedure foundations
+are implemented; their behavior is owned by the authorities linked in section 5.
+The [roadmap](../../roadmap/README.md#procedure-evidence-and-reference-quality)
+records the completed V2SCL, V2AST, V2GRD and V2REF epics. They are an available
+baseline, not future work in this candidate.
+
+The remaining preferred sequencing for investigation is:
 
 ```text
-V2SCL -> V2AST -> V2GRD -> V2REF
-                              |
-                              v
       continuation-generation experiment and design closure
                               |
                               v
@@ -408,40 +418,20 @@ The following questions prevent adoption:
 20. Which CLI/JSON result families, stable error codes, observation fields, and
     recovery recipes are required?
 
-## 8. Experiment and roadmap promotion conditions
+## 8. Conditions proposed for future implementation
 
-Before an implementation dossier or roadmap epic is adopted, run a preregistered
-`S7: plan revision and topology replacement` experiment after V2REF. It should use
-realistic completed-task shapes and compare at least:
-
-- Procedure v2 plus external planning and destructive session replacement;
-- Procedure v2 plus an external durable executor that owns plan and topology
-  lineage; and
-- the smallest disposable continuation-generation model that records the lineage
-  in Podway.
-
-The experiment should cover:
-
-- classification selects an unsuitable default execution path;
-- planning chooses a different fixed template;
-- planning produces a bounded custom topology;
-- execution partially progresses and then returns to plan;
-- replanning reuses the same group version;
-- replanning appends and activates a different group version;
-- an old mutation or fan report arrives after supersession;
-- a foreground caller exits or is killed before and after activation, and the
-  next invocation reopens the worktree Store and reconciles the original
-  idempotency identity;
-- the activation response is lost and reconciled by idempotency identity; and
-- history remains inspectable while retired work cannot satisfy current
-  progression.
+The [PROOF candidate](../TODO-podway-graph-evolution-feasibility.md#s7-plan-revision-and-topology-replacement)
+owns the S7 comparison protocol. These conditions describe the later
+implementation decision, not permission to implement the model or a second
+experiment plan.
 
 Promotion requires all of the following:
 
 1. At least one concrete workflow demonstrates a failure that Procedure v2 plus a
    durable external executor cannot adequately resolve under the preregistered
    criteria.
-2. The evidence-to-scope rule in the graph-engineering candidate admits only the
+2. The evidence-to-scope rule in the
+   [PROOF candidate](../TODO-podway-graph-evolution-feasibility.md) admits only the
    mechanisms motivated by that failure.
 3. The layered relationship between base Procedure, continuation generation, and
    fan group is decision-complete.
@@ -450,7 +440,8 @@ Promotion requires all of the following:
 5. Every affected accepted decision is changed through a named superseding,
    amending, or extending ADR.
 6. One adopted dossier owns a bounded implementation scope and the active roadmap
-   registers its epic or release-program dependencies after V2REF.
+   registers its epic or release-program dependencies against the completed
+   foundations.
 7. The target release and applicable complete gate are selected according to
    repository policy.
 
@@ -481,17 +472,17 @@ narrowed to the smallest independently motivated mechanism.
 
 ## 10. References
 
-- [TODO and Adopted Design Dossiers](README.md)
-- [Podway Graph Engineering Evolution](TODO-podway-graph-engineering-evolution.md)
-- [ADR-0024: Bounded Evidence Scale and Paged Read-back](../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md)
-- [ADR-0025: Structurally Bound External Check Results](../architecture-decision-records/0025-structurally-bound-external-check-results.md)
-- [ADR-0028: Bound Procedure Conditions to a Closed Typed Vocabulary](../architecture-decision-records/0028-bounded-typed-procedure-guards.md)
-- [Built-in Presets](../specs/domain/built-in-presets.md)
-- [Shipped Reference-path Evidence](../specs/quality/testing-and-conformance.md#shipped-reference-path-evidence)
-- [ADR-0017: Permit Single-Cursor Convergence](../architecture-decision-records/0017-single-cursor-convergence.md)
-- [ADR-0019: Make Procedure v2 the Only Product Model](../architecture-decision-records/0019-procedure-v2-only-product.md)
-- [ADR-0021: Separate Session Preparation from Execution](../architecture-decision-records/0021-separate-session-preparation-from-execution.md)
-- [Procedure and Item Specification](../specs/domain/procedure-and-item-specification.md)
-- [Rework and Lifecycle](../specs/domain/rework-and-lifecycle.md)
-- [State Transitions](../specs/domain/state-transitions.md)
-- [Procedure Evidence and Reference Quality roadmap](../roadmap/README.md#procedure-evidence-and-reference-quality)
+- [TODO and Adopted Design Dossiers](../README.md)
+- [Podway Graph Engineering Evolution](graph-engineering-research.md)
+- [ADR-0024: Bounded Evidence Scale and Paged Read-back](../../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md)
+- [ADR-0025: Structurally Bound External Check Results](../../architecture-decision-records/0025-structurally-bound-external-check-results.md)
+- [ADR-0028: Bound Procedure Conditions to a Closed Typed Vocabulary](../../architecture-decision-records/0028-bounded-typed-procedure-guards.md)
+- [Built-in Presets](../../specs/domain/built-in-presets.md)
+- [Shipped Reference-path Evidence](../../specs/quality/testing-and-conformance.md#shipped-reference-path-evidence)
+- [ADR-0017: Permit Single-Cursor Convergence](../../architecture-decision-records/0017-single-cursor-convergence.md)
+- [ADR-0019: Make Procedure v2 the Only Product Model](../../architecture-decision-records/0019-procedure-v2-only-product.md)
+- [ADR-0021: Separate Session Preparation from Execution](../../architecture-decision-records/0021-separate-session-preparation-from-execution.md)
+- [Procedure and Item Specification](../../specs/domain/procedure-and-item-specification.md)
+- [Rework and Lifecycle](../../specs/domain/rework-and-lifecycle.md)
+- [State Transitions](../../specs/domain/state-transitions.md)
+- [Procedure Evidence and Reference Quality roadmap](../../roadmap/README.md#procedure-evidence-and-reference-quality)

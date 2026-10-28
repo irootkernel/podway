@@ -127,7 +127,7 @@ external-consumer change is selected by this design registration.
   maintenance scope, including its artifact rehash; do not extend that exception
   to mutations. Preserve deadlines as behavior without measuring performance.
 - Keep separate start/reset observations and existing user interaction semantics.
-  [CALLS](../todo/TODO-podway-cli-interaction-simplification.md) is an unadopted
+  [CALLS](../todo/TODO-podway-agent-workflow-simplification.md) is an unadopted
   candidate, with no roadmap tasks or implementation commitment.
 
 The completed task-local ownership ledgers informed the durable
@@ -1019,7 +1019,7 @@ Implemented behavior and proof are mapped in the
 Source capability does not grant publication, installation, mode switching,
 daemon restart, or production and Aquarium runtime activation. Real executor
 integration remains a
-[separate candidate](../todo/TODO-podway-supervised-delegation-integration.md).
+[separate candidate](../todo/TODO-podway-executor-integration.md).
 
 The offline [adapter field/authority/digest review](../implementation-tips/delegation-adapter-contract-review.md)
 closed the Podway meanings before schema reservation. Both real integration

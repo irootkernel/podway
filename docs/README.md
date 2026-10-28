@@ -49,7 +49,7 @@ are retired; the roadmap alone owns status.
 Elapsed-time tests, latency percentiles, throughput benchmarks and performance
 baselines/thresholds are excluded. Existing CLI/JSON interfaces and persisted
 validation remain preserved; CLI interaction changes remain an
-[unadopted CALLS candidate](todo/TODO-podway-cli-interaction-simplification.md).
+[unadopted CALLS candidate](todo/TODO-podway-agent-workflow-simplification.md).
 This program selects no release or external-consumer change.
 
 The preceding [internal-improvement sequence](roadmap/README.md#current-internal-improvements)

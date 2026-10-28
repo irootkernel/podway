@@ -10,7 +10,7 @@ and current projection routes. The [roadmap](../../roadmap/README.md) owns task 
 release status; the source capability does not attest an installed release,
 external adapter, model run, or production rollout.
 
-The [integration candidate](../../todo/TODO-podway-supervised-delegation-integration.md)
+The [integration candidate](../../todo/TODO-podway-executor-integration.md)
 records separate external Dolgorae/managed Primary integration work. No adapter or
 neighboring checkout is required for deterministic Podway tests.
 
