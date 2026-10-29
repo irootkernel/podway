@@ -52,7 +52,7 @@ use grammar::{
     ArchiveCommand, Cli, Command, DelegationCommand, DispositionCommand, EvidenceCommand,
     ExistingSessionPolicy, GoalCommand, OutcomeCommand, PresetCommand, ProcedureCommand, ReadArgs,
     StartArgs, StartTerminalDisposition, WorkspaceCommand, help_text,
-    normalize_top_level_help_alias, parse_failure_command_context,
+    normalize_top_level_help_alias, parse_failure_command_context, syntax_failure_message,
 };
 #[cfg(test)]
 use grammar::{ParseFailureCommandContext, parse_timeout_millis};
@@ -463,8 +463,8 @@ pub fn run() -> i32 {
             }
             exit
         }
-        Err(_) => {
-            let failure = LocalFailure::request_invalid("invalid command syntax");
+        Err(error) => {
+            let failure = LocalFailure::request_invalid(syntax_failure_message(&error, &arguments));
             let failure = match parse_failure_command_context(&arguments) {
                 Some(context) => failure.with_command(context.route),
                 None => failure,

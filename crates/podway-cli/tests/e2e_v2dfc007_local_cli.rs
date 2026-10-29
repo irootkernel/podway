@@ -46,6 +46,223 @@ fn one_json(output: &Output) -> Value {
 }
 
 #[test]
+fn calls002_missing_required_diagnostics_use_trusted_labels_and_keep_error_contracts() {
+    let fixture = Fixture::new();
+    for (arguments, route, label) in [
+        (
+            vec!["start", "--preset", "small-change-v2"],
+            "session.start",
+            "--task <TITLE>",
+        ),
+        (vec!["preset", "show"], "preset.show", "<NAME>"),
+        (vec!["decide"], "session.decide", "--option <ID>"),
+        (vec!["procedure", "graph"], "procedure.graph", "<FILE>"),
+        (vec!["start"], "session.start", "--preset <PRESET>"),
+        (vec!["set", "--", "private-value"], "item.set", "<VALUE>"),
+        (
+            vec!["start", "--preset", "private-value"],
+            "session.start",
+            "--task <TITLE>",
+        ),
+    ] {
+        let mut argv = arguments
+            .iter()
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>();
+        argv.push("--json".to_owned());
+        // JSON after the literal delimiter is a positional value, so select it before `--`.
+        if arguments.contains(&"--") {
+            argv.pop();
+            argv.insert(0, "--json".to_owned());
+        }
+        let output = fixture.run(&argv);
+        assert_eq!(output.status.code(), Some(2), "{argv:?}: {output:?}");
+        assert!(output.stderr.is_empty(), "{argv:?}: {output:?}");
+        let error = one_json(&output);
+        assert_eq!(error["code"], "REQUEST_INVALID", "{argv:?}");
+        assert_eq!(error["command"], route, "{argv:?}");
+        assert_eq!(error["details"], json!({}), "{argv:?}");
+        assert_eq!(error["exit_code"], 2, "{argv:?}");
+        assert_eq!(error["retryable"], false, "{argv:?}");
+        assert_eq!(
+            error["message"],
+            format!("missing required argument: {label}"),
+            "{argv:?}"
+        );
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("private-value"));
+    }
+    for arguments in [
+        vec!["status", "--private-value", "--json"],
+        vec!["start", "--preset", "private-value", "--unknown", "--json"],
+        vec!["--json", "--contract-generation"],
+        vec![
+            "decide",
+            "--option",
+            "private-value",
+            "--reason",
+            "safe",
+            "--if-goal-revision",
+            "private-value",
+            "--json",
+        ],
+        vec!["start", "--unknown", "--account", "private-value", "--json"],
+    ] {
+        let output = fixture.run(
+            &arguments
+                .iter()
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {output:?}");
+        let error = one_json(&output);
+        assert_eq!(error["message"], "invalid command syntax", "{arguments:?}");
+        assert!(output.stderr.is_empty());
+        assert_eq!(error["code"], "REQUEST_INVALID");
+        assert_eq!(error["details"], json!({}));
+        assert_eq!(error["exit_code"], 2);
+        assert_eq!(error["retryable"], false);
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("private-value"));
+    }
+    let output = fixture.run(
+        &[
+            "--idempotency-key",
+            "--json",
+            "start",
+            "--preset",
+            "private-value",
+        ]
+        .map(str::to_owned),
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("missing required argument: --task <TITLE>"));
+    assert!(!error.contains("private-value"));
+    let literal = fixture.run(&["set", "--", "--json"].map(str::to_owned));
+    assert_eq!(literal.status.code(), Some(2));
+    assert!(literal.stdout.is_empty());
+    assert!(
+        String::from_utf8(literal.stderr)
+            .unwrap()
+            .contains("missing required argument: <VALUE>")
+    );
+    let retired = fixture.run(&["daemon", "--json"].map(str::to_owned));
+    assert_eq!(one_json(&retired)["code"], "COMMAND_RETIRED");
+}
+
+#[test]
+fn calls002_help_usage_distinguishes_global_options_and_key_owners() {
+    let fixture = Fixture::new();
+    for topic in [
+        "preset.show",
+        "procedure.graph",
+        "session.start",
+        "workspace.show",
+        "workspace.repair",
+        "workspace.remove",
+        "session.observe",
+        "item.record_many",
+        "delegation.accept",
+        "outcome.lookup",
+    ] {
+        let output = fixture.run(&["--json", "help", topic].map(str::to_owned));
+        assert!(output.status.success(), "{topic}: {output:?}");
+        let envelope = one_json(&output);
+        assert_eq!(envelope["command"], "help");
+        let text = envelope["result"]["text"].as_str().unwrap();
+        if let Some(command) = topic.strip_prefix("workspace.") {
+            let words = fixture.run(&["--json", "help", "workspace", command].map(str::to_owned));
+            assert!(words.status.success(), "{topic}: {words:?}");
+            let word_help = one_json(&words);
+            assert_eq!(word_help["command"], "help");
+            assert_eq!(word_help["result"]["topic"], format!("workspace {command}"));
+            assert_eq!(word_help["result"]["text"], text, "{topic}");
+        }
+        let usage = text
+            .lines()
+            .find(|line| line.starts_with("  podway "))
+            .unwrap();
+        for flag in [
+            "--json",
+            "--quiet",
+            "--no-color",
+            "--contract-generation <1|2>",
+        ] {
+            assert_eq!(
+                usage.matches(flag).count(),
+                1,
+                "{topic}: expected one {flag}: {usage}"
+            );
+        }
+        if topic.starts_with("preset.") || topic.starts_with("procedure.") {
+            for flag in [
+                "--worktree",
+                "--timeout",
+                "--idempotency-key",
+                "--if-workspace-uuid",
+            ] {
+                assert!(
+                    !text.contains(flag),
+                    "{topic}: non-applicable {flag}: {text}"
+                );
+            }
+        } else {
+            assert!(usage.contains("--worktree"), "{topic}: {usage}");
+            assert!(usage.contains("--timeout"), "{topic}: {usage}");
+        }
+        if matches!(topic, "workspace.repair" | "workspace.remove") {
+            assert!(
+                usage.contains("--idempotency-key <KEY>"),
+                "{topic}: missing caller-owned key: {usage}"
+            );
+            assert!(
+                text.contains("Automation mutations require a caller-owned --idempotency-key"),
+                "{topic}"
+            );
+            assert!(
+                text.contains("Interactive mutations may omit it to generate a UUID-v4 key"),
+                "{topic}"
+            );
+        }
+        if topic == "workspace.show" {
+            assert!(!usage.contains("--idempotency-key"));
+            assert!(!text.contains("Automation mutations"));
+            assert!(!text.contains("Interactive mutations"));
+        }
+        if topic == "session.start" {
+            assert!(usage.contains("--idempotency-key"));
+            assert!(text.contains("Automation mutations require a caller-owned --idempotency-key"));
+            assert!(text.contains("dry-run"));
+            assert!(text.contains("interactive"));
+        }
+        if matches!(topic, "item.record_many" | "delegation.accept") {
+            assert!(!usage.contains("--idempotency-key"));
+            assert!(text.contains("stdin owns the key and fences"));
+        }
+        if topic == "session.observe" {
+            assert!(!usage.contains("--idempotency-key"));
+        }
+        if topic == "outcome.lookup" {
+            assert!(usage.contains("--idempotency-key"));
+            assert!(text.contains("Lookup requires its key even though it is read-only"));
+        }
+    }
+    for command in ["show", "repair", "remove"] {
+        let output =
+            fixture.run(&["workspace", command, "--private-value", "--json"].map(str::to_owned));
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stderr.is_empty());
+        let error = one_json(&output);
+        assert_eq!(error["command"], format!("workspace.{command}"));
+        assert_eq!(error["code"], "REQUEST_INVALID");
+        assert_eq!(error["message"], "invalid command syntax");
+        assert_eq!(error["details"], json!({}));
+        assert_eq!(error["exit_code"], 2);
+        assert_eq!(error["retryable"], false);
+    }
+}
+
+#[test]
 fn v2dfc011_json_write_failure_returns_a_valid_internal_error() {
     use std::os::unix::fs::PermissionsExt;
 

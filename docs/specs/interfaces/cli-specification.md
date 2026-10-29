@@ -122,6 +122,14 @@ available as help topics without becoming executable-command suggestions, and
 hidden commands remain excluded. Use `help --` before topic words containing
 flags, for example `podway help -- reset --all`.
 
+Route help appends applicable global options to its usage lines. Local routes
+show rendering controls and contract generation without worktree request options.
+Workspace mutations explain that automation supplies a caller-owned idempotency
+key; interactive key generation remains available. `start` and `reset` dry runs
+are read-only and reject keys. Atomic `record` and `delegation accept` documents
+own their keys and fences in stdin, while read-only `outcome lookup` requires the
+original key on the CLI.
+
 ## Worktree selection and deadlines
 
 `--worktree <path>` selects an explicit Git worktree; omission discovers it from
@@ -378,5 +386,12 @@ failures and local results that exceed the output budget return a validated erro
 envelope with a diagnostic UUID. If the clock cannot supply a valid timestamp or
 the rebuilt error envelope cannot be validated, rendering falls back to a stderr
 diagnostic and exit 6 without aborting.
+For a typed missing-required-argument parse failure, the message names the first
+missing option or positional in grammar declaration order, using only a label
+regenerated from the trusted grammar. Unrecognized or unavailable typed context
+and every other syntax error retain `invalid command syntax`. Raw parser output
+and argument values never enter this diagnostic. Route attribution, retirement
+precedence, JSON selection and `REQUEST_INVALID` code, details, exit and
+retryability remain unchanged.
 Diagnostics go to the structured envelope in JSON mode and stderr only where the
 command contract explicitly has no JSON response.

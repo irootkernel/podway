@@ -32,6 +32,18 @@ limits, compact output ceilings, bounded evidence pages, exact collection totals
 and truncation flags remain cross-layer requirements. Maximum-size and escaped
 JSON cases must exercise encoded response limits as well as domain counters.
 
+### CLI usage and syntax guidance
+
+The registered `podway-cli` `e2e_suite::e2e_v2dfc007_local_cli` cases
+`calls002_missing_required_diagnostics_use_trusted_labels_and_keep_error_contracts`
+and `calls002_help_usage_distinguishes_global_options_and_key_owners` exercise the
+actual CLI. They cover declaration-order missing arguments, trusted labels,
+redacted generic fallback, route and error fields, late JSON, value and literal
+positions, retired precedence, local/workspace globals, mutation keys, stdin
+ownership, dry runs and read-only lookup. Grammar unit coverage also rejects
+untrusted or absent typed diagnostic context. Existing native mutation and
+interactive tests remain the owners of admission and automatic key generation.
+
 ### Shipped reference-path evidence
 
 [The reference-path fixture](../../../tests/fixtures/v2/presets/reference-paths.json)

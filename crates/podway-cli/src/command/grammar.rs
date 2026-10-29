@@ -944,6 +944,40 @@ pub(super) fn parse_failure_command_context(
     parse_failure_command_context_from_matches(&matches)
 }
 
+/// Parser context selects candidates; only labels regenerated from our grammar may escape.
+pub(super) fn syntax_failure_message(error: &clap::Error, arguments: &[OsString]) -> String {
+    use clap::error::{ContextKind, ContextValue, ErrorKind};
+
+    let generic = || "invalid command syntax".to_owned();
+    if error.kind() != ErrorKind::MissingRequiredArgument {
+        return generic();
+    }
+    let Some(ContextValue::Strings(missing)) = error.get(ContextKind::InvalidArg) else {
+        return generic();
+    };
+    let mut grammar = Cli::command().ignore_errors(true);
+    let Ok(matches) = grammar.try_get_matches_from_mut(arguments) else {
+        return generic();
+    };
+    let mut scope = &grammar;
+    let mut selected = &matches;
+    while let Some((name, nested)) = selected.subcommand() {
+        let Some(child) = scope.find_subcommand(name) else {
+            return generic();
+        };
+        scope = child;
+        selected = nested;
+    }
+    // get_arguments retains declaration order, independently of Clap's diagnostic ordering.
+    for argument in scope.get_arguments() {
+        let label = argument.clone().required(true).to_string();
+        if missing.contains(&label) {
+            return format!("missing required argument: {label}");
+        }
+    }
+    generic()
+}
+
 fn parse_failure_command_context_from_matches(
     matches: &ArgMatches,
 ) -> Option<ParseFailureCommandContext> {
@@ -1224,11 +1258,15 @@ pub(super) fn help_completion_globals() -> Vec<(String, bool)> {
 
 /// Maps one word path, including flag-selected spellings, to its route through
 /// the parse-failure command context.
-fn word_route(words: &[String]) -> Option<&'static str> {
+fn word_context(words: &[String]) -> Option<ParseFailureCommandContext> {
     let mut argv: Vec<OsString> = Vec::with_capacity(words.len() + 1);
     argv.push(OsString::from("podway"));
     argv.extend(words.iter().cloned().map(OsString::from));
-    parse_failure_command_context(&argv).map(|context| context.route)
+    parse_failure_command_context(&argv)
+}
+
+fn word_route(words: &[String]) -> Option<&'static str> {
+    word_context(words).map(|context| context.route)
 }
 
 /// Resolves executable command words and group words against the clap tree,
@@ -1242,9 +1280,7 @@ fn command_word_topic(words: &[String]) -> Option<String> {
         {
             let mut selected = vec![(*name).to_owned()];
             selected.extend(flags.iter().map(|flag| (*flag).to_owned()));
-            return word_route(&selected)
-                .and_then(route_topic)
-                .map(str::to_owned);
+            return word_route(&selected).and_then(route_help);
         }
     }
     let mut grammar = Cli::command();
@@ -1269,7 +1305,7 @@ fn command_word_topic(words: &[String]) -> Option<String> {
             lines.join("\n")
         ));
     }
-    word_route(words).and_then(route_topic).map(str::to_owned)
+    word_route(words).and_then(route_help)
 }
 
 fn collect_executable_lines(
@@ -1344,9 +1380,9 @@ pub(super) fn help_text(words: &[String]) -> Result<String, LocalFailure> {
         return Ok(guidance);
     }
     if words.len() == 1
-        && let Some(text) = route_topic(&words[0])
+        && let Some(text) = route_help(&words[0])
     {
-        return Ok(text.to_owned());
+        return Ok(text);
     }
     if let Some(text) = command_word_topic(words) {
         return Ok(text);
@@ -1354,6 +1390,108 @@ pub(super) fn help_text(words: &[String]) -> Result<String, LocalFailure> {
     Err(LocalFailure::request_invalid(
         "unknown help topic; run podway help to list topics",
     ))
+}
+
+/// Resolve help applicability through the existing grammar and route classifier.
+fn topic_context(
+    topic: &str,
+    grammar: &clap::Command,
+) -> Option<(ParseFailureCommandContext, bool)> {
+    fn find(
+        scope: &clap::Command,
+        path: &mut Vec<String>,
+        topic: &str,
+    ) -> Option<(ParseFailureCommandContext, bool)> {
+        for child in scope.get_subcommands().filter(|child| !child.is_hide_set()) {
+            path.push(child.get_name().to_owned());
+            if let Some(context) = word_context(path)
+                && context.route == topic
+            {
+                let local = matches!(
+                    path[0].as_str(),
+                    "help" | "version" | "completions" | "procedure" | "preset"
+                );
+                return Some((context, local));
+            }
+            if let Some(found) = find(child, path, topic) {
+                return Some(found);
+            }
+            path.pop();
+        }
+        None
+    }
+    for (name, _, flags) in FLAG_SELECTED_TOPICS {
+        let mut words = vec![(*name).to_owned()];
+        words.extend(flags.iter().map(|flag| (*flag).to_owned()));
+        if let Some(context) = word_context(&words)
+            && context.route == topic
+        {
+            return Some((context, false));
+        }
+    }
+    find(grammar, &mut Vec::new(), topic)
+}
+
+fn route_help(topic: &str) -> Option<String> {
+    let text = route_topic(topic)?;
+    let mut grammar = Cli::command();
+    grammar.build();
+    let Some((context, local)) = topic_context(topic, &grammar) else {
+        return Some(text.to_owned());
+    };
+    let stdin_owned = matches!(topic, "item.record_many" | "delegation.accept");
+    let mutation = context.mutation || matches!(topic, "workspace.repair" | "workspace.remove");
+    let key = !stdin_owned && (mutation || topic == "outcome.lookup");
+    let options: Vec<_> = grammar
+        .get_arguments()
+        .filter(|arg| {
+            matches!(
+                arg.get_id().as_str(),
+                "json" | "no_color" | "quiet" | "contract_generation"
+            ) || (!local && matches!(arg.get_id().as_str(), "worktree" | "timeout"))
+                || (key && arg.get_id().as_str() == "idempotency_key")
+        })
+        .collect();
+    let mut usage = true;
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        if line.is_empty() {
+            usage = false;
+        }
+        let mut line = line.to_owned();
+        if usage && line.starts_with("  podway ") {
+            for arg in &options {
+                let flag = format!(
+                    "--{}",
+                    arg.get_long().expect("selected globals have long names")
+                );
+                if !line
+                    .split_whitespace()
+                    .any(|word| word.trim_matches(['[', ']']) == flag)
+                {
+                    line.push_str(&format!(" [{}]", (*arg).clone().required(true)));
+                }
+            }
+        }
+        lines.push(line);
+    }
+    let mut result = lines.join("\n");
+    if stdin_owned {
+        result.push_str("\n\nThe atomic stdin owns the key and fences; do not pass CLI identity, revision or idempotency options.");
+    } else if topic == "outcome.lookup" {
+        result.push_str("\n\nLookup requires its key even though it is read-only; use the original caller-owned --idempotency-key.");
+    } else if mutation {
+        result.push_str("\n\nAutomation mutations require a caller-owned --idempotency-key. Interactive mutations may omit it to generate a UUID-v4 key.");
+        if matches!(
+            topic,
+            "session.start" | "session.start_replace" | "session.reset"
+        ) {
+            result.push_str(
+                " With --dry-run the invocation is read-only and rejects --idempotency-key.",
+            );
+        }
+    }
+    Some(result)
 }
 
 /// The exact-topic table shared by single-word resolution and the command-word
@@ -1548,6 +1686,32 @@ fn route_topic(topic: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn calls002_missing_required_context_never_supplies_untrusted_labels() {
+        use clap::error::{ContextKind, ContextValue, ErrorKind};
+
+        let arguments = ["podway", "start", "--preset", "private-value"].map(OsString::from);
+        let mut error = Cli::try_parse_from(&arguments).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+        assert_eq!(
+            syntax_failure_message(&error, &arguments),
+            "missing required argument: --task <TITLE>"
+        );
+        error.insert(
+            ContextKind::InvalidArg,
+            ContextValue::Strings(vec!["private-value".to_owned()]),
+        );
+        assert_eq!(
+            syntax_failure_message(&error, &arguments),
+            "invalid command syntax"
+        );
+        error.remove(ContextKind::InvalidArg);
+        assert_eq!(
+            syntax_failure_message(&error, &arguments),
+            "invalid command syntax"
+        );
+    }
 
     #[test]
     fn calls001_help_completion_topics_resolve_through_the_shared_grammar() {

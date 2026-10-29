@@ -9,6 +9,11 @@ This file records concise shipped outcomes and the planned next stable release.
 - Complete contextual bash, zsh and fish help topics without workspace queries,
   and resolve advertised flag-selected help spellings.
 
+### Fixed
+
+- Show applicable global options and caller-owned key guidance in route usage,
+  and name the first missing required argument without exposing input values.
+
 ## v0.2.15 - 2026-10-24
 
 ### Added
