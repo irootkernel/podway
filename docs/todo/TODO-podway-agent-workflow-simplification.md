@@ -70,6 +70,9 @@ DF-047, DF-048, DF-049 and DF-051 now belong to the
 [adopted CALLS source entries](TODO-podway-calls-guidance.md#source-feedback).
 Their roadmap promotion closes the deferrals only, not implementation or
 acceptance. They are not Open feedback owned by this continuing candidate.
+Their original details and delivered guidance also have a
+[durable owner](../implementation-tips/testing.md#guidance-source-feedback-and-revisit-conditions)
+so later dossier retirement does not remove that rationale.
 
 ## 5. Open Decisions
 

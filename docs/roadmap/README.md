@@ -40,6 +40,12 @@ acceptance. This roadmap alone owns membership, order and status. Completing
 all Tasks does not complete CALLS without independent completion assessment and
 the owner's explicit acceptance of the exact closeout candidate.
 
+CALLS-006 completes the ordinary qualification member: integrated CLI checks,
+durable documentation, a dossier-reference inventory and a prepared closeout
+candidate. Internal whole-Epic validation follows its normal completion commit.
+Owner acceptance and dossier/index retirement belong to the later Epic closeout;
+they remain pending when the qualification member is completed.
+
 | id | title | status | goal | references |
 |---|---|---|---|---|
 | `CALLS-001` | Complete contextual help topics | Completed | Derive contextual help candidates from the existing command tree and topic definitions; execute bash, zsh and fish completion checks. | [Help completion](../todo/TODO-podway-calls-guidance.md#help-completion) |
@@ -47,7 +53,7 @@ the owner's explicit acceptance of the exact closeout candidate.
 | `CALLS-003` | Clarify observation and recording | Completed | Explain read selection, nested check-result input, digest provenance and distinct revision counters in help and human output. | [Observation and recording](../todo/TODO-podway-calls-guidance.md#observation-and-recording) |
 | `CALLS-004` | Explain lifecycle and recovery | Completed | Explain automation fences, dispositions, replacement variants and optional actor/citation arguments; verify lost-output lookup and exact replay. | [Lifecycle and recovery](../todo/TODO-podway-calls-guidance.md#lifecycle-and-recovery) |
 | `CALLS-005` | Clarify preset behavior | Completed | Show human goal-tracking status and clarify recorded reproduction results; advance only bug-fix-v2 to version 4 with consistent preset and manifest identities. | [Preset guidance](../todo/TODO-podway-calls-guidance.md#preset-guidance) |
-| `CALLS-006` | Qualify and close CALLS | Planned | Verify both real CLI workflows and preserved contracts, pass the development gate and independent assessment, then obtain owner acceptance and retire the dossier. | [Verification and release acceptance](../todo/TODO-podway-calls-guidance.md#7-verification-and-release-acceptance) |
+| `CALLS-006` | Qualify and close CALLS | Completed | Verify integrated CLI workflows and preserved contracts, promote durable owners, inventory dossier references and prepare exact closeout while preserving the later owner-acceptance and retirement gate. | [Verification and release acceptance](../todo/TODO-podway-calls-guidance.md#7-verification-and-release-acceptance) |
 
 ## GUIDE — Agent Guidance and Contract Generation 2
 

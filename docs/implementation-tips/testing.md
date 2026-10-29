@@ -516,6 +516,78 @@ GUIDE agent-guidance and contract-generation checks use these registered owners:
 - The deprecation help text is owned by the grammar unit test
   `guide011_contract_generation_deprecation_topic_and_overview`.
 
+### Integrated CLI guidance qualification
+
+The existing registered owners cover separate boundaries; qualify the combined
+caller workflow through the actual CLI in owned standalone Git fixtures as well.
+Run `small-change-v2` and `bug-fix-v2` through terminal completion and disposition.
+The bug-fix flow records reproduction commands actually run and observed results,
+or a reproduction limitation, then records the later complete nested
+`check_result` with a digest of retained exact output. Exercise enabled Goal
+assessment with eligible source and recorded decision-local item citations.
+Preserve fresh observed fences, original request/key replay and read-only lookup.
+
+Execute both preset and file variants actually advertised as
+`session.start_replace`, using an appropriate prepared or replacement-eligible
+state. A disposed terminal's plain-start template is named `session.start`;
+that distinct auto-archive action does not prove either replacement variant.
+Preserve the generation-1/2 machine templates and allowed actions while filling
+only declared placeholders and supported optional arguments.
+
+Use the existing exact Make E2E entry point and registered owners before adding
+coverage. The [real-shell owner](#functional-regression-owners) executes bash, zsh and fish
+functions; the
+[usage/diagnostic](../specs/quality/testing-and-conformance.md#cli-usage-and-syntax-guidance),
+[documented record/counter](../specs/quality/testing-and-conformance.md#observation-and-recorded-check-guidance),
+[lifecycle/recovery](../specs/quality/testing-and-conformance.md#lifecycle-attribution-and-lost-output-guidance)
+and [preset/writer](../specs/quality/testing-and-conformance.md#shipped-reference-path-evidence)
+owners cover the remaining boundaries. The
+[workflow example](../examples/v2-workflow.md) supplies the canonical nested input
+that the real CLI regression decodes and submits. Engine-only preset paths do
+not replace the two actual CLI journeys. Keep whole-batch rejection, stale
+session/item fences, lost-output recovery, distinct counters, unchanged preset
+bytes and incompatible-writer refusal in the verification basis.
+
+Bind every claimed result to its actual source, binary, manifest and check
+inputs. Reuse a prior full gate only where those inputs remain applicable; record
+changed build stamps and run current checks for changed documentation or inputs.
+Executable or contract changes still require `make test`, and test changes
+require `make lint-all`. These are functional correctness checks, with bounded
+reaped children and owned-fixture cleanup. They establish no agent-usability,
+VM, distribution, installation, release or elapsed-time qualification.
+
+The [roadmap](../roadmap/README.md#calls-agent-workflow-guidance) owns the ordinary
+qualification, later internal whole-Epic validation and final owner-acceptance
+split. Keep the adopted dossier and its links until the exact closeout is
+accepted and the final reference/consumer check permits retirement. A private
+prepared patch is a proposal and does not complete those lifecycle steps.
+
+### Guidance source feedback and revisit conditions
+
+The following historical findings, deferral reasons and revisit conditions are
+preserved verbatim from GUIDE's design review and UTM reruns. They describe the
+original gaps before CALLS implementation. Promotion closed their deferrals;
+the roadmap alone records implementation and acceptance. Current behavior belongs
+to the CLI, JSON, built-in preset and writer specifications and the linked
+regression owners, with the continuing interaction candidate retaining its
+unselected questions and DF-050 retaining its independent owner.
+
+| ID | Source | Feedback | Deferral reason | Revisit condition |
+|---|---|---|---|---|
+| DF-044 | GUIDE design review | `podway help` topics have no shell completion: the help route completes no values, and multi-word command topics would need contextual completion. | GUIDE-003 resolves topics without changing completion route accumulation; completing multi-word positionals is an independent refinement. | Before changing help grammar or completion route accumulation, complete help topics from the same command tree and verify the bash, zsh and fish scripts. |
+| DF-047 | GUIDE-012 UTM agent reruns | Per-command help usage lines omit `--idempotency-key` and global options such as `--contract-generation`, so agents learn the key requirement only from a `REQUEST_INVALID`, and "invalid command syntax" does not name a missing required option such as `--task`. | Help keeps its established per-route usage format and the closed JSON errors remain actionable; enriching usage lines and usage failures is a guidance improvement, not a contract defect. | Before changing help usage rendering or usage-failure messages, consider appending the always-available global options to per-command usage lines and naming the first missing required option in the usage failure. |
+| DF-048 | GUIDE-012 UTM agent reruns | The nested `check_result` shape (`input_basis` with `descriptor` and `digest`, `executor` with `name` and `version`) appears only in the observation's `stdin_template` and not in the inspected agent guidance (help, the runtime skill and observation prose); `item.set` results call the session revision just `revision` beside item revisions; and nothing guides agents toward reproducible check-output digests. | The shapes are schema-valid and the observation carries the executable input. The runtime skill now names the required nested fields, uses stdin_template when present, distinguishes session/item revisions and recommends hashing retained check output. The remaining CLI-help and observation-prose guidance is independent. | When record help or observation prose is next revised, explain the nested check-result shape, session-revision field name and reproducible output digests; preserve the runtime guidance already added. |
+| DF-049 | GUIDE-012 UTM agent reruns | Help and the runtime skill do not say when to choose `disposition handed-off` versus `not-required`, or what `--reference` holds; `allowed_actions` lists `session.start_replace` once while two prepared templates exist; and the templates omit the optional `--actor` and the `goal assess-criterion` `--evidence`/`--item` options. | The template shapes remain valid by design. Runtime lifecycle guidance now explains disposition choice and reference; shared execution rules permit supported optional/repeatable arguments, and goal guidance names citation flags. CLI-help explanation remains independent. | When lifecycle or goal help is next revised, explain disposition choice and reference, the shared start_replace action covering two variants, and supported optional actor/citation arguments. |
+| DF-051 | GUIDE-012 UTM agent reruns on the final candidate build | The `begin` and `disposition` help say "Omitted fences are filled from a fresh status preflight" and their usage lines bracket the fences as optional, while the runtime skill says never to omit a required mutation fence (`774954a:skills/use-podway/SKILL.md:75`), so both agents read the two as conflicting; the envelope's `latest_workspace_sequence`, the init result's `revision` and the archive list's `archived_workspace_revision` are not related anywhere in the inspected guidance; `preset explain` (text and JSON) does not show that `bug-fix-v2` tracks a goal (`assets/presets/bug-fix-v2.yaml:7`); and the `bug-fix-v2` `regression-check` prompt (`:40`) can be read as the check to run later or as its result. | The runtime skill now distinguishes CLI preflight auto-fill from automation preserving observed fences. Both agents had preserved all fences, and the counters, preset explain output and prompt remain valid; their presentation improvements remain independent. | When command help or presets are next revised, explain automation fence practice, relate workspace revision and sequence, show goal tracking in human preset explain, and clarify the regression-check prompt. |
+
+| Source feedback | Durable behavior and regression ownership |
+| --- | --- |
+| DF-044 | [Help grammar and completion](../specs/interfaces/cli-specification.md#grammar-and-global-options), with the [real-shell owner](#functional-regression-owners). |
+| DF-047 | [Usage and diagnostics](../specs/interfaces/cli-specification.md#output-and-exits), with [registered diagnostic cases](../specs/quality/testing-and-conformance.md#cli-usage-and-syntax-guidance). |
+| DF-048 | [Recording and counters](../examples/v2-workflow.md#keep-counters-distinct), with the [actual documented record owner](../specs/quality/testing-and-conformance.md#observation-and-recorded-check-guidance). |
+| DF-049 | [Lifecycle and recovery](../specs/interfaces/cli-specification.md#mutation-rules), with [attribution/recovery cases](../specs/quality/testing-and-conformance.md#lifecycle-attribution-and-lost-output-guidance). |
+| DF-051 | [Automation fences](../specs/interfaces/automation-client-contract.md), [distinct counters](../examples/v2-workflow.md#keep-counters-distinct), [preset guidance](../specs/domain/built-in-presets.md), and the same lifecycle/record/preset owners. |
+
 ## Structural simplification verification
 
 The [VIEWS, PARSE, STATE and ADMIT program](../roadmap/README.md#structural-simplification-program)
@@ -560,8 +632,9 @@ retired under the [TODO lifecycle](../todo/README.md#lifecycle); completed behav
 remains independently documented. The separately adopted
 [CALLS epic](../roadmap/README.md#calls-agent-workflow-guidance) owns its guidance
 acceptance in the [CALLS dossier](../todo/TODO-podway-calls-guidance.md#7-verification-and-release-acceptance);
-those checks are planned, not completed structural-program evidence. Combined
-operations and returned observations remain unadopted.
+its durable [integrated qualification requirements](#integrated-cli-guidance-qualification)
+remain separate from completed structural-program evidence. Combined operations
+and returned observations remain unadopted.
 
 CALLS observation/recording regression ownership is recorded in
 [Testing and Conformance](../specs/quality/testing-and-conformance.md#observation-and-recorded-check-guidance).

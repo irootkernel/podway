@@ -51,6 +51,10 @@ baselines/thresholds are excluded. Existing CLI/JSON interfaces and persisted
 validation remain preserved. The separately adopted
 [CALLS epic](roadmap/README.md#calls-agent-workflow-guidance) plans existing CLI
 guidance improvements under its [design dossier](todo/TODO-podway-calls-guidance.md).
+Implemented guidance is owned by the [CLI specification](specs/interfaces/cli-specification.md),
+[built-in preset specification](specs/domain/built-in-presets.md) and
+[durable feedback and regression ownership](implementation-tips/testing.md#guidance-source-feedback-and-revisit-conditions).
+The roadmap retains the qualification and final acceptance boundaries.
 Optional combined operations and returned
 observations remain in the [interaction candidate](todo/TODO-podway-agent-workflow-simplification.md).
 This program selects no release or external-consumer change.
