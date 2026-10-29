@@ -65,6 +65,15 @@ complete removal destroys the Store, so an absent-removal result is convergence
 rather than replay of the original response. A fresh key or freshly substituted revision is
 a new mutation and requires a new justified decision.
 
+A lookup miss is bounded by retention and does not prove that an external effect
+never occurred or grant permission to repeat it. Retain the original semantic
+values, options, key and all resolved fences; an updated fence is a different
+request even when the intended work sounds the same. Classify current workspace
+and writer identity before supported exact replay. Workspace outcomes keep at
+most 100 entries or 30 days with pruning on successful writes; session outcomes
+survive archival and archive purge until session/runtime reset or workspace
+removal.
+
 ## Retained invocation and identity requirements
 
 | ID | Normative requirement |
@@ -133,6 +142,26 @@ Archive purge records a workspace-scoped success; original-key lookup is the
 primary response-loss reconciliation. A fresh archive list can confirm absence,
 but cannot identify the caller that deleted it. Stored session outcomes remain
 available under `AUT-DIRECT-010`.
+
+CLI begin and terminal-disposition fence flags remain optional because preflight
+can resolve them from fresh status. Automation should preserve the observed
+workspace/session/revision fences to pin its intended target. Neither operation
+accepts an attempt fence; begin's optional initial goal/criteria group and actor
+constraint remain unchanged. A handed-off reference identifies an actual result
+rather than work for Podway to execute or attest; not-required records why no
+handoff is owed.
+
+Preset and file templates carrying `session.start_replace` are two variants of
+one action, retaining the same policy, authorization and observed-fence rules.
+They do not turn disposed-terminal `session.start` templates into replacement
+commands. Actor attribution is optional correlation metadata on the supported
+routes, not authentication. On start it belongs only to preservation; on begin
+it requires the optional goal.
+
+Criterion `--evidence` and `--item` citations are optional and repeatable, unique
+within each kind and limited to four combined. Eligible evidence is a declared,
+resolved and still-valid source of the current decision attempt; eligible items
+have recorded values in that decision attempt. `not_applicable` cites neither.
 
 ## Retained reconciliation, observation, and evidence requirements
 

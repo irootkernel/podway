@@ -17,6 +17,12 @@ pub(super) const OBSERVATION_READ_GUIDANCE: &str = "observe combines compact cur
 pub(super) const RECORD_CHECK_GUIDANCE: &str = "Use the observed item.record_many stdin_template when present: keep its identity and revision fences and fill its declared placeholders with a caller-owned key and performed results. A complete check_result record requires type, operation_id, operation_digest, input_basis: {descriptor, digest}, executor: {name, version}, outcome, summary and output_digest. The caller hashes retained exact check-output bytes with SHA-256 for output_digest; describe and hash the actual input basis separately. The operation digest identifies the declared slot, not the output. Podway does not execute, verify or attest the operation and does not store its output bytes.";
 pub(super) const REVISION_GUIDANCE: &str = "Counters are not interchangeable: a single-item result.revision is the session revision, not the next item fence. Re-observe active_items[].revision for --if-item-revision; use result.status.session.revision for the session fence. workspace.latest_workspace_sequence orders newly retained successful mutations, including no-op outcomes; reads and exact replay do not advance it. The init result.revision is a fixed zero initialization marker. archive list/show archived_workspace_revision captures the persisted graph/workspace revision when archived, alongside its separate session_revision; neither is the live workspace sequence. Never substitute these numbers or increment a stale observation to derive a write fence.";
 
+const LIFECYCLE_FENCE_GUIDANCE: &str = "The CLI can fill omitted fences from a fresh status preflight. Automation should retain the observed template fences to preserve its intended workspace, session and revision; do not silently substitute a newer target. Begin and terminal disposition accept no attempt fence. Fence flags remain optional CLI syntax; a caller-owned automation key is still required.";
+const DISPOSITION_GUIDANCE: &str = "handed-off records an actual external result with its summary and reference. The reference identifies that result; it is not an instruction for Podway to run. not-required records why no external handoff is owed. Podway records these caller assertions and does not execute or attest the external result.";
+const REPLACEMENT_GUIDANCE: &str = "Replacement templates named session.start_replace have two variants: --preset selects an embedded preset, while --procedure with --expect-procedure-digest selects a pinned file. Both are variants of the same session.start_replace action, not two different actions. The digest flag remains optional in CLI grammar; the file template supplies it. Keep the observed command identity, policy, authorization requirements and fences; disposed-terminal auto-archive templates named session.start remain that distinct action.";
+const CITATION_GUIDANCE: &str = "--evidence and --item are optional and repeatable, with at most four citations in total across both flags and no duplicate within either kind. Cite only resolved, valid sources declared in the current decision attempt's guidance.references[] with --evidence, or a recorded decision-local item with --item; unrecorded items and undeclared, skipped or stale sources are ineligible. not_applicable carries no citations. The current session, attempt and goal fences still apply; citations are caller assertions, not attestation.";
+const OUTCOME_RECOVERY_GUIDANCE: &str = "After lost output, retain the original key and complete canonical request, including original resolved identities, revision/attempt/item/goal fences, values and options. Use outcome lookup with that same --idempotency-key in the owning worktree before exact replay where supported, after classifying the current workspace and writer. Lookup is read-only and never submits a mutation. A retained success contains the original response; exact replay preserves its request ID, timestamp and fences without a second effect. Changed input under that key fails IDEMPOTENCY_KEY_REUSED; a fresh key or refreshed fence is a new mutation. A found=false miss is retention-bounded and does not prove that an external effect never happened or authorize repeating external work. Session outcomes survive archival and archive purge until session/runtime reset or workspace removal; workspace outcomes retain at most 100 entries or 30 days, pruned on successful writes. Completed workspace removal destroys its Store and converges on absence rather than replaying the original response.";
+
 #[derive(Debug, Parser)]
 #[command(
     name = "podway",
@@ -1438,6 +1444,9 @@ fn topic_context(
 
 fn route_help(topic: &str) -> Option<String> {
     let text = route_topic(topic)?;
+    if topic == "automation" {
+        return Some(format!("{text}\n\n{OUTCOME_RECOVERY_GUIDANCE}"));
+    }
     let mut grammar = Cli::command();
     grammar.build();
     let Some((context, local)) = topic_context(topic, &grammar) else {
@@ -1502,6 +1511,11 @@ fn route_help(topic: &str) -> Option<String> {
             REVISION_GUIDANCE,
         ],
         "session.status" | "session.next" => &[OBSERVATION_READ_GUIDANCE],
+        "session.begin" => &[LIFECYCLE_FENCE_GUIDANCE],
+        "session.terminal_disposition" => &[LIFECYCLE_FENCE_GUIDANCE, DISPOSITION_GUIDANCE],
+        "session.start" | "session.start_replace" => &[REPLACEMENT_GUIDANCE],
+        "goal.assess_criterion" => &[CITATION_GUIDANCE],
+        "outcome.lookup" => &[OUTCOME_RECOVERY_GUIDANCE],
         "item.record_many" => &[RECORD_CHECK_GUIDANCE, REVISION_GUIDANCE],
         "item.set"
         | "workspace.init"
@@ -1514,6 +1528,28 @@ fn route_help(topic: &str) -> Option<String> {
     for guidance in guidance {
         result.push_str("\n\n");
         result.push_str(guidance);
+    }
+    if matches!(
+        topic,
+        "session.start"
+            | "session.start_replace"
+            | "session.begin"
+            | "session.decide"
+            | "session.rework"
+            | "goal.define"
+            | "goal.revise"
+            | "goal.assess_criterion"
+            | "session.terminal_disposition"
+    ) {
+        result.push_str("\n\n--actor is optional attribution of 1..256 Unicode scalars for correlation, not authentication or authorization.");
+        if topic == "session.begin" {
+            result.push_str(" The initial --goal and --criterion group remains optional; --actor requires --goal and --goal requires at least one --criterion.");
+        } else if matches!(topic, "session.start" | "session.start_replace") {
+            result.push_str(" On start, --actor requires --on-existing preserve; it does not apply to plain start or deletion.");
+        }
+    }
+    if mutation {
+        result.push_str("\n\nFor lost output, retain the original key and complete canonical request; consult podway help outcome.lookup before replay.");
     }
     Some(result)
 }

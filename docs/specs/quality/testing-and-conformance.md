@@ -68,6 +68,32 @@ Registered `podway-cli` E2E owners bind CALLS-003 guidance to real behavior:
 These checks validate recording mechanics; they do not attest the truth of an
 external check result or a caller's described input basis.
 
+### Lifecycle, attribution and lost-output guidance
+
+CALLS-004 uses registered `podway-cli` E2E owners:
+
+- `e2e_v2dfc007_local_cli::calls004_help_explains_lifecycle_attribution_and_original_request_recovery`
+  exercises actual help for begin/disposition fences, replacement variants,
+  optional actors, citation eligibility/bounds and original-request recovery.
+- `e2e_v2dfc007_direct_cli::sigkill_after_commit_before_stdout_preserves_the_original_outcome_and_exact_replay`
+  proves committed mutation output was never delivered, then original lookup and
+  exact replay with one effect; changed input under the key and a fresh key with
+  stale item fences are rejected without another effect.
+- `calls004_workspace_retention_miss_preserves_known_effect_and_read_only_lookup`
+  in that direct owner evicts a workspace outcome through 100 later public CLI
+  repairs, proves generation-1/2 lookup misses while known effects remain, and
+  verifies read-only lookup leaves the Store unchanged.
+- `calls004_citations_preserve_optional_actor_eligibility_duplicates_and_total_bound`
+  in that direct owner covers duplicate/over-bound/ineligible/no-citation-mode
+  rejections without outcomes, mixed eligible citations and optional actor use.
+- Existing `goal_begin_define_assess_decide_and_completed_revision_preserve_fences_and_replay`,
+  `guide010_generation2_citation_details_list_citable_sources`, runtime lifecycle
+  owners and `e2e_guide009_generation2_lifecycle::generation2_lifecycle_conformance`
+  retain actor, stale-fence, optional grammar, generation and template coverage.
+
+No result above makes Podway an external effect executor or attestor. Lookup is
+bounded by retention; exact replay uses the original canonical request and key.
+
 ### Shipped reference-path evidence
 
 [The reference-path fixture](../../../tests/fixtures/v2/presets/reference-paths.json)

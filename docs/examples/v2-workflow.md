@@ -371,6 +371,31 @@ the workspace sequence, initialization marker or archive snapshot for a fence.
 Exact replay retains its original request and fences rather than substituting
 fresh values.
 
+## Preserve lifecycle and recovery intent
+
+Begin and terminal dispositions may obtain omitted fences from CLI preflight,
+but automation should retain the observed template's workspace/session/revision
+fences. Neither accepts `--if-attempt`. Begin's initial goal/criteria group is
+optional; its optional actor requires that goal. Actor labels are correlation
+metadata, not authentication. The same optional attribution exists on decide,
+rework, goal define/revise/assess-criterion and both dispositions; start accepts
+it only with `--on-existing preserve`.
+
+A `handed-off` reference identifies an actual external result. A `not-required`
+reason explains why no handoff is owed. Neither asks Podway to execute work or
+attest an external result. Preset/file templates named `session.start_replace`
+are two variants of one action; keep their policy, authorization and observed
+fences rather than treating them as two actions.
+
+After lost output, keep the original key and complete canonical request,
+including semantic values, options and resolved fences. Read `outcome lookup`
+with that key before exact supported replay after workspace/writer classification.
+A retained success returns the original response without a second effect.
+A changed fence or fresh key creates a new mutation. A retention-bounded miss
+does not prove an external effect never happened or authorize repeating it.
+Workspace outcomes retain at most 100 entries or 30 days; session outcomes survive
+archive/purge until session/runtime reset or workspace removal.
+
 ## Advance, retry, and decide
 
 After recording all required items for an action node, complete it with the
@@ -463,6 +488,12 @@ podway --contract-generation 2 --json goal revise \
 ```
 
 ## Assess criteria and close out
+
+Both `--evidence` and `--item` may repeat, with no duplicate within either kind
+and at most four citations combined. Cite only declared, resolved and still-valid
+sources of the current decision attempt, or items recorded in that decision
+attempt. `not_applicable` carries no citations. Omitting citations or actor stays
+valid where existing admission permits it.
 
 At `assess-goal`, record one assessment per criterion. Evidence and item
 citations identify recorded Podway state; they do not validate an external test:

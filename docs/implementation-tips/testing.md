@@ -560,6 +560,13 @@ CLI rather than treated as a prose-only schema example. Its focused `--nocapture
 run emits the submitted document, retained exact check-output bytes and original
 record response for task-local evidence; normal gates capture passing test output.
 
+Lifecycle/attribution/recovery owners are listed in
+[Testing and Conformance](../specs/quality/testing-and-conformance.md#lifecycle-attribution-and-lost-output-guidance).
+They reuse the real blocked-stdout/SIGKILL fixture for loss and the existing
+single-CLI helpers for retention and citation controls. Keep original requests
+and fences in replay checks; a fresh key or changed fence must not stand in for
+exact replay.
+
 ## Optional diagnostics
 
 - The pinned fuzz targets cover canonical JSON, selectors, response decoding,

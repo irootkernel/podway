@@ -11,6 +11,8 @@ This file records concise shipped outcomes and the planned next stable release.
 - Explain combined observation reads, complete nested check-result recording,
   retained-output digest provenance and distinct revision counters in help and
   human observation, with an executable documented record example.
+- Clarify lifecycle fences, disposition references, replacement variants,
+  optional actors and citations, and original-request recovery after lost output.
 
 ### Fixed
 

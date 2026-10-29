@@ -2863,6 +2863,95 @@ fn sigkill_after_commit_before_stdout_preserves_the_original_outcome_and_exact_r
         after["result"]["session"]["revision"].as_u64().unwrap(),
         before["result"]["session"]["revision"].as_u64().unwrap() + 1
     );
+    let mut changed = arguments;
+    changed[2] = "a changed request must not replay";
+    let output = fixture.output(&changed);
+    assert_eq!(output.status.code(), Some(2));
+    let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(error.as_value()["code"], "IDEMPOTENCY_KEY_REUSED");
+    changed = arguments;
+    changed[4] = "lost-output-fresh-key";
+    let output = fixture.output(&changed);
+    assert_eq!(output.status.code(), Some(4));
+    let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(error.as_value()["code"], "ITEM_REVISION_CONFLICT");
+    assert_eq!(
+        fixture.run(&[
+            "outcome",
+            "lookup",
+            "--idempotency-key",
+            "lost-output-fresh-key"
+        ])["result"]["found"],
+        false
+    );
+    let rejected = fixture.run(&["status"]);
+    assert_eq!(rejected["result"], after["result"]);
+    assert_eq!(
+        rejected["workspace"]["latest_workspace_sequence"],
+        after["workspace"]["latest_workspace_sequence"]
+    );
+}
+
+#[test]
+fn calls004_workspace_retention_miss_preserves_known_effect_and_read_only_lookup() {
+    let fixture = Fixture::new();
+    let original = fixture.run(&["init", "--idempotency-key", "calls004-old-init"]);
+    assert_eq!(
+        fixture.run(&[
+            "outcome",
+            "lookup",
+            "--idempotency-key",
+            "calls004-old-init"
+        ])["result"]["outcome"]["response"],
+        original
+    );
+    fs::write(
+        fixture.0.join("external-result.txt"),
+        b"The client completed an external effect.\n",
+    )
+    .unwrap();
+    for index in 0..100 {
+        fixture.run(&[
+            "workspace",
+            "repair",
+            "--idempotency-key",
+            &format!("calls004-repair-{index}"),
+        ]);
+    }
+    let before = fixture.run(&["workspace", "show"]);
+    let snapshot = fixture.podway_snapshot();
+    for generation in ["1", "2"] {
+        let missing = fixture.run(&[
+            "--contract-generation",
+            generation,
+            "outcome",
+            "lookup",
+            "--idempotency-key",
+            "calls004-old-init",
+        ]);
+        assert_eq!(missing["result"]["found"], false);
+        assert_eq!(missing["result"]["outcome"], Value::Null);
+        let latest = fixture.run(&[
+            "--contract-generation",
+            generation,
+            "outcome",
+            "lookup",
+            "--idempotency-key",
+            "calls004-repair-99",
+        ]);
+        assert_eq!(latest["result"]["found"], true);
+    }
+    fixture.assert_podway_snapshot(&snapshot);
+    assert_eq!(
+        fixture.run(&["workspace", "show"])["workspace"]["latest_workspace_sequence"],
+        before["workspace"]["latest_workspace_sequence"]
+    );
+    assert_eq!(before["workspace"]["uuid"], original["workspace"]["uuid"]);
+    assert!(fixture.0.join(".podway/config.yaml").is_file());
+    assert_eq!(
+        fs::read(fixture.0.join("external-result.txt")).unwrap(),
+        b"The client completed an external effect.\n"
+    );
 }
 
 #[test]
@@ -4031,6 +4120,142 @@ fn guide010_assess_arguments(item: &str) -> Vec<&str> {
         "--idempotency-key",
         "guide010-citation",
     ]
+}
+
+#[test]
+fn calls004_citations_preserve_optional_actor_eligibility_duplicates_and_total_bound() {
+    let fixture = guide010_goal_fixture(true, true);
+    let before = fixture.run(&["observe"]);
+    for (key, status, citations, code) in [
+        (
+            "duplicate-source",
+            "satisfied",
+            vec!["--evidence", "perform", "--evidence", "perform"],
+            "REQUEST_INVALID",
+        ),
+        (
+            "duplicate-item",
+            "satisfied",
+            vec!["--item", "assessment-note", "--item", "assessment-note"],
+            "REQUEST_INVALID",
+        ),
+        (
+            "four-unique-check-eligibility",
+            "satisfied",
+            vec![
+                "--evidence",
+                "perform",
+                "--item",
+                "assessment-note",
+                "--evidence",
+                "other-source",
+                "--item",
+                "other-item",
+            ],
+            "CRITERION_CITATION_INVALID",
+        ),
+        (
+            "too-many",
+            "satisfied",
+            vec![
+                "--evidence",
+                "perform",
+                "--item",
+                "assessment-note",
+                "--evidence",
+                "other-source",
+                "--item",
+                "other-item",
+                "--evidence",
+                "last-source",
+            ],
+            "REQUEST_INVALID",
+        ),
+        (
+            "not-applicable-citation",
+            "not_applicable",
+            vec!["--item", "assessment-note"],
+            "REQUEST_INVALID",
+        ),
+        (
+            "undeclared-source",
+            "satisfied",
+            vec!["--evidence", "not-declared"],
+            "CRITERION_CITATION_INVALID",
+        ),
+        (
+            "unrecorded-item",
+            "satisfied",
+            vec!["--item", "not-recorded"],
+            "CRITERION_CITATION_INVALID",
+        ),
+    ] {
+        let mut args = vec![
+            "goal",
+            "assess-criterion",
+            "correct",
+            "--status",
+            status,
+            "--reason",
+            "Verify citation admission.",
+            "--idempotency-key",
+            key,
+        ];
+        args.extend(citations);
+        let output = fixture.output(&args);
+        assert!(!output.status.success(), "{key}");
+        let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(error.as_value()["code"], code, "{key}");
+        let after = fixture.run(&["observe"]);
+        assert_eq!(after["result"], before["result"]);
+        assert_eq!(
+            after["workspace"]["latest_workspace_sequence"],
+            before["workspace"]["latest_workspace_sequence"]
+        );
+        assert_eq!(
+            fixture.run(&["outcome", "lookup", "--idempotency-key", key])["result"]["found"],
+            false
+        );
+    }
+    let assessed = fixture.run(&[
+        "goal",
+        "assess-criterion",
+        "correct",
+        "--status",
+        "satisfied",
+        "--reason",
+        "The resolved source and recorded local item support the criterion.",
+        "--evidence",
+        "perform",
+        "--item",
+        "assessment-note",
+        "--idempotency-key",
+        "calls004-mixed",
+    ]);
+    assert_eq!(
+        assessed["result"]["result"]["citations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(assessed["result"]["result"]["criterion_id"], "correct");
+    let with_actor = fixture.run(&[
+        "goal",
+        "assess-criterion",
+        "tested",
+        "--status",
+        "satisfied",
+        "--reason",
+        "The recorded local item supports the criterion.",
+        "--item",
+        "assessment-note",
+        "--actor",
+        "calls004-reviewer",
+        "--idempotency-key",
+        "calls004-actor",
+    ]);
+    assert_eq!(with_actor["result"]["result"]["criterion_id"], "tested");
 }
 
 /// GUIDE-010: under generation 2 the rejected citation carries the citable

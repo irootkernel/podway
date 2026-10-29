@@ -293,6 +293,13 @@ After lost stdout or uncertain COMMIT I/O, look up the original key before exact
 replay of a retained Store mutation. `MUTATION_OUTCOME_UNKNOWN` is emitted only
 for uncertain COMMIT I/O; an external process kill or lost stdout is a caller-side uncertainty, not a job state.
 
+A `found=false` response does not prove that an external effect never happened
+and does not authorize repeating external work. Retain the original key, semantic
+values, options and resolved fences; changing a fence or using a fresh key creates
+a new mutation. Workspace/writer identity classification still precedes replay.
+Completed workspace removal destroys the Store and converges on absence instead
+of replaying the original response.
+
 `retry` remains on the active action or decision node. `block` and `unblock` also
 apply to either active node type. `rework --to <node>` uses the Procedure
 v2 manual-rework contract. Decisions, goals, and criterion assessments use their
@@ -310,6 +317,28 @@ requires summary and reference, while `disposition not-required` requires a
 reason. Each form accepts optional actor attribution and exact terminal-session
 fences. These values are caller assertions; the CLI does not inspect Git or
 validate external handoff semantics.
+
+Begin and both disposition forms can fill omitted fences through fresh CLI
+status preflight. Automation should retain the observed template's workspace UUID,
+session ID and revision to preserve its intended target; these remain optional
+CLI flags and neither operation accepts an attempt fence. The initial begin goal
+and criteria are optional together, while `begin --actor` requires `--goal`.
+`handed-off` describes an actual external result; its reference identifies that
+result, not an instruction for Podway to execute. `not-required` states why no
+handoff is owed. Podway does not execute or attest either assertion.
+
+`--actor` is optional correlation metadata of 1..256 Unicode scalars, not
+identity authentication. It is supported on begin (with goal), decide, rework,
+goal define/revise/assess-criterion and both dispositions. On start it requires
+`--on-existing preserve`; plain start and deletion reject it.
+
+`goal assess-criterion --evidence` and `--item` are optional and repeatable, with
+at most four citations combined and no duplicates within either kind. Evidence
+must name a declared, resolved source still valid for the current decision
+attempt, as exposed by `guidance.references[]`; an item citation must name a
+recorded item of that decision attempt. Unrecorded items and undeclared, skipped
+or stale sources are ineligible. `not_applicable` accepts no citations. Keep
+the observed session, attempt and goal fences.
 
 `reset` without `--yes` deletes only a prepared session or a completed or
 cancelled session with a disposition for its current revision. `reset --dry-run`
@@ -336,6 +365,13 @@ An interactive continue result performs a fresh committed-snapshot read and rend
 current guidance after stating that no session was created. Prepared and running
 sessions use `session.next`; completed and cancelled sessions use the terminal-safe
 `session.observe` route.
+
+Observation replacement templates named `session.start_replace` offer preset
+(`--preset`) and file (`--procedure` with a supplied `--expect-procedure-digest`)
+variants of the same action. Preserve their declared command, policy, required
+authorization and supplied fences; do not treat them as two distinct actions.
+The optional digest flag in CLI grammar stays optional. Disposed-terminal
+auto-archive templates named `session.start` retain that separate command.
 
 Plain `start` archives a completed or cancelled current session whose disposition
 is current, then creates the new prepared session. That automatic path rejects

@@ -46,6 +46,82 @@ fn one_json(output: &Output) -> Value {
 }
 
 #[test]
+fn calls004_help_explains_lifecycle_attribution_and_original_request_recovery() {
+    let fixture = Fixture::new();
+    for (topic, phrases) in [
+        (
+            "session.begin",
+            vec![
+                "retain the observed template fences",
+                "optional",
+                "requires --goal",
+                "no attempt fence",
+            ],
+        ),
+        (
+            "session.terminal_disposition",
+            vec![
+                "retain the observed template fences",
+                "actual external result",
+                "reference identifies",
+                "not-required",
+                "does not execute or attest",
+            ],
+        ),
+        (
+            "session.start_replace",
+            vec![
+                "two variants",
+                "same session.start_replace action",
+                "digest flag remains optional",
+                "--preset",
+                "--procedure",
+            ],
+        ),
+        (
+            "session.start",
+            vec!["--actor", "requires --on-existing preserve"],
+        ),
+        (
+            "session.decide",
+            vec!["--actor is optional", "correlation", "256"],
+        ),
+        ("session.rework", vec!["--actor is optional"]),
+        ("goal.define", vec!["--actor is optional"]),
+        ("goal.revise", vec!["--actor is optional"]),
+        (
+            "goal.assess_criterion",
+            vec![
+                "--evidence and --item are optional and repeatable",
+                "at most four",
+                "recorded decision-local",
+                "resolved",
+                "not_applicable",
+            ],
+        ),
+        (
+            "outcome.lookup",
+            vec![
+                "original key and complete canonical request",
+                "exact replay",
+                "retention",
+                "does not prove",
+                "external effect",
+            ],
+        ),
+    ] {
+        let output = fixture.run(&["--json", "help", topic].map(str::to_owned));
+        assert!(output.status.success(), "{topic}: {output:?}");
+        let value = one_json(&output);
+        assert_eq!(value["command"], "help");
+        let text = value["result"]["text"].as_str().unwrap();
+        for phrase in phrases {
+            assert!(text.contains(phrase), "{topic}: missing {phrase}");
+        }
+    }
+}
+
+#[test]
 fn calls002_missing_required_diagnostics_use_trusted_labels_and_keep_error_contracts() {
     let fixture = Fixture::new();
     for (arguments, route, label) in [
