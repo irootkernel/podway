@@ -130,6 +130,18 @@ are read-only and reject keys. Atomic `record` and `delegation accept` documents
 own their keys and fences in stdin, while read-only `outcome lookup` requires the
 original key on the CLI.
 
+`observe` combines compact current status, progression guidance, active items and
+mutation templates, replacing repeated narrow current-state reads. `status`
+retains full standard fields such as `purpose` and `item_values`; `status
+--verbose` provides trace history. Human observation and route help explain this
+choice and recording/counter guidance without adding machine response fields.
+For a check result, prefer an observed `stdin_template`, preserving its fences;
+fill `input_basis: {descriptor, digest}`, `executor: {name, version}`, operation
+identity/digest, outcome, summary and output digest from performed work. The caller
+hashes retained exact check-output bytes; Podway neither executes nor attests the
+operation. See the [executable walkthrough](../../examples/v2-workflow.md#keep-counters-distinct)
+for distinct counter producers and the complete nested input.
+
 ## Worktree selection and deadlines
 
 `--worktree <path>` selects an explicit Git worktree; omission discovers it from

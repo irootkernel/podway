@@ -2185,6 +2185,224 @@ fn goal_begin_define_assess_decide_and_completed_revision_preserve_fences_and_re
 }
 
 #[test]
+fn calls003_documented_check_result_decodes_and_records_with_observed_fences() {
+    use sha2::{Digest, Sha256};
+
+    let document = include_str!("../../../docs/examples/v2-workflow.md");
+    let example = document
+        .split("At the `bug-fix-v2` `verify` node")
+        .nth(1)
+        .unwrap()
+        .split("```json\n")
+        .nth(1)
+        .unwrap()
+        .split("```")
+        .next()
+        .unwrap();
+    let decoded = podway_protocol::decode_item_record_many_input_v1(example.as_bytes()).unwrap();
+    let mut input = serde_json::to_value(decoded).unwrap();
+    assert_eq!(input, serde_json::from_str::<Value>(example).unwrap());
+
+    let fixture = Fixture::new();
+    let init = fixture.run(&["init", "--idempotency-key", "calls003-init"]);
+    assert_eq!(init["result"]["revision"], 0);
+    assert_eq!(init["workspace"]["latest_workspace_sequence"], 1);
+    fixture.run(&[
+        "start",
+        "--preset",
+        "bug-fix-v2",
+        "--task",
+        "Documented check record",
+        "--idempotency-key",
+        "calls003-start",
+    ]);
+    fixture.run(&["begin", "--idempotency-key", "calls003-begin"]);
+    for (item, value) in [
+        ("reproduction-status", "reproduced"),
+        (
+            "observed-behavior",
+            "The fixture reproduces the documented recording path.",
+        ),
+        (
+            "expected-behavior",
+            "Recording retains observed fences and caller digests.",
+        ),
+        ("regression-check", "Check the canonical bug-fix Procedure."),
+    ] {
+        let set = fixture.run(&["set", item, value, "--idempotency-key", item]);
+        let fresh = fixture.run(&["observe"]);
+        let slot = fresh["result"]["active_items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["item_id"] == item)
+            .unwrap();
+        assert_eq!(slot["revision"], 1);
+        assert_eq!(
+            set["result"]["revision"],
+            fresh["result"]["status"]["session"]["revision"]
+        );
+        assert_ne!(set["result"]["revision"], slot["revision"]);
+    }
+    fixture.run(&["complete", "--idempotency-key", "calls003-reproduced"]);
+    for (item, value) in [
+        (
+            "cause",
+            "The documented shape needs complete nested values.",
+        ),
+        ("affected-boundary", "CLI record guidance"),
+    ] {
+        fixture.run(&["set", item, value, "--idempotency-key", item]);
+    }
+    fixture.run(&["complete", "--idempotency-key", "calls003-diagnosed"]);
+    fixture.run(&[
+        "set",
+        "fix-summary",
+        "Clarified recording guidance.",
+        "--idempotency-key",
+        "calls003-fix",
+    ]);
+    fixture.run(&[
+        "add",
+        "changed-boundaries",
+        "CLI guidance",
+        "--idempotency-key",
+        "calls003-boundary",
+    ]);
+    fixture.run(&["complete", "--idempotency-key", "calls003-implemented"]);
+
+    let before = fixture.run(&["--contract-generation", "2", "observe"]);
+    assert_eq!(
+        before["result"]["status"]["current"]["node"]["graph_node_id"],
+        "verify"
+    );
+    let generation_one = fixture.run(&["--contract-generation", "1", "observe"]);
+    let mut normalized = generation_one["result"].clone();
+    assert_eq!(normalized["schema"], "podway.observation-result/v5");
+    assert_eq!(before["result"]["schema"], "podway.observation-result/v6");
+    normalized["schema"] = before["result"]["schema"].clone();
+    assert_eq!(normalized, before["result"]);
+    let template = before["result"]["mutation_templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["command"] == "item.record_many")
+        .unwrap();
+    let observed: Value =
+        serde_json::from_str(template["stdin_template"].as_str().unwrap()).unwrap();
+    for field in [
+        "workspace_uuid",
+        "session_id",
+        "session_revision",
+        "attempt_id",
+    ] {
+        input[field] = observed[field].clone();
+    }
+    input["operations"][0]["expected_item_revision"] =
+        observed["operations"][0]["expected_item_revision"].clone();
+    for field in ["operation_id", "operation_digest"] {
+        assert_eq!(
+            input["operations"][0]["record"][field],
+            observed["operations"][0]["record"][field]
+        );
+    }
+    let basis = include_bytes!("../../../assets/presets/bug-fix-v2.yaml");
+    fs::write(fixture.0.join("check-input.yaml"), basis).unwrap();
+    let check = fixture.raw_output(&["--json", "procedure", "check", "check-input.yaml"]);
+    assert!(check.status.success(), "{check:?}");
+    assert!(check.stderr.is_empty());
+    fs::write(fixture.0.join("check-output.json"), &check.stdout).unwrap();
+    let retained = fs::read(fixture.0.join("check-output.json")).unwrap();
+    let digest = format!("sha256:{:x}", Sha256::digest(&retained));
+    input["operations"][0]["record"]["input_basis"]["digest"] =
+        json!(format!("sha256:{:x}", Sha256::digest(basis)));
+    input["operations"][0]["record"]["executor"] =
+        json!({"name":"podway procedure check", "version":env!("CARGO_PKG_VERSION")});
+    input["operations"][0]["record"]["output_digest"] = json!(digest);
+    let bytes = serde_json::to_vec(&input).unwrap();
+    podway_protocol::decode_item_record_many_input_v1(&bytes).unwrap();
+    let output =
+        fixture.output_with_stdin(&["--contract-generation", "2", "record", "--stdin"], &bytes);
+    assert!(output.status.success(), "{output:?}");
+    let response = serde_json::from_slice::<OutputEnvelopeV4>(&output.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(response["command"], "item.record_many");
+    assert_eq!(response["result"]["items"][0]["item_revision"], 1);
+    assert_eq!(
+        response["result"]["revision"].as_u64().unwrap(),
+        before["result"]["status"]["session"]["revision"]
+            .as_u64()
+            .unwrap()
+            + 1
+    );
+    let after = fixture.run(&["--contract-generation", "2", "observe"]);
+    let slot = &after["result"]["active_items"][0];
+    assert_eq!(slot["revision"], 1);
+    assert_eq!(slot["value"]["output_digest"], digest);
+    assert!(slot["satisfied"].as_bool().unwrap());
+    assert_eq!(
+        fixture.run(&[
+            "outcome",
+            "lookup",
+            "--idempotency-key",
+            "bug-42-record-verification"
+        ])["result"]["outcome"]["response"],
+        response
+    );
+    let replay =
+        fixture.output_with_stdin(&["--contract-generation", "2", "record", "--stdin"], &bytes);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&replay.stdout).unwrap(),
+        response
+    );
+    assert_eq!(
+        fixture.run(&["--contract-generation", "2", "observe"])["result"],
+        after["result"]
+    );
+    assert_eq!(
+        fixture.run(&["workspace", "show"])["workspace"]["latest_workspace_sequence"],
+        after["workspace"]["latest_workspace_sequence"]
+    );
+
+    let mut no_op = input.clone();
+    no_op["idempotency_key"] = json!("calls003-no-op");
+    no_op["session_revision"] = after["result"]["status"]["session"]["revision"].clone();
+    no_op["operations"][0]["expected_item_revision"] = slot["revision"].clone();
+    let no_op_output =
+        fixture.output_with_stdin(&["record", "--stdin"], &serde_json::to_vec(&no_op).unwrap());
+    assert!(no_op_output.status.success(), "{no_op_output:?}");
+    let no_op_response: Value = serde_json::from_slice(&no_op_output.stdout).unwrap();
+    assert_eq!(no_op_response["result"]["changed"], false);
+    assert_eq!(
+        no_op_response["result"]["revision"],
+        after["result"]["status"]["session"]["revision"]
+    );
+    let no_op_after = fixture.run(&["--contract-generation", "2", "observe"]);
+    assert_eq!(no_op_after["result"], after["result"]);
+    assert_eq!(
+        no_op_after["workspace"]["latest_workspace_sequence"]
+            .as_u64()
+            .unwrap(),
+        after["workspace"]["latest_workspace_sequence"]
+            .as_u64()
+            .unwrap()
+            + 1
+    );
+
+    // Captured by the focused --nocapture proof run; normal gates capture passing test output.
+    println!(
+        "calls003_documented_input={}",
+        String::from_utf8(bytes).unwrap()
+    );
+    println!(
+        "calls003_retained_check_output={}",
+        serde_json::to_string(&retained).unwrap()
+    );
+    println!("calls003_record_response={response}");
+}
+
+#[test]
 fn record_stdin_preserves_identity_applies_one_atomic_batch_and_replays_without_preflight() {
     let fixture = Fixture::new();
     fixture.run(&["init", "--idempotency-key", "init"]);

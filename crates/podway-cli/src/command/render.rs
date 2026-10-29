@@ -419,6 +419,15 @@ fn render_human_output_direct(
         )?;
     }
     let result = &value["result"];
+    if value["command"].as_str() == Some("session.observe") {
+        for guidance in [
+            super::grammar::OBSERVATION_READ_GUIDANCE,
+            super::grammar::RECORD_CHECK_GUIDANCE,
+            super::grammar::REVISION_GUIDANCE,
+        ] {
+            write_text_line(stdout, format_args!("note: {guidance}"))?;
+        }
+    }
     if contains_check_result_projection_v1(result) {
         write_text_line(
             stdout,

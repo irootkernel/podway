@@ -44,6 +44,30 @@ ownership, dry runs and read-only lookup. Grammar unit coverage also rejects
 untrusted or absent typed diagnostic context. Existing native mutation and
 interactive tests remain the owners of admission and automatic key generation.
 
+### Observation and recorded check guidance
+
+Registered `podway-cli` E2E owners bind CALLS-003 guidance to real behavior:
+
+- `e2e_v2dfc007_runtime_cli::calls003_help_and_human_observation_explain_reads_records_and_counters`
+  covers help/human guidance and write-free observation.
+- `e2e_v2dfc007_direct_cli::calls003_documented_check_result_decodes_and_records_with_observed_fences`
+  extracts the existing nested JSON block from `docs/examples/v2-workflow.md`,
+  decodes it canonically, fills observed fences, retains actual Procedure-check
+  output bytes, hashes them, records the document and verifies original lookup,
+  exact replay, separate session/item/init/success counters and unchanged running
+  generation-1/2 bodies, templates and actions apart from their schema selector.
+- `record_stdin_preserves_identity_applies_one_atomic_batch_and_replays_without_preflight`
+  in the same direct CLI owner proves stale session/item refusal and whole-batch
+  atomicity with no rejected outcome.
+- `disposed_terminal_start_archives_atomically_and_purge_honors_the_archived_revision`
+  in the runtime CLI owner checks the archive revision against the actual
+  persisted graph/workspace producer and the separate terminal session revision.
+- The frozen `e2e_guide006_generation1_baselines` observation cases and existing
+  generation-2 lifecycle owners retain machine compatibility coverage.
+
+These checks validate recording mechanics; they do not attest the truth of an
+external check result or a caller's described input basis.
+
 ### Shipped reference-path evidence
 
 [The reference-path fixture](../../../tests/fixtures/v2/presets/reference-paths.json)

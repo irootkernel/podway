@@ -200,6 +200,22 @@ retain one usable template for every offered command.
 | `AUT-CHK-008` | Podway MUST treat every check-result field as caller supplied and MUST NOT claim factual verification, authenticate the executor, inspect external bytes, compare the input basis with the worktree, execute a command, or store logs. |
 | `AUT-CHK-009` | Observation MUST expose one closed `unsatisfied_reason` (`operation_id_mismatch`, `operation_digest_mismatch`, or `outcome_not_accepted`) only on a stored, unsatisfied check result, naming the first failed declaration comparison in that order. The reason MUST derive from declaration/value alone, MUST be absent from compact-item projections, and MUST NOT claim that an operation ran. |
 
+Callers should fill `stdin_template` on the observed `item.record_many` mutation
+template when present, preserving its identity and revision fences. The complete nested value includes
+`input_basis: {descriptor, digest}` and `executor: {name, version}` in addition to
+operation ID/digest, outcome, summary and output digest. Hash retained exact
+check-output bytes for `output_digest`; describe and hash the actual input basis
+separately. Podway does not inspect those bytes or attest the external operation.
+
+Counter fields have distinct producers: single-item `result.revision` is the
+session trace revision, while fresh `active_items[].revision` supplies an item
+fence. `workspace.latest_workspace_sequence` orders newly retained success
+outcomes, including no-op mutations; reads and exact replay do not advance it.
+Init's result revision is a fixed zero marker. Archive `archived_workspace_revision`
+is the persisted graph/workspace revision captured at archival, with a separate
+`session_revision`. None of these numbers may replace another fence or be
+incremented from a stale observation to construct a subsequent write.
+
 ### Typed conditions and option guards (AUT-GRD-001–010)
 
 | ID | Normative requirement |

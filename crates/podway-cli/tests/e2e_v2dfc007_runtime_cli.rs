@@ -196,6 +196,63 @@ fn generated_mutation(
 }
 
 #[test]
+fn calls003_help_and_human_observation_explain_reads_records_and_counters() {
+    let fixture = running_fixture(STATE);
+    let before = fixture.run(&["observe"]);
+    let human = fixture.raw_output(&["observe"]);
+    assert!(human.status.success());
+    let text = String::from_utf8(human.stdout).unwrap();
+    for phrase in [
+        "observe combines",
+        "status --verbose",
+        "stdin_template",
+        "input_basis",
+        "executor",
+        "exact check-output bytes",
+        "active_items[].revision",
+        "latest_workspace_sequence",
+    ] {
+        assert!(text.contains(phrase), "missing {phrase}: {text}");
+    }
+    assert_eq!(fixture.run(&["observe"])["result"], before["result"]);
+    for (topic, phrases) in [
+        (
+            "session.observe",
+            vec![
+                "narrow current-state reads",
+                "status --verbose",
+                "stdin_template",
+                "exact check-output bytes",
+            ],
+        ),
+        (
+            "item.record_many",
+            vec![
+                "input_basis: {descriptor, digest}",
+                "executor: {name, version}",
+                "exact check-output bytes",
+                "stdin_template",
+            ],
+        ),
+        (
+            "item.set",
+            vec!["session revision", "active_items[].revision"],
+        ),
+        ("workspace.init", vec!["revision", "initialization marker"]),
+        (
+            "session.archive_list",
+            vec!["archived_workspace_revision", "session revision"],
+        ),
+    ] {
+        let help = fixture.run(&["help", topic]);
+        let text = help["result"]["text"].as_str().unwrap();
+        for phrase in phrases {
+            assert!(text.contains(phrase), "{topic}: missing {phrase}");
+        }
+    }
+}
+
+#[test]
 fn generated_item_recipes_preserve_all_types_clearing_and_attachment_evidence() {
     let fixture = running_fixture(include_str!(
         "../../../tests/fixtures/v2/procedures/action-readback-procedure.yaml"
@@ -759,6 +816,17 @@ fn disposed_terminal_start_archives_atomically_and_purge_honors_the_archived_rev
         reject(&fixture, &invalid, key, "REQUEST_INVALID");
     }
     let before = fixture.run(&["observe"]);
+    let archived_workspace_revision: u64 = rusqlite::Connection::open_with_flags(
+        fixture.0.join(".podway/runtime/state.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap()
+    .query_row(
+        "SELECT workspace_revision FROM v2_workspace_state WHERE singleton=1",
+        [],
+        |row| row.get(0),
+    )
+    .unwrap();
     let argv = [
         "start",
         "--preset",
@@ -775,6 +843,14 @@ fn disposed_terminal_start_archives_atomically_and_purge_honors_the_archived_rev
     let list = fixture.run(&["archive", "list"]);
     assert_eq!(list["result"]["count"], 1);
     assert_eq!(list["result"]["sessions"][0]["session_id"], session);
+    assert_eq!(
+        list["result"]["sessions"][0]["archived_workspace_revision"],
+        archived_workspace_revision
+    );
+    assert_eq!(
+        list["result"]["sessions"][0]["session_revision"],
+        before["result"]["status"]["session"]["revision"]
+    );
     let revision = list["result"]["sessions"][0]["session_revision"]
         .as_u64()
         .unwrap();

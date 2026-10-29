@@ -553,6 +553,13 @@ acceptance in the [CALLS dossier](../todo/TODO-podway-calls-guidance.md#7-verifi
 those checks are planned, not completed structural-program evidence. Combined
 operations and returned observations remain unadopted.
 
+CALLS observation/recording regression ownership is recorded in
+[Testing and Conformance](../specs/quality/testing-and-conformance.md#observation-and-recorded-check-guidance).
+The documented nested check-result example is exercised by the registered real
+CLI rather than treated as a prose-only schema example. Its focused `--nocapture`
+run emits the submitted document, retained exact check-output bytes and original
+record response for task-local evidence; normal gates capture passing test output.
+
 ## Optional diagnostics
 
 - The pinned fuzz targets cover canonical JSON, selectors, response decoding,

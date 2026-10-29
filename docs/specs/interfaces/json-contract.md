@@ -363,6 +363,23 @@ projection. `evidence.read` returns the complete check-result value in one
 terminal page because its 32 KiB encoded ceiling is below the 256 KiB page-data
 limit.
 
+The complete recording shape includes `input_basis: {descriptor, digest}` and
+`executor: {name, version}`; these nested fields do not expand the compact
+projection above. The caller computes `output_digest` over retained exact
+check-output bytes; Podway does not inspect or store those bytes. Human observation
+and help may explain these fields without inserting prose into JSON results,
+`allowed_actions`, or mutation/stdin templates.
+
+Counter names remain unchanged. Single-item mutation `result.revision` comes from
+the resulting session trace; active-item `revision` comes from its attempt-local
+slot. The outer `workspace.latest_workspace_sequence` orders newly retained
+success outcomes, including no-op mutations, and is unchanged by reads and exact
+replay. Init `result.revision` is the fixed zero marker. Archive
+`archived_workspace_revision` captures the persisted graph/workspace revision at
+archival, distinct from the archived terminal `session_revision` and the live
+success sequence. Numeric equality does not make these valid substitutes for
+observed session/item fences.
+
 ## Response budgets
 
 `session.next` and `session.observe` each have a closed byte composition proved against the 1,048,576-byte output bound. Authoring validation charges every allocation separately and names the one an author exceeded, because the remedies differ. Every windowed collection reports its exact total and whether it was truncated; silent truncation is forbidden.

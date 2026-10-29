@@ -8,6 +8,9 @@ This file records concise shipped outcomes and the planned next stable release.
 
 - Complete contextual bash, zsh and fish help topics without workspace queries,
   and resolve advertised flag-selected help spellings.
+- Explain combined observation reads, complete nested check-result recording,
+  retained-output digest provenance and distinct revision counters in help and
+  human observation, with an executable documented record example.
 
 ### Fixed
 

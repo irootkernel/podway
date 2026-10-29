@@ -13,6 +13,10 @@ use serde_json::Value;
 use super::completion::Shell;
 use super::{LocalFailure, MAX_DIRECT_COMMAND_TIMEOUT_MILLIS_V1, retirement};
 
+pub(super) const OBSERVATION_READ_GUIDANCE: &str = "observe combines compact current status, guidance, active items and mutation templates in one bounded read, replacing repeated narrow current-state reads. Use status for full standard fields such as purpose and item_values; use status --verbose for trace history. Selected evidence values still require evidence read.";
+pub(super) const RECORD_CHECK_GUIDANCE: &str = "Use the observed item.record_many stdin_template when present: keep its identity and revision fences and fill its declared placeholders with a caller-owned key and performed results. A complete check_result record requires type, operation_id, operation_digest, input_basis: {descriptor, digest}, executor: {name, version}, outcome, summary and output_digest. The caller hashes retained exact check-output bytes with SHA-256 for output_digest; describe and hash the actual input basis separately. The operation digest identifies the declared slot, not the output. Podway does not execute, verify or attest the operation and does not store its output bytes.";
+pub(super) const REVISION_GUIDANCE: &str = "Counters are not interchangeable: a single-item result.revision is the session revision, not the next item fence. Re-observe active_items[].revision for --if-item-revision; use result.status.session.revision for the session fence. workspace.latest_workspace_sequence orders newly retained successful mutations, including no-op outcomes; reads and exact replay do not advance it. The init result.revision is a fixed zero initialization marker. archive list/show archived_workspace_revision captures the persisted graph/workspace revision when archived, alongside its separate session_revision; neither is the live workspace sequence. Never substitute these numbers or increment a stale observation to derive a write fence.";
+
 #[derive(Debug, Parser)]
 #[command(
     name = "podway",
@@ -1490,6 +1494,26 @@ fn route_help(topic: &str) -> Option<String> {
                 " With --dry-run the invocation is read-only and rejects --idempotency-key.",
             );
         }
+    }
+    let guidance: &[&str] = match topic {
+        "session.observe" => &[
+            OBSERVATION_READ_GUIDANCE,
+            RECORD_CHECK_GUIDANCE,
+            REVISION_GUIDANCE,
+        ],
+        "session.status" | "session.next" => &[OBSERVATION_READ_GUIDANCE],
+        "item.record_many" => &[RECORD_CHECK_GUIDANCE, REVISION_GUIDANCE],
+        "item.set"
+        | "workspace.init"
+        | "workspace.show"
+        | "session.archive"
+        | "session.archive_list"
+        | "session.archive_show" => &[REVISION_GUIDANCE],
+        _ => &[],
+    };
+    for guidance in guidance {
+        result.push_str("\n\n");
+        result.push_str(guidance);
     }
     Some(result)
 }

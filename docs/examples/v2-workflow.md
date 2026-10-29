@@ -186,6 +186,11 @@ The source must still be a dominating `required: true` evidence reference with
 podway --contract-generation 2 --json observe
 ```
 
+`observe` combines compact current status, guidance, active items and mutation
+templates, replacing repeated narrow current-state reads. Use `status` when you
+need standard fields such as `purpose` and `item_values`, and `status --verbose`
+for trace history. Selected evidence values still use `evidence read`.
+
 Automation uses the JSON contract, never human-readable text. The observation
 returns `podway.observation-result/v6` for every Procedure; the deprecated
 generation-1 default serves `podway.observation-result/v5`. Read these stable fields:
@@ -293,10 +298,10 @@ operation ran:
 ```json
 {
   "schema": "podway.item-record-many-input/v1",
-  "workspace_uuid": "<workspace-uuid>",
-  "session_id": "<session-id>",
+  "workspace_uuid": "00000000-0000-4000-8000-000000000001",
+  "session_id": "00000000-0000-4000-8000-000000000002",
   "session_revision": 12,
-  "attempt_id": "<attempt-id>",
+  "attempt_id": "00000000-0000-4000-8000-000000000003",
   "idempotency_key": "bug-42-record-verification",
   "operations": [{
     "item_id": "verification-result",
@@ -318,11 +323,53 @@ operation ran:
 }
 ```
 
+The sample UUIDs, revision, item revision and repeated-letter digests above are
+illustrative valid values. Prefer `stdin_template` on the observed
+`item.record_many` mutation template when present: preserve its workspace/session/attempt identity and revision fences,
+then supply your own stable key and the complete record value. Otherwise replace
+the sample identities and revisions from a fresh observation. Do not send the
+illustrative numbers to a live session.
+
+`input_basis.descriptor` describes the actual candidate and check inputs;
+`input_basis.digest` is the caller's SHA-256 of that retained input basis.
+`executor.name` and `executor.version` identify the actual external executor.
+Keep the declared `operation_id` and `operation_digest`; the operation digest
+identifies the abstract slot and is not an output hash. Retain the exact
+check-output bytes and compute `output_digest` from those bytes, including
+newlines and encoding, before recording. For a check saved in `check-output.log`:
+
+```bash
+shasum -a 256 check-output.log
+```
+
+Prefix the lowercase hex result with `sha256:`. Hashing a reformatted JSON object,
+summary, terminal screenshot or a different output stream does not identify those
+same bytes. Podway does not execute the operation, inspect or store those bytes,
+or attest that the check ran or passed.
+
 Save this document and pass it to `podway --contract-generation 2 --json record --stdin`; JSON shown in a
 documentation block is not shell input by itself.
 
 Re-read observe after every successful mutation and use the returned revisions.
 Do not increment a revision locally or reuse a stale attempt ID.
+
+## Keep counters distinct
+
+| Field | Actual producer and use |
+|---|---|
+| Single-item `result.revision` | The resulting session trace revision; it is not an item revision. |
+| `result.active_items[].revision` | The active attempt's item slot revision, used for that item's next `--if-item-revision` after a fresh read. |
+| `result.status.session.revision` | The current session trace revision for session and atomic-record fences. |
+| `workspace.latest_workspace_sequence` | The Store's ordered newly retained success outcomes, including no-op mutations; reads and exact replay do not advance it. |
+| Init `result.revision` | A fixed zero initialization marker, independent of the success sequence and later session/item revisions. |
+| Archive `archived_workspace_revision` | The persisted graph/workspace revision captured at archival, alongside the separate terminal `session_revision`; it is not the live success sequence. |
+
+These numbers can coincide without being interchangeable. In particular, a
+successful `set` can return session revision 12 while its item slot is revision 1.
+Re-observe before the next write; never increment a stale counter or substitute
+the workspace sequence, initialization marker or archive snapshot for a fence.
+Exact replay retains its original request and fences rather than substituting
+fresh values.
 
 ## Advance, retry, and decide
 
