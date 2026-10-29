@@ -539,8 +539,11 @@ checks and the required `make test` development gate for executable or contract
 changes, plus `make lint-all` for test changes. Integration review and durable
 promotion complement task-local verification. The four accepted dossiers are
 retired under the [TODO lifecycle](../todo/README.md#lifecycle); completed behavior
-remains independently documented. CALLS remains unadopted and
-creates no interface-change verification obligation.
+remains independently documented. The separately adopted
+[CALLS epic](../roadmap/README.md#calls-agent-workflow-guidance) owns its guidance
+acceptance in the [CALLS dossier](../todo/TODO-podway-calls-guidance.md#7-verification-and-release-acceptance);
+those checks are planned, not completed structural-program evidence. Combined
+operations and returned observations remain unadopted.
 
 ## Optional diagnostics
 

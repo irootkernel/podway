@@ -97,14 +97,16 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-No adopted dossier remains.
+- [CALLS agent workflow guidance](TODO-podway-calls-guidance.md) — the execution
+  dossier for the [CALLS epic](../roadmap/README.md#calls-agent-workflow-guidance).
 
 ## Related candidates
 
 These seven documents group possible epic scopes. Their working labels reserve
 no roadmap identifiers and establish no task order or implementation commitment.
 Each remains `Candidate`; adoption requires closing its decisions and registering
-bounded work in the active roadmap. CALLS is the recommended next design topic.
+bounded work in the active roadmap. Existing-interface guidance is adopted as
+CALLS; optional interaction semantics remain a continuing candidate.
 
 Select work from a concrete product need and each finding's revisit condition.
 These groupings are not seven sequential implementation commitments: TYPED is
@@ -114,7 +116,7 @@ verification obligations; grouping does not waive them.
 
 | Working label | Candidate | Proposed outcome | Source feedback |
 |---|---|---|---|
-| CALLS | [Agent workflow simplification](TODO-podway-agent-workflow-simplification.md) | Clear observation, input, recording, lifecycle and recovery flows | DF-044, DF-047, DF-048, DF-049, DF-051 |
+| Future interaction semantics | [Agent workflow simplification](TODO-podway-agent-workflow-simplification.md) | Assess combined operations or returned observations against a concrete caller need | Unselected interaction research |
 | TYPED | [Typed boundary ownership](TODO-podway-typed-boundary-ownership.md) | Explicit owners for existing values, bounds, extraction and validation reuse | DF-002, DF-003, DF-005, DF-011, DF-012, DF-013, DF-014, DF-016, DF-017, DF-022, DF-024, DF-025, DF-027 |
 | MAINT | [Maintenance and recovery safety](TODO-podway-maintenance-recovery-safety.md) | Bounded recovery policy, confirmation and fault verification | DF-029, DF-030, DF-031, DF-032, DF-033, DF-034, DF-036, DF-039, DF-040, DF-041, DF-042, DF-043 |
 | CNTRT | [Public contract consistency](TODO-podway-public-contract-consistency.md) | Diagnostic, command/schema and known-answer consistency | DF-004, DF-008, DF-046 |

@@ -20,6 +20,35 @@ sequence, for example `OPTIM-001`. Existing alphanumeric epic IDs, including
 `V2CTR` and `REL12`, and the compact `REL12` task IDs remain unchanged historical
 identifiers. Do not rename completed work to apply the new convention.
 
+## CALLS — Agent Workflow Guidance
+
+Dependencies: accepted GUIDE completion. Status: Planned.
+Detailed SOT: [CALLS design dossier](../todo/TODO-podway-calls-guidance.md).
+
+CALLS adopts the remaining guidance work in DF-044, DF-047, DF-048, DF-049 and
+DF-051. It makes existing CLI workflows understandable without adding a command,
+result family or combined mutation. This registration is design only; product
+implementation begins only under a separately authorized execution workflow.
+No product release, installation, external-consumer change or Git publication
+is selected. Optional combined operations and returned observations remain in
+the [continuing interaction candidate](../todo/TODO-podway-agent-workflow-simplification.md).
+
+Tasks execute in numeric order with one active task. Every executable or contract
+change requires focused checks and `make test`; test changes also require
+`make lint-all`. The dossier owns detailed requirements, compatibility and
+acceptance. This roadmap alone owns membership, order and status. Completing
+all Tasks does not complete CALLS without independent completion assessment and
+the owner's explicit acceptance of the exact closeout candidate.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `CALLS-001` | Complete contextual help topics | Planned | Derive contextual help candidates from the existing command tree and topic definitions; execute bash, zsh and fish completion checks. | [Help completion](../todo/TODO-podway-calls-guidance.md#help-completion) |
+| `CALLS-002` | Explain required options and syntax failures | Planned | Show applicable global options and key requirements; name the first missing required argument without exposing user values or changing error classification. | [Usage and syntax](../todo/TODO-podway-calls-guidance.md#usage-and-syntax) |
+| `CALLS-003` | Clarify observation and recording | Planned | Explain read selection, nested check-result input, digest provenance and distinct revision counters in help and human output. | [Observation and recording](../todo/TODO-podway-calls-guidance.md#observation-and-recording) |
+| `CALLS-004` | Explain lifecycle and recovery | Planned | Explain automation fences, dispositions, replacement variants and optional actor/citation arguments; verify lost-output lookup and exact replay. | [Lifecycle and recovery](../todo/TODO-podway-calls-guidance.md#lifecycle-and-recovery) |
+| `CALLS-005` | Clarify preset behavior | Planned | Show human goal-tracking status and clarify recorded reproduction results; advance only bug-fix-v2 to version 4 with consistent preset and manifest identities. | [Preset guidance](../todo/TODO-podway-calls-guidance.md#preset-guidance) |
+| `CALLS-006` | Qualify and close CALLS | Planned | Verify both real CLI workflows and preserved contracts, pass the development gate and independent assessment, then obtain owner acceptance and retire the dossier. | [Verification and release acceptance](../todo/TODO-podway-calls-guidance.md#7-verification-and-release-acceptance) |
+
 ## GUIDE — Agent Guidance and Contract Generation 2
 
 Dependencies: none; prior epics are Completed. Status: Completed. Implemented
@@ -127,8 +156,9 @@ external-consumer change is selected by this design registration.
   maintenance scope, including its artifact rehash; do not extend that exception
   to mutations. Preserve deadlines as behavior without measuring performance.
 - Keep separate start/reset observations and existing user interaction semantics.
-  [CALLS](../todo/TODO-podway-agent-workflow-simplification.md) is an unadopted
-  candidate, with no roadmap tasks or implementation commitment.
+  [CALLS](#calls-agent-workflow-guidance) separately owns adopted guidance work.
+  Combined mutation and returned-observation changes remain in the
+  [unadopted interaction candidate](../todo/TODO-podway-agent-workflow-simplification.md).
 
 The completed task-local ownership ledgers informed the durable
 [read architecture](../architecture/system.md#read-path),

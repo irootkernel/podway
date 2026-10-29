@@ -48,8 +48,11 @@ VIEWS, PARSE, STATE and ADMIT are completed and owner-accepted. Their dossiers
 are retired; the roadmap alone owns status.
 Elapsed-time tests, latency percentiles, throughput benchmarks and performance
 baselines/thresholds are excluded. Existing CLI/JSON interfaces and persisted
-validation remain preserved; CLI interaction changes remain an
-[unadopted CALLS candidate](todo/TODO-podway-agent-workflow-simplification.md).
+validation remain preserved. The separately adopted
+[CALLS epic](roadmap/README.md#calls-agent-workflow-guidance) plans existing CLI
+guidance improvements under its [design dossier](todo/TODO-podway-calls-guidance.md);
+implementation has not started. Optional combined operations and returned
+observations remain in the [interaction candidate](todo/TODO-podway-agent-workflow-simplification.md).
 This program selects no release or external-consumer change.
 
 The preceding [internal-improvement sequence](roadmap/README.md#current-internal-improvements)
