@@ -114,6 +114,14 @@ use spaces or hyphens. State-aware `start` resolves to `session.start_replace`.
 The hidden `__complete [KIND]` route supports completion scripts; it is a bounded
 best-effort query and emits no candidates on failure.
 
+Help-topic completion is offline. The generated bash, zsh and fish scripts
+derive contextual command words, groups, dotted routes, overview, guides and
+flag-selected topics from the same command tree and topic definitions as help
+resolution. Global option values are not topic words. Retired families remain
+available as help topics without becoming executable-command suggestions, and
+hidden commands remain excluded. Use `help --` before topic words containing
+flags, for example `podway help -- reset --all`.
+
 ## Worktree selection and deadlines
 
 `--worktree <path>` selects an explicit Git worktree; omission discovers it from

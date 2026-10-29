@@ -4,6 +4,11 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.2.16 - Unreleased
 
+### Added
+
+- Complete contextual bash, zsh and fish help topics without workspace queries,
+  and resolve advertised flag-selected help spellings.
+
 ## v0.2.15 - 2026-10-24
 
 ### Added

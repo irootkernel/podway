@@ -1170,6 +1170,58 @@ const FLAG_SELECTED_TOPICS: &[(&str, &str, &[&str])] = &[
     ("reset", "reset --all", &["--all"]),
 ];
 
+/// Offline completion uses the same visible command tree and help definitions as resolution.
+pub(super) fn help_completion_topics() -> Vec<String> {
+    fn collect(scope: &clap::Command, path: &mut Vec<String>, topics: &mut Vec<String>) {
+        for child in scope.get_subcommands().filter(|child| !child.is_hide_set()) {
+            path.push(child.get_name().to_owned());
+            topics.push(path.join(" "));
+            if let Some(route) = word_route(path) {
+                topics.push(route.to_owned());
+            }
+            collect(child, path, topics);
+            path.pop();
+        }
+    }
+    let mut grammar = Cli::command();
+    grammar.build();
+    let mut topics = vec!["overview".to_owned()];
+    collect(&grammar, &mut Vec::new(), &mut topics);
+    topics.extend(GUIDE_TOPICS.iter().map(|topic| (*topic).to_owned()));
+    topics.extend(
+        RETIRED_FAMILY_TOPICS
+            .iter()
+            .flat_map(|topic| [(*topic).to_owned(), topic.replace(' ', ".")]),
+    );
+    topics.extend(FLAG_SELECTED_TOPICS.iter().flat_map(|(_, display, flags)| {
+        let mut words = vec![display.split_whitespace().next().unwrap().to_owned()];
+        words.extend(flags.iter().map(|word| (*word).to_owned()));
+        [
+            (*display).to_owned(),
+            word_route(&words).unwrap().to_owned(),
+        ]
+    }));
+    topics.sort();
+    topics.dedup();
+    topics
+}
+
+pub(super) fn help_completion_globals() -> Vec<(String, bool)> {
+    let mut grammar = Cli::command();
+    grammar.build();
+    grammar
+        .get_arguments()
+        .filter_map(|arg| {
+            arg.get_long().map(|long| {
+                (
+                    long.to_owned(),
+                    arg.get_num_args().is_some_and(|range| range.takes_values()),
+                )
+            })
+        })
+        .collect()
+}
+
 /// Maps one word path, including flag-selected spellings, to its route through
 /// the parse-failure command context.
 fn word_route(words: &[String]) -> Option<&'static str> {
@@ -1182,6 +1234,19 @@ fn word_route(words: &[String]) -> Option<&'static str> {
 /// Resolves executable command words and group words against the clap tree,
 /// walking only non-hidden subcommands.
 fn command_word_topic(words: &[String]) -> Option<String> {
+    for (name, display, flags) in FLAG_SELECTED_TOPICS {
+        if words
+            .iter()
+            .map(String::as_str)
+            .eq(display.split_whitespace())
+        {
+            let mut selected = vec![(*name).to_owned()];
+            selected.extend(flags.iter().map(|flag| (*flag).to_owned()));
+            return word_route(&selected)
+                .and_then(route_topic)
+                .map(str::to_owned);
+        }
+    }
     let mut grammar = Cli::command();
     grammar.build();
     let mut scope = &grammar;
@@ -1483,6 +1548,37 @@ fn route_topic(topic: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn calls001_help_completion_topics_resolve_through_the_shared_grammar() {
+        let topics = help_completion_topics();
+        for topic in &topics {
+            let words = topic
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            assert!(
+                help_text(&words).is_ok(),
+                "completion topic does not resolve: {topic}"
+            );
+        }
+        for topic in [
+            "overview",
+            "goal",
+            "goal assess-criterion",
+            "goal.assess_criterion",
+            "reset --all",
+            "workspace.reset_all",
+            "workspace mode",
+            "workspace.mode",
+        ] {
+            assert!(
+                topics.iter().any(|candidate| candidate == topic),
+                "missing {topic}"
+            );
+        }
+        assert!(!topics.iter().any(|topic| topic.contains("__complete")));
+    }
 
     const EXECUTABLE_WORD_ROUTES: &[(&[&str], &str)] = &[
         (&["help"], "help"),

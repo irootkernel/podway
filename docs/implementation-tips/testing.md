@@ -137,6 +137,14 @@ the roadmap; it establishes no release or installed-runtime compatibility.
 
 ## Functional regression owners
 
+`e2e_phase5_user_environment::calls001_help_completion_executes_contextually_without_workspace_queries`
+executes generated bash, zsh and fish completion functions for root, partial,
+multi-word and dotted help topics, option placement and values, flag-selected
+topics, retired help families and retained executable routes. A sentinel CLI
+rejects workspace queries. Bash and fish exercise prefix filtering; zsh captures
+the generated function's candidates because native `compadd` requires an
+interactive completion context.
+
 Pure workflow and goal tests live beside their Core implementations in
 [`workflow_v2/tests.rs`](../../crates/podway-core/src/workflow_v2/tests.rs) and
 [`goal_state_v2/tests.rs`](../../crates/podway-core/src/goal_state_v2/tests.rs).

@@ -22,7 +22,7 @@ identifiers. Do not rename completed work to apply the new convention.
 
 ## CALLS — Agent Workflow Guidance
 
-Dependencies: accepted GUIDE completion. Status: Planned.
+Dependencies: accepted GUIDE completion. Status: In Progress.
 Detailed SOT: [CALLS design dossier](../todo/TODO-podway-calls-guidance.md).
 
 CALLS adopts the remaining guidance work in DF-044, DF-047, DF-048, DF-049 and
@@ -42,7 +42,7 @@ the owner's explicit acceptance of the exact closeout candidate.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `CALLS-001` | Complete contextual help topics | Planned | Derive contextual help candidates from the existing command tree and topic definitions; execute bash, zsh and fish completion checks. | [Help completion](../todo/TODO-podway-calls-guidance.md#help-completion) |
+| `CALLS-001` | Complete contextual help topics | Completed | Derive contextual help candidates from the existing command tree and topic definitions; execute bash, zsh and fish completion checks. | [Help completion](../todo/TODO-podway-calls-guidance.md#help-completion) |
 | `CALLS-002` | Explain required options and syntax failures | Planned | Show applicable global options and key requirements; name the first missing required argument without exposing user values or changing error classification. | [Usage and syntax](../todo/TODO-podway-calls-guidance.md#usage-and-syntax) |
 | `CALLS-003` | Clarify observation and recording | Planned | Explain read selection, nested check-result input, digest provenance and distinct revision counters in help and human output. | [Observation and recording](../todo/TODO-podway-calls-guidance.md#observation-and-recording) |
 | `CALLS-004` | Explain lifecycle and recovery | Planned | Explain automation fences, dispositions, replacement variants and optional actor/citation arguments; verify lost-output lookup and exact replay. | [Lifecycle and recovery](../todo/TODO-podway-calls-guidance.md#lifecycle-and-recovery) |

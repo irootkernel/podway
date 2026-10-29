@@ -1,6 +1,9 @@
 //! Generated shell completion scripts for the public CLI grammar.
 
-use std::fmt::Write as _;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Write as _,
+};
 
 /// Supported completion script targets.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
@@ -358,8 +361,8 @@ const RESET_FLAGS: &[&Flag] = &[
     &YES,
 ];
 
-/// This is the only command/flag grammar source. Every shell renderer below derives its nested
-/// verbs, leaf flags, static values, and dynamic candidate kind from these routes.
+/// Executable completion routes retain their flags, static values and dynamic candidate kinds.
+/// Help topics additionally use the shared command tree and topic definitions in grammar.
 const ROUTES: &[Route] = &[
     Route {
         words: "help",
@@ -1187,19 +1190,117 @@ fn route_values(route: &Route) -> Vec<String> {
     route.values.split_whitespace().map(str::to_owned).collect()
 }
 
+fn help_candidates() -> BTreeMap<String, BTreeSet<String>> {
+    let mut candidates = BTreeMap::<String, BTreeSet<String>>::new();
+    for topic in super::grammar::help_completion_topics() {
+        let mut parent = "help".to_owned();
+        for word in topic.split_whitespace() {
+            candidates
+                .entry(parent.clone())
+                .or_default()
+                .insert(word.to_owned());
+            let _ = write!(parent, " {word}");
+        }
+    }
+    candidates
+        .entry("help".to_owned())
+        .or_default()
+        .extend(DISPLAY_FLAGS.iter().map(|flag| format!("--{}", flag.long)));
+    candidates
+}
+
+fn write_global_option_skip(script: &mut String, fish: bool) {
+    // Only global options can surround help words. Their values are not topics.
+    if fish {
+        script.push_str("    if test $literal -eq 0\n      switch \"$word\"\n        case --; set literal 1; continue\n");
+    } else {
+        script.push_str("    if [[ $literal -eq 0 ]]; then\n      case \"$word\" in\n        --) literal=1; continue ;;\n");
+    }
+    for (long, takes_value) in super::grammar::help_completion_globals() {
+        if fish {
+            let _ = writeln!(
+                script,
+                "        case --{long}; {}continue\n        case '--{long}=*'; continue",
+                if takes_value {
+                    "set expecting_worktree 1; "
+                } else {
+                    ""
+                }
+            );
+        } else {
+            let _ = writeln!(
+                script,
+                "        --{long}) {}continue ;;\n        --{long}=*) continue ;;",
+                if takes_value {
+                    "expecting_worktree=1; "
+                } else {
+                    ""
+                }
+            );
+        }
+    }
+    if fish {
+        script.push_str("      end\n    end\n");
+    } else {
+        script.push_str("      esac\n    fi\n");
+    }
+}
+
+fn write_help_value_guard(script: &mut String, shell: Shell) {
+    let valued = super::grammar::help_completion_globals()
+        .into_iter()
+        .filter(|(_, takes_value)| *takes_value)
+        .map(|(long, _)| format!("--{long}=*"))
+        .collect::<Vec<_>>();
+    if shell == Shell::Fish {
+        script.push_str("  switch \"$root\"\n    case help 'help *'\n      if test $expecting_worktree -eq 1\n        echo help-option-value\n        return\n      end\n      if test $literal -eq 0\n        set -l current (commandline -ct)\n        switch \"$current\"\n");
+        let patterns = valued
+            .iter()
+            .map(|pattern| format!("'{pattern}'"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let _ = writeln!(
+            script,
+            "          case {patterns}\n            echo help-option-value\n            return"
+        );
+        script.push_str("        end\n      end\n  end\n");
+    } else {
+        let current = if shell == Shell::Bash {
+            "${COMP_WORDS[COMP_CWORD]}"
+        } else {
+            "${words[CURRENT]}"
+        };
+        script.push_str("  case \"$root\" in\n    help|\"help \"*)\n      if [[ $expecting_worktree -eq 1 ]]; then\n        printf '%s\\n' help-option-value\n        return\n      fi\n      if [[ $literal -eq 0 ]]; then\n");
+        let _ = writeln!(
+            script,
+            "        case \"{current}\" in\n          {}) printf '%s\\n' help-option-value; return ;;\n        esac",
+            valued.join("|")
+        );
+        script.push_str("      fi\n      ;;\n  esac\n");
+    }
+}
+
 fn bash_script() -> String {
     let mut script = String::from("# podway bash completion (generated from ROUTES)\n");
     script.push_str("_podway_dynamic() {\n  local kind=$1 worktree=\"\" index word\n  for ((index = 1; index < COMP_CWORD; ++index)); do\n    word=${COMP_WORDS[index]}\n    case \"$word\" in\n      --worktree) ((++index)); worktree=${COMP_WORDS[index]} ;;\n      --worktree=*) worktree=${word#--worktree=} ;;\n    esac\n  done\n  local -a workspace=()\n  [[ -n \"$worktree\" ]] && workspace=(--worktree \"$worktree\")\n  command podway \"${workspace[@]}\" __complete \"$kind\" 2>/dev/null\n}\n");
-    script.push_str("_podway_route() {\n  local word root=\"\" index expecting_worktree=0\n");
+    script.push_str(
+        "_podway_route() {\n  local word root=\"\" index expecting_worktree=0 literal=0\n",
+    );
+    // Bash may split '=' into its own word. Map from the cursor backwards so
+    // earlier commands cannot supply a matching option, and keep literal '=' values.
+    script.push_str("  local -a attached_equals=()\n  if [[ ${1:-} == help-equals ]]; then\n    local LC_ALL=C\n    local raw=\"${COMP_LINE:0:COMP_POINT}\" before after current=\"${COMP_WORDS[COMP_CWORD]}\"\n    while [[ -n $current && $raw != *\"$current\" ]]; do current=${current%?}; done\n    raw=${raw%\"$current\"}\n    for ((index = COMP_CWORD - 1; index >= 0; --index)); do\n      word=${COMP_WORDS[index]}\n      before=${raw%\"$word\"*}\n      after=${raw#\"$before$word\"}\n      if [[ $word == = && $raw != \"$before\" && $after != [[:space:]]* ]]; then\n        attached_equals[index]=1\n      fi\n      raw=$before\n    done\n  fi\n");
     script.push_str("  for ((index = 1; index < COMP_CWORD; ++index)); do\n");
     script.push_str("    word=${COMP_WORDS[index]}\n");
-    script.push_str("    if [[ $expecting_worktree -eq 1 ]]; then\n      expecting_worktree=0\n      continue\n    fi\n    case \"$word\" in\n      --worktree) expecting_worktree=1; continue ;;\n      --worktree=*) continue ;;\n    esac\n");
+    script.push_str("    if [[ $expecting_worktree -eq 1 ]]; then\n      if [[ ${1:-} == help-equals ]]; then\n        if [[ ${attached_equals[index]:-} == 1 ]]; then continue; fi\n      elif [[ $root == help* && $word == = ]]; then continue\n      fi\n      expecting_worktree=0\n      continue\n    fi\n");
+    write_global_option_skip(&mut script, false);
     script.push_str("    if [[ -z \"$root\" ]]; then\n      case \"$word\" in\n");
     for root in roots() {
         let _ = writeln!(script, "        {root}) root={root} ;;");
     }
     script.push_str("      esac\n      continue\n    fi\n");
-    script.push_str("    case \"$root\" in\n");
+    script.push_str(
+        "    case \"$root\" in\n      help|\"help \"*) root=\"$root $word\"; continue ;;\n",
+    );
     for parent in parents() {
         let children = children(parent).join("|");
         let _ = writeln!(
@@ -1207,7 +1308,9 @@ fn bash_script() -> String {
             "      \"{parent}\") case \"$word\" in {children}) root=\"$root $word\"; continue ;; esac ;;"
         );
     }
-    script.push_str("    esac\n  done\n  printf '%s\\n' \"${root:-root}\"\n}\n");
+    script.push_str("    esac\n  done\n");
+    write_help_value_guard(&mut script, Shell::Bash);
+    script.push_str("  printf '%s\\n' \"${root:-root}\"\n}\n");
     script.push_str("_podway_candidates() {\n  case \"$1\" in\n");
     let root_candidates = roots()
         .into_iter()
@@ -1226,7 +1329,15 @@ fn bash_script() -> String {
             .collect::<Vec<_>>();
         write_bash_candidates(&mut script, parent, &children, None);
     }
-    for route in ROUTES {
+    for (parent, values) in help_candidates() {
+        write_bash_candidates(
+            &mut script,
+            &parent,
+            &values.into_iter().collect::<Vec<_>>(),
+            None,
+        );
+    }
+    for route in ROUTES.iter().filter(|route| route.words != "help") {
         write_bash_candidates(
             &mut script,
             route.words,
@@ -1236,7 +1347,8 @@ fn bash_script() -> String {
     }
     script.push_str("  esac\n}\n");
     script.push_str("_podway() {\n  local cur=\"${COMP_WORDS[COMP_CWORD]}\" route\n");
-    script.push_str("  route=$(_podway_route)\n");
+    // Use the raw-word normalization only for help; executable routing stays unchanged.
+    script.push_str("  route=$(_podway_route help-equals)\n  case \"$route\" in\n    help|\"help \"*|help-option-value) ;;\n    *) route=$(_podway_route) ;;\n  esac\n");
     script.push_str(
         "  COMPREPLY=( $(compgen -W \"$(_podway_candidates \"$route\")\" -- \"$cur\") )\n}\n",
     );
@@ -1279,16 +1391,21 @@ fn write_bash_dynamic(script: &mut String, dynamic: Option<&str>) {
 fn zsh_script() -> String {
     let mut script = String::from("#compdef podway\n# Generated from ROUTES.\n");
     script.push_str("_podway_dynamic() {\n  local kind=$1 worktree=\"\" index word\n  for ((index = 2; index < CURRENT; ++index)); do\n    word=$words[index]\n    case \"$word\" in\n      --worktree) ((++index)); worktree=$words[index] ;;\n      --worktree=*) worktree=${word#--worktree=} ;;\n    esac\n  done\n  local -a workspace=()\n  [[ -n \"$worktree\" ]] && workspace=(--worktree \"$worktree\")\n  command podway \"${workspace[@]}\" __complete \"$kind\" 2>/dev/null\n}\n");
-    script.push_str("_podway_route() {\n  local word root=\"\" index expecting_worktree=0\n");
+    script.push_str(
+        "_podway_route() {\n  local word root=\"\" index expecting_worktree=0 literal=0\n",
+    );
     script.push_str("  for ((index = 2; index < CURRENT; ++index)); do\n");
     script.push_str("    word=$words[index]\n");
-    script.push_str("    if [[ $expecting_worktree -eq 1 ]]; then\n      expecting_worktree=0\n      continue\n    fi\n    case \"$word\" in\n      --worktree) expecting_worktree=1; continue ;;\n      --worktree=*) continue ;;\n    esac\n");
+    script.push_str("    if [[ $expecting_worktree -eq 1 ]]; then\n      expecting_worktree=0\n      continue\n    fi\n");
+    write_global_option_skip(&mut script, false);
     script.push_str("    if [[ -z \"$root\" ]]; then\n      case \"$word\" in\n");
     for root in roots() {
         let _ = writeln!(script, "        {root}) root={root} ;;");
     }
     script.push_str("      esac\n      continue\n    fi\n");
-    script.push_str("    case \"$root\" in\n");
+    script.push_str(
+        "    case \"$root\" in\n      help|\"help \"*) root=\"$root $word\"; continue ;;\n",
+    );
     for parent in parents() {
         let children = children(parent).join("|");
         let _ = writeln!(
@@ -1296,7 +1413,9 @@ fn zsh_script() -> String {
             "      \"{parent}\") case \"$word\" in {children}) root=\"$root $word\"; continue ;; esac ;;"
         );
     }
-    script.push_str("    esac\n  done\n  print -r -- \"${root:-root}\"\n}\n");
+    script.push_str("    esac\n  done\n");
+    write_help_value_guard(&mut script, Shell::Zsh);
+    script.push_str("  print -r -- \"${root:-root}\"\n}\n");
     script.push_str("_podway_candidates() {\n  case \"$1\" in\n");
     let root_candidates = roots()
         .into_iter()
@@ -1315,7 +1434,15 @@ fn zsh_script() -> String {
             .collect::<Vec<_>>();
         write_zsh_candidates(&mut script, parent, &children, None);
     }
-    for route in ROUTES {
+    for (parent, values) in help_candidates() {
+        write_zsh_candidates(
+            &mut script,
+            &parent,
+            &values.into_iter().collect::<Vec<_>>(),
+            None,
+        );
+    }
+    for route in ROUTES.iter().filter(|route| route.words != "help") {
         write_zsh_candidates(
             &mut script,
             route.words,
@@ -1366,14 +1493,17 @@ fn write_zsh_dynamic(script: &mut String, dynamic: Option<&str>) {
 fn fish_script() -> String {
     let mut script = String::from("# podway fish completion (generated from ROUTES)\n");
     script.push_str("function __podway_dynamic\n  set -l worktree\n  set -l expecting_worktree 0\n  for word in (commandline -opc)\n    if test $expecting_worktree -eq 1\n      set worktree \"$word\"\n      set expecting_worktree 0\n      continue\n    end\n    switch \"$word\"\n      case --worktree\n        set expecting_worktree 1\n      case '--worktree=*'\n        set worktree (string replace -- '--worktree=' '' \"$word\")\n    end\n  end\n  set -l workspace\n  if test -n \"$worktree\"; set workspace --worktree \"$worktree\"; end\n  command podway $workspace __complete $argv 2>/dev/null\nend\n");
-    script.push_str("function __podway_route\n  set -l root\n  set -l expecting_worktree 0\n");
-    script.push_str("  for word in (commandline -opc)\n    if test \"$word\" = podway\n      continue\n    end\n    if test $expecting_worktree -eq 1\n      set expecting_worktree 0\n      continue\n    end\n    switch \"$word\"\n      case --worktree\n        set expecting_worktree 1\n        continue\n      case '--worktree=*'\n        continue\n    end\n");
+    script.push_str("function __podway_route\n  set -l root\n  set -l expecting_worktree 0\n  set -l literal 0\n");
+    script.push_str("  set -l words (commandline -opc)\n  for word in $words[2..-1]\n    if test $expecting_worktree -eq 1\n      set expecting_worktree 0\n      continue\n    end\n");
+    write_global_option_skip(&mut script, true);
     script.push_str("    if test -z \"$root\"\n      switch \"$word\"\n");
     for root in roots() {
         let _ = writeln!(script, "        case {root}; set root {root}");
     }
     script.push_str("      end\n      continue\n    end\n");
-    script.push_str("    switch \"$root\"\n");
+    script.push_str(
+        "    switch \"$root\"\n      case help 'help *'; set root \"$root $word\"; continue\n",
+    );
     for parent in parents() {
         let children = children(parent).join(" ");
         let _ = writeln!(
@@ -1381,7 +1511,11 @@ fn fish_script() -> String {
             "      case \"{parent}\"\n        switch \"$word\"\n          case {children}; set root \"$root $word\"; continue\n        end"
         );
     }
-    script.push_str("    end\n  end\n  if test -n \"$root\"\n    echo \"$root\"\n  else\n    echo root\n  end\nend\n");
+    script.push_str("    end\n  end\n");
+    write_help_value_guard(&mut script, Shell::Fish);
+    script.push_str(
+        "  if test -n \"$root\"\n    echo \"$root\"\n  else\n    echo root\n  end\nend\n",
+    );
     script.push_str("function __podway_route_is\n  test (__podway_route) = \"$argv[1]\"\nend\n");
     script.push_str("complete -c podway -f\n");
     let roots = roots().join(" ");
@@ -1397,6 +1531,13 @@ fn fish_script() -> String {
         let _ = writeln!(
             script,
             "complete -c podway -n '__podway_route_is \"{parent}\"' -a '{children}'"
+        );
+    }
+    for (parent, values) in help_candidates() {
+        let _ = writeln!(
+            script,
+            "complete -c podway -n '__podway_route_is \"{parent}\"' -a '{}'",
+            values.into_iter().collect::<Vec<_>>().join(" ")
         );
     }
     for route in ROUTES {
@@ -1462,7 +1603,7 @@ fn write_fish_flag(script: &mut String, route: &str, flag: &Flag, dynamic: Optio
 
 #[cfg(test)]
 mod tests {
-    use super::{IF_WORKSPACE_UUID, ROUTES, Shell, children, parents};
+    use super::{IF_WORKSPACE_UUID, ROUTES, Shell, children, help_candidates, parents, roots};
 
     #[test]
     fn delegation_receipt_completes_the_accepted_workspace_fence() {
@@ -1504,10 +1645,15 @@ mod tests {
     }
 
     #[test]
-    fn retired_execution_routes_and_flags_are_absent_from_every_completion_script() {
+    fn retired_execution_routes_and_flags_stay_outside_executable_completion_context() {
         assert!(children("daemon").is_empty());
         assert!(children("runtime").is_empty());
         assert!(children("job").is_empty());
+        for retired in ["daemon", "runtime", "job"] {
+            assert!(!roots().contains(&retired));
+        }
+        assert!(!children("workspace").contains(&"mode"));
+        assert!(help_candidates()["help workspace"].contains("mode"));
         for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
             let script = shell.script();
             for retired in [
@@ -1518,7 +1664,6 @@ mod tests {
                 "--wait-for-idle",
                 "--after-job",
                 "daemon status",
-                "workspace mode",
                 "job lookup",
             ] {
                 assert!(!script.contains(retired), "retired {retired} in {shell:?}");
