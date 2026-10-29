@@ -49,8 +49,9 @@ are retired; the roadmap alone owns status.
 Elapsed-time tests, latency percentiles, throughput benchmarks and performance
 baselines/thresholds are excluded. Existing CLI/JSON interfaces and persisted
 validation remain preserved. The separately adopted
-[CALLS epic](roadmap/README.md#calls-agent-workflow-guidance) plans existing CLI
-guidance improvements under its [design dossier](todo/TODO-podway-calls-guidance.md).
+[CALLS epic](roadmap/README.md#calls-agent-workflow-guidance) records the existing CLI
+guidance, with [integrated qualification](implementation-tips/testing.md#integrated-cli-guidance-qualification)
+and durable behavior under the specifications.
 Implemented guidance is owned by the [CLI specification](specs/interfaces/cli-specification.md),
 [built-in preset specification](specs/domain/built-in-presets.md) and
 [durable feedback and regression ownership](implementation-tips/testing.md#guidance-source-feedback-and-revisit-conditions).

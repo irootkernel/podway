@@ -630,9 +630,9 @@ changes, plus `make lint-all` for test changes. Integration review and durable
 promotion complement task-local verification. The four accepted dossiers are
 retired under the [TODO lifecycle](../todo/README.md#lifecycle); completed behavior
 remains independently documented. The separately adopted
-[CALLS epic](../roadmap/README.md#calls-agent-workflow-guidance) owns its guidance
-acceptance in the [CALLS dossier](../todo/TODO-podway-calls-guidance.md#7-verification-and-release-acceptance);
-its durable [integrated qualification requirements](#integrated-cli-guidance-qualification)
+[CALLS epic](../roadmap/README.md#calls-agent-workflow-guidance) retains its acceptance
+record. Its [integrated qualification requirements](#integrated-cli-guidance-qualification)
+and [historical feedback](#guidance-source-feedback-and-revisit-conditions)
 remain separate from completed structural-program evidence. Combined operations
 and returned observations remain unadopted.
 

@@ -97,8 +97,7 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-- [CALLS agent workflow guidance](TODO-podway-calls-guidance.md) — the execution
-  dossier for the [CALLS epic](../roadmap/README.md#calls-agent-workflow-guidance).
+No current adopted dossiers.
 
 ## Related candidates
 

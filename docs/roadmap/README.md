@@ -22,38 +22,31 @@ identifiers. Do not rename completed work to apply the new convention.
 
 ## CALLS — Agent Workflow Guidance
 
-Dependencies: accepted GUIDE completion. Status: In Progress.
-Detailed SOT: [CALLS design dossier](../todo/TODO-podway-calls-guidance.md).
+Dependencies: accepted GUIDE completion. Status: Completed.
+Implemented ownership: [CLI guidance](../specs/interfaces/cli-specification.md),
+[built-in presets](../specs/domain/built-in-presets.md), and
+[integrated qualification and historical feedback](../implementation-tips/testing.md#integrated-cli-guidance-qualification).
 
-CALLS adopts the remaining guidance work in DF-044, DF-047, DF-048, DF-049 and
-DF-051. It makes existing CLI workflows understandable without adding a command,
-result family or combined mutation. This registration is design only; product
-implementation begins only under a separately authorized execution workflow.
-No product release, installation, external-consumer change or Git publication
-is selected. Optional combined operations and returned observations remain in
-the [continuing interaction candidate](../todo/TODO-podway-agent-workflow-simplification.md).
+CALLS covers DF-044, DF-047, DF-048, DF-049 and DF-051 through existing-interface
+guidance, preserving command/result families and separate mutations. The
+[continuing interaction candidate](../todo/TODO-podway-agent-workflow-simplification.md)
+retains unselected combined operations and returned observations. No release,
+installation, external-consumer change or Git publication is selected.
 
-Tasks execute in numeric order with one active task. Every executable or contract
-change requires focused checks and `make test`; test changes also require
-`make lint-all`. The dossier owns detailed requirements, compatibility and
-acceptance. This roadmap alone owns membership, order and status. Completing
-all Tasks does not complete CALLS without independent completion assessment and
-the owner's explicit acceptance of the exact closeout candidate.
-
-CALLS-006 completes the ordinary qualification member: integrated CLI checks,
-durable documentation, a dossier-reference inventory and a prepared closeout
-candidate. Internal whole-Epic validation follows its normal completion commit.
-Owner acceptance and dossier/index retirement belong to the later Epic closeout;
-they remain pending when the qualification member is completed.
+The ordinary qualification member, its normal completion commit, internal
+whole-Epic validation and actual owner acceptance precede this final closeout.
+The original dossier and adopted index entry retire only with the accepted exact
+reference/deletion scope and completed last-consumer check. Durable behavior,
+compatibility, source feedback and regression ownership remain linked below.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `CALLS-001` | Complete contextual help topics | Completed | Derive contextual help candidates from the existing command tree and topic definitions; execute bash, zsh and fish completion checks. | [Help completion](../todo/TODO-podway-calls-guidance.md#help-completion) |
-| `CALLS-002` | Explain required options and syntax failures | Completed | Show applicable global options and key requirements; name the first missing required argument without exposing user values or changing error classification. | [Usage and syntax](../todo/TODO-podway-calls-guidance.md#usage-and-syntax) |
-| `CALLS-003` | Clarify observation and recording | Completed | Explain read selection, nested check-result input, digest provenance and distinct revision counters in help and human output. | [Observation and recording](../todo/TODO-podway-calls-guidance.md#observation-and-recording) |
-| `CALLS-004` | Explain lifecycle and recovery | Completed | Explain automation fences, dispositions, replacement variants and optional actor/citation arguments; verify lost-output lookup and exact replay. | [Lifecycle and recovery](../todo/TODO-podway-calls-guidance.md#lifecycle-and-recovery) |
-| `CALLS-005` | Clarify preset behavior | Completed | Show human goal-tracking status and clarify recorded reproduction results; advance only bug-fix-v2 to version 4 with consistent preset and manifest identities. | [Preset guidance](../todo/TODO-podway-calls-guidance.md#preset-guidance) |
-| `CALLS-006` | Qualify and close CALLS | Completed | Verify integrated CLI workflows and preserved contracts, promote durable owners, inventory dossier references and prepare exact closeout while preserving the later owner-acceptance and retirement gate. | [Verification and release acceptance](../todo/TODO-podway-calls-guidance.md#7-verification-and-release-acceptance) |
+| `CALLS-001` | Complete contextual help topics | Completed | Derive contextual help candidates from the existing command tree and topic definitions; execute bash, zsh and fish completion checks. | [Help completion](../specs/interfaces/cli-specification.md#grammar-and-global-options) |
+| `CALLS-002` | Explain required options and syntax failures | Completed | Show applicable global options and key requirements; name the first missing required argument without exposing user values or changing error classification. | [Usage and syntax](../specs/interfaces/cli-specification.md#output-and-exits) |
+| `CALLS-003` | Clarify observation and recording | Completed | Explain read selection, nested check-result input, digest provenance and distinct revision counters in help and human output. | [Observation and recording](../examples/v2-workflow.md#keep-counters-distinct) |
+| `CALLS-004` | Explain lifecycle and recovery | Completed | Explain automation fences, dispositions, replacement variants and optional actor/citation arguments; verify lost-output lookup and exact replay. | [Lifecycle and recovery](../specs/interfaces/cli-specification.md#mutation-rules) |
+| `CALLS-005` | Clarify preset behavior | Completed | Show human goal-tracking status and clarify recorded reproduction results; advance only bug-fix-v2 to version 4 with consistent preset and manifest identities. | [Preset guidance](../specs/domain/built-in-presets.md#bug-fix-v2) |
+| `CALLS-006` | Qualify and close CALLS | Completed | Verify integrated CLI workflows and preserved contracts, promote durable owners, inventory dossier references and prepare exact closeout while preserving the later owner-acceptance and retirement gate. | [Verification and release acceptance](../implementation-tips/testing.md#integrated-cli-guidance-qualification) |
 
 ## GUIDE — Agent Guidance and Contract Generation 2
 

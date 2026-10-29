@@ -9,8 +9,9 @@
 - Repository scope: Podway only
 - Original interaction-research baseline: 2026-10-19 at `98796e6a20467d1d072bd84f377fd9ddccccab93`
 
-Existing-interface guidance was selected into the separate
-[CALLS design dossier](TODO-podway-calls-guidance.md). This continuing candidate
+Existing-interface guidance has [durable behavior](../specs/interfaces/cli-specification.md)
+and [historical feedback](../implementation-tips/testing.md#guidance-source-feedback-and-revisit-conditions).
+This continuing candidate
 owns only the unselected interaction-semantics questions. It reserves no roadmap
 ID and establishes no implementation commitment. The original research baseline
 is not a claim that later feedback was inspected at that revision.
@@ -66,13 +67,10 @@ existing observation and atomic-record baseline.
 ### Source feedback
 
 The complete original source, deferral reasons and revisit conditions of DF-044,
-DF-047, DF-048, DF-049 and DF-051 now belong to the
-[adopted CALLS source entries](TODO-podway-calls-guidance.md#source-feedback).
-Their roadmap promotion closes the deferrals only, not implementation or
-acceptance. They are not Open feedback owned by this continuing candidate.
-Their original details and delivered guidance also have a
-[durable owner](../implementation-tips/testing.md#guidance-source-feedback-and-revisit-conditions)
-so later dossier retirement does not remove that rationale.
+DF-047, DF-048, DF-049 and DF-051 remain with their
+[durable owner](../implementation-tips/testing.md#guidance-source-feedback-and-revisit-conditions).
+Their roadmap promotion closed the deferrals only; the roadmap owns implementation
+and acceptance. They are not Open feedback owned by this continuing candidate.
 
 ## 5. Open Decisions
 
