@@ -13,6 +13,12 @@ when a valid timestamp or rebuilt error envelope cannot be supplied: bounded
 stderr and exit 6 replace JSON, without partial output or process abort. This
 exception does not permit emitting an invalid Error v2 envelope.
 
+Human `preset explain` reports admitted goal-tracking policy without adding a
+JSON field. The `bug-fix-v2` version `4` prompt changes its existing version and
+digest values and the resulting manifest identity, without widening any schema,
+template or action set. The [writer contract](../storage/sqlite-model.md#workspace-and-writer-identity)
+still refuses previous-manifest Stores before reads, writes and replay.
+
 Direct and delegated Procedures share status, compact status, running next,
 and the default (generation 1) observation v5, with prepared next v3; under
 `--contract-generation 2`, observation serves

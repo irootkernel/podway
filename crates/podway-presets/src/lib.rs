@@ -20,7 +20,7 @@ pub const SW_DEV_V2_YAML: &str = include_str!("../../../assets/presets/sw-dev-v2
 pub const ANALYSIS_V2_SHIPPED_DIGEST: &str =
     "sha256:a3843d434f545759563514e37c2b0fc1ce404e12bfd869513123877e2100c4b6";
 pub const BUG_FIX_V2_SHIPPED_DIGEST: &str =
-    "sha256:154949392818619eb3b0d7b57344f0a2c2799b94dc19b4692a62869ab2e0aa9c";
+    "sha256:9fa5e72367461e7bc1d4d9ec0b4c9dd17768ee461167b124d5c2f90dc69bcebd";
 pub const SMALL_CHANGE_V2_SHIPPED_DIGEST: &str =
     "sha256:428679042ee39b6e48c66949cdc8adcb959c424418ac1ecba26bff28930a6320";
 pub const SW_DEV_V2_SHIPPED_DIGEST: &str =
@@ -298,7 +298,7 @@ const ANALYSIS_V2_METADATA: PresetMetadata = PresetMetadata {
 const BUG_FIX_V2_METADATA: PresetMetadata = PresetMetadata {
     schema: PROCEDURE_SCHEMA_V2,
     id: "bug-fix-v2",
-    version: "3",
+    version: "4",
     name: "Bug Fix v2",
     description: "The middle reference Procedure for a reproduced defect, typed verification, guarded rework, and goal-directed closeout.",
 };

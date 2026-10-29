@@ -1,6 +1,6 @@
 schema: podway.procedure/v2
 id: bug-fix-v2
-version: "3"
+version: "4"
 name: Bug Fix v2
 purpose: Correct a defect with fresh structurally bound verification and guarded review evidence.
 description: The middle reference Procedure for a reproduced defect, typed verification, guarded rework, and goal-directed closeout.
@@ -37,7 +37,7 @@ node_definitions:
         multiline: true
       - id: regression-check
         type: text
-        prompt: Record the regression check in English, preserving exact commands verbatim.
+        prompt: Record the regression commands actually run and their observed results in English, preserving exact commands verbatim. If they could not be run, record why.
         required: true
         min_length: 1
         max_length: 2000

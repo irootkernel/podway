@@ -43,7 +43,7 @@ fn bug_fix_v2_is_canonical_clean_and_covers_the_full_defect_workflow() {
 
     let procedure = validated.parsed();
     assert_eq!(procedure.id(), "bug-fix-v2");
-    assert_eq!(procedure.version(), "3");
+    assert_eq!(procedure.version(), "4");
     assert!(
         procedure
             .goal_tracking()
@@ -141,6 +141,19 @@ fn bug_fix_v2_is_canonical_clean_and_covers_the_full_defect_workflow() {
             .expect("the accepted action definition must exist")
     };
     let verification = action_items("verification");
+    let reproduction = action_items("reproduction");
+    let ItemSpecV2::Text(regression) = &reproduction[3] else {
+        panic!("regression-check must remain text");
+    };
+    assert_eq!(regression.common().id().as_str(), "regression-check");
+    assert_eq!(
+        regression.common().prompt(),
+        "Record the regression commands actually run and their observed results in English, preserving exact commands verbatim. If they could not be run, record why."
+    );
+    assert!(regression.common().required());
+    assert_eq!(regression.min_length(), 1);
+    assert_eq!(regression.max_length(), 2_000);
+    assert!(regression.multiline());
     let ItemSpecV2::CheckResult(result) = &verification[0] else {
         panic!("verification-result must be a check result");
     };

@@ -13,6 +13,15 @@ This file records concise shipped outcomes and the planned next stable release.
   human observation, with an executable documented record example.
 - Clarify lifecycle fences, disposition references, replacement variants,
   optional actors and citations, and original-request recovery after lost output.
+- Show admitted goal-tracking policy in human preset explanations and clarify
+  recorded reproduction commands and results in `bug-fix-v2` version `4`.
+
+### Changed
+
+- The updated preset changes the contract manifest. Previous-manifest Stores,
+  including sessions using unchanged presets, refuse normal reads, writes and
+  original-request replay with `WORKSPACE_CONTRACT_MISMATCH`. No migration,
+  predecessor declaration, forced reset or installed-runtime update is included.
 
 ### Fixed
 

@@ -74,6 +74,15 @@ is empty; the cutover declares no daemon-era predecessor. Only a release or its
 following open-development commit may add a predecessor. Feature work and a
 reduced metadata-only patch gate cannot do so.
 
+The `bug-fix-v2` version `4` reproduction-prompt update changes the manifest even
+though Store generation and layout remain unchanged. The candidate therefore
+refuses Stores carrying the preceding manifest on normal reads, writes and
+original-request replays with `WORKSPACE_CONTRACT_MISMATCH`. This applies to
+sessions using unchanged presets as well. Their snapshots remain immutable;
+that does not promise transparent continuation with a new manifest. Verify the
+candidate in freshly initialized isolated fixtures. No migration, predecessor
+declaration, forced reset or installed-runtime update is part of this change.
+
 A declared migration verifies the complete predecessor schema and identity
 before opening a writer, holds the exclusive native lease, applies the reviewed
 migration and writer update atomically, then validates the successor. The

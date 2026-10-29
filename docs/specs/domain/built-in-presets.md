@@ -14,9 +14,13 @@ binary with pinned digests.
 `podway preset list`, `show`, and `explain` expose only this catalog. A workspace
 created by `podway init` defaults to `sw-dev-v2`. A preset start admits the exact
 embedded source and fails closed if its shipped digest does not match.
+Human `preset explain` reports `Goal tracking: enabled` or `disabled` from the
+admitted Procedure content for every preset. Its JSON result remains the existing
+preset metadata and graph-node list; it gains no goal-tracking field.
 
-The established software presets declare version `3`; `analysis-v2` begins at
-version `1`. Version is descriptive public identity while the canonical digest
+`bug-fix-v2` declares version `4`; `small-change-v2` and `sw-dev-v2` remain at
+version `3`, and `analysis-v2` remains at version `1`.
+Version is descriptive public identity while the canonical digest
 binds the admitted semantics. New preset starts use these current identities;
 existing sessions retain their earlier immutable snapshots. Copyable recording,
 condition, guard, selector, page-token, check-result, and rework patterns live in the
@@ -114,6 +118,12 @@ mechanical binding uses `check_result` instead.
 This middle preset adds one structurally bound verification result and guarded
 decisions. Every list fits in one read-back page. It omits conditional requiredness
 and multi-target phase-owner option routing.
+
+The reproduction `regression-check` records commands actually run and their
+observed results, or why they could not be run. Exact commands remain verbatim
+within the English record. Version `4` clarifies only that prompt; the required
+text item remains bounded to 1..2,000 characters. This reproduction record does
+not replace the later structurally bound `verification-result`.
 
 | Node | Kind | Items and bounds | Successor or routes |
 | --- | --- | --- | --- |
@@ -258,6 +268,16 @@ Preset IDs remain stable, while a changed canonical preset receives a new versio
 and embedded digest. Existing sessions retain immutable admitted snapshots and
 are never migrated or reinterpreted. The canonical YAML, pinned embedded digest,
 preset selection, and packaged manifest must bind the same exact bytes.
+
+The `bug-fix-v2` version `4` prompt changes the packaged manifest digest. With
+the current empty predecessor registry, the candidate refuses normal reads,
+writes and original-request replays against a Store carrying the previous
+manifest with `WORKSPACE_CONTRACT_MISMATCH`, including sessions using an unchanged
+preset. Retaining an immutable snapshot does not promise transparent continuation
+with the new binary. Verify new workflows in freshly initialized isolated
+fixtures; this change authorizes no migration, predecessor declaration, forced
+reset or installed-runtime update. The [writer contract](../storage/sqlite-model.md#workspace-and-writer-identity)
+owns admission.
 
 `podway init` continues to select `sw-dev-v2`. Changes to that preset affect only
 newly initialized workspaces and new sessions. They do not change an already

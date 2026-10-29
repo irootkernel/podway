@@ -96,6 +96,18 @@ bounded by retention; exact replay uses the original canonical request and key.
 
 ### Shipped reference-path evidence
 
+`e2e_v2dfc007_local_cli::calls005_preset_explain_reports_admitted_goal_tracking_only_in_human_output`
+checks all four admitted presets through the real CLI, including enabled and
+disabled policy and identical existing generation-1/2 JSON result fields.
+`int_v2dog002_bug_fix_preset::bug_fix_v2_is_canonical_clean_and_covers_the_full_defect_workflow`
+pins version `4`, the exact reproduction-record prompt and unchanged item bounds,
+graph and later verification contract. Preset embedding/digest tests remain the
+identity owner. The existing actual CLI
+`incompatible_writer_identity_refuses_concurrent_reads_mutations_and_old_replays`
+owns fail-closed writer classification; authentic previous-manifest Store checks
+also require unchanged refusal for an unaffected preset and a fresh candidate
+fixture, without migration, reset or an installed-runtime change.
+
 [The reference-path fixture](../../../tests/fixtures/v2/presets/reference-paths.json)
 owns the accepted inventory for the four shipped presets. Every `runtime_proofs`
 entry currently resolves to a registered test in

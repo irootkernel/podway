@@ -13,7 +13,7 @@
     {
       "kind": "preset",
       "path": "presets/bug-fix-v2.yaml",
-      "sha256": "sha256:f63922f7996ad1227f6d309ba70e8c2457847f6a9eb9fe4445b6bd5c1e9e1ca5"
+      "sha256": "sha256:2499410c646d620a791ac7da5a4d882ff053da905a829980637a90735212cdcb"
     },
     {
       "kind": "preset",
@@ -621,7 +621,7 @@
       "sha256": "sha256:7de5f4f024eb795ae7fb73594d4847b833016bea6be9f2737c567b524ae5466e"
     }
   ],
-  "digest": "sha256:293cfcf7bcaebb55b55b9e7cabb5842df228dbd9afacea5d1ae78474c25ae01b",
+  "digest": "sha256:331a59d6763311a24b26be9e0c2a8a4b04c114e0ff8a197d524f04d722e098d9",
   "product": "podway",
   "product_version": "0.2.15",
   "schema_version": "podway.contract-manifest/v2"

@@ -109,9 +109,18 @@ pub(super) fn execute_preset(command: &PresetCommand) -> Result<RunResult, Local
                 })
                 .collect();
             let text = format!(
-                "{}\n{}\nGraph nodes: {}",
+                "{}\n{}\nGoal tracking: {}\nGraph nodes: {}",
                 preset.metadata.name,
                 preset.metadata.description,
+                if admitted
+                    .parsed()
+                    .goal_tracking()
+                    .is_some_and(|policy| policy.is_enabled())
+                {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
                 nodes
                     .iter()
                     .filter_map(|node| node.get("id").and_then(Value::as_str))

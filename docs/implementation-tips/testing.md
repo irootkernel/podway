@@ -78,6 +78,16 @@ protocol behavior, not a live executor integration.
 
 ## Supported Store continuity
 
+The `bug-fix-v2` version `4` prompt intentionally changes the manifest. It is
+outside the matching-writer continuity scenario below: an authentic
+previous-manifest Store must refuse candidate reads, fresh writes and original
+request replay with `WORKSPACE_CONTRACT_MISMATCH`, including an unchanged-preset
+session, while preserving filesystem bytes, metadata and session state. Create
+such owned fixtures with the verified previous CLI, retain original requests and
+responses, and separately prove a freshly initialized candidate workflow. Do not
+edit a user Store, add a predecessor, migrate or reset to make the check pass.
+These isolated compatibility checks establish no release or installation claim.
+
 For a boundary refactor, preserve an accepted prechange CLI and create an owned
 standalone Git fixture through that CLI: init, start, begin and record one required
 item with explicit fences and a caller key. Retain the original stdout bytes,

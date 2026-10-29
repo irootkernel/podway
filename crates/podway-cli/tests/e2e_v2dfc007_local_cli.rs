@@ -46,6 +46,67 @@ fn one_json(output: &Output) -> Value {
 }
 
 #[test]
+fn calls005_preset_explain_reports_admitted_goal_tracking_only_in_human_output() {
+    let fixture = Fixture::new();
+    for (name, enabled) in [
+        ("analysis-v2", true),
+        ("bug-fix-v2", true),
+        ("small-change-v2", false),
+        ("sw-dev-v2", true),
+    ] {
+        let shown = fixture.run(&["preset", "show", name, "--json"].map(str::to_owned));
+        assert!(shown.status.success(), "{name}: {shown:?}");
+        let shown = one_json(&shown);
+        let procedure = &shown["result"]["procedure"];
+        assert_eq!(
+            procedure["goal_tracking"].as_bool().unwrap_or(false),
+            enabled
+        );
+        let expected_nodes: Vec<_> = procedure["graph"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|node| {
+                let definition = &procedure["node_definitions"][node["use"].as_str().unwrap()];
+                json!({"id": node["id"], "title": definition["title"], "type": definition["type"]})
+            })
+            .collect();
+        for generation in ["1", "2"] {
+            let explained = fixture.run(
+                &[
+                    "--contract-generation",
+                    generation,
+                    "preset",
+                    "explain",
+                    name,
+                    "--json",
+                ]
+                .map(str::to_owned),
+            );
+            assert!(explained.status.success(), "{name}: {explained:?}");
+            let explained = one_json(&explained);
+            assert_eq!(
+                explained["result"],
+                json!({"preset": shown["result"]["metadata"], "nodes": expected_nodes}),
+                "generation {generation}: {name}"
+            );
+        }
+        let human = fixture.run(&["preset", "explain", name].map(str::to_owned));
+        assert!(human.status.success(), "{name}: {human:?}");
+        let text = String::from_utf8(human.stdout).unwrap();
+        let expected = format!(
+            "Goal tracking: {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
+        assert_eq!(
+            text.lines().filter(|line| *line == expected).count(),
+            1,
+            "{name}: {text}"
+        );
+    }
+}
+
+#[test]
 fn calls004_help_explains_lifecycle_attribution_and_original_request_recovery() {
     let fixture = Fixture::new();
     for (topic, phrases) in [

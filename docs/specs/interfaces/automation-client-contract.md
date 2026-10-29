@@ -55,6 +55,16 @@ remain below with their retired clauses identified.
 | `AUT-DIRECT-019` | RecoveryRecipe v2 MUST be closed, bounded, and code/boundary-specific. Ordinary recovery MUST remain read-only; legacy reset and exact initialization/reset/removal continuation MUST explicitly require authorization. No recipe may weaken a fence, fabricate a new replay key, or authorize external work. |
 | `AUT-DIRECT-020` | Native qualification MUST bind one packaged release-profile CLI, immutable candidate bytes, independent extraction, exact manifest/catalog/lock/source identity, disabled debug hooks, and bounded process/fixture cleanup. A dirty-source development dry run MUST remain explicitly nonpublishable `development-qualification` with gate `development`; it MUST NOT imply clean distribution or a full/patch release gate. |
 
+The `bug-fix-v2` version `4` reproduction prompt changes the current manifest
+identity. The empty predecessor registry therefore refuses normal reads, writes
+and even original-request replay against a previous-manifest Store with
+`WORKSPACE_CONTRACT_MISMATCH`, regardless of the session's selected preset.
+An immutable admitted snapshot is preserved but cannot bypass writer admission.
+Use fresh isolated candidate fixtures for workflow checks; this feature declares
+no migration or predecessor and authorizes no forced reset or installed update.
+Human `preset explain` reports admitted goal-tracking policy; its JSON result
+retains the existing fields.
+
 The [CLI specification](cli-specification.md#worktree-selection-and-deadlines)
 owns duration syntax and prompting. Retired syntax is listed in the
 [canonical table](../../../assets/specifications/retired-commands-v1.json).
