@@ -97,18 +97,20 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-No current adopted dossiers.
+| Epic | Dossier | Execution contract |
+|---|---|---|
+| [CNTRT](../roadmap/README.md#cntrt-public-contract-consistency) | [Public contract consistency](TODO-podway-public-contract-consistency.md) | Exhaustive result memberships, existing overflow diagnostic clarification, writer-example correction and integrated acceptance. |
 
 ## Related candidates
 
-These seven documents group possible epic scopes. Their working labels reserve
+These six documents group possible epic scopes. Their working labels reserve
 no roadmap identifiers and establish no task order or implementation commitment.
 Each remains `Candidate`; adoption requires closing its decisions and registering
 bounded work in the active roadmap. Existing-interface guidance is adopted as
 CALLS; optional interaction semantics remain a continuing candidate.
 
 Select work from a concrete product need and each finding's revisit condition.
-These groupings are not seven sequential implementation commitments: TYPED is
+These groupings are not six sequential implementation commitments: TYPED is
 not a prerequisite for INTEG, and independent improvements do not wait for the
 entire PROOF program. A selected scope carries its applicable correctness and
 verification obligations; grouping does not waive them.
@@ -118,7 +120,6 @@ verification obligations; grouping does not waive them.
 | Future interaction semantics | [Agent workflow simplification](TODO-podway-agent-workflow-simplification.md) | Assess combined operations or returned observations against a concrete caller need | Unselected interaction research |
 | TYPED | [Typed boundary ownership](TODO-podway-typed-boundary-ownership.md) | Explicit owners for existing values, bounds, extraction and validation reuse | DF-002, DF-003, DF-005, DF-011, DF-012, DF-013, DF-014, DF-016, DF-017, DF-022, DF-024, DF-025, DF-027 |
 | MAINT | [Maintenance and recovery safety](TODO-podway-maintenance-recovery-safety.md) | Bounded recovery policy, confirmation and fault verification | DF-029, DF-030, DF-031, DF-032, DF-033, DF-034, DF-036, DF-039, DF-040, DF-041, DF-042, DF-043 |
-| CNTRT | [Public contract consistency](TODO-podway-public-contract-consistency.md) | Diagnostic, command/schema and known-answer consistency | DF-004, DF-008, DF-046 |
 | INTEG | [Executor integration](TODO-podway-executor-integration.md) | Real adapter and selected-build qualification beyond the local foundation | Existing real executor candidate |
 | PROOF | [Graph evolution feasibility](TODO-podway-graph-evolution-feasibility.md) | Per-shape evidence for coordination and topology-lineage needs | Existing graph and continuation research |
 | WEBUI | [Operations console](TODO-podway-operations-console.md) | Foreground human operations after the graph direction is settled | Existing Web console candidate |
@@ -126,6 +127,8 @@ verification obligations; grouping does not waive them.
 The [deferred-feedback register](../deferred-feedback/README.md) retains each
 feedback ID and source. Candidate-owned details live in the linked candidate;
 grouping alone does not resolve a deferral or populate its promoted task.
+CNTRT's three selected entries are resolved by promotion and retain their original
+details in its adopted dossier until closeout promotes them to durable owners.
 DF-026, DF-028, DF-045 and DF-050 retain their full independent entries there.
 
 ## Supporting research notes

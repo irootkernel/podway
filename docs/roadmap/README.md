@@ -20,6 +20,29 @@ sequence, for example `OPTIM-001`. Existing alphanumeric epic IDs, including
 `V2CTR` and `REL12`, and the compact `REL12` task IDs remain unchanged historical
 identifiers. Do not rename completed work to apply the new convention.
 
+## CNTRT — Public Contract Consistency
+
+Dependencies: accepted GUIDE and CALLS completion. Status: Planned.
+Detailed SOT: [Public contract consistency](../todo/TODO-podway-public-contract-consistency.md).
+
+CNTRT adopts DF-004, DF-008 and DF-046. It adds exhaustive command/result
+membership verification and aligns diagnostic descriptions plus the selected
+writer-mismatch example with current behavior. Retain the existing overflow
+code, schema families, contract generations, bounds and runtime behavior.
+Canonical asset corrections share one complete manifest/adapter regeneration.
+No release, installation, Store migration or external-consumer change is selected.
+
+Execute `CNTRT-001 -> CNTRT-002 -> CNTRT-003`. Each member retains its applicable
+verification obligations. CNTRT-003 prepares durable owners and the exact closeout;
+its normal completion commit, internal whole-epic validation and explicit owner
+acceptance precede epic completion and approved dossier retirement.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `CNTRT-001` | Verify exhaustive command/result memberships | Planned | Compare the catalog, Protocol registrations and Output v4 closed result selections; reject missing, extra, duplicate and wrongly associated memberships while preserving generic results and supported variants. | [Membership design](../todo/TODO-podway-public-contract-consistency.md#exhaustive-result-membership-verification) |
+| `CNTRT-002` | Align diagnostic descriptions and the writer example | Planned | Clarify existing canonical and emitted-document measurements, preserve runtime behavior, correct DF-046 and regenerate coherent manifest/adapter identities together. | [Diagnostic contract](../todo/TODO-podway-public-contract-consistency.md#existing-overflow-diagnostic), [example and generation](../todo/TODO-podway-public-contract-consistency.md#writer-mismatch-known-answer-and-generation) |
+| `CNTRT-003` | Qualify and prepare CNTRT closeout | Planned | Pass integrated checks and the complete development gate; promote durable owners and prepare reference/deletion scope while preserving later whole-epic validation and explicit owner acceptance. | [Verification and acceptance](../todo/TODO-podway-public-contract-consistency.md#7-verification-and-release-acceptance) |
+
 ## CALLS — Agent Workflow Guidance
 
 Dependencies: accepted GUIDE completion. Status: Completed.
