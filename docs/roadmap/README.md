@@ -41,7 +41,7 @@ acceptance precede epic completion and approved dossier retirement.
 |---|---|---|---|---|
 | `CNTRT-001` | Verify exhaustive command/result memberships | Completed | Compare the catalog, Protocol registrations and Output v4 closed result selections; reject missing, extra, duplicate and wrongly associated memberships while preserving generic results and supported variants. | [Membership design](../todo/TODO-podway-public-contract-consistency.md#exhaustive-result-membership-verification) |
 | `CNTRT-002` | Align diagnostic descriptions and the writer example | Completed | Clarify existing canonical and emitted-document measurements, preserve runtime behavior, correct DF-046 and regenerate coherent manifest/adapter identities together. | [Diagnostic contract](../todo/TODO-podway-public-contract-consistency.md#existing-overflow-diagnostic), [example and generation](../todo/TODO-podway-public-contract-consistency.md#writer-mismatch-known-answer-and-generation) |
-| `CNTRT-003` | Qualify and prepare CNTRT closeout | Planned | Pass integrated checks and the complete development gate; promote durable owners and prepare reference/deletion scope while preserving later whole-epic validation and explicit owner acceptance. | [Verification and acceptance](../todo/TODO-podway-public-contract-consistency.md#7-verification-and-release-acceptance) |
+| `CNTRT-003` | Qualify and prepare CNTRT closeout | Completed | Pass integrated checks and the complete development gate; promote durable owners and prepare reference/deletion scope while preserving later whole-epic validation and explicit owner acceptance. | [Verification and acceptance](../todo/TODO-podway-public-contract-consistency.md#7-verification-and-release-acceptance) |
 
 ## CALLS — Agent Workflow Guidance
 

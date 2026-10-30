@@ -145,10 +145,64 @@ completion and one retained/consumed/reused hint for automatic preflight.
 This functional evidence supports the owner-accepted ADMIT closeout recorded by
 the roadmap; it establishes no release or installed-runtime compatibility.
 
+## CNTRT feedback traceability
+
+The following table preserves the original review observations, deferral reasons
+and revisit conditions adopted by CNTRT. Its wording and source line references
+are historical: the missing check and incorrect example described here were
+addressed by the implemented outcomes below. This table does not describe the
+current example or reopen the resolved deferrals.
+
+| ID | Source | Feedback | Deferral reason | Revisit condition |
+|---|---|---|---|---|
+| DF-004 | V2GSC documentation review | The catalog defines `SOURCE_PROJECTION_BUDGET_EXCEEDED` for canonical JSON exceeding 1,048,576 characters or 1 MiB encoded, while `procedure format` also reports it when the emitted authoring document exceeds the character limit. | The format-emitter behavior predates the 1,024-node correction. Resolving the difference in which document is measured requires a separate decision across the diagnostic catalog, schema, release adapter, and CLI contract rather than widening this correction. | Before changing source-projection diagnostics or the emitted-document bound, assign the format overflow its own contract or explicitly broaden the existing code and update every published consumer. |
+| DF-008 | V2SDG-006 testing review | The command catalog's `result_schemas` entries have no exhaustive automated match against registered result schemas. | Current catalog, registry, schemas, and emitted generations agree under the development gate; an exhaustive cross-check is separate contract-tooling work. | Before adding or renaming a result generation, extend contract verification to compare catalog command memberships with registered schemas and add a known-answer check. |
+| DF-046 | GUIDE-012 integration review, recorded from the GUIDE-004 r2 observation | The `error-workspace_contract_mismatch` known answer (`tests/fixtures/v2/protocol/current-contracts.json:2112-2141`) carries the shared template message "The write-lock deadline elapsed without a state effect." and a `diagnose_workspace`/`workspace.doctor` recovery, while the catalog (`assets/specifications/error-codes.json:588-592`) and the runtime emit "The Store writer contract is not supported by this binary." with the `diagnose_writer` `version --identity` recipe. | The example is schema-valid (`workspace-contract-mismatch-details/v1` admits both recoveries), five other error examples share the same template message, no verifier rule requires example text to equal the catalog, and automation never depends on human-readable output; correcting a manifest-enrolled known answer forces the manifest, adapter and manifest regeneration for a non-authoritative example field. | Before the fixture examples are next regenerated for a contract change, align this example's message and recovery with the catalog summary and the `diagnose_writer` recipe, then run the full contract checks. |
+
+### Implemented outcomes and retained boundaries
+
+| Feedback | Current outcome and authoritative owner | Regression owner |
+|---|---|---|
+| DF-004 | The [diagnostic catalog](../../assets/specifications/authoring-diagnostics.json), [procedure commands](../specs/interfaces/cli-specification.md#procedure-commands) and [authoring diagnostics](../specs/interfaces/errors-and-exit-codes.md#typed-conditions-and-authoring-diagnostics) distinguish complete canonical JSON's scalar and UTF-8 byte limits from emitted canonical authoring text's scalar-only limit. Each limit remains 1,048,576; equality is admitted by that check and independent envelope budgets remain in force. Existing code, severity, runtime text and wire shape are unchanged. | Config's [canonical suite](../../crates/podway-config/tests/int_v2_procedure_canonical.rs) and [formatter unit tests](../../crates/podway-config/src/procedure_v2_format.rs), plus the isolated [CLI format-write failure](../../crates/podway-cli/tests/e2e_v2dfc007_local_cli.rs), own exact boundaries, multibyte input, post-admission emission overflow and original-byte preservation. |
+| DF-008 | The [JSON contract](../specs/interfaces/json-contract.md#direct-cli-generation) defines exhaustive equality of every `(command, closed result family)` pair across the [command catalog](../../assets/specifications/command-catalog.yaml), public registration tables and Output v4 selections. Generic-object branches and non-command documents contribute no pair; generic command inventory agreement is not asserted. Deprecated generation 1 and supported generation 2 retain their existing selection rules. | Protocol's [result-contract suite](../../crates/podway-protocol/tests/int_v2_result_contract.rs) owns the real three-way comparison and shared-helper negative controls; the [generation suite](../../crates/podway-protocol/tests/int_guide007_contract_generations.rs) retains generation-declaration coverage. |
+| DF-046 | Only `error-workspace_contract_mismatch` in the [current known answers](../../tests/fixtures/v2/protocol/current-contracts.json) now uses the [error catalog](../../assets/specifications/error-codes.json) summary and existing read-only `diagnose_writer` / `version --identity` [recovery recipe](../specs/interfaces/errors-and-exit-codes.md#structured-recovery-recipes). Its error/detail families, remaining fields and the distinct generation-2 detail family are retained. Other template examples were not changed. | Protocol's `cntrt002_writer_mismatch_example_matches_catalog_and_writer_recovery` in the [result-contract suite](../../crates/podway-protocol/tests/int_v2_result_contract.rs) checks the selected catalog message, recipe and closed schemas. This scoped assertion does not make every human-readable error message a compatibility field. |
+
+Canonical asset changes use the [manifest/adapter generation workflow](release.md)
+and preserve exact-manifest writer refusal. CNTRT declares no predecessor, Store
+conversion or transparent migration; frozen GUIDE compatibility baselines remain
+unchanged. The independent future YAML-source pipeline regression remains
+[DF-052](../deferred-feedback/README.md#open); current direct boundary,
+canonical-admission/JSON and real-CLI coverage does not claim that additional
+YAML-specific regression executes.
+
+### Integrated public contract verification
+
+Run the named [functional regression owners](#functional-regression-owners) first,
+including both membership tests, canonical scalar/byte and emitted-text bounds,
+the selected writer example and retained generation tests. Use the registered
+`int_suite` paths and exact E2E selection described above; verify that the intended
+tests actually execute. The local emitter boundary is a library unit test.
+
+Through Gaori with the pinned repository toolchain, run `make architecture`,
+`make contract-manifest` and `make test-int`. Architecture's static prerequisites
+include documentation/link checks, contract/schema integrity and the prepared
+adapter self-test; `python3 tools/verify_contracts.py --sentinels` supplements
+these checks. Then run the configured `full` command (`make test`) on the frozen
+final candidate. Inspect repository status and the complete diff after checks.
+Focused results and compilation do not replace the complete development gate.
+These checks establish development evidence, without release, packaged
+qualification, installed-runtime or external-consumer coverage.
+
+The roadmap alone owns member and Epic status. Integrated qualification and a
+prepared closeout do not constitute whole-Epic acceptance: the normal CNTRT-003
+completion commit, independent whole-Epic validation and explicit owner acceptance
+precede final reference relinking, adopted-index removal and dossier retirement.
+
 ## Functional regression owners
 
 Overflow measurement coverage belongs to Config's existing
 `int_v2_procedure_canonical` suite: the canonical character/UTF-8 boundary test
+`v2gsc004_canonical_projection_enforces_exact_character_and_byte_boundaries`
 uses both ASCII and multibyte input, and
 `cntrt002_emitted_overflow_follows_successful_canonical_admission` proves that an
 admitted canonical document can exceed the separate emitted-text limit. The
