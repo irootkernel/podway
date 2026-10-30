@@ -18,13 +18,15 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Changed
 
-- The updated preset changes the contract manifest. Previous-manifest Stores,
+- Public contract asset updates change the contract manifest. Previous-manifest Stores,
   including sessions using unchanged presets, refuse normal reads, writes and
   original-request replay with `WORKSPACE_CONTRACT_MISMATCH`. No migration,
   predecessor declaration, forced reset or installed-runtime update is included.
 
 ### Fixed
 
+- Align overflow diagnostic descriptions and the writer-mismatch example with
+  existing behavior.
 - Show applicable global options and caller-owned key guidance in route usage,
   and name the first missing required argument without exposing input values.
 

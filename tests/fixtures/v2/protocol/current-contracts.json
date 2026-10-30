@@ -2118,7 +2118,7 @@
         "command": "item.set",
         "generated_at": "2026-10-06T00:00:00.000Z",
         "code": "WORKSPACE_CONTRACT_MISMATCH",
-        "message": "The write-lock deadline elapsed without a state effect.",
+        "message": "The Store writer contract is not supported by this binary.",
         "retryable": false,
         "exit_code": 5,
         "details": {
@@ -2126,14 +2126,15 @@
           "expected_contract_manifest_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "actual_contract_manifest_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "recovery": {
-            "action": "diagnose_workspace",
-            "command": "workspace.doctor",
+            "action": "diagnose_writer",
+            "command": "version",
             "argv": [
               "podway",
               "--json",
-              "doctor"
+              "version",
+              "--identity"
             ],
-            "reason": "Refresh committed state before retrying.",
+            "reason": "Inspect writer identity. Restore access or use the original writer. To discard invalid state, retire other writers and confirm an unfenced reset --all with a new key; unfenced removal needs a terminal and exact path. Newer generations stay refused.",
             "requires_explicit_authorization": false
           }
         }

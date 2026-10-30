@@ -3478,3 +3478,46 @@ fn cntrt001_membership_comparison_rejects_drift_and_duplicate_declarations() {
         );
     }
 }
+
+#[test]
+fn cntrt002_writer_mismatch_example_matches_catalog_and_writer_recovery() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/v2/protocol/current-contracts.json"
+    ))
+    .unwrap();
+    let example = &fixture["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == "error-workspace_contract_mismatch")
+        .unwrap()["value"];
+    let catalog: Value = serde_json::from_slice(
+        &fs::read(root().join("assets/specifications/error-codes.json")).unwrap(),
+    )
+    .unwrap();
+    let error = catalog["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["code"] == "WORKSPACE_CONTRACT_MISMATCH")
+        .unwrap();
+    assert_eq!(example["message"], error["summary"]);
+    assert_eq!(example["details"]["schema"], error["details_schema"]);
+    assert_eq!(example["exit_code"], error["exit_code"]);
+    assert_eq!(example["retryable"], error["retryable"]);
+    let recipe = &example["details"]["recovery"];
+    assert_eq!(recipe["action"], "diagnose_writer");
+    assert_eq!(recipe["command"], "version");
+    assert_eq!(
+        recipe["argv"],
+        json!(["podway", "--json", "version", "--identity"])
+    );
+    assert_eq!(recipe["requires_explicit_authorization"], false);
+    assert!(
+        recipe["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("Inspect writer identity")
+    );
+    assert_current_error_validation(&current_error_validator(), example, true);
+}

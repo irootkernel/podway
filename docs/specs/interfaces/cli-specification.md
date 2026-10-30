@@ -221,6 +221,14 @@ operation that modifies a file; it validates and renders fully before an atomic
 same-directory replacement. Other procedure commands are read-only. Unsupported
 schemas report `PROCEDURE_SCHEMA_UNSUPPORTED` or `PROCEDURE_INVALID` as appropriate.
 
+`SOURCE_PROJECTION_BUDGET_EXCEEDED` distinguishes two measured documents. Complete
+canonical JSON admits at most 1,048,576 Unicode scalar values and 1,048,576 UTF-8
+encoded bytes; either excess is rejected. Emitted canonical authoring text admits
+at most 1,048,576 Unicode scalar values, without an additional authoring-text byte
+limit from this check. Equality passes the respective measurement; independent
+input and output envelope budgets still apply. An emission overflow retains the
+existing diagnostic and leaves the original file unchanged under `format --write`.
+
 Procedure inspection and authoring output preserves optional `required_when` and
 option `guards` structurally. Validation rejects unknown operators, wrong literal
 types, conditional chains, invalid controller order, unselected or optional guard

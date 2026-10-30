@@ -147,6 +147,21 @@ the roadmap; it establishes no release or installed-runtime compatibility.
 
 ## Functional regression owners
 
+Overflow measurement coverage belongs to Config's existing
+`int_v2_procedure_canonical` suite: the canonical character/UTF-8 boundary test
+uses both ASCII and multibyte input, and
+`cntrt002_emitted_overflow_follows_successful_canonical_admission` proves that an
+admitted canonical document can exceed the separate emitted-text limit. The
+formatter's local `cntrt002_emitted_projection_counts_scalars_at_the_exact_boundary`
+unit test pins exact and one-over scalar boundaries without imposing a byte cap
+on authoring text. The real CLI case
+`e2e_v2dfc007_local_cli::cntrt002_format_write_emission_overflow_preserves_original_bytes`
+uses an owned fixture to prove failed `format --write` preserves source bytes and
+emits diagnostics rather than a partial successful source result. Protocol's
+`cntrt002_writer_mismatch_example_matches_catalog_and_writer_recovery` pins only
+the selected known answer's catalog message and read-only writer recipe; it
+does not make every human-readable error message a compatibility field.
+
 Public result memberships are owned by Protocol
 [`int_v2_result_contract`](../../crates/podway-protocol/tests/int_v2_result_contract.rs).
 `cntrt001_catalog_registry_and_output_have_exhaustive_result_memberships` compares

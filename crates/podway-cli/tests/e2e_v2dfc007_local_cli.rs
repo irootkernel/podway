@@ -1679,3 +1679,59 @@ fn bound005_fresh_preset_preview_remains_offline() {
     assert!(output.stderr.is_empty());
     assert!(!fixture.root.join(".podway").exists());
 }
+
+#[test]
+fn cntrt002_format_write_emission_overflow_preserves_original_bytes() {
+    let fixture = Fixture::new();
+    let definitions = (0..podway_core::MAX_NODE_DEFINITIONS_PER_PROCEDURE_V2)
+        .map(|index| (format!("d{index:04}"), json!({
+            "type": "action", "title": "Work", "intent": "Record a value.",
+            "description": "a".repeat(700),
+            "items": [{"id": "value", "type": "text", "prompt": "Value?", "required": false}]
+        })))
+        .collect::<serde_json::Map<_, _>>();
+    let source = json!({
+        "schema": "podway.procedure/v2", "id": "emission-overflow", "version": "1",
+        "name": "Emission overflow", "purpose": "Preserve source after emitted overflow.",
+        "node_definitions": definitions,
+        "graph": {"entry": "work", "nodes": [{"id": "work", "use": "d0000", "terminal": true}]}
+    })
+    .to_string();
+    let podway_config::ParsedProcedure::V2(parsed) = podway_config::parse_procedure_document(
+        source.as_bytes(),
+        podway_config::ProcedureDocumentFormat::Json,
+    )
+    .unwrap();
+    let admitted = podway_config::validate_procedure_v2(parsed).unwrap();
+    assert!(admitted.canonical_json().as_str().len() <= podway_core::MAX_PROCEDURE_DOCUMENT_BYTES);
+    let file = fixture.root.join("overflow.json");
+    fs::write(&file, source.as_bytes()).unwrap();
+    let output = fixture
+        .run(&["procedure", "format", "overflow.json", "--write", "--json"].map(str::to_owned));
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let envelope = one_json(&output);
+    assert_eq!(
+        envelope["result"]["schema"],
+        "podway.procedure-diagnostics-result/v1"
+    );
+    assert_eq!(
+        envelope["result"]["diagnostics"][0]["code"],
+        "SOURCE_PROJECTION_BUDGET_EXCEEDED"
+    );
+    assert_eq!(envelope["result"]["diagnostics"][0]["severity"], "error");
+    assert!(
+        envelope["result"]["diagnostics"][0]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Canonical authoring form")
+    );
+    assert!(envelope["result"].get("document").is_none());
+    assert_eq!(fs::read(&file).unwrap(), source.as_bytes());
+    assert!(fs::read_dir(&fixture.root).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".podway-tmp")
+    }));
+}

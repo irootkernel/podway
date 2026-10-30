@@ -911,3 +911,41 @@ fn canonical_form_omits_absent_optionals_and_empty_collections() {
     assert!(!canonical.contains("[]"));
     assert!(!canonical.contains("{}"));
 }
+
+#[test]
+fn cntrt002_emitted_overflow_follows_successful_canonical_admission() {
+    let minimum_filler = podway_core::MAX_NODE_DEFINITIONS_PER_PROCEDURE_V2;
+    let minimum = json(&projection_document(minimum_filler, 0));
+    let filler = minimum_filler + SOURCE_PROJECTION_MAX_CHARACTERS
+        - minimum.canonical_json().as_str().chars().count();
+    let source = projection_document(filler, 0);
+    let admitted = json(&source);
+    assert_eq!(
+        admitted.canonical_json().as_str().len(),
+        podway_core::MAX_PROCEDURE_DOCUMENT_BYTES
+    );
+    let podway_config::FormatFailure::Diagnostics(diagnostics) =
+        podway_config::format_procedure_v2(podway_config::FormatRequest {
+            source: &source,
+            source_path: "projection.json",
+            format: ProcedureDocumentFormat::Json,
+        })
+        .unwrap_err()
+    else {
+        panic!("the admitted v2 source must fail at emitted-document measurement");
+    };
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(
+        diagnostics[0].code(),
+        podway_core::AuthoringDiagnosticCode::SourceProjectionBudgetExceeded
+    );
+    assert_eq!(
+        diagnostics[0].severity(),
+        podway_core::AuthoringSeverity::Error
+    );
+    assert!(
+        diagnostics[0]
+            .message()
+            .starts_with("Canonical authoring form of this Procedure")
+    );
+}

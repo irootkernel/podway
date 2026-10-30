@@ -666,3 +666,39 @@ fn json_string(value: &str) -> String {
         format!("\"{escaped}\"")
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use podway_core::AuthoringSeverity;
+
+    #[test]
+    fn cntrt002_emitted_projection_counts_scalars_at_the_exact_boundary() {
+        let context = AuthoringContext::new("workflow.yaml", "", ProcedureDocumentFormat::Yaml);
+        for character in ["a", "é"] {
+            let exact = character.repeat(SOURCE_PROJECTION_MAX_CHARACTERS);
+            assert_eq!(exact.chars().count(), SOURCE_PROJECTION_MAX_CHARACTERS);
+            assert!(bound_projection(&exact, &context).is_ok());
+            if character == "é" {
+                assert!(exact.len() > podway_core::MAX_PROCEDURE_DOCUMENT_BYTES);
+            }
+            let over = format!("{exact}{character}");
+            let diagnostics = bound_projection(&over, &context).unwrap_err();
+            assert_eq!(diagnostics.len(), 1);
+            assert_eq!(
+                diagnostics[0].code(),
+                AuthoringDiagnosticCode::SourceProjectionBudgetExceeded
+            );
+            assert_eq!(diagnostics[0].severity(), AuthoringSeverity::Error);
+            assert_eq!(diagnostics[0].field(), "$");
+            assert_eq!(
+                diagnostics[0].message(),
+                format!(
+                    "Canonical authoring form of this Procedure is {} characters, over the {}-character source projection budget.",
+                    SOURCE_PROJECTION_MAX_CHARACTERS + 1,
+                    SOURCE_PROJECTION_MAX_CHARACTERS
+                )
+            );
+        }
+    }
+}

@@ -61,7 +61,7 @@
       {
         "code": "SOURCE_PROJECTION_BUDGET_EXCEEDED",
         "severity": "error",
-        "summary": "The complete canonical source projection exceeds 1,048,576 characters or 1 MiB encoded."
+        "summary": "Canonical JSON exceeds 1,048,576 Unicode scalar values or 1,048,576 UTF-8 encoded bytes, or emitted canonical authoring text exceeds 1,048,576 Unicode scalar values."
       },
       {
         "code": "GRAPH_PROJECTION_BUDGET_EXCEEDED",

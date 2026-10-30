@@ -352,8 +352,14 @@ structure. Their inventory includes `EVIDENCE_SOURCE_DOES_NOT_DOMINATE_CONSUMER`
 `READBACK_BUDGET_EXCEEDED`, `NEXT_STATIC_BUDGET_EXCEEDED`,
 `OBSERVATION_STATIC_MEMBERS_BUDGET_EXCEEDED`, `SOURCE_PROJECTION_BUDGET_EXCEEDED`,
 `GRAPH_PROJECTION_BUDGET_EXCEEDED`, `REWORK_TARGET_NOT_DOMINATING`, and
-`NO_REACTIVATION_PATH`. Canonical-source diagnostics distinguish Unicode and
-encoded-byte overflow. Human lists report truncation and shown/total counts;
+`NO_REACTIVATION_PATH`. `SOURCE_PROJECTION_BUDGET_EXCEEDED` retains error severity
+for either complete canonical JSON exceeding 1,048,576 Unicode scalar values or
+1,048,576 UTF-8 encoded bytes, or emitted canonical authoring text exceeding
+1,048,576 Unicode scalar values. The authoring-text measurement adds no byte cap;
+independent input/output budgets remain in force. Equality passes each respective
+measurement. Existing message and field values distinguish the failed document
+and measurement without changing the diagnostic wire shape. Human lists report
+truncation and shown/total counts;
 machine output retains `diagnostics_truncated` and `diagnostics_total`.
 
 `OPTION_LABELS_NOT_DISTINCT` compares labels after lowercasing, whitespace
