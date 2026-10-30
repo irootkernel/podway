@@ -22,8 +22,10 @@ identifiers. Do not rename completed work to apply the new convention.
 
 ## CNTRT — Public Contract Consistency
 
-Dependencies: accepted GUIDE and CALLS completion. Status: In Progress.
-Detailed SOT: [Public contract consistency](../todo/TODO-podway-public-contract-consistency.md).
+Dependencies: accepted GUIDE and CALLS completion. Status: Completed.
+Canonical Outcomes: [public contract guidance](../specs/interfaces/json-contract.md#direct-cli-generation),
+[authoring diagnostics](../specs/interfaces/errors-and-exit-codes.md#typed-conditions-and-authoring-diagnostics)
+and [feedback traceability and qualification](../implementation-tips/testing.md#cntrt-feedback-traceability).
 
 CNTRT adopts DF-004, DF-008 and DF-046. It adds exhaustive command/result
 membership verification and aligns diagnostic descriptions plus the selected
@@ -32,16 +34,15 @@ code, schema families, contract generations, bounds and runtime behavior.
 Canonical asset corrections share one complete manifest/adapter regeneration.
 No release, installation, Store migration or external-consumer change is selected.
 
-Execute `CNTRT-001 -> CNTRT-002 -> CNTRT-003`. Each member retains its applicable
-verification obligations. CNTRT-003 prepares durable owners and the exact closeout;
-its normal completion commit, internal whole-epic validation and explicit owner
-acceptance precede epic completion and approved dossier retirement.
+CNTRT-001 through CNTRT-003 completed in order with integrated focused and development
+verification. Independent whole-epic validation and explicit owner acceptance
+authorize this closeout and retirement of the adopted execution dossier.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `CNTRT-001` | Verify exhaustive command/result memberships | Completed | Compare the catalog, Protocol registrations and Output v4 closed result selections; reject missing, extra, duplicate and wrongly associated memberships while preserving generic results and supported variants. | [Membership design](../todo/TODO-podway-public-contract-consistency.md#exhaustive-result-membership-verification) |
-| `CNTRT-002` | Align diagnostic descriptions and the writer example | Completed | Clarify existing canonical and emitted-document measurements, preserve runtime behavior, correct DF-046 and regenerate coherent manifest/adapter identities together. | [Diagnostic contract](../todo/TODO-podway-public-contract-consistency.md#existing-overflow-diagnostic), [example and generation](../todo/TODO-podway-public-contract-consistency.md#writer-mismatch-known-answer-and-generation) |
-| `CNTRT-003` | Qualify and prepare CNTRT closeout | Completed | Pass integrated checks and the complete development gate; promote durable owners and prepare reference/deletion scope while preserving later whole-epic validation and explicit owner acceptance. | [Verification and acceptance](../todo/TODO-podway-public-contract-consistency.md#7-verification-and-release-acceptance) |
+| `CNTRT-001` | Verify exhaustive command/result memberships | Completed | Compare the catalog, Protocol registrations and Output v4 closed result selections; reject missing, extra, duplicate and wrongly associated memberships while preserving generic results and supported variants. | [Membership contract](../specs/interfaces/json-contract.md#direct-cli-generation) |
+| `CNTRT-002` | Align diagnostic descriptions and the writer example | Completed | Clarify existing canonical and emitted-document measurements, preserve runtime behavior, correct DF-046 and regenerate coherent manifest/adapter identities together. | [Diagnostic contract](../specs/interfaces/cli-specification.md#procedure-commands), [example regression](../implementation-tips/testing.md#functional-regression-owners) |
+| `CNTRT-003` | Qualify and prepare CNTRT closeout | Completed | Pass integrated checks and the complete development gate; promote durable owners and prepare reference/deletion scope while preserving later whole-epic validation and explicit owner acceptance. | [Verification and feedback](../implementation-tips/testing.md#cntrt-feedback-traceability) |
 
 ## CALLS — Agent Workflow Guidance
 

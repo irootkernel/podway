@@ -97,9 +97,7 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-| Epic | Dossier | Execution contract |
-|---|---|---|
-| [CNTRT](../roadmap/README.md#cntrt-public-contract-consistency) | [Public contract consistency](TODO-podway-public-contract-consistency.md) | Exhaustive result memberships, existing overflow diagnostic clarification, writer-example correction and integrated acceptance. |
+No adopted execution dossiers remain.
 
 ## Related candidates
 
@@ -127,8 +125,8 @@ verification obligations; grouping does not waive them.
 The [deferred-feedback register](../deferred-feedback/README.md) retains each
 feedback ID and source. Candidate-owned details live in the linked candidate;
 grouping alone does not resolve a deferral or populate its promoted task.
-CNTRT's three selected entries are resolved by promotion and retain their original
-details in its adopted dossier until closeout promotes them to durable owners.
+CNTRT's three selected entries retain their original details and implemented
+regression owners in [durable testing guidance](../implementation-tips/testing.md#cntrt-feedback-traceability).
 DF-026, DF-028, DF-045 and DF-050 retain their full independent entries there.
 
 ## Supporting research notes
