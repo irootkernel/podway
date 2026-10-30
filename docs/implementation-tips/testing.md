@@ -147,6 +147,17 @@ the roadmap; it establishes no release or installed-runtime compatibility.
 
 ## Functional regression owners
 
+Public result memberships are owned by Protocol
+[`int_v2_result_contract`](../../crates/podway-protocol/tests/int_v2_result_contract.rs).
+`cntrt001_catalog_registry_and_output_have_exhaustive_result_memberships` compares
+the command catalog, the three public registration tables and Output v4 selections,
+including both observation generations, status tiers, prepared/running guidance
+and legacy graph/preview variants. Generic objects and non-command documents do
+not contribute closed result memberships; `__complete` remains internal.
+`cntrt001_membership_comparison_rejects_drift_and_duplicate_declarations` uses the
+same comparison helper with mutated inputs to reject missing, extra, duplicate,
+misassociated and unresolved memberships before set conversion can hide defects.
+
 `e2e_phase5_user_environment::calls001_help_completion_executes_contextually_without_workspace_queries`
 executes generated bash, zsh and fish completion functions for root, partial,
 multi-word and dotted help topics, option placement and values, flag-selected

@@ -31,6 +31,14 @@ each retained command's result families; the
 [transition matrix](../../../assets/specifications/state-transition-matrix.csv)
 owns mutation transitions and their result identifiers.
 
+Protocol contract tests compare every `(command, closed result family)` pair
+declared by the command catalog, public registration tables and Output v4
+selections. The comparison includes deprecated generation 1, supported generation 2
+and all closed result variants. Generic-object branches contribute no pair; this
+check does not compare inventories of generic commands. Missing, extra, duplicate
+and wrongly associated pairs or duplicate command declarations fail verification;
+the check never repairs canonical assets automatically.
+
 `outcome.lookup` is a read-only direct Engine command. It returns
 `podway.outcome-lookup-result/v1` with retained committed success or a null
 outcome. Input and output budgets are independently 1,048,576 bytes. Recovery

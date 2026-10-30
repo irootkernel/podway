@@ -3079,3 +3079,402 @@ fn current_direct_registry_preserves_the_accepted_known_answer_family_inventory(
         .collect::<BTreeSet<_>>();
     assert_eq!(actual, expected);
 }
+// Compare declarations before set conversion, so repeated memberships remain observable.
+type ResultMemberships = BTreeSet<(String, String)>;
+
+#[derive(Clone)]
+struct MembershipInputs {
+    catalog: Value,
+    registry: Vec<(String, String)>,
+    output: Value,
+    schemas: LocalSchemas,
+}
+
+fn membership_inputs() -> MembershipInputs {
+    MembershipInputs {
+        catalog: serde_norway::from_str(
+            &fs::read_to_string(root().join("assets/specifications/command-catalog.yaml")).unwrap(),
+        )
+        .unwrap(),
+        registry: EXISTING_ROUTE_RESULT_SCHEMAS_V2
+            .iter()
+            .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
+            .chain(DAEMON_FREE_DOCUMENT_SCHEMAS_V1)
+            .flat_map(|entry| {
+                entry
+                    .commands
+                    .iter()
+                    .map(move |command| ((*command).to_owned(), entry.schema.to_owned()))
+            })
+            .collect(),
+        output: read_schema("schemas/output-v4.schema.json"),
+        schemas: local_schemas(),
+    }
+}
+
+fn membership_strings(value: &Value) -> Result<Vec<String>, String> {
+    value
+        .as_array()
+        .ok_or("expected an array of strings")?
+        .iter()
+        .map(|entry| {
+            entry
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "expected a string".to_owned())
+        })
+        .collect()
+}
+
+fn unique_memberships(
+    source: &str,
+    pairs: impl IntoIterator<Item = (String, String)>,
+) -> Result<ResultMemberships, String> {
+    let mut memberships = BTreeSet::new();
+    for pair in pairs {
+        if !memberships.insert(pair.clone()) {
+            return Err(format!("{source}: duplicate membership {pair:?}"));
+        }
+    }
+    Ok(memberships)
+}
+
+fn catalog_memberships(catalog: &Value) -> Result<ResultMemberships, String> {
+    let mut commands = BTreeSet::new();
+    let mut pairs = Vec::new();
+    for entry in catalog["commands"]
+        .as_array()
+        .ok_or("catalog: missing commands")?
+    {
+        let command = entry["name"]
+            .as_str()
+            .ok_or("catalog: missing command name")?;
+        if !commands.insert(command) {
+            return Err(format!("catalog: duplicate command {command}"));
+        }
+        if let Some(families) = entry.get("result_schemas") {
+            for family in membership_strings(families)? {
+                pairs.push((command.to_owned(), family));
+            }
+        }
+    }
+    unique_memberships("catalog", pairs)
+}
+
+fn resolve_membership_schema<'a>(
+    mut value: &'a Value,
+    mut document: &'a Value,
+    schemas: &'a LocalSchemas,
+) -> Result<(&'a Value, &'a Value), String> {
+    for _ in 0..64 {
+        let Some(reference) = value.get("$ref") else {
+            return Ok((value, document));
+        };
+        let reference = reference.as_str().ok_or("schema: malformed reference")?;
+        let (resource, fragment) = reference.split_once('#').unwrap_or((reference, ""));
+        if !resource.is_empty() {
+            document = schemas
+                .0
+                .get(resource)
+                .ok_or_else(|| format!("schema: unresolved resource {resource}"))?;
+        }
+        value = if fragment.is_empty() {
+            document
+        } else {
+            if !fragment.starts_with('/') {
+                return Err(format!("schema: unsupported fragment {fragment}"));
+            }
+            document
+                .pointer(fragment)
+                .ok_or_else(|| format!("schema: unresolved fragment {fragment}"))?
+        };
+    }
+    Err("schema: cyclic or excessively deep references".to_owned())
+}
+
+fn selected_result_families(
+    value: &Value,
+    document: &Value,
+    schemas: &LocalSchemas,
+    depth: usize,
+) -> Result<Vec<String>, String> {
+    if depth >= 64 {
+        return Err("schema: cyclic or excessively deep alternatives".to_owned());
+    }
+    let (value, document) = resolve_membership_schema(value, document, schemas)?;
+    if let Some(family) = value
+        .pointer("/properties/schema/const")
+        .and_then(Value::as_str)
+    {
+        return Ok(vec![family.to_owned()]);
+    }
+    if let Some(alternatives) = value.get("oneOf") {
+        let mut families = Vec::new();
+        for alternative in alternatives
+            .as_array()
+            .ok_or("schema: malformed result alternatives")?
+        {
+            families.extend(selected_result_families(
+                alternative,
+                document,
+                schemas,
+                depth + 1,
+            )?);
+        }
+        if families.is_empty() {
+            return Err("schema: empty closed result alternatives".to_owned());
+        }
+        return Ok(families);
+    }
+    if value == &json!({"type":"object"}) {
+        return Ok(Vec::new());
+    }
+    Err("schema: result is neither a closed discriminated family nor genericObject".to_owned())
+}
+
+fn output_memberships(input: &MembershipInputs) -> Result<ResultMemberships, String> {
+    let mut pairs = Vec::new();
+    for branch in input.output["oneOf"]
+        .as_array()
+        .ok_or("output: missing command alternatives")?
+    {
+        let (branch, document) = resolve_membership_schema(branch, &input.output, &input.schemas)?;
+        let command = &branch["properties"]["command"];
+        let commands = if let Some(command) = command.get("const") {
+            vec![
+                command
+                    .as_str()
+                    .ok_or("output: malformed command constant")?
+                    .to_owned(),
+            ]
+        } else {
+            membership_strings(&command["enum"])?
+        };
+        if commands.is_empty() {
+            return Err("output: empty command selection".to_owned());
+        }
+        let families =
+            selected_result_families(&branch["properties"]["result"], document, &input.schemas, 0)?;
+        for command in commands {
+            for family in &families {
+                pairs.push((command.clone(), family.clone()));
+            }
+        }
+    }
+    unique_memberships("output", pairs)
+}
+
+fn compare_result_memberships(input: &MembershipInputs) -> Result<ResultMemberships, String> {
+    let catalog = catalog_memberships(&input.catalog)?;
+    let registry = unique_memberships("registry", input.registry.clone())?;
+    let output = output_memberships(input)?;
+    for (source, actual) in [("registry", &registry), ("output", &output)] {
+        if &catalog != actual {
+            return Err(format!(
+                "{source}: missing {:?}; extra {:?}",
+                catalog.difference(actual).collect::<Vec<_>>(),
+                actual.difference(&catalog).collect::<Vec<_>>()
+            ));
+        }
+    }
+    Ok(catalog)
+}
+
+#[test]
+fn cntrt001_catalog_registry_and_output_have_exhaustive_result_memberships() {
+    let input = membership_inputs();
+    let memberships = compare_result_memberships(&input).unwrap();
+    let mut reordered = input.clone();
+    reordered.registry.reverse();
+    reordered.catalog["commands"]
+        .as_array_mut()
+        .unwrap()
+        .reverse();
+    for command in reordered.catalog["commands"].as_array_mut().unwrap() {
+        if let Some(families) = command.get_mut("result_schemas") {
+            families.as_array_mut().unwrap().reverse();
+        }
+    }
+    reordered.output["oneOf"].as_array_mut().unwrap().reverse();
+    assert_eq!(compare_result_memberships(&reordered).unwrap(), memberships);
+    for (command, family) in [
+        ("session.status", "podway.status-result/v5"),
+        ("session.status", "podway.compact-status-result/v5"),
+        ("session.next", "podway.next-result/v5"),
+        ("session.next", "podway.prepared-next-result/v3"),
+        ("session.observe", "podway.observation-result/v5"),
+        ("session.observe", "podway.observation-result/v6"),
+        ("procedure.graph", "podway.procedure-graph-result/v1"),
+        ("procedure.graph", "podway.procedure-graph-result/v2"),
+        ("procedure.preview", "podway.procedure-preview-result/v1"),
+        ("procedure.preview", "podway.procedure-preview-result/v2"),
+        ("procedure.format", "podway.procedure-diagnostics-result/v1"),
+        ("procedure.check", "podway.procedure-diagnostics-result/v1"),
+    ] {
+        assert!(memberships.contains(&(command.to_owned(), family.to_owned())));
+    }
+    for command in [
+        "help",
+        "preset.list",
+        "preset.show",
+        "preset.explain",
+        "__complete",
+    ] {
+        assert!(!memberships.iter().any(|(name, _)| name == command));
+    }
+    assert!(
+        !input.catalog["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["name"] == "__complete")
+    );
+    assert!(
+        !memberships
+            .iter()
+            .any(|(_, family)| family.contains("details") || family == "podway.procedure/v2")
+    );
+}
+
+#[test]
+fn cntrt001_membership_comparison_rejects_drift_and_duplicate_declarations() {
+    let original = membership_inputs();
+    let mut cases = Vec::new();
+    for source in ["catalog", "registry", "output"] {
+        for change in ["missing", "extra", "duplicate", "wrong-command"] {
+            let mut input = original.clone();
+            match source {
+                "catalog" => {
+                    let commands = input.catalog["commands"].as_array_mut().unwrap();
+                    let index = commands
+                        .iter()
+                        .position(|entry| entry["name"] == "version")
+                        .unwrap();
+                    match change {
+                        "missing" => {
+                            commands[index]
+                                .as_object_mut()
+                                .unwrap()
+                                .remove("result_schemas");
+                        }
+                        "extra" => commands[index]["result_schemas"]
+                            .as_array_mut()
+                            .unwrap()
+                            .push(json!("podway.status-result/v5")),
+                        "duplicate" => commands[index]["result_schemas"]
+                            .as_array_mut()
+                            .unwrap()
+                            .push(json!("podway.version-result/v2")),
+                        _ => commands[index]["name"] = json!("misassociated.version"),
+                    }
+                }
+                "registry" => {
+                    let index = input
+                        .registry
+                        .iter()
+                        .position(|(command, _)| command == "version")
+                        .unwrap();
+                    match change {
+                        "missing" => {
+                            input.registry.remove(index);
+                        }
+                        "extra" => input
+                            .registry
+                            .push(("version".to_owned(), "podway.status-result/v5".to_owned())),
+                        "duplicate" => input.registry.push(input.registry[index].clone()),
+                        _ => input.registry[index].0 = "misassociated.version".to_owned(),
+                    }
+                }
+                _ => match change {
+                    "missing" => {
+                        input.output["oneOf"].as_array_mut().unwrap().remove(1);
+                    }
+                    "extra" => {
+                        input.output["$defs"]["version"]["properties"]["result"] = json!({"oneOf":[{"$ref":"urn:podway:schema:version-result:v2"},{"$ref":"urn:podway:schema:status-result:v5"}]})
+                    }
+                    "duplicate" => input.output["oneOf"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!({"$ref":"#/$defs/version"})),
+                    _ => {
+                        input.output["$defs"]["version"]["properties"]["command"]["const"] =
+                            json!("misassociated.version")
+                    }
+                },
+            }
+            cases.push((format!("{source}: {change}"), input));
+        }
+    }
+    for source in ["catalog", "registry", "output"] {
+        let mut input = original.clone();
+        match source {
+            "catalog" => {
+                let commands = input.catalog["commands"].as_array_mut().unwrap();
+                let version = commands
+                    .iter()
+                    .position(|entry| entry["name"] == "version")
+                    .unwrap();
+                let init = commands
+                    .iter()
+                    .position(|entry| entry["name"] == "workspace.init")
+                    .unwrap();
+                let version_families = commands[version]["result_schemas"].clone();
+                commands[version]["result_schemas"] = commands[init]["result_schemas"].clone();
+                commands[init]["result_schemas"] = version_families;
+            }
+            "registry" => {
+                for (command, _) in &mut input.registry {
+                    if command == "version" {
+                        *command = "workspace.init".to_owned();
+                    } else if command == "workspace.init" {
+                        *command = "version".to_owned();
+                    }
+                }
+            }
+            _ => {
+                input.output["$defs"]["version"]["properties"]["command"]["const"] =
+                    json!("workspace.init");
+                input.output["$defs"]["workspaceInit"]["properties"]["command"]["const"] =
+                    json!("version");
+            }
+        }
+        cases.push((format!("{source}: swapped associations"), input));
+    }
+    let mut duplicate_command = original.clone();
+    let command = duplicate_command.catalog["commands"][0].clone();
+    duplicate_command.catalog["commands"]
+        .as_array_mut()
+        .unwrap()
+        .push(command);
+    cases.push((
+        "duplicate generic command declaration".to_owned(),
+        duplicate_command,
+    ));
+    for reference in [
+        json!("#/$defs/missing"),
+        json!("urn:podway:schema:unknown:v1"),
+        json!(42),
+        json!("#/$defs/version"),
+    ] {
+        let mut input = original.clone();
+        input.output["$defs"]["version"]["properties"]["result"] = json!({"$ref":reference});
+        cases.push((format!("invalid result reference {reference}"), input));
+    }
+    for invalid in [
+        json!({"type":"object","properties":{"nested":{"$ref":"urn:podway:schema:version-result:v2"}}}),
+        json!({"oneOf":[]}),
+    ] {
+        let mut input = original.clone();
+        input.output["$defs"]["version"]["properties"]["result"] = invalid;
+        cases.push(("nested component or empty alternatives".to_owned(), input));
+    }
+    let mut unknown_catalog = original.clone();
+    unknown_catalog.catalog["commands"][1]["result_schemas"] = json!(["podway.unknown-result/v1"]);
+    cases.push(("unknown catalog family".to_owned(), unknown_catalog));
+    for (label, input) in cases {
+        assert!(
+            compare_result_memberships(&input).is_err(),
+            "accepted {label}"
+        );
+    }
+}

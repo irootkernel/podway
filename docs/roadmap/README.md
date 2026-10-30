@@ -22,7 +22,7 @@ identifiers. Do not rename completed work to apply the new convention.
 
 ## CNTRT — Public Contract Consistency
 
-Dependencies: accepted GUIDE and CALLS completion. Status: Planned.
+Dependencies: accepted GUIDE and CALLS completion. Status: In Progress.
 Detailed SOT: [Public contract consistency](../todo/TODO-podway-public-contract-consistency.md).
 
 CNTRT adopts DF-004, DF-008 and DF-046. It adds exhaustive command/result
@@ -39,7 +39,7 @@ acceptance precede epic completion and approved dossier retirement.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `CNTRT-001` | Verify exhaustive command/result memberships | Planned | Compare the catalog, Protocol registrations and Output v4 closed result selections; reject missing, extra, duplicate and wrongly associated memberships while preserving generic results and supported variants. | [Membership design](../todo/TODO-podway-public-contract-consistency.md#exhaustive-result-membership-verification) |
+| `CNTRT-001` | Verify exhaustive command/result memberships | Completed | Compare the catalog, Protocol registrations and Output v4 closed result selections; reject missing, extra, duplicate and wrongly associated memberships while preserving generic results and supported variants. | [Membership design](../todo/TODO-podway-public-contract-consistency.md#exhaustive-result-membership-verification) |
 | `CNTRT-002` | Align diagnostic descriptions and the writer example | Planned | Clarify existing canonical and emitted-document measurements, preserve runtime behavior, correct DF-046 and regenerate coherent manifest/adapter identities together. | [Diagnostic contract](../todo/TODO-podway-public-contract-consistency.md#existing-overflow-diagnostic), [example and generation](../todo/TODO-podway-public-contract-consistency.md#writer-mismatch-known-answer-and-generation) |
 | `CNTRT-003` | Qualify and prepare CNTRT closeout | Planned | Pass integrated checks and the complete development gate; promote durable owners and prepare reference/deletion scope while preserving later whole-epic validation and explicit owner acceptance. | [Verification and acceptance](../todo/TODO-podway-public-contract-consistency.md#7-verification-and-release-acceptance) |
 
