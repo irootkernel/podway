@@ -234,6 +234,11 @@ removal destroys its outcome Store; an already-absent result confirms convergenc
 not replay of the original response. Inspect the selected worktree read-only
 after lost removal output. Podway does not control historical installed services.
 
+[Integrated maintenance qualification](../../implementation-tips/testing.md#maint-integrated-qualification)
+uses real native terminal confirmation, compatibility and force-guidance owners,
+plus matching-writer read/replay/continuation in isolated explicit worktrees.
+It preserves the existing machine envelope and deletion authority.
+
 ## Procedure commands
 
 All procedure commands accept only `podway.procedure/v2`. Validation and authoring

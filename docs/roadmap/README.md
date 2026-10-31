@@ -48,7 +48,7 @@ commit or Git publication is selected by this registration.
 | `MAINT-005` | Verify destructive generation fences | Completed | Deterministically replace database and WAL at existing maintenance guards and preserve unsupported-generation and changed-witness refusal. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#destructive-generation-fences) |
 | `MAINT-006` | Converge residual removal safely | Completed | Converge concurrent empty-residual disappearance while refusing changed ancestry and preserving a fresh successor. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#residual-removal-convergence) |
 | `MAINT-007` | Reuse exact marker construction | Completed | Restore lone-removal intent through canonical construction while preserving request digest, original response and recorded time. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#exact-marker-construction) |
-| `MAINT-008` | Qualify maintenance safety and prepare closeout | Planned | Pass integrated functional verification and the development gate, promote durable owners and prepare later owner-approved dossier retirement. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#integrated-qualification) |
+| `MAINT-008` | Qualify maintenance safety and prepare closeout | Completed | Pass integrated functional verification and the development gate, promote durable owners and prepare later owner-approved dossier retirement. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#integrated-qualification) |
 
 ## CNTRT — Public Contract Consistency
 

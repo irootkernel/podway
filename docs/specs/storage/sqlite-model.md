@@ -188,3 +188,8 @@ recovery; Store owns safe filesystem and transaction primitives. The empty
 predecessor registry exposes no current Engine migration route; a future declared
 release must supply the corresponding exclusive recovery path. See [Recovery](recovery-retention-and-maintenance.md)
 and [Transactions](transactions-concurrency-and-idempotency.md).
+
+[Integrated maintenance qualification](../../implementation-tips/testing.md#maint-integrated-qualification)
+covers native generation/witness refusal, checkpoint/sync durability and matching-
+writer normal-flow continuity through the existing owners. A rejected or mismatched
+Store is not reset or migrated to make that continuity check pass.

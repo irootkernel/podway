@@ -121,6 +121,11 @@ confirmation consume that same set. Store owns the typed classification of
 invalid current state; Engine combines it with request authority and independent
 generation admission.
 
+[Integrated maintenance qualification](../implementation-tips/testing.md#maint-integrated-qualification)
+binds these Engine/Store/CLI responsibilities to existing native owners and the
+[complete historical feedback](../implementation-tips/testing.md#maint-source-feedback-and-revisit-conditions).
+It introduces no new hosting, lock, migration or marker protocol.
+
 ### Procedure and configuration loader
 
 `podway-config` parses bounded YAML/JSON, rejects invalid structure and semantics,

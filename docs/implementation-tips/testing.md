@@ -249,6 +249,115 @@ prepared closeout do not constitute whole-Epic acceptance: the normal CNTRT-003
 completion commit, independent whole-Epic validation and explicit owner acceptance
 precede final reference relinking, adopted-index removal and dossier retirement.
 
+## MAINT source feedback and revisit conditions
+
+These twelve historical records preserve their original source, feedback,
+deferral rationale and revisit condition. Promotion closes the original deferral;
+the roadmap owns task implementation and acceptance, with whole-Epic acceptance
+remaining a separate boundary. Current qualifications and lasting owners follow
+the unchanged historical records.
+
+| ID | Source | Feedback | Deferral reason | Revisit condition |
+|---|---|---|---|---|
+| DF-029 | V2DFC-015 maintainability review | Workspace UUID and durable-selector fences are enumerated in both the general guard and invalid-Store recovery admission. | Both current predicates include the same two fences, and native copied-Store reset/removal regressions refuse durable selectors without effects. Consolidation is future drift prevention, not current recovery correctness. | Before adding or changing an identity fence, give the complete fence set one Engine owner and verify both valid-Store guards and invalid-Store recovery admission. |
+| DF-030 | V2DFC-015 security review | The existing interactive removal prompt renders control characters in a worktree path without escaping them. | Exact-byte path confirmation binds deletion to the descriptor-validated target and cannot redirect it; clearer display is independent prompt hardening. | Before changing removal confirmation rendering, escape control characters visibly while preserving exact target identity and test unusual native path bytes. |
+| DF-031 | V2DFC-015 security review | An unmarked checksum-valid WAL with a committed page-one image lacking a SQLite header is refused as unreadable, without destructive recovery advice. | That image does not provide a trustworthy effective generation. Markers remain diagnostically visible but do not authorize deletion of an indeterminate generation; destructive admission refuses marked and unmarked unknown committed page-one images. Defining recovery for those images requires a separate policy, rather than treating a possibly unsupported Store as current. | Before broadening unreadable-State recovery, define a generation-safe policy for unmarked corrupt WAL images and prove that newer Stores cannot be deleted or opened. |
+| DF-032 | V2DFC-015 testing review | Checkpoint tests do not inject a database or lease replacement during the native checkpoint, or an fsync failure immediately after TRUNCATE. | Native external-reader Busy, unchanged main bytes, committed retry, no duplicate journal or clock, and exclusive failed-read witness tests cover current acceptance. Pre/post descriptor guards and zero-WAL retry sync preserve the suffix; precise mid-call fault injection is independent regression hardening. | Before changing checkpoint or durability suffix logic, add deterministic private fault injection at these boundaries and verify changed witnesses fail closed and post-TRUNCATE retry completes sync without duplicate effects. |
+| DF-033 | V2DFC-015 ordinal-two maintainability review | Classification precedence after invalid configuration is invoked in both workspace init and existing-workspace resolution. | Both refuse a known newer Store; their Maintenance-arm difference preserves each command's existing admission policy. There is no current divergent newer-generation behavior. | Before adding another precedence variant or caller, consolidate the resolver-owned probe while preserving caller-specific Maintenance policy and test init/status/reset/removal on invalid configuration. |
+| DF-034 | V2DFC-015 ordinal-two maintainability review | Invalid-current read errors are classified by Store while the Engine separately enumerates errors eligible for unfenced recovery. | Narrow corruption mapping, generation admission, identity fences and native invalid-data regressions satisfy current behavior; a missed future error category would fail closed. | Before adding another recovery-eligible error kind, expose the Store-owned corruption classification explicitly and verify that IO, Busy, changed witnesses and unknown generations remain excluded. |
+| DF-036 | V2DFC-015 ordinal-three maintainability review | CLI confirmation and Engine recovery separately identify an unfenced request. | The CLI supplies no durable selector identity, so both predicates agree today and the native prompt tests enforce current behavior. | Before adding a CLI identity fence or a durable selector, give the complete fence predicate one Engine owner and verify both confirmation and invalid-Store recovery. |
+| DF-039 | V2DFC-015 ordinal-three product review | Interactive removal requests exact-path confirmation before reporting that a newer Store cannot be removed. | Newer state is refused before effects with compatible-version guidance; avoiding the unnecessary prompt is independent workflow refinement. | Before changing destructive confirmation order, consider an Engine-owned read-only compatibility precheck while retaining authoritative post-confirmation admission and unchanged-file refusal. |
+| DF-040 | V2DFC-015 ordinal-three testing review | Deterministic replacement injection does not cover every interval between destructive-generation guards. | Held file witnesses, checks before and under the lease and before destruction, and native newer-WAL refusal cover current acceptance; no missed guard or current race failure is established. | Before changing guard placement, inject database and WAL replacement at the existing maintenance boundaries and verify unsupported-generation or changed-witness refusal without deletion. |
+| DF-041 | V2DFC-016 ordinal-one logic review | Concurrent empty-residual removals after the runtime child is already absent can report a disappearing-path failure before an exact retry converges. | Marked-runtime cleanup holds the runtime inode anchor through final unlink; missing-parent races fail closed and do not delete a fresh successor. Root-only residual convergence is an independent refinement, outside the reproduced named-lock race. | Before changing runtime-absent residual admission, deterministically contend two residual removals and fresh init, retaining descriptor identity checks and successor protection while defining absence convergence. |
+| DF-042 | V2DFC-016 ordinal-two maintainability M1 | Lone-removal-marker restoration repeats closed intent fields rather than reusing the canonical intent constructor. | Current exact-retry conversion validates both schemas and preserves the original response identity and time; native interruption/resume gates pass. Consolidation is independent future schema-maintenance work. | Before changing intent fields or schema identity, consolidate marker construction while retaining exact response/time, request digest and writer/root fences, and run lone-marker retry regressions. |
+| DF-043 | V2DFC-016 ordinal-two product P1 | Human unforced removal of a prepared/running session reports the safe `REQUEST_INVALID` refusal without a specific force hint. | Refusal occurs before intent or filesystem effects; session-less admitted unforced removal and recovery preserve their original authority. The closed empty error details remain compatible. | Before refining human destructive-refusal presentation, provide an explicit authorized-force hint without widening JSON authority or bypassing confirmation, and test prepared/running no-effect refusal. |
+
+### Current qualifications and delivered owners
+
+DF-033's historical wording remains unchanged. With invalid configuration, both
+`Ok(Maintenance)` observations select Maintenance. Initialization propagates
+classification `Err(e)`; existing-workspace resolution retains the original
+configuration error unless a successful probe observes Newer or Maintenance.
+`Err(DirectStoreErrorV1::Maintenance)` is distinct from `Ok(Maintenance)`.
+The resolver-owned probe creates no SQLite connection, SHM, lease or marker;
+reset/removal retain their command-specific authority. Native representative
+classification failures and unchanged caller ordering jointly establish this
+boundary; the source guard is not labeled a separate native Err(Maintenance) case.
+
+DF-042's historical wording also remains unchanged. Lone-removal restoration
+already validated the removal value, changed schema, removed phase and validated
+the intent schema; it did not reconstruct every identity field. The delivered
+private helper shares only canonical encoding, bounded document admission and
+Store marker construction. Callers retain schema/order/error policy and original
+fields, digest, root/writer/UUID/force, response and time. The authentic SIGKILL
+owner guards the clock and observes a different caller-supplied retry request ID
+returning the original response identity; reset's exact retry separately guards
+both clock and ID source. Their [registered owners](#exact-maintenance-marker-construction)
+preserve the complete membership, values and canonical bytes.
+
+| Historical record | Member | Lasting behavior and verification owner |
+|---|---|---|
+| DF-029 | MAINT-001 | [Current owner](../architecture/system.md#direct-engine) |
+| DF-030 | MAINT-003 | [Current owner](../specs/interfaces/cli-specification.md#workspace-lifecycle) |
+| DF-031 | MAINT-002 | [Current owner](../specs/storage/recovery-retention-and-maintenance.md#newer-store-generations) |
+| DF-032 | MAINT-004 | [Current owner](#native-migration-checkpoint-faults) |
+| DF-033 | MAINT-002 | [Current owner](../specs/storage/recovery-retention-and-maintenance.md#invalid-configuration-and-compatibility) |
+| DF-034 | MAINT-001 | [Current owner](../architecture/system.md#direct-engine) |
+| DF-036 | MAINT-001 | [Current owner](../architecture/system.md#direct-engine) |
+| DF-039 | MAINT-003 | [Current owner](../specs/storage/recovery-retention-and-maintenance.md#workspace-removal) |
+| DF-040 | MAINT-005 | [Current owner](#native-destructive-generation-replacements) |
+| DF-041 | MAINT-006 | [Current owner](#native-empty-residual-convergence) |
+| DF-042 | MAINT-007 | [Current owner](#exact-maintenance-marker-construction) |
+| DF-043 | MAINT-003 | [Current owner](../specs/interfaces/cli-specification.md#workspace-lifecycle) |
+
+## MAINT integrated qualification
+
+Qualification of an assembled revision uses the existing registered Engine
+maintenance/maintenance-ports suites, Store classification/predecessor units and
+binary-backed native CLI owners. Start with a focused exact admission check,
+then bounded maintenance module groups and the native indeterminate-WAL and seven
+confirmation/guidance cases, retaining existing invalid-current recovery owners.
+The [checkpoint](#native-migration-checkpoint-faults),
+[destructive-generation](#native-destructive-generation-replacements),
+[residual](#native-empty-residual-convergence) and
+[marker](#exact-maintenance-marker-construction) sections own their concrete
+fault, exclusion, retry and preservation checks. Complete development qualification
+requires the repository `make test` gate on the applicable frozen source.
+
+After that final build, compare the actual final debug CLI with the retained
+prechange binary in one unique owned standalone Git fixture. Verify both hashes,
+embedded identities and matching manifests before creating the fixture. Baseline
+build inputs remain unknown beyond the actual bytes/embedded stamp. Record a
+required item with explicit fences and a caller key, then require candidate reads,
+original byte-identical replay and original-response lookup without logical or
+sequence effects. Continue once with current fences, verify the next node and
+exactly one sequence increment, then repeat original old-attempt replay/lookup.
+Generation, writer-contract row and Procedure snapshot remain unchanged. This is
+the [supported Store continuity](#supported-store-continuity) scenario; mismatch
+must remain refusal, without reset, migration or edited writer identity.
+
+Evidence stays within its native limits. Non-UTF8 qualification combines the
+observed fixture-filesystem creation refusal, real raw-byte argv/no-lossy-alias
+refusal and constructed lossless-target confirmation unit; it does not claim an
+existing non-UTF8 worktree reaches confirmation or generalize one filesystem's
+EILSEQ to every platform. Missing unprovable child ancestry remains strict while
+its parent survives; whole-target absence uses both fresh Git and retained-root
+proof. The original-plan verification is bounded, with no continuously atomic
+filesystem snapshot claim. DB/WAL witnesses are per probe, not permanent lease
+witnesses, and the production predecessor registry remains empty.
+
+Bound/reap native children, close SQLite handles on success and failure, persist
+owned fixture allocation before initialization, and remove only that exact owned
+fixture after its consumers finish. Retain actual source/binary/check identities
+and result fields; host-local logs/receipts are not durable documentation owners.
+This qualification selects no release, installation or external-consumer change.
+
+The adopted dossier and current links remain until whole-Epic validation and
+actual final owner acceptance of a concrete closeout patch. Prepare consumer and
+replacement/deletion scope before that decision. Final relinking, adopted-index
+removal, dossier deletion and Epic completion follow the
+[TODO lifecycle](../todo/README.md#lifecycle); they are not qualification side effects.
+
 ## Exact maintenance marker construction
 
 Engine's [registered maintenance suite](../../crates/podway-engine/tests/int_v2dfc006_maintenance.rs)

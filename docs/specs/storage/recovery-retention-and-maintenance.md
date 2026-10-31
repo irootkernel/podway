@@ -13,6 +13,12 @@ is advice, not permission: destructive reset or removal still requires explicit
 authority and confirmation. Podway never discards or converts such state during
 an ordinary read or mutation.
 
+[Integrated maintenance qualification](../../implementation-tips/testing.md#maint-integrated-qualification)
+and the [historical feedback owners](../../implementation-tips/testing.md#maint-source-feedback-and-revisit-conditions)
+map these existing boundaries to native regression owners. Qualification preserves
+current admission and recovery authority; it does not itself retire the adopted
+design or complete the Epic.
+
 ## Daemon restart
 
 This heading preserves historical roadmap links. Daemon restart and running-job
