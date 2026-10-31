@@ -145,6 +145,33 @@ completion and one retained/consumed/reused hint for automatic preflight.
 This functional evidence supports the owner-accepted ADMIT closeout recorded by
 the roadmap; it establishes no release or installed-runtime compatibility.
 
+## Native destructive generation replacements
+
+Engine's [maintenance ports suite](../../crates/podway-engine/tests/int_v2dfc006_maintenance_ports.rs)
+`destructive_generation_guards_refuse_physical_replacement_at_each_interval`
+owns eighteen fresh reset/removal cases: physical newer database, committed newer
+WAL and indeterminate committed page-one WAL replacements after initial preflight
+before lease acquisition, under the exclusive lease, and before runtime clearing.
+`owned_maintenance_retry_preserves_generation_refusal_and_exact_resume` adds six
+authentic prepared-marker retry cases. Bounded worker acknowledgments bind atomic
+renames and actual dev/inode changes to the selected observer interval. Rejection
+preserves the post-injection phase namespace/replacement and publishes no success;
+late callbacks retain already-owned markers and allowed earlier config effects.
+Restoring supported input in the owned fixture permits exact original-request
+recovery without a new clock/UUID or changed response/time. It is not operator
+advice for unsupported state.
+
+Store's [classification unit tests](../../crates/podway-store/src/direct_store/classification.rs)
+`destructive_generation_probe_retains_captured_database_and_wal_witnesses`
+own four held-probe/fresh-control cases. DB/WAL witnesses live inside each probe;
+the exclusive lease owns directory/lock witnesses, not an old DB/WAL identity
+across probes. Supported replacements after capture refuse as changed witnesses;
+stable supported replacements before capture remain valid generation inputs.
+No universal earlier inode refusal is implied. Existing marked/unmarked unknown
+WAL, scan-budget, admission/fence and confirmation regressions remain required.
+Use registered exact integration/library commands through Gaori and `make test`;
+no guard placement, public error or persistence protocol changes are introduced.
+
 ## Native migration checkpoint faults
 
 Store's private [predecessor unit tests](../../crates/podway-store/src/direct_store/predecessor.rs)

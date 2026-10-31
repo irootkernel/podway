@@ -1134,3 +1134,444 @@ fn removal_force_guidance_observes_only_the_same_execution_typed_cause() {
         assert!(!context.removal_force_required());
     }
 }
+
+// The matrix distinguishes phase-local effects from the rejected destructive suffix.
+type MaintenanceImage = BTreeMap<std::path::PathBuf, (u64, u64, Option<Vec<u8>>)>;
+fn maintenance_image(root: &Path) -> MaintenanceImage {
+    fn visit(root: &Path, path: &Path, out: &mut MaintenanceImage) {
+        let m = std::fs::symlink_metadata(path).unwrap();
+        assert!(m.is_dir() || m.is_file());
+        out.insert(
+            path.strip_prefix(root).unwrap().to_path_buf(),
+            (
+                m.dev(),
+                m.ino(),
+                if m.is_file() {
+                    Some(std::fs::read(path).unwrap())
+                } else {
+                    None
+                },
+            ),
+        );
+        if m.is_dir() {
+            for e in std::fs::read_dir(path).unwrap() {
+                visit(root, &e.unwrap().path(), out);
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    visit(root, root, &mut out);
+    out
+}
+#[derive(Default)]
+struct MaintenanceEffects {
+    clocks: std::sync::atomic::AtomicUsize,
+    ids: std::sync::atomic::AtomicUsize,
+    forbid: std::sync::atomic::AtomicBool,
+}
+impl podway_engine::execution::ExecutionClockV1 for MaintenanceEffects {
+    fn now(&self) -> podway_core::UnixMillis {
+        use std::sync::atomic::Ordering::SeqCst;
+        assert!(
+            !self.forbid.load(SeqCst),
+            "no clock after injection or during owned recovery"
+        );
+        self.clocks.fetch_add(1, SeqCst);
+        podway_core::UnixMillis::new(1_700_000_000_000)
+    }
+}
+impl podway_engine::direct_execution::DirectIdSourceV1 for MaintenanceEffects {
+    fn next_workspace_id(&self) -> WorkspaceId {
+        use std::sync::atomic::Ordering::SeqCst;
+        assert!(
+            !self.forbid.load(SeqCst),
+            "owned recovery cannot generate another UUID"
+        );
+        self.ids.fetch_add(1, SeqCst);
+        WorkspaceId::new("00000000-0000-4000-8000-000000000004").unwrap()
+    }
+    fn next_session_id(&self) -> podway_core::SessionId {
+        panic!("unexpected session")
+    }
+    fn next_attempt_id(&self) -> podway_core::AttemptId {
+        panic!("unexpected attempt")
+    }
+    fn next_blocker_id(&self) -> podway_core::BlockerId {
+        panic!("unexpected blocker")
+    }
+    fn next_procedure_snapshot_id(&self) -> podway_core::ProcedureSnapshotId {
+        panic!("unexpected snapshot")
+    }
+    fn next_delegation_receipt_id(&self) -> podway_core::DelegationReceiptIdV1 {
+        panic!("unexpected receipt")
+    }
+}
+#[derive(Clone, Copy, Debug)]
+enum GenerationInterval {
+    PreLease,
+    Exclusive,
+    Destruction,
+}
+impl GenerationInterval {
+    fn matches(self, b: B) -> bool {
+        matches!(
+            (self, b),
+            (Self::PreLease, B::BeforeLeaseAcquisition)
+                | (Self::Exclusive, B::LeaseAcquired { .. })
+                | (Self::Destruction, B::BeforeRuntimeDestruction)
+        )
+    }
+}
+#[derive(Clone, Copy, Debug)]
+enum GenerationPayload {
+    DatabaseNewer,
+    WalNewer,
+    WalIndeterminate,
+}
+fn indeterminate_generation_wal() -> Vec<u8> {
+    fn checksum(mut sum: (u32, u32), bytes: &[u8]) -> (u32, u32) {
+        for p in bytes.chunks_exact(8) {
+            sum.0 = sum
+                .0
+                .wrapping_add(u32::from_le_bytes(p[..4].try_into().unwrap()))
+                .wrapping_add(sum.1);
+            sum.1 = sum
+                .1
+                .wrapping_add(u32::from_le_bytes(p[4..].try_into().unwrap()))
+                .wrapping_add(sum.0);
+        }
+        sum
+    }
+    let mut w = vec![0; 32 + 24 + 512];
+    w[..4].copy_from_slice(&0x377f0682_u32.to_be_bytes());
+    w[4..8].copy_from_slice(&3_007_000_u32.to_be_bytes());
+    w[8..12].copy_from_slice(&512_u32.to_be_bytes());
+    w[16..24].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+    let sum = checksum((0, 0), &w[..24]);
+    w[24..28].copy_from_slice(&sum.0.to_be_bytes());
+    w[28..32].copy_from_slice(&sum.1.to_be_bytes());
+    w[32..36].copy_from_slice(&1_u32.to_be_bytes());
+    w[36..40].copy_from_slice(&1_u32.to_be_bytes());
+    w[40..48].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+    let sum = checksum(checksum(sum, &w[32..40]), &w[56..]);
+    w[48..52].copy_from_slice(&sum.0.to_be_bytes());
+    w[52..56].copy_from_slice(&sum.1.to_be_bytes());
+    w
+}
+struct GenerationSwap {
+    entered: std::sync::mpsc::SyncSender<()>,
+    acknowledged: std::sync::Mutex<std::sync::mpsc::Receiver<MaintenanceImage>>,
+    snapshot: std::sync::Mutex<Option<MaintenanceImage>>,
+    effects: std::sync::Arc<MaintenanceEffects>,
+    calls: std::sync::atomic::AtomicUsize,
+}
+impl GenerationSwap {
+    fn perform(&self) {
+        use std::sync::atomic::Ordering::SeqCst;
+        assert_eq!(self.calls.fetch_add(1, SeqCst), 0);
+        self.entered.send(()).unwrap();
+        let image = self
+            .acknowledged
+            .lock()
+            .unwrap()
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        *self.snapshot.lock().unwrap() = Some(image);
+        self.effects.forbid.store(true, SeqCst);
+    }
+}
+fn observed_maintenance(
+    engine: &Engine,
+    request: DirectMaintenanceRequestV1,
+    remove: bool,
+    effects: &MaintenanceEffects,
+    interval: GenerationInterval,
+    injection: Option<std::sync::Arc<GenerationSwap>>,
+) -> Result<
+    podway_protocol::OutputEnvelopeV4,
+    podway_engine::direct_maintenance::DirectMaintenanceErrorV1,
+> {
+    use podway_engine::direct_maintenance::{
+        remove_workspace_with_lease_observers_v1, reset_all_with_lease_observers_v1,
+    };
+    let first = injection.clone();
+    let observer = move |b| {
+        if matches!(interval, GenerationInterval::PreLease)
+            && interval.matches(b)
+            && let Some(s) = &first
+        {
+            s.perform();
+        }
+    };
+    let leased =
+        move |b,
+              store: &podway_store::direct_store::DirectStoreV1,
+              lease: &podway_store::direct_store::ExclusiveMaintenanceLeaseV1| {
+            if !matches!(interval, GenerationInterval::PreLease)
+                && interval.matches(b)
+                && let Some(s) = &injection
+            {
+                lease.revalidate(store.layout()).unwrap();
+                s.perform();
+            }
+        };
+    if remove {
+        remove_workspace_with_lease_observers_v1(
+            &engine.resolver,
+            request,
+            effects,
+            observer,
+            leased,
+        )
+    } else {
+        reset_all_with_lease_observers_v1(
+            &engine.resolver,
+            request,
+            effects,
+            effects,
+            observer,
+            leased,
+        )
+    }
+}
+fn seed_owned_prepared(
+    engine: &Engine,
+    request: DirectMaintenanceRequestV1,
+    remove: bool,
+    effects: &MaintenanceEffects,
+) {
+    use podway_engine::direct_maintenance::{
+        remove_workspace_with_boundary_observer_v1, reset_all_with_boundary_observer_v1,
+    };
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let interrupt = |b| {
+            if b == B::MarkerPublished {
+                panic!("owned prepared marker published");
+            }
+        };
+        if remove {
+            remove_workspace_with_boundary_observer_v1(
+                &engine.resolver,
+                request,
+                effects,
+                interrupt,
+            )
+        } else {
+            reset_all_with_boundary_observer_v1(
+                &engine.resolver,
+                request,
+                effects,
+                effects,
+                interrupt,
+            )
+        }
+    }));
+    assert!(result.is_err());
+    assert!(engine.store.layout().intent_marker().exists());
+    assert!(
+        (if remove {
+            engine.store.layout().removal_marker()
+        } else {
+            engine.store.layout().reset_marker()
+        })
+        .exists()
+    );
+}
+fn generation_replacement_case(
+    remove: bool,
+    interval: GenerationInterval,
+    payload: GenerationPayload,
+    owned: bool,
+) {
+    use std::{
+        sync::{Arc, Mutex, atomic::Ordering::SeqCst, mpsc},
+        time::Duration,
+    };
+    let engine = engine();
+    let effects = Arc::new(MaintenanceEffects::default());
+    let mut request = maintenance(&engine, "generation-replacement");
+    request.force = remove;
+    if owned {
+        seed_owned_prepared(&engine, request.clone(), remove, &effects);
+        effects.forbid.store(true, SeqCst);
+    }
+    let stage = engine.temporary.path().join("generation-stage");
+    std::fs::create_dir(&stage).unwrap();
+    let source = engine.store.layout().database();
+    let main = std::fs::read(&source).unwrap();
+    let current = u32::from_be_bytes(main[60..64].try_into().unwrap());
+    let prepared = stage.join("replacement");
+    if matches!(payload, GenerationPayload::WalIndeterminate) {
+        std::fs::write(&prepared, indeterminate_generation_wal()).unwrap();
+    } else {
+        let producer = stage.join("producer.sqlite3");
+        std::fs::write(&producer, &main).unwrap();
+        let connection = rusqlite::Connection::open(&producer).unwrap();
+        if matches!(payload, GenerationPayload::DatabaseNewer) {
+            connection
+                .execute_batch(&format!("PRAGMA user_version={}", current + 1))
+                .unwrap();
+            drop(connection);
+            std::fs::copy(producer, &prepared).unwrap();
+        } else {
+            connection
+                .execute_batch(&format!(
+                    "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA user_version={}",
+                    current + 1
+                ))
+                .unwrap();
+            std::fs::copy(stage.join("producer.sqlite3-wal"), &prepared).unwrap();
+            drop(connection);
+        }
+    }
+    let target = if matches!(payload, GenerationPayload::DatabaseNewer) {
+        source
+    } else {
+        engine.store.layout().wal()
+    };
+    if !target.exists() {
+        std::fs::write(&target, []).unwrap();
+    }
+    let retired = stage.join("original");
+    let root = engine.store.layout().podway_directory();
+    let worker_target = target.clone();
+    let worker_retired = retired.clone();
+    let prepared_meta = std::fs::metadata(&prepared).unwrap();
+    let prepared_identity = (prepared_meta.dev(), prepared_meta.ino());
+    let prepared_bytes = std::fs::read(&prepared).unwrap();
+    let (send, receive) = mpsc::sync_channel(0);
+    let (ack, acknowledgment) = mpsc::sync_channel(0);
+    let worker = std::thread::spawn(move || {
+        receive.recv_timeout(Duration::from_secs(5)).unwrap();
+        let original = std::fs::metadata(&worker_target)
+            .expect("replacement requires an existing actual inode");
+        assert_ne!((original.dev(), original.ino()), prepared_identity);
+        std::fs::hard_link(&worker_target, &worker_retired).unwrap();
+        std::fs::rename(prepared, &worker_target).unwrap();
+        let installed = std::fs::metadata(&worker_target).unwrap();
+        assert_eq!((installed.dev(), installed.ino()), prepared_identity);
+        assert_eq!(std::fs::read(&worker_target).unwrap(), prepared_bytes);
+        ack.send(maintenance_image(&root)).unwrap();
+    });
+    let injection = Arc::new(GenerationSwap {
+        entered: send,
+        acknowledged: Mutex::new(acknowledgment),
+        snapshot: Mutex::new(None),
+        effects: effects.clone(),
+        calls: Default::default(),
+    });
+    let error = observed_maintenance(
+        &engine,
+        request.clone(),
+        remove,
+        &effects,
+        interval,
+        Some(injection.clone()),
+    )
+    .unwrap_err();
+    worker.join().unwrap();
+    assert_eq!(injection.calls.load(SeqCst), 1);
+    assert_eq!(
+        maintenance_image(&engine.store.layout().podway_directory()),
+        injection.snapshot.lock().unwrap().take().unwrap(),
+        "{remove:?}/{interval:?}/{payload:?}/{owned:?}"
+    );
+    let context = podway_engine::direct_error::DirectErrorContextV1 {
+        request_id: request.request_id.clone(),
+        command: podway_protocol::CommandNameV1::new(if remove {
+            "workspace.remove"
+        } else {
+            "workspace.reset_all"
+        })
+        .unwrap(),
+        observed_at: podway_protocol::Rfc3339MillisV1::new("2023-11-14T22:13:20.000Z").unwrap(),
+        idempotency_key: Some(request.key.clone()),
+        timeout_ms: 5000,
+        generation: podway_protocol::ContractGenerationV1::Generation1,
+        maintenance: None,
+    };
+    let rendered = podway_engine::direct_error::render_direct_error_v1(
+        &podway_engine::direct_execution::DirectExecutionErrorV1::Maintenance(error),
+        &context,
+    )
+    .unwrap();
+    assert_eq!(
+        rendered.as_value()["code"],
+        if matches!(payload, GenerationPayload::WalIndeterminate) {
+            "WORKSPACE_STATE_UNREADABLE"
+        } else {
+            "WORKSPACE_SCHEMA_UNSUPPORTED"
+        }
+    );
+    assert_eq!(rendered.as_value()["exit_code"], 5);
+    assert_eq!(rendered.as_value()["retryable"], false);
+    let published = owned || matches!(interval, GenerationInterval::Destruction);
+    assert_eq!(effects.clocks.load(SeqCst), usize::from(published));
+    assert_eq!(effects.ids.load(SeqCst), usize::from(published && !remove));
+    if published {
+        let intent: Value =
+            serde_json::from_slice(&std::fs::read(engine.store.layout().intent_marker()).unwrap())
+                .unwrap();
+        std::fs::rename(retired, &target).unwrap();
+        request.deadline = deadline();
+        let output =
+            observed_maintenance(&engine, request.clone(), remove, &effects, interval, None)
+                .unwrap();
+        assert_eq!(
+            output.as_value()["request_id"],
+            intent["response_request_id"]
+        );
+        assert_eq!(output.as_value()["generated_at"], intent["created_at"]);
+        if remove {
+            assert!(!engine.store.layout().podway_directory().exists());
+        } else {
+            assert_eq!(
+                output.as_value()["workspace"]["uuid"],
+                intent["workspace_uuid"]
+            );
+            let value = engine
+                .store
+                .read(deadline(), |s| s.outcome(&request.key))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(value.response().as_str()).unwrap(),
+                *output.as_value()
+            );
+        }
+        assert_eq!(effects.clocks.load(SeqCst), 1);
+        assert_eq!(effects.ids.load(SeqCst), usize::from(!remove));
+    } else {
+        assert!(!engine.store.layout().intent_marker().exists());
+    }
+}
+#[test]
+fn destructive_generation_guards_refuse_physical_replacement_at_each_interval() {
+    for remove in [false, true] {
+        for interval in [
+            GenerationInterval::PreLease,
+            GenerationInterval::Exclusive,
+            GenerationInterval::Destruction,
+        ] {
+            for payload in [
+                GenerationPayload::DatabaseNewer,
+                GenerationPayload::WalNewer,
+                GenerationPayload::WalIndeterminate,
+            ] {
+                generation_replacement_case(remove, interval, payload, false);
+            }
+        }
+    }
+}
+#[test]
+fn owned_maintenance_retry_preserves_generation_refusal_and_exact_resume() {
+    for remove in [false, true] {
+        for payload in [
+            GenerationPayload::DatabaseNewer,
+            GenerationPayload::WalNewer,
+            GenerationPayload::WalIndeterminate,
+        ] {
+            generation_replacement_case(remove, GenerationInterval::Exclusive, payload, true);
+        }
+    }
+}

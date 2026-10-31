@@ -85,6 +85,7 @@ impl From<podway_protocol::ProtocolError> for DirectMaintenanceErrorV1 {
 /// Explicit isolated-fixture instrumentation of Engine-owned marker phases.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirectMaintenanceBoundaryV1 {
+    BeforeLeaseAcquisition,
     LeaseAcquired {
         wait: std::time::Duration,
     },
@@ -194,6 +195,10 @@ fn reset_inner<R: GitResolverContractV1>(
         None => store,
     };
     require_destructive_generation_v1(store.layout())?;
+    notify(
+        &observer,
+        DirectMaintenanceBoundaryV1::BeforeLeaseAcquisition,
+    );
     let acquisition_started = lease_observer.as_ref().map(|_| Instant::now());
     let lease = ExclusiveMaintenanceLeaseV1::acquire(store.layout(), request.deadline, true)?;
     if let Some(started) = acquisition_started {
@@ -578,6 +583,10 @@ fn remove_inner<R: GitResolverContractV1>(
         }
         Classification::Current => {}
     }
+    notify(
+        &observer,
+        DirectMaintenanceBoundaryV1::BeforeLeaseAcquisition,
+    );
     let acquisition_started = lease_observer.as_ref().map(|_| Instant::now());
     let lease = ExclusiveMaintenanceLeaseV1::acquire(store.layout(), request.deadline, true)?;
     if let Some(started) = acquisition_started {

@@ -64,6 +64,13 @@ pub fn classify_direct_store_v1(
 pub fn require_destructive_generation_v1(
     layout: &DirectWorkspaceLayoutV1,
 ) -> DirectStoreResultV1<()> {
+    require_destructive_generation_at_inspection(layout, || {})
+}
+
+fn require_destructive_generation_at_inspection(
+    layout: &DirectWorkspaceLayoutV1,
+    after_capture: impl FnOnce(),
+) -> DirectStoreResultV1<()> {
     let directories = ClassificationDirectories::open(layout)?;
     let mut witnesses = Vec::new();
     for path in [layout.database(), layout.wal()] {
@@ -91,6 +98,7 @@ pub fn require_destructive_generation_v1(
         }
         witnesses.push((held, path));
     }
+    after_capture();
     let result =
         classify_database_store_v1(layout).and_then(|classification| match classification {
             DirectStoreClassificationV1::Newer { generation } => {
@@ -774,6 +782,70 @@ mod tests {
                     assert_eq!(prefix, bytes);
                     assert!(!layout.shm().exists());
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn destructive_generation_probe_retains_captured_database_and_wal_witnesses() {
+        use std::{os::unix::fs::MetadataExt, sync::mpsc, time::Duration};
+        for replace_wal in [false, true] {
+            for captured in [false, true] {
+                let root = tempfile::TempDir::new().unwrap();
+                let layout = DirectWorkspaceLayoutV1::new(
+                    crate::ValidatedWorkspaceRootV1::from_path(root.path()).unwrap(),
+                )
+                .unwrap();
+                fs::create_dir_all(layout.runtime_directory()).unwrap();
+                // This is native generation-probe input, not a full Store schema assertion.
+                let mut main = vec![0; 512];
+                main[..16].copy_from_slice(SQLITE_MAGIC);
+                main[60..64].copy_from_slice(&DIRECT_SCHEMA_GENERATION_V1.to_be_bytes());
+                fs::write(layout.database(), &main).unwrap();
+                fs::write(
+                    layout.wal(),
+                    wal(false, &[(1, 1, Some(DIRECT_SCHEMA_GENERATION_V1))]),
+                )
+                .unwrap();
+                let target = if replace_wal {
+                    layout.wal()
+                } else {
+                    layout.database()
+                };
+                let replacement = root.path().join("replacement");
+                fs::copy(&target, &replacement).unwrap();
+                let old = fs::metadata(&target).unwrap();
+                let prepared = fs::metadata(&replacement).unwrap();
+                assert_ne!((old.dev(), old.ino()), (prepared.dev(), prepared.ino()));
+                let bytes = fs::read(&replacement).unwrap();
+                if captured {
+                    let (entered, wait) = mpsc::sync_channel(0);
+                    let (ack, received) = mpsc::sync_channel(0);
+                    let worker_target = target.clone();
+                    let worker = std::thread::spawn(move || {
+                        wait.recv_timeout(Duration::from_secs(5)).unwrap();
+                        fs::rename(replacement, worker_target).unwrap();
+                        ack.send(()).unwrap();
+                    });
+                    let result = require_destructive_generation_at_inspection(&layout, || {
+                        entered.send(()).unwrap();
+                        received.recv_timeout(Duration::from_secs(5)).unwrap();
+                    });
+                    worker.join().unwrap();
+                    assert!(
+                        matches!(result, Err(DirectStoreErrorV1::Maintenance)),
+                        "{result:?}"
+                    );
+                } else {
+                    fs::rename(replacement, &target).unwrap();
+                    require_destructive_generation_v1(&layout).unwrap();
+                }
+                let actual = fs::metadata(&target).unwrap();
+                assert_eq!(
+                    (actual.dev(), actual.ino()),
+                    (prepared.dev(), prepared.ino())
+                );
+                assert_eq!(fs::read(target).unwrap(), bytes);
             }
         }
     }
