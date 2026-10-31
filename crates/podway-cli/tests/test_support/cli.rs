@@ -333,6 +333,24 @@ impl Fixture {
         )
     }
 
+    pub(super) fn confirm_removal_in_pty_after_prompt(
+        &self,
+        delay: Duration,
+    ) -> (Output, Duration) {
+        self.respond_in_pty_after_prompt(
+            &[
+                "workspace",
+                "remove",
+                "--force",
+                "--idempotency-key",
+                "remove",
+            ],
+            Some(b"Type that exact path to remove all .podway content: "),
+            format!("{}\n", self.0.display()).as_bytes(),
+            delay,
+        )
+    }
+
     pub(super) fn confirm_removal_in_pty(&self) -> Output {
         let response = format!("{}\n", self.0.display());
         self.removal_answer_in_pty(&response, false)
@@ -419,6 +437,55 @@ impl Fixture {
         response: &[u8],
         delay: Duration,
     ) -> (Output, Duration) {
+        self.respond_in_pty_with_action(arguments, prompt, response, delay, &self.0, || {})
+    }
+
+    pub(super) fn human_removal_in_pty(
+        &self,
+        arguments: &[&str],
+        response: &[u8],
+        expect_prompt: bool,
+        after_confirmation: impl FnOnce(),
+    ) -> Output {
+        self.respond_in_pty_with_action(
+            arguments,
+            expect_prompt
+                .then_some(b"Type that exact path to remove all .podway content: ".as_slice()),
+            response,
+            Duration::ZERO,
+            &self.0,
+            after_confirmation,
+        )
+        .0
+    }
+
+    pub(super) fn removal_at_native_path_in_pty(&self, worktree: &Path) -> Output {
+        self.respond_in_pty_with_action(
+            &[
+                "workspace",
+                "remove",
+                "--force",
+                "--idempotency-key",
+                "remove",
+            ],
+            None,
+            b"",
+            Duration::ZERO,
+            worktree,
+            || {},
+        )
+        .0
+    }
+
+    fn respond_in_pty_with_action(
+        &self,
+        arguments: &[&str],
+        prompt: Option<&'static [u8]>,
+        response: &[u8],
+        delay: Duration,
+        worktree: &Path,
+        after_confirmation: impl FnOnce(),
+    ) -> (Output, Duration) {
         assert_packaged_fixture(&self.0);
         let limit = Instant::now() + Duration::from_secs(20);
         // script's status alone is not proof of the candidate's exit status.
@@ -431,7 +498,7 @@ impl Fixture {
             ])
             .arg(podway_binary())
             .arg("--worktree")
-            .arg(&self.0)
+            .arg(worktree)
             .args(arguments)
             .process_group(0)
             .current_dir(&self.0)
@@ -490,6 +557,7 @@ impl Fixture {
         } else {
             drop(stdin);
         }
+        after_confirmation();
         let status = loop {
             if let Some(status) = guard.0.as_mut().unwrap().try_wait().unwrap() {
                 break status;

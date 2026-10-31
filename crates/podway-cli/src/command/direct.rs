@@ -282,6 +282,34 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
         fences.workspace_id.as_ref(),
         &invocation.selector,
     );
+    let interactive_removal = matches!(
+        cli.command,
+        Command::Workspace {
+            command: WorkspaceCommand::Remove { .. }
+        }
+    ) && !(cli.yes && maintenance_fenced)
+        && !cli.json
+        && io::stdin().is_terminal();
+    if interactive_removal {
+        let error = protocol_boundary::precheck_direct_removal_v1(
+            &invocation.resolver,
+            protocol_boundary::DirectRemovalPrecheckRequestV1 {
+                request_id: RequestIdV1::new(Uuid::new_v4().to_string())
+                    .map_err(invalid_v2_value)?,
+                selector: invocation.selector.clone(),
+                observed_at: invocation.observed_at.clone(),
+                timeout_ms: invocation.timeout_ms,
+                generation: invocation.generation,
+            },
+        )
+        .map_err(|_| LocalFailure::internal("the Engine could not construct a valid response"))?;
+        if let Some(error) = error {
+            return Ok(direct_response_result(
+                &cli.command,
+                protocol_boundary::DirectResponseV1::Failure(error),
+            ));
+        }
+    }
     confirm_if_required(&cli, route, &target, maintenance_fenced)?;
     let preflight = match preflight::prepare(&mut invocation, &cli, &mut fences)? {
         ControlFlow::Continue(facts) => facts,
@@ -417,7 +445,15 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             }
         }
     }
-    Ok(direct_response_result(&cli.command, response))
+    let mut result = direct_response_result(&cli.command, response);
+    if let RunResult::Direct {
+        removal_force_required,
+        ..
+    } = &mut result
+    {
+        *removal_force_required = invocation.context.removal_force_required();
+    }
+    Ok(result)
 }
 
 fn required<T>(value: Option<T>, flag: &str) -> Result<T, LocalFailure> {

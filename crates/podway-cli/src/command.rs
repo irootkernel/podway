@@ -346,6 +346,7 @@ enum RunResult {
     Direct {
         response: Box<podway_engine::direct_api::DirectResponseV1>,
         procedure_check_path: Option<String>,
+        removal_force_required: bool,
     },
     VersionSummary {
         name: &'static str,
@@ -399,6 +400,7 @@ fn direct_response_result(
     RunResult::Direct {
         response: Box::new(response),
         procedure_check_path,
+        removal_force_required: false,
     }
 }
 
@@ -1124,7 +1126,15 @@ fn confirm_if_required(
     ) {
         let exact_path = workspace_removal_confirmation_path(target)?;
         let mut stdout = io::stdout().lock();
-        writeln!(stdout, "Resolved worktree root: {exact_path}")
+        let mut display = String::new();
+        for character in exact_path.chars() {
+            if character.is_control() {
+                display.extend(character.escape_default());
+            } else {
+                display.push(character);
+            }
+        }
+        writeln!(stdout, "Resolved worktree root: {display}")
             .and_then(|()| {
                 write!(
                     stdout,
@@ -1161,11 +1171,17 @@ fn confirm_if_required(
 }
 
 fn workspace_removal_confirmation_path(target: &WorkspaceTarget) -> Result<&str, LocalFailure> {
-    target.path.to_str().ok_or_else(|| {
+    let path = target.path.to_str().ok_or_else(|| {
         LocalFailure::request_invalid(
-            "interactive removal cannot confirm a non-UTF-8 worktree path; use --yes and --if-workspace-uuid",
+            "interactive removal cannot confirm a non-UTF-8 worktree path; --yes and --if-workspace-uuid require a trustworthy UUID and supported-generation, writer and recovery admission",
         )
-    })
+    })?;
+    if path.contains('\n') || path.ends_with('\r') {
+        return Err(LocalFailure::request_invalid(
+            "interactive removal cannot confirm a worktree path containing LF or ending in CR; --yes and --if-workspace-uuid require a trustworthy UUID and supported-generation, writer and recovery admission",
+        ));
+    }
+    Ok(path)
 }
 fn prepare_stdin_payload(command: &mut Command) -> Result<(), LocalFailure> {
     match command {
@@ -1863,6 +1879,7 @@ mod tests {
         let result = RunResult::Direct {
             response: Box::new(DirectResponseV1::Success(output)),
             procedure_check_path: None,
+            removal_force_required: false,
         };
         let clock = FixedClock(UNIX_EPOCH + Duration::from_millis(12));
         let note = "note: check_result is a caller-supplied, structurally bound external check result; Podway does not verify or attest it";

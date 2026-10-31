@@ -193,6 +193,28 @@ JSON use also requires `--force`. Human removal may omit `--force` when no
 prepared or running session exists; a recovery recipe preserves the original
 force policy rather than changing the canonical request.
 
+Before an interactive removal prompt, Engine performs a bounded native-file
+compatibility precheck. Known unsupported newer state refuses before prompting,
+including when configuration is invalid. This observation opens no SQLite
+connection, creates no SHM or maintenance marker, and acquires no lease. It does
+not grant removal authority: after confirmation, normal admission and exclusive
+maintenance checks run again under the original invocation deadline. Marker-backed
+exact retries and command-specific invalid-current recovery retain their policies.
+
+The displayed root escapes control characters for terminal safety. Confirmation
+still compares the original resolved path exactly; an escaped display spelling is
+not an alias. Non-UTF-8 paths and paths containing LF or ending in CR cannot
+round-trip through the terminal line protocol and refuse interactive removal.
+A separately authorized
+`--yes --if-workspace-uuid <uuid>` request is available only with a trustworthy UUID
+and supported-generation, writer and recovery admission. No lossy path,
+normalization or alternate confirmation syntax grants authority.
+
+If this execution rejects unforced removal because a prepared or running session
+requires force, human output explains that separately authorized removal needs a
+new `workspace remove --force` request and normal confirmation. The hint does not
+retry, edit a published request or change machine error fields, codes or exits.
+
 `reset --all --yes --idempotency-key <key>` replaces runtime state with a fresh
 Store while preserving Procedure sources and configuration unrelated to retired
 legacy mode; legacy-mode configuration/markers are intentionally retired.

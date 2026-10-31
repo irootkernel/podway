@@ -4438,3 +4438,333 @@ fn maint002_indeterminate_committed_wal_refuses_owned_and_unmarked_destruction()
         }
     }
 }
+
+#[test]
+fn maint003_newer_removal_refuses_before_human_confirmation() {
+    for (wal, invalid_config) in [(false, false), (false, true), (true, false), (true, true)] {
+        let fixture = Fixture::new();
+        fixture.run(&["init", "--idempotency-key", "init"]);
+        let database = fixture.0.join(".podway/runtime/state.sqlite3");
+        let mut bytes = fs::read(&database).unwrap();
+        let generation = u32::from_be_bytes(bytes[60..64].try_into().unwrap());
+        if wal {
+            let staging = fixture.0.join("newer-producer");
+            fs::create_dir(&staging).unwrap();
+            fs::write(staging.join("state.sqlite3"), &bytes).unwrap();
+            let producer = rusqlite::Connection::open(staging.join("state.sqlite3")).unwrap();
+            producer
+                .execute_batch(&format!(
+                    "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA user_version={}",
+                    generation + 1
+                ))
+                .unwrap();
+            let runtime = database.parent().unwrap();
+            // Only the producer opens SQLite; the tested runtime receives native
+            // main/WAL bytes and deliberately has no SHM for the probe to reuse.
+            for suffix in ["", "-wal"] {
+                fs::copy(
+                    staging.join(format!("state.sqlite3{suffix}")),
+                    runtime.join(format!("state.sqlite3{suffix}")),
+                )
+                .unwrap();
+            }
+            let shm = runtime.join("state.sqlite3-shm");
+            if shm.exists() {
+                fs::remove_file(shm).unwrap();
+            }
+            drop(producer);
+        } else {
+            bytes[60..64].copy_from_slice(&(generation + 1).to_be_bytes());
+            fs::write(&database, bytes).unwrap();
+        }
+        if invalid_config {
+            fs::write(fixture.0.join(".podway/config.yaml"), b"invalid: [\n").unwrap();
+        }
+        let before = fixture.podway_snapshot();
+        let output = fixture.human_removal_in_pty(
+            &[
+                "workspace",
+                "remove",
+                "--force",
+                "--idempotency-key",
+                "remove",
+            ],
+            b"",
+            false,
+            || {},
+        );
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(text.contains("podway-test-pty-exit:5"), "{text}");
+        assert!(!text.contains("Type that exact path"), "{text}");
+        assert!(!text.contains("Resolved worktree root:"), "{text}");
+        assert!(text.contains("generation"), "{text}");
+        fixture.assert_podway_snapshot(&before);
+    }
+}
+
+#[test]
+fn maint003_unforced_active_removal_has_only_a_human_typed_force_hint() {
+    for running in [false, true] {
+        let fixture = Fixture::new();
+        fixture.run(&["init", "--idempotency-key", "init"]);
+        fixture.run(&[
+            "start",
+            "--preset",
+            "small-change-v2",
+            "--task",
+            "retain",
+            "--idempotency-key",
+            "start",
+        ]);
+        if running {
+            fixture.run(&["begin", "--idempotency-key", "begin"]);
+        }
+        let before = fixture.podway_snapshot();
+        let answer = format!("{}\n", fixture.0.display());
+        let output = fixture.human_removal_in_pty(
+            &["workspace", "remove", "--idempotency-key", "remove"],
+            answer.as_bytes(),
+            true,
+            || {},
+        );
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(text.contains("podway-test-pty-exit:2"), "{text}");
+        assert!(text.contains("--force"), "{text}");
+        assert!(
+            text.contains("new") && text.contains("confirmation"),
+            "{text}"
+        );
+        fixture.assert_podway_snapshot(&before);
+        let unrelated = fixture.raw_output(&["workspace", "remove", "--force", "--yes"]);
+        assert!(
+            !String::from_utf8(unrelated.stderr)
+                .unwrap()
+                .contains("new workspace remove --force")
+        );
+    }
+}
+
+#[test]
+fn maint003_control_path_display_keeps_only_original_confirmation_authority() {
+    let mut fixture = Fixture::new();
+    let renamed = fixture.0.with_file_name(format!(
+        "{}-tab\t-escape\u{1b}-internal\r-return",
+        fixture.0.file_name().unwrap().to_str().unwrap()
+    ));
+    fs::rename(&fixture.0, &renamed).unwrap();
+    fixture.0 = renamed;
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    let before = fixture.podway_snapshot();
+    let original = fixture.0.to_str().unwrap();
+    let displayed = original
+        .replace('\t', "\\t")
+        .replace('\u{1b}', "\\u{1b}")
+        .replace('\r', "\\r");
+    let alias = format!("{displayed}\n");
+    let rejected = fixture.human_removal_in_pty(
+        &[
+            "workspace",
+            "remove",
+            "--force",
+            "--idempotency-key",
+            "remove",
+        ],
+        alias.as_bytes(),
+        true,
+        || {},
+    );
+    let text = String::from_utf8(rejected.stdout).unwrap();
+    assert!(text.contains("podway-test-pty-exit:2"), "{text}");
+    assert!(
+        text.contains(&format!("Resolved worktree root: {displayed}\r\n")),
+        "{text}"
+    );
+    fixture.assert_podway_snapshot(&before);
+    // The terminal's literal-next key quotes internal CR so canonical input
+    // delivers the original byte instead of translating it into a line ending.
+    let answer = format!("{}\n", original.replace('\r', "\u{16}\r"));
+    let accepted = fixture.human_removal_in_pty(
+        &[
+            "workspace",
+            "remove",
+            "--force",
+            "--idempotency-key",
+            "remove",
+        ],
+        answer.as_bytes(),
+        true,
+        || {},
+    );
+    let text = String::from_utf8(accepted.stdout).unwrap();
+    assert!(text.contains("podway-test-pty-exit:0"), "{text}");
+    assert!(!fixture.0.join(".podway").exists());
+    assert!(fixture.0.join(".git").is_dir());
+}
+
+#[test]
+fn maint003_non_roundtrippable_paths_refuse_before_prompt_without_effects() {
+    for suffix in [b"embedded\nline".as_slice(), b"trailing\r", b"trailing\n"] {
+        let mut fixture = Fixture::new();
+        let mut name = fixture.0.file_name().unwrap().as_encoded_bytes().to_vec();
+        name.extend_from_slice(suffix);
+        let renamed = fixture
+            .0
+            .with_file_name(std::str::from_utf8(&name).unwrap());
+        fs::rename(&fixture.0, &renamed).unwrap();
+        fixture.0 = renamed;
+        fixture.run(&["init", "--idempotency-key", "init"]);
+        let before = fixture.podway_snapshot();
+        let output = fixture.human_removal_in_pty(
+            &[
+                "workspace",
+                "remove",
+                "--force",
+                "--idempotency-key",
+                "remove",
+            ],
+            b"",
+            false,
+            || {},
+        );
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(text.contains("podway-test-pty-exit:2"), "{text}");
+        assert!(
+            text.contains("interactive removal cannot confirm"),
+            "{text}"
+        );
+        assert!(!text.contains("Type that exact path"), "{text}");
+        assert!(!text.contains("Resolved worktree root:"), "{text}");
+        fixture.assert_podway_snapshot(&before);
+    }
+}
+
+#[test]
+fn maint003_post_confirmation_generation_change_is_not_admitted_by_the_precheck() {
+    use std::os::unix::fs::MetadataExt;
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    let database = fixture.0.join(".podway/runtime/state.sqlite3");
+    let mut newer = fs::read(&database).unwrap();
+    let generation = u32::from_be_bytes(newer[60..64].try_into().unwrap());
+    newer[60..64].copy_from_slice(&(generation + 1).to_be_bytes());
+    let original = fs::metadata(&database).unwrap();
+    let replacement = fixture.0.join("replacement.sqlite3");
+    fs::write(&replacement, &newer).unwrap();
+    let prepared = fs::metadata(&replacement).unwrap();
+    assert_ne!(
+        (original.dev(), original.ino()),
+        (prepared.dev(), prepared.ino())
+    );
+    let runtime = database.parent().unwrap();
+    let held = fs::File::open(runtime.join("maintenance.lock")).unwrap();
+    held.lock().unwrap();
+    let directory = fs::File::open(runtime).unwrap();
+    let mut after_replacement = None;
+    let output = fixture.human_removal_in_pty(
+        &[
+            "workspace",
+            "remove",
+            "--force",
+            "--idempotency-key",
+            "remove",
+        ],
+        format!("{}\n", fixture.0.display()).as_bytes(),
+        true,
+        || {
+            // The answer has been sent. Only normal removal admission takes
+            // this directory lock; the advisory precheck never acquires it.
+            let limit = Instant::now() + Duration::from_secs(2);
+            loop {
+                match directory.try_lock() {
+                    Err(std::fs::TryLockError::WouldBlock) => break,
+                    Ok(()) => directory.unlock().unwrap(),
+                    Err(error) => panic!("directory lock witness failed: {error}"),
+                }
+                assert!(
+                    Instant::now() < limit,
+                    "confirmed CLI must reach exclusive admission"
+                );
+                thread::sleep(Duration::from_millis(1));
+            }
+            fs::rename(&replacement, &database).unwrap();
+            let replaced = fs::metadata(&database).unwrap();
+            assert_eq!(
+                (replaced.dev(), replaced.ino()),
+                (prepared.dev(), prepared.ino())
+            );
+            assert_ne!(
+                (replaced.dev(), replaced.ino()),
+                (original.dev(), original.ino())
+            );
+            after_replacement = Some(fixture.podway_snapshot());
+            held.unlock().unwrap();
+        },
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("podway-test-pty-exit:5"), "{text}");
+    assert!(
+        text.contains("generation") || text.contains("WORKSPACE_MAINTENANCE"),
+        "{text}"
+    );
+    fixture.assert_podway_snapshot(&after_replacement.unwrap());
+}
+
+#[test]
+fn maint003_removal_confirmation_keeps_the_original_wait_deadline() {
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    let before = fixture.podway_snapshot();
+    let paused = fixture.pause_at_maintenance_boundary(
+        &[
+            "reset",
+            "--all",
+            "--yes",
+            "--idempotency-key",
+            "paused-reset",
+        ],
+        "lease-acquired",
+    );
+    let (output, elapsed) = fixture.confirm_removal_in_pty_after_prompt(Duration::from_secs(6));
+    assert!(elapsed < Duration::from_secs(2), "{elapsed:?}: {output:?}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("podway-test-pty-exit:4"), "{text}");
+    assert!(text.contains("WORKSPACE_MAINTENANCE"), "{text}");
+    assert!(!text.contains("new workspace remove --force"), "{text}");
+    drop(paused);
+    fixture.assert_podway_snapshot(&before);
+}
+
+#[test]
+fn maint003_native_non_utf8_argument_cannot_select_a_lossy_alias() {
+    use std::os::unix::ffi::OsStringExt;
+    let mut fixture = Fixture::new();
+    let name = fixture.0.file_name().unwrap().to_str().unwrap().to_owned();
+    let alias = fixture
+        .0
+        .with_file_name(format!("{name}-replacement-\u{fffd}"));
+    fs::rename(&fixture.0, &alias).unwrap();
+    fixture.0 = alias;
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    let mut invalid_name = format!("{name}-replacement-").into_bytes();
+    invalid_name.push(0xff);
+    let invalid = fixture
+        .0
+        .with_file_name(std::ffi::OsString::from_vec(invalid_name));
+    // This actual fixture filesystem cannot materialize that native filename.
+    // Retain the real OS evidence rather than pretending it reached confirmation.
+    let error = fs::create_dir(&invalid).unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(nix::libc::EILSEQ));
+    assert_eq!(invalid.to_string_lossy(), fixture.0.to_string_lossy());
+    let before = fixture.podway_snapshot();
+    let output = fixture.removal_at_native_path_in_pty(&invalid);
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("podway-test-pty-exit:2"), "{text}");
+    assert!(
+        text.contains("workspace removal requires an existing Git worktree"),
+        "{text}"
+    );
+    assert!(!text.contains("Type that exact path"), "{text}");
+    assert!(!text.contains("Resolved worktree root:"), "{text}");
+    fixture.assert_podway_snapshot(&before);
+    assert!(fixture.0.join(".git").is_dir());
+}

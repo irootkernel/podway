@@ -1,7 +1,7 @@
 //! Typed in-process request boundary shared by CLI and programmatic callers.
 
 use sha2::{Digest as _, Sha256};
-use std::{sync::Arc, time::Instant};
+use std::{cell::Cell, sync::Arc, time::Instant};
 
 use podway_core::{SessionId, WorkspaceId};
 use podway_git::GitResolverContractV1;
@@ -98,11 +98,20 @@ impl DirectCommandV1 {
     }
 }
 
-/// One invocation's optional immutable graph hint. No Store types, stamps or
-/// live guards are exposed to the CLI. A fresh preflight replaces prior state.
+/// One invocation's optional immutable graph hint and transient typed guidance.
+/// No Store types, stamps or live guards are exposed to the CLI. A fresh
+/// preflight replaces the graph hint; each execution replaces its guidance.
 #[derive(Default)]
 pub struct DirectInvocationContextV1 {
     prepared: Option<podway_store::direct_store::DirectPreparedGraphV1>,
+    removal_force_required: bool,
+}
+
+impl DirectInvocationContextV1 {
+    /// Original typed cause from the most recent execution, for human guidance only.
+    pub fn removal_force_required(&self) -> bool {
+        self.removal_force_required
+    }
 }
 
 pub(crate) fn prepare_graph_v1(
@@ -264,6 +273,18 @@ fn execute_direct_in_context_v1<R: GitResolverContractV1>(
     context: &mut DirectInvocationContextV1,
     maintenance_observer: Option<MaintenanceObserver>,
 ) -> Result<DirectResponseV1, ProtocolError> {
+    context.removal_force_required = false;
+    let force_required = Cell::new(false);
+    let observer = |error: &DirectExecutionErrorV1| {
+        if matches!(
+            error,
+            DirectExecutionErrorV1::Maintenance(
+                crate::direct_maintenance::DirectMaintenanceErrorV1::ForceRequired
+            )
+        ) {
+            force_required.set(true);
+        }
+    };
     // Classify without validating inputs or moving any command work earlier.
     let consumes = match &request.command {
         DirectCommandV1::Cursor(_) | DirectCommandV1::Item(_) | DirectCommandV1::Procedure(_) => {
@@ -279,10 +300,11 @@ fn execute_direct_in_context_v1<R: GitResolverContractV1>(
         request,
         clock,
         ids,
-        None,
+        Some(&observer),
         maintenance_observer,
         Some(context),
     );
+    context.removal_force_required = force_required.get();
     if consumes {
         context.prepared = None;
     }
@@ -353,6 +375,46 @@ fn finish_direct_error_v1<R: GitResolverContractV1>(
         }
     }
     render_direct_error_v1(&error, context)
+}
+
+/// Read-only advisory compatibility observation before human removal confirmation.
+/// This entry does not admit removal, validate configuration, acquire a lease or
+/// open SQLite. Normal removal must repeat all authoritative checks afterward.
+#[derive(Clone, Debug)]
+pub struct DirectRemovalPrecheckRequestV1 {
+    pub request_id: RequestIdV1,
+    pub selector: WorktreeSelectorV1,
+    pub observed_at: Rfc3339MillisV1,
+    pub timeout_ms: u64,
+    pub generation: ContractGenerationV1,
+}
+
+pub fn precheck_direct_removal_v1<R: GitResolverContractV1>(
+    resolver: &DirectWorkspaceResolverV1<R>,
+    request: DirectRemovalPrecheckRequestV1,
+) -> Result<Option<ErrorEnvelopeV2>, ProtocolError> {
+    let mut context = DirectErrorContextV1 {
+        request_id: request.request_id,
+        command: CommandNameV1::new("workspace.remove")?,
+        observed_at: request.observed_at,
+        idempotency_key: None,
+        timeout_ms: request.timeout_ms,
+        generation: request.generation,
+        maintenance: None,
+    };
+    let result = resolver
+        .resolve_candidate(request.selector.clone())
+        .map_err(DirectExecutionErrorV1::from)
+        .and_then(|(_, store)| {
+            podway_store::direct_store::require_destructive_generation_v1(store.layout())
+                .map_err(DirectExecutionErrorV1::from)
+        });
+    match result {
+        Ok(()) => Ok(None),
+        Err(error) => {
+            finish_direct_error_v1(error, &mut context, resolver, &request.selector, None).map(Some)
+        }
+    }
 }
 
 /// READS-004 typed fence-preflight facts entry: renders failures through the

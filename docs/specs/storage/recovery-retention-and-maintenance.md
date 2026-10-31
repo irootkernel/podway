@@ -188,8 +188,8 @@ do not qualify as invalid-state recovery authority.
 ## Workspace removal
 
 Explicit removal binds the same root, Git identity, writer, key and workspace
-fences under exclusive maintenance authority. A running session requires the
-explicit force policy in addition to removal confirmation. Runtime and
+fences under exclusive maintenance authority. A prepared or running session
+requires the explicit force policy in addition to removal confirmation. Runtime and
 configuration deletion proceed through the recorded phases; the full response
 is prepared before namespace deletion destroys retention.
 An unfenced confirmed removal can discard invalid current-generation state,
@@ -201,6 +201,24 @@ could not be validated. A later request after complete removal reports
 `already_absent=true`; absence is independent of whether a UUID was readable.
 The non-interactive CLI still requires its explicit UUID fence; unfenced CLI
 removal uses the interactive exact-path confirmation.
+
+Interactive removal first observes compatibility through Engine's bounded,
+read-only native generation check. It does not validate workspace configuration,
+open SQLite, create sidecars or markers, or acquire maintenance authority. A known
+newer generation refuses before the prompt even with invalid configuration;
+a matching maintenance marker remains eligible for its normal exact retry.
+Confirmation does not retain this observation as admission: normal checks run
+again afterward and under the exclusive lease, using the same invocation deadline.
+
+Control characters in the displayed root are escaped, while confirmation retains
+the original exact path. Escaped aliases never confirm removal. Non-UTF-8 paths
+or paths containing LF or ending in CR refuse the interactive line protocol. The
+non-interactive path requires a separately authorized UUID-fenced, explicitly
+confirmed request with a trustworthy UUID and supported-generation, writer and
+recovery admission. Human force guidance comes from the same execution's typed
+active-session
+refusal and requires a new authorized request with normal confirmation. It never
+changes an original request, grants force, or changes machine error semantics.
 
 Descriptor-relative traversal rejects symlinks, mounts, changed ancestry,
 foreign ownership and unknown residual contents. Removal clears the intent and

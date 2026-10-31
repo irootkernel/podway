@@ -88,6 +88,7 @@ pub(super) fn render_result_with_clock_and_writers(
         RunResult::Direct {
             response,
             procedure_check_path,
+            removal_force_required,
         } => {
             let value = match &**response {
                 podway_engine::direct_api::DirectResponseV1::Success(output) => output.as_value(),
@@ -109,6 +110,11 @@ pub(super) fn render_result_with_clock_and_writers(
                     _ => Ok(()),
                 };
                 if rendered.is_err() {
+                    return LOCAL_CLIENT_EXIT;
+                }
+                if *removal_force_required
+                    && writeln!(stderr, "hint: if separately authorized, make a new workspace remove --force request with normal confirmation; keep the original request unchanged").is_err()
+                {
                     return LOCAL_CLIENT_EXIT;
                 }
             }

@@ -30,6 +30,9 @@ This file records concise shipped outcomes and the planned next stable release.
 - Show applicable global options and caller-owned key guidance in route usage,
   and name the first missing required argument without exposing input values.
 
+- Check removal compatibility before human confirmation, display path controls visibly, reject paths
+  that cannot be confirmed exactly, and explain explicit force for prepared or running sessions.
+
 ## v0.2.15 - 2026-10-24
 
 ### Added

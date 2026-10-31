@@ -963,3 +963,174 @@ fn invalid_configuration_preserves_command_specific_compatibility_precedence() {
         }
     }
 }
+
+#[test]
+fn removal_precheck_is_advisory_and_exclusive_admission_rechecks_generation() {
+    use podway_engine::direct_api::{DirectRemovalPrecheckRequestV1, precheck_direct_removal_v1};
+    use podway_engine::direct_maintenance::remove_workspace_with_lease_observers_v1;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let engine = engine();
+    let request = engine.request(
+        D::WorkspaceRemove {
+            confirmed: true,
+            force: true,
+        },
+        "remove",
+    );
+    let before = files(&engine.temporary.path().join(".podway"));
+    let probe = DirectRemovalPrecheckRequestV1 {
+        request_id: request.request_id,
+        selector: request.selector,
+        observed_at: request.observed_at,
+        timeout_ms: request.timeout_ms,
+        generation: request.generation,
+    };
+    assert!(
+        precheck_direct_removal_v1(&engine.resolver, probe.clone())
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(files(&engine.temporary.path().join(".podway")), before);
+    // An invalid configuration is not normal existing-workspace admission here.
+    std::fs::write(
+        engine.temporary.path().join(".podway/config.yaml"),
+        b"invalid: [\n",
+    )
+    .unwrap();
+    let invalid = files(&engine.temporary.path().join(".podway"));
+    assert!(
+        precheck_direct_removal_v1(&engine.resolver, probe)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(files(&engine.temporary.path().join(".podway")), invalid);
+    let mut removal = maintenance(&engine, "remove");
+    removal.force = true;
+    let replaced = Arc::new(AtomicBool::new(false));
+    let seen = replaced.clone();
+    let error = remove_workspace_with_lease_observers_v1(
+        &engine.resolver,
+        removal,
+        &NoClock,
+        |_| {},
+        move |boundary, store, _| {
+            if matches!(boundary, B::LeaseAcquired { .. }) {
+                let database = store.layout().database();
+                let mut bytes = std::fs::read(&database).unwrap();
+                let current = u32::from_be_bytes(bytes[60..64].try_into().unwrap());
+                bytes[60..64].copy_from_slice(&(current + 1).to_be_bytes());
+                std::fs::write(database, bytes).unwrap();
+                seen.store(true, Ordering::SeqCst);
+            }
+        },
+    )
+    .unwrap_err();
+    assert!(replaced.load(Ordering::SeqCst));
+    assert!(
+        matches!(
+            error,
+            podway_engine::direct_maintenance::DirectMaintenanceErrorV1::Workspace(
+                podway_engine::direct_workspace::DirectWorkspaceErrorV1::Store(
+                    podway_store::direct_store::DirectStoreErrorV1::UnsupportedGeneration { .. }
+                )
+            )
+        ),
+        "{error:?}"
+    );
+    assert!(engine.temporary.path().join(".podway/config.yaml").exists());
+    assert!(
+        !engine
+            .store
+            .layout()
+            .runtime_directory()
+            .join("removal.marker")
+            .exists()
+    );
+}
+
+#[test]
+fn removal_force_guidance_observes_only_the_same_execution_typed_cause() {
+    use podway_engine::direct_api::{DirectInvocationContextV1, execute_direct_with_context_v1};
+    for generation in [
+        podway_protocol::ContractGenerationV1::Generation1,
+        podway_protocol::ContractGenerationV1::Generation2,
+    ] {
+        let engine = Engine::new(STATE_PROCEDURE);
+        let mut context = DirectInvocationContextV1::default();
+        let mut force = engine.request(
+            D::WorkspaceRemove {
+                confirmed: true,
+                force: false,
+            },
+            "force",
+        );
+        force.generation = generation;
+        let plain = execute_direct_v1(
+            &engine.resolver,
+            force.clone(),
+            &NoClock,
+            &NativeDirectIdSourceV1,
+        )
+        .unwrap();
+        let observed = execute_direct_with_context_v1(
+            &engine.resolver,
+            force,
+            &NoClock,
+            &NativeDirectIdSourceV1,
+            &mut context,
+        )
+        .unwrap();
+        let (DirectResponseV1::Failure(plain), DirectResponseV1::Failure(observed)) =
+            (plain, observed)
+        else {
+            panic!("active session must refuse unforced removal")
+        };
+        assert_eq!(plain.as_value(), observed.as_value());
+        assert_eq!(observed.as_value()["code"], "REQUEST_INVALID");
+        assert!(context.removal_force_required());
+        let unrelated = engine.request(
+            D::WorkspaceRemove {
+                confirmed: false,
+                force: false,
+            },
+            "confirmation",
+        );
+        let failure = execute_direct_with_context_v1(
+            &engine.resolver,
+            unrelated,
+            &NoClock,
+            &NativeDirectIdSourceV1,
+            &mut context,
+        )
+        .unwrap();
+        let DirectResponseV1::Failure(failure) = failure else {
+            panic!("confirmation required")
+        };
+        assert_eq!(failure.as_value()["code"], "CONFIRMATION_REQUIRED");
+        assert!(!context.removal_force_required());
+        let mut same_code = engine.request(
+            D::WorkspaceRemove {
+                confirmed: true,
+                force: false,
+            },
+            "missing-key",
+        );
+        same_code.idempotency_key = None;
+        let failure = execute_direct_with_context_v1(
+            &engine.resolver,
+            same_code,
+            &NoClock,
+            &NativeDirectIdSourceV1,
+            &mut context,
+        )
+        .unwrap();
+        let DirectResponseV1::Failure(failure) = failure else {
+            panic!("missing mutation key is invalid")
+        };
+        assert_eq!(failure.as_value()["code"], "REQUEST_INVALID");
+        assert!(!context.removal_force_required());
+    }
+}
