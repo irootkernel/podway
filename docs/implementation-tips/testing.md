@@ -284,6 +284,17 @@ reset/removal retain their command-specific authority. Native representative
 classification failures and unchanged caller ordering jointly establish this
 boundary; the source guard is not labeled a separate native Err(Maintenance) case.
 
+The [native CLI owner](../../crates/podway-cli/tests/e2e_v2dfc007_direct_cli.rs)
+`maint002_indeterminate_committed_wal_refuses_owned_and_unmarked_destruction`
+checks marked/unmarked reset and removal in the default and explicit contract
+generations 1 and 2. Human unreadable-state output places preservation and
+Store-independent diagnosis limits before the unchanged recovery reason, and
+qualifies its discard advice on supported generation, original authority and
+stable witnesses. Each invocation preserves the namespace and creates no SHM.
+Normalized machine bytes agree across generations, and the recovery object matches
+the frozen GUIDE-004 baseline. GUIDE-004 and GUIDE-010 separately retain exact
+writer-mismatch JSON and human-output baselines.
+
 DF-042's historical wording also remains unchanged. Lone-removal restoration
 already validated the removal value, changed schema, removed phase and validated
 the intent schema; it did not reconstruct every identity field. The delivered

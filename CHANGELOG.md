@@ -35,6 +35,8 @@ This file records concise shipped outcomes and the planned next stable release.
 - Allow concurrent removal of the same empty workspace remnants to converge while preserving
   fresh workspaces and refusing changed paths.
 
+- Qualify human recovery advice for unreadable Stores with generation and preservation requirements.
+
 ## v0.2.15 - 2026-10-24
 
 ### Added

@@ -290,6 +290,20 @@ pub(super) fn render_human_error_direct(
         .get("reason")
         .and_then(Value::as_str)
     {
+        if error["code"] == "WORKSPACE_STATE_UNREADABLE" {
+            write_text_line(
+                stderr,
+                format_args!(
+                    "hint: Preserve indeterminate state. Store-independent version --identity diagnoses the writer; it establishes neither a supported generation nor a trustworthy workspace UUID or deletion authority."
+                ),
+            )?;
+            write_text_line(
+                stderr,
+                format_args!(
+                    "hint: The following discard advice applies only after supported-generation admission, original request authority and stable filesystem witnesses. Confirmation or force does not replace these conditions."
+                ),
+            )?;
+        }
         write_text_line(stderr, format_args!("reason: {reason}"))?;
     }
     if error["code"]

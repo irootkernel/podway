@@ -4376,6 +4376,9 @@ fn maint002_indeterminate_committed_wal_refuses_owned_and_unmarked_destruction()
         }
         sum
     }
+    let frozen_writer: Value =
+        serde_json::from_str(GUIDE004_WRITER_MISMATCH_JSON_BASELINE).unwrap();
+    let frozen_recovery = &frozen_writer["details"]["recovery"];
     // A checksum-valid committed page-one image with no trustworthy SQLite header.
     let mut wal = vec![0; 32 + 24 + 512];
     wal[..4].copy_from_slice(&0x377f0682_u32.to_be_bytes());
@@ -4425,16 +4428,57 @@ fn maint002_indeterminate_committed_wal_refuses_owned_and_unmarked_destruction()
                 "unknown-remove",
             ];
             let args: &[&str] = if remove { &removal } else { &reset };
-            let output = fixture.output(args);
-            assert_eq!(output.status.code(), Some(5));
-            let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
-            assert_eq!(
-                error.as_value()["code"],
-                "WORKSPACE_STATE_UNREADABLE",
-                "marked={marked}, remove={remove}"
-            );
-            fixture.assert_podway_snapshot(&before);
-            assert!(!runtime.join("state.sqlite3-shm").exists());
+            let mut normalized_machine = None;
+            for generation in [None, Some("1"), Some("2")] {
+                let mut request = Vec::new();
+                if let Some(generation) = generation {
+                    request.extend_from_slice(&["--contract-generation", generation]);
+                }
+                request.extend_from_slice(args);
+                let output = fixture.output(&request);
+                assert_eq!(output.status.code(), Some(5));
+                assert!(output.stderr.is_empty());
+                let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+                assert_eq!(
+                    error.as_value()["code"],
+                    "WORKSPACE_STATE_UNREADABLE",
+                    "marked={marked}, remove={remove}, generation={generation:?}"
+                );
+                assert_eq!(error.as_value()["retryable"], false);
+                assert_eq!(
+                    error.as_value()["details"]["schema"],
+                    "podway.workspace-recovery-details/v2"
+                );
+                assert_eq!(error.as_value()["details"]["recovery"], *frozen_recovery);
+                let normalized = guide004_normalized_error_stdout(&output.stdout);
+                if let Some(expected) = &normalized_machine {
+                    assert_eq!(&normalized, expected);
+                } else {
+                    normalized_machine = Some(normalized);
+                }
+                fixture.assert_podway_snapshot(&before);
+                assert!(!shm.exists());
+
+                let human = fixture.raw_output(&request);
+                assert_eq!(human.status.code(), Some(5));
+                assert!(human.stdout.is_empty());
+                let stderr = String::from_utf8(human.stderr).unwrap();
+                assert!(stderr.contains("error: WORKSPACE_STATE_UNREADABLE:"));
+                let preservation = stderr
+                    .find("hint: Preserve indeterminate state. Store-independent version --identity diagnoses the writer; it establishes neither a supported generation nor a trustworthy workspace UUID or deletion authority.\n")
+                    .expect("human unreadable-state guidance must preserve indeterminate state before discard advice");
+                let qualification = stderr
+                    .find("hint: The following discard advice applies only after supported-generation admission, original request authority and stable filesystem witnesses. Confirmation or force does not replace these conditions.\n")
+                    .expect("human discard advice must be qualified by generation, request authority and witnesses");
+                let reason = stderr.find("reason: ").unwrap();
+                assert!(preservation < qualification && qualification < reason);
+                assert_eq!(
+                    &stderr[reason..],
+                    format!("reason: {}\n", frozen_recovery["reason"].as_str().unwrap())
+                );
+                fixture.assert_podway_snapshot(&before);
+                assert!(!shm.exists());
+            }
         }
     }
 }
