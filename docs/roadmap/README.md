@@ -22,33 +22,34 @@ identifiers. Do not rename completed work to apply the new convention.
 
 ## MAINT — Maintenance and Recovery Safety
 
-Dependencies: none; required prior implementation is already delivered. Status: In Progress.
-Detailed SOT: [Maintenance and recovery safety](../todo/TODO-podway-maintenance-recovery-safety.md).
+Dependencies: none; required prior implementation is already delivered. Status: Completed.
+Canonical Outcomes: [maintenance admission and recovery](../specs/storage/recovery-retention-and-maintenance.md),
+[Direct Engine ownership](../architecture/system.md#direct-engine) and
+[integrated qualification and feedback history](../implementation-tips/testing.md#maint-integrated-qualification).
 
-MAINT adopts DF-029, DF-030, DF-031, DF-032, DF-033, DF-034, DF-036,
-DF-039, DF-040, DF-041, DF-042 and DF-043. It consolidates maintenance
-admission ownership, improves human confirmation and guidance, and adds
-deterministic fault and concurrency verification. Indeterminate WAL generations
-remain refused; adoption grants no additional destructive authority.
+MAINT delivered DF-029, DF-030, DF-031, DF-032, DF-033, DF-034, DF-036,
+DF-039, DF-040, DF-041, DF-042 and DF-043 through shared maintenance admission,
+generation-safe diagnosis, human confirmation and recovery guidance, and
+deterministic durability and concurrency verification. Indeterminate WAL
+generations remain refused; this work grants no additional destructive authority.
 
-Tasks execute in numeric order with one active task. Each task depends on its
-predecessor; later tasks remain Planned until that predecessor is accepted.
-The roadmap alone owns task order and status. Task completion does not complete
-the Epic: integrated whole-Epic assessment and explicit owner acceptance precede
-its separately approved closeout and last-consumer dossier retirement.
-No release, installation, Store migration, external-consumer change, staging,
-commit or Git publication is selected by this registration.
+MAINT-001 through MAINT-008 completed in numeric order with integrated focused
+verification and the development gate. Independent whole-Epic validation and
+explicit owner acceptance authorize this closeout and retirement of the adopted
+execution dossier. The roadmap alone owns task order and completion status.
+Release, installation, Store migration and Git publication remain separately
+authorized operations.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `MAINT-001` | Unify maintenance admission ownership | Completed | Give Engine one complete fence predicate and consume Store-owned invalid-current classification without widening recovery admission. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#admission-ownership) |
-| `MAINT-002` | Consolidate compatibility diagnosis | Completed | Share resolver-owned invalid-configuration precedence and retain generation-safe refusal of indeterminate WAL state. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#compatibility-diagnosis) |
-| `MAINT-003` | Harden removal confirmation and guidance | Completed | Precheck compatibility before human confirmation, visibly escape path controls and explain explicit force without changing machine authority. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#confirmation-and-guidance) |
-| `MAINT-004` | Verify checkpoint durability faults | Completed | Inject native checkpoint replacement and post-TRUNCATE sync failure; prove fail-closed witnesses and exact retry durability. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#checkpoint-durability) |
-| `MAINT-005` | Verify destructive generation fences | Completed | Deterministically replace database and WAL at existing maintenance guards and preserve unsupported-generation and changed-witness refusal. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#destructive-generation-fences) |
-| `MAINT-006` | Converge residual removal safely | Completed | Converge concurrent empty-residual disappearance while refusing changed ancestry and preserving a fresh successor. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#residual-removal-convergence) |
-| `MAINT-007` | Reuse exact marker construction | Completed | Restore lone-removal intent through canonical construction while preserving request digest, original response and recorded time. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#exact-marker-construction) |
-| `MAINT-008` | Qualify maintenance safety and prepare closeout | Completed | Pass integrated functional verification and the development gate, promote durable owners and prepare later owner-approved dossier retirement. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#integrated-qualification) |
+| `MAINT-001` | Unify maintenance admission ownership | Completed | Give Engine one complete fence predicate and consume Store-owned invalid-current classification without widening recovery admission. | [Admission ownership](../architecture/system.md#direct-engine) |
+| `MAINT-002` | Consolidate compatibility diagnosis | Completed | Share resolver-owned invalid-configuration precedence and retain generation-safe refusal of indeterminate WAL state. | [Compatibility and recovery](../specs/storage/recovery-retention-and-maintenance.md#invalid-configuration-and-compatibility) |
+| `MAINT-003` | Harden removal confirmation and guidance | Completed | Precheck compatibility before human confirmation, visibly escape path controls and explain explicit force without changing machine authority. | [Confirmation and guidance](../specs/interfaces/cli-specification.md#workspace-lifecycle) |
+| `MAINT-004` | Verify checkpoint durability faults | Completed | Inject native checkpoint replacement and post-TRUNCATE sync failure; prove fail-closed witnesses and exact retry durability. | [Native checkpoint verification](../implementation-tips/testing.md#native-migration-checkpoint-faults) |
+| `MAINT-005` | Verify destructive generation fences | Completed | Deterministically replace database and WAL at existing maintenance guards and preserve unsupported-generation and changed-witness refusal. | [Native generation fences](../implementation-tips/testing.md#native-destructive-generation-replacements) |
+| `MAINT-006` | Converge residual removal safely | Completed | Converge concurrent empty-residual disappearance while refusing changed ancestry and preserving a fresh successor. | [Native residual convergence](../implementation-tips/testing.md#native-empty-residual-convergence) |
+| `MAINT-007` | Reuse exact marker construction | Completed | Restore lone-removal intent through canonical construction while preserving request digest, original response and recorded time. | [Marker construction and replay](../implementation-tips/testing.md#exact-maintenance-marker-construction) |
+| `MAINT-008` | Qualify maintenance safety and prepare closeout | Completed | Pass integrated functional verification and the development gate, promote durable owners and prepare later owner-approved dossier retirement. | [Integrated qualification](../implementation-tips/testing.md#maint-integrated-qualification) |
 
 ## CNTRT — Public Contract Consistency
 

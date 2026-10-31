@@ -97,9 +97,7 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-| Epic | Detailed SOT | Outcome |
-|---|---|---|
-| [MAINT](../roadmap/README.md#maint-maintenance-and-recovery-safety) | [Maintenance and recovery safety](TODO-podway-maintenance-recovery-safety.md) | Safe maintenance ownership, human guidance and deterministic fault/concurrency verification; indeterminate WAL deletion stays refused. |
+None.
 
 ## Related candidates
 

@@ -24,13 +24,14 @@ write-free snapshot reads are the current product boundaries.
 [Examples](examples/) provide walkthroughs and versioned known-answer payloads.
 
 Current adopted work is tracked by the [active roadmap](roadmap/).
-The [MAINT epic](roadmap/README.md#maint-maintenance-and-recovery-safety) adopts
-maintenance ownership, human confirmation/guidance and deterministic durability
-and concurrency verification. Its [adopted design dossier](todo/TODO-podway-maintenance-recovery-safety.md)
-owns intended changes; current specifications continue to own implemented behavior.
-All twelve selected feedback deferrals are promoted, not implemented. Unknown WAL
-generations remain refused for destructive maintenance. This work selects no
-release, installation or external-consumer change.
+The [MAINT epic](roadmap/README.md#maint-maintenance-and-recovery-safety)
+delivered maintenance admission ownership, human confirmation and recovery
+guidance, and deterministic durability and concurrency verification.
+The [maintenance specification](specs/storage/recovery-retention-and-maintenance.md)
+owns recovery admission, while the [integrated qualification and feedback history](implementation-tips/testing.md#maint-integrated-qualification)
+preserve verification owners and limits. Unknown WAL generations remain refused
+for destructive maintenance. The roadmap owns completion status; release,
+installation and external-consumer changes require their own authorization.
 
 The [GUIDE epic](roadmap/README.md#guide-agent-guidance-and-contract-generation-2)
 is completed and owner-accepted. It delivered agent-facing guidance fixes and
