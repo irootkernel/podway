@@ -828,3 +828,138 @@ fn maintenance_identity_fences_preserve_valid_and_invalid_store_admission() {
         }
     }
 }
+
+#[test]
+fn invalid_configuration_preserves_command_specific_compatibility_precedence() {
+    use podway_engine::direct_execution::DirectReadCommandV1;
+    use podway_engine::v2_read_service::GraphStatusTierV2;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    for kind in ["current", "newer", "maintenance", "classification-error"] {
+        for operation in ["init", "status", "reset", "remove"] {
+            let mut engine = engine();
+            let layout = engine.store.layout();
+            match kind {
+                "newer" => {
+                    let mut bytes = std::fs::read(layout.database()).unwrap();
+                    bytes[60..64].copy_from_slice(
+                        &(podway_store::direct_store::DIRECT_SCHEMA_GENERATION_V1 + 1)
+                            .to_be_bytes(),
+                    );
+                    std::fs::write(layout.database(), bytes).unwrap();
+                }
+                "maintenance" => {
+                    let mut original = maintenance(&engine, "interrupted-reset");
+                    original.expected_workspace_id = None;
+                    let interrupted =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            reset_all_with_boundary_observer_v1(
+                                &engine.resolver,
+                                original,
+                                &Clock,
+                                &NativeDirectIdSourceV1,
+                                |boundary| {
+                                    if boundary == B::IntentPublished {
+                                        panic!("retain owned intent");
+                                    }
+                                },
+                            )
+                            .unwrap();
+                        }));
+                    assert!(interrupted.is_err());
+                    assert!(layout.intent_marker().exists());
+                }
+                "classification-error" => {
+                    let target = engine.temporary.path().join("outside-wal");
+                    std::fs::write(&target, b"preserve outside target").unwrap();
+                    if layout.wal().exists() {
+                        std::fs::remove_file(layout.wal()).unwrap();
+                    }
+                    std::os::unix::fs::symlink(&target, layout.wal()).unwrap();
+                }
+                _ => {}
+            }
+            std::fs::write(
+                engine.temporary.path().join(".podway/config.yaml"),
+                b"invalid: [\n",
+            )
+            .unwrap();
+            let opens = Arc::new(AtomicUsize::new(0));
+            let observed = opens.clone();
+            engine.resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest())
+                .with_store_boundary_observer_v1(move |_| {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                });
+            let command = match operation {
+                "init" => D::WorkspaceInit { repair: false },
+                "status" => D::Read {
+                    command: DirectReadCommandV1::Status {
+                        tier: GraphStatusTierV2::Standard,
+                        history_before: None,
+                    },
+                    expected_session_id: None,
+                },
+                "reset" => D::WorkspaceResetAll { confirmed: true },
+                _ => D::WorkspaceRemove {
+                    confirmed: true,
+                    force: true,
+                },
+            };
+            let request = engine.request(command, "config-precedence");
+            if kind == "current" && matches!(operation, "reset" | "remove") {
+                let output = engine.output(engine.execute(request, &Clock));
+                if operation == "remove" {
+                    assert_eq!(output["result"]["podway_directory_removed"], true);
+                } else {
+                    assert!(output["workspace"]["uuid"].is_string());
+                }
+                continue;
+            }
+            let before = files(&engine.temporary.path().join(".podway"));
+            let file_ids: Vec<_> = before
+                .keys()
+                .map(|path| {
+                    let file = engine.temporary.path().join(".podway").join(path);
+                    let metadata = std::fs::symlink_metadata(&file).unwrap();
+                    (file, metadata.dev(), metadata.ino())
+                })
+                .collect();
+            let DirectResponseV1::Failure(error) = engine.execute(request, &NoClock) else {
+                panic!("{kind}/{operation} admitted");
+            };
+            let expected = match (kind, operation) {
+                ("newer", _) => "WORKSPACE_SCHEMA_UNSUPPORTED",
+                ("maintenance", _) => "WORKSPACE_MAINTENANCE",
+                ("classification-error", "status") | ("current", _) => "WORKSPACE_CONFIG_INVALID",
+                _ => "WORKSPACE_STATE_UNREADABLE",
+            };
+            assert_eq!(
+                error.as_value()["code"],
+                expected,
+                "{kind}/{operation}: {error:?}"
+            );
+            assert_eq!(
+                files(&engine.temporary.path().join(".podway")),
+                before,
+                "{kind}/{operation}"
+            );
+            assert_eq!(
+                opens.load(Ordering::SeqCst),
+                0,
+                "{kind}/{operation} opened Store"
+            );
+            for (file, device, inode) in file_ids {
+                let metadata = std::fs::symlink_metadata(file).unwrap();
+                assert_eq!((metadata.dev(), metadata.ino()), (device, inode));
+            }
+            if kind == "classification-error" {
+                assert_eq!(
+                    std::fs::read(engine.temporary.path().join("outside-wal")).unwrap(),
+                    b"preserve outside target"
+                );
+            }
+        }
+    }
+}

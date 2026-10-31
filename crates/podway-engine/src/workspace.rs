@@ -69,6 +69,20 @@ pub fn workspace_request_is_fenced_v1(
         .is_some()
 }
 
+/// Interpret a successful read-only probe without conflating classification
+/// failure with the observed Maintenance classification. Callers own precedence.
+pub(crate) fn invalid_config_store_error(
+    classification: DirectStoreClassificationV1,
+) -> Option<DirectStoreErrorV1> {
+    match classification {
+        DirectStoreClassificationV1::Newer { generation } => {
+            Some(DirectStoreErrorV1::UnsupportedGeneration { generation })
+        }
+        DirectStoreClassificationV1::Maintenance => Some(DirectStoreErrorV1::Maintenance),
+        _ => None,
+    }
+}
+
 const STATE_DATABASE_FILE_NAME_V1: &str = "state.sqlite3";
 const STORED_ROOT_DIAGNOSTIC_V1: &str = "store-validated workspace root";
 const MAX_WORKSPACE_REMOVAL_ENTRIES_V1: usize = 100_000;
@@ -1419,14 +1433,11 @@ impl<R: GitResolverContractV1> DirectWorkspaceResolverV1<R> {
         if let Err(error) = self.validate_workspace_config(&preliminary) {
             // Removal can invalidate a config read while its marker still owns admission.
             // Classify without opening SQLite; unmarked invalid config remains rejected.
-            match classify_direct_store_v1(&layout) {
-                Ok(DirectStoreClassificationV1::Newer { generation }) => {
-                    return Err(DirectStoreErrorV1::UnsupportedGeneration { generation }.into());
-                }
-                Ok(DirectStoreClassificationV1::Maintenance) => {
-                    return Err(DirectStoreErrorV1::Maintenance.into());
-                }
-                _ => {}
+            if let Some(compatibility) = classify_direct_store_v1(&layout)
+                .ok()
+                .and_then(invalid_config_store_error)
+            {
+                return Err(compatibility.into());
             }
             return Err(error.into());
         }

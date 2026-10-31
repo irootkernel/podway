@@ -145,6 +145,21 @@ They do not run `quick_check`, `foreign_key_check`, full graph reconstruction or
 all-receipt scans on every invocation. Explicit doctor and maintenance perform
 those stronger checks. Ordinary reads never resume a maintenance marker.
 
+A successful classification and a failed probe remain distinct in Engine
+configuration diagnostics. Both callers prefer an observed newer generation or
+maintenance classification over invalid configuration. Init propagates probe
+errors; existing-workspace resolution retains its configuration error on any
+probe failure, including a changed-witness maintenance error. This precedence
+shares the original bounded native observation without a SQLite open or new
+lease, sidecar or marker.
+
+Unknown committed page-one generation and an unresolved valid WAL stream at the
+scan boundary remain destructive-admission failures even when a marker is
+present. Supported main-file generation, force, confirmation and writer-version
+diagnosis do not establish the WAL generation. Existing invalid-current recovery
+advice applies only after generation admission; indeterminate input stays
+preserved without a deletion recipe or an inferred UUID.
+
 ## Mutations and maintenance
 
 Before opening a writer, the mutation path verifies the current Store through a

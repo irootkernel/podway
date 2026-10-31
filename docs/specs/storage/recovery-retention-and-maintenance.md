@@ -107,6 +107,31 @@ A cold hot-WAL/no-SHM read also temporarily drains managed readers under an
 exclusive lease to build a write-free heap WAL index. It is not destructive
 maintenance and publishes no operation marker. See [SQLite Model](sqlite-model.md).
 
+## Invalid configuration and compatibility
+
+The Engine resolver owns the shared interpretation of a successful read-only
+Store classification when workspace configuration is invalid. A known newer
+Store takes precedence over the configuration error, as does a successful
+maintenance classification. Current state leaves the configuration error in place.
+
+Initialization classifies before checking configuration and propagates a
+classification failure. Existing-workspace resolution probes after a
+configuration error and retains that original error if classification fails.
+In particular, `Ok(Maintenance)` selects the maintenance error;
+`Err(DirectStoreErrorV1::Maintenance)` remains a failed probe and does not replace
+the existing-resolution configuration error. The probe opens no SQLite
+connection and creates no SHM, native lease or operation marker. Reset and
+removal retain their separate generation, confirmation and request admission.
+
+Discard advice applies only after supported-generation admission, original
+request authority and stable filesystem witnesses. A checksum-valid committed
+WAL page-one image without a trustworthy SQLite header, or a valid unresolved
+stream beyond the bounded scan, remains refused with or without maintenance
+markers. Preserve that state. Store-independent `version --identity` diagnoses
+the writer; it establishes neither a supported generation nor a trustworthy
+workspace UUID or deletion authority. No deletion, marker-edit or recursive
+cleanup recipe is provided for indeterminate state.
+
 ## Initialization and writer migration
 
 Init validates Git and path containment, takes an exclusive lease and publishes

@@ -4364,3 +4364,77 @@ fn guide010_generation2_citation_details_list_citable_sources() {
         "{stderr}"
     );
 }
+
+#[test]
+fn maint002_indeterminate_committed_wal_refuses_owned_and_unmarked_destruction() {
+    fn checksum(mut sum: (u32, u32), bytes: &[u8]) -> (u32, u32) {
+        for pair in bytes.chunks_exact(8) {
+            let first = u32::from_le_bytes(pair[..4].try_into().unwrap());
+            let second = u32::from_le_bytes(pair[4..].try_into().unwrap());
+            sum.0 = sum.0.wrapping_add(first).wrapping_add(sum.1);
+            sum.1 = sum.1.wrapping_add(second).wrapping_add(sum.0);
+        }
+        sum
+    }
+    // A checksum-valid committed page-one image with no trustworthy SQLite header.
+    let mut wal = vec![0; 32 + 24 + 512];
+    wal[..4].copy_from_slice(&0x377f0682_u32.to_be_bytes());
+    wal[4..8].copy_from_slice(&3_007_000_u32.to_be_bytes());
+    wal[8..12].copy_from_slice(&512_u32.to_be_bytes());
+    wal[16..24].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+    let sum = checksum((0, 0), &wal[..24]);
+    wal[24..28].copy_from_slice(&sum.0.to_be_bytes());
+    wal[28..32].copy_from_slice(&sum.1.to_be_bytes());
+    wal[32..36].copy_from_slice(&1_u32.to_be_bytes());
+    wal[36..40].copy_from_slice(&1_u32.to_be_bytes());
+    wal[40..48].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+    let sum = checksum(checksum(sum, &wal[32..40]), &wal[56..]);
+    wal[48..52].copy_from_slice(&sum.0.to_be_bytes());
+    wal[52..56].copy_from_slice(&sum.1.to_be_bytes());
+    for marked in [false, true] {
+        for remove in [false, true] {
+            let fixture = Fixture::new();
+            let initialized = fixture.run(&["init", "--idempotency-key", "init"]);
+            let uuid = initialized["workspace"]["uuid"].as_str().unwrap();
+            let reset = [
+                "reset",
+                "--all",
+                "--yes",
+                "--idempotency-key",
+                "unknown-reset",
+            ];
+            if marked {
+                fixture.kill_at_maintenance_boundary(&reset, "marker-published");
+            }
+            let runtime = fixture.0.join(".podway/runtime");
+            let shm = runtime.join("state.sqlite3-shm");
+            if shm.exists() {
+                fs::remove_file(&shm).unwrap();
+            }
+            fs::write(runtime.join("state.sqlite3-wal"), &wal).unwrap();
+            assert!(!shm.exists());
+            let before = fixture.podway_snapshot();
+            let removal = [
+                "workspace",
+                "remove",
+                "--force",
+                "--yes",
+                "--if-workspace-uuid",
+                uuid,
+                "--idempotency-key",
+                "unknown-remove",
+            ];
+            let args: &[&str] = if remove { &removal } else { &reset };
+            let output = fixture.output(args);
+            assert_eq!(output.status.code(), Some(5));
+            let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                error.as_value()["code"],
+                "WORKSPACE_STATE_UNREADABLE",
+                "marked={marked}, remove={remove}"
+            );
+            fixture.assert_podway_snapshot(&before);
+            assert!(!runtime.join("state.sqlite3-shm").exists());
+        }
+    }
+}

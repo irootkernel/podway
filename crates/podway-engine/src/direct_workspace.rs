@@ -313,8 +313,8 @@ fn initialize_workspace_inner_v1<R: GitResolverContractV1>(
         return Err(DirectStoreErrorV1::UnsupportedGeneration { generation }.into());
     }
     if let Err(error) = resolver.validate_workspace_config(&candidate) {
-        if classification == DirectStoreClassificationV1::Maintenance {
-            return Err(DirectStoreErrorV1::Maintenance.into());
+        if let Some(compatibility) = crate::workspace::invalid_config_store_error(classification) {
+            return Err(compatibility.into());
         }
         return Err(error.into());
     }
