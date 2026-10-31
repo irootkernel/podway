@@ -685,6 +685,448 @@ fn markerless_residual_converges_only_when_descriptor_verified_empty() {
         "retain without marker"
     );
 }
+
+#[test]
+fn concurrent_runtime_absent_residual_removals_converge_without_successor() {
+    use podway_engine::direct_maintenance::remove_workspace_with_boundary_observer_v1;
+    use std::sync::{Mutex, mpsc};
+    use std::time::Duration;
+
+    for (case, boundary, nested, ambiguous_child) in [
+        ("open-use", B::ResidualClassified, false, false),
+        ("held-root", B::ResidualInspected, false, false),
+        (
+            "active-child",
+            B::ResidualChildOpened { depth: 1 },
+            true,
+            true,
+        ),
+        (
+            "final-unlink",
+            B::BeforeResidualDirectoryRemoval { depth: 0 },
+            false,
+            false,
+        ),
+        ("nested-whole-target", B::ResidualInspected, true, false),
+    ] {
+        let engine = engine();
+        let winner_request = maintenance(&engine, "residual-winner");
+        let loser_request = maintenance(&engine, "residual-loser");
+        engine.success(
+            D::WorkspaceRemove {
+                confirmed: true,
+                force: true,
+            },
+            "remove-initial",
+        );
+        let podway = engine.temporary.path().join(".podway");
+        std::fs::create_dir_all(if nested {
+            podway.join("empty")
+        } else {
+            podway.clone()
+        })
+        .unwrap();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            ready_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+            let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+            let release_rx = Mutex::new(release_rx);
+            let paused_tx = done_tx.clone();
+            let result = remove_workspace_with_boundary_observer_v1(
+                &resolver,
+                winner_request,
+                &Clock,
+                move |b| {
+                    if ambiguous_child && b == (B::BeforeResidualDirectoryRemoval { depth: 0 }) {
+                        paused_tx.send(()).unwrap();
+                        release_rx
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(Duration::from_secs(20))
+                            .unwrap();
+                    }
+                },
+            );
+            if !ambiguous_child {
+                done_tx.send(()).unwrap();
+            }
+            result
+        });
+        let done_rx = Mutex::new(done_rx);
+        let result = remove_workspace_with_boundary_observer_v1(
+            &engine.resolver,
+            loser_request.clone(),
+            &Clock,
+            move |b| {
+                if b == boundary {
+                    ready_tx.send(()).unwrap();
+                    done_rx
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(20))
+                        .unwrap();
+                }
+            },
+        );
+        // A missing child in a surviving original parent has no native unlink
+        // proof on this filesystem. Retain refusal instead of adopting absence.
+        let retained_parent =
+            ambiguous_child.then(|| (podway.is_dir(), std::fs::read_dir(&podway).unwrap().count()));
+        let _ = release_tx.send(());
+        let winner = worker.join().unwrap().unwrap();
+        assert_eq!(
+            winner.as_value()["result"]["already_absent"],
+            true,
+            "{case}"
+        );
+        assert_eq!(
+            winner.as_value()["result"]["podway_directory_removed"],
+            true,
+            "{case}"
+        );
+        if ambiguous_child {
+            assert_eq!(retained_parent, Some((true, 0)), "{case}");
+            let error = residual_public_error(result.unwrap_err(), &loser_request);
+            assert_eq!(error["code"], "WORKSPACE_STATE_UNREADABLE", "{case}");
+            assert_eq!(error["exit_code"], 5);
+            assert_eq!(error["retryable"], false);
+        } else {
+            let loser = result.expect("same original whole-target disappearance converges");
+            assert_eq!(loser.as_value()["result"]["already_absent"], true, "{case}");
+            assert_eq!(
+                loser.as_value()["result"]["podway_directory_removed"],
+                false,
+                "{case}"
+            );
+            assert_eq!(
+                loser.as_value()["result"]["workspace_uuid"],
+                Value::Null,
+                "{case}"
+            );
+        }
+        assert!(!podway.exists(), "{case}");
+    }
+}
+fn residual_public_error(
+    error: podway_engine::direct_maintenance::DirectMaintenanceErrorV1,
+    request: &DirectMaintenanceRequestV1,
+) -> Value {
+    podway_engine::direct_error::render_direct_error_v1(
+        &podway_engine::direct_execution::DirectExecutionErrorV1::Maintenance(error),
+        &podway_engine::direct_error::DirectErrorContextV1 {
+            request_id: request.request_id.clone(),
+            command: podway_protocol::CommandNameV1::new("workspace.remove").unwrap(),
+            observed_at: podway_protocol::Rfc3339MillisV1::new("2023-11-14T22:13:20.000Z").unwrap(),
+            idempotency_key: Some(request.key.clone()),
+            timeout_ms: 5000,
+            generation: podway_protocol::ContractGenerationV1::Generation1,
+            maintenance: None,
+        },
+    )
+    .unwrap()
+    .into_value()
+}
+
+// Snapshot names, physical identities and bytes without following symlinks.
+type ResidualImage = BTreeMap<std::path::PathBuf, (u64, u64, u32, Option<Vec<u8>>)>;
+fn residual_image(root: &Path) -> ResidualImage {
+    fn visit(root: &Path, path: &Path, image: &mut ResidualImage) {
+        let m = std::fs::symlink_metadata(path).unwrap();
+        let bytes = if m.is_file() {
+            Some(std::fs::read(path).unwrap())
+        } else if m.file_type().is_symlink() {
+            Some(
+                std::fs::read_link(path)
+                    .unwrap()
+                    .as_os_str()
+                    .as_encoded_bytes()
+                    .to_vec(),
+            )
+        } else {
+            None
+        };
+        image.insert(
+            path.strip_prefix(root).unwrap().to_path_buf(),
+            (m.dev(), m.ino(), m.mode(), bytes),
+        );
+        if m.is_dir() {
+            for entry in std::fs::read_dir(path).unwrap() {
+                visit(root, &entry.unwrap().path(), image);
+            }
+        }
+    }
+    let mut image = BTreeMap::new();
+    visit(root, root, &mut image);
+    image
+}
+
+#[test]
+fn residual_removal_preserves_fresh_init_and_changed_ancestry() {
+    use podway_engine::{
+        direct_maintenance::{remove_workspace_v1, remove_workspace_with_boundary_observer_v1},
+        direct_workspace::{
+            DirectWorkspaceMutationRequestV1, initialize_workspace_with_boundary_observer_v1,
+        },
+    };
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::Duration;
+
+    for (case, boundary) in [
+        ("fresh-parent", B::ResidualClassified),
+        ("fresh-runtime", B::ResidualClassified),
+        ("empty-parent", B::ResidualInspected),
+        ("root", B::ResidualInspected),
+        ("git", B::ResidualInspected),
+        ("moved-child", B::ResidualChildOpened { depth: 1 }),
+        ("replaced-child", B::ResidualChildOpened { depth: 1 }),
+        ("symlink-child", B::ResidualChildOpened { depth: 1 }),
+        ("unknown", B::BeforeResidualDirectoryRemoval { depth: 0 }),
+        ("config", B::BeforeResidualDirectoryRemoval { depth: 0 }),
+        ("empty-runtime", B::ResidualClassified),
+    ] {
+        let engine = engine();
+        let old = uuid(&engine);
+        let request = maintenance(&engine, "old-residual");
+        let winner_request = maintenance(&engine, "winner");
+        let init_request = DirectWorkspaceMutationRequestV1 {
+            selector: engine.selector.clone(),
+            expected_workspace_id: None,
+            request_id: request.request_id.clone(),
+            key: IdempotencyKeyV1::new("fresh-init").unwrap(),
+            deadline: deadline(),
+        };
+        engine.success(
+            D::WorkspaceRemove {
+                confirmed: true,
+                force: true,
+            },
+            "remove-initial",
+        );
+        let root = engine.temporary.path().to_path_buf();
+        let podway = root.join(".podway");
+        let child_case = case.ends_with("child");
+        std::fs::create_dir_all(if child_case {
+            podway.join("child")
+        } else {
+            podway.clone()
+        })
+        .unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let worker_root = root.clone();
+        let worker_outside = outside.path().to_path_buf();
+        let (start_tx, start_rx) = mpsc::channel();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            start_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+            let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+            let podway = worker_root.join(".podway");
+            let release_rx = Mutex::new(release_rx);
+            if matches!(case, "fresh-parent" | "fresh-runtime") {
+                if case == "fresh-parent" {
+                    remove_workspace_v1(&resolver, winner_request, &Clock).unwrap();
+                }
+                let observed_root = worker_root.clone();
+                let observed_outside = worker_outside.clone();
+                let paused_tx = ready_tx.clone();
+                let output = initialize_workspace_with_boundary_observer_v1(&resolver, init_request, false, &Clock, &NativeDirectIdSourceV1, move |b| {
+                    if case == "fresh-runtime" && b == podway_store::direct_store::DirectTransactionBoundaryV1::BeforeMaintenancePublication {
+                        paused_tx.send((residual_image(&observed_root), residual_image(&observed_outside))).unwrap();
+                        release_rx.lock().unwrap().recv_timeout(Duration::from_secs(20)).unwrap();
+                    }
+                }).unwrap();
+                if case == "fresh-parent" {
+                    ready_tx
+                        .send((
+                            residual_image(&worker_root),
+                            residual_image(&worker_outside),
+                        ))
+                        .unwrap();
+                }
+                Some(output)
+            } else {
+                match case {
+                    "empty-parent" => {
+                        std::fs::rename(&podway, worker_outside.join("original-podway")).unwrap();
+                        std::fs::create_dir(&podway).unwrap();
+                    }
+                    "root" => {
+                        std::fs::rename(&worker_root, worker_outside.join("original-root"))
+                            .unwrap();
+                        std::fs::create_dir(&worker_root).unwrap();
+                    }
+                    "git" => {
+                        std::fs::rename(
+                            worker_root.join(".git"),
+                            worker_outside.join("original-git"),
+                        )
+                        .unwrap();
+                        std::fs::create_dir(worker_root.join(".git")).unwrap();
+                    }
+                    "moved-child" | "replaced-child" | "symlink-child" => {
+                        let original = worker_outside.join("original-child");
+                        std::fs::rename(podway.join("child"), &original).unwrap();
+                        // Any traversal of the moved original would now encounter
+                        // data outside the original ancestry; preserve it exactly.
+                        std::fs::write(original.join("outside-data"), b"do not traverse").unwrap();
+                        if case == "replaced-child" {
+                            std::fs::create_dir(podway.join("child")).unwrap();
+                        }
+                        if case == "symlink-child" {
+                            std::os::unix::fs::symlink(&original, podway.join("child")).unwrap();
+                        }
+                    }
+                    "unknown" => {
+                        std::fs::write(podway.join("unknown"), b"preserve late bytes").unwrap()
+                    }
+                    "config" => {
+                        std::fs::write(podway.join("config.toml"), b"preserve late config").unwrap()
+                    }
+                    "empty-runtime" => std::fs::create_dir(podway.join("runtime")).unwrap(),
+                    _ => unreachable!(),
+                }
+                ready_tx
+                    .send((
+                        residual_image(&worker_root),
+                        residual_image(&worker_outside),
+                    ))
+                    .unwrap();
+                None
+            }
+        });
+        let before = Arc::new(Mutex::new(None));
+        let saved = Arc::clone(&before);
+        let ready_rx = Mutex::new(ready_rx);
+        let result = remove_workspace_with_boundary_observer_v1(
+            &engine.resolver,
+            request.clone(),
+            &NoClock,
+            move |b| {
+                if b == boundary {
+                    start_tx.send(()).unwrap();
+                    *saved.lock().unwrap() = Some(
+                        ready_rx
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(Duration::from_secs(20))
+                            .unwrap(),
+                    );
+                }
+            },
+        );
+        // Capture while native init is still paused, then release and join it
+        // before assertions. Its later admitted publication is an allowed effect.
+        let after = (residual_image(&root), residual_image(outside.path()));
+        let _ = release_tx.send(());
+        let fresh = worker.join().unwrap();
+        let error = residual_public_error(result.unwrap_err(), &request);
+        assert_eq!(
+            error["code"],
+            if matches!(case, "moved-child" | "unknown" | "config") {
+                "WORKSPACE_STATE_UNREADABLE"
+            } else {
+                "WORKSPACE_PATH_UNSAFE"
+            },
+            "{case}"
+        );
+        assert_eq!(error["exit_code"], 5, "{case}");
+        assert_eq!(error["retryable"], false, "{case}");
+        assert_eq!(
+            before.lock().unwrap().as_ref().unwrap(),
+            &after,
+            "{case}: preserve names, inode and bytes"
+        );
+        if let Some(fresh) = fresh {
+            let new_uuid =
+                WorkspaceId::new(fresh.as_value()["workspace"]["uuid"].as_str().unwrap()).unwrap();
+            assert_ne!(old, new_uuid, "{case}");
+            let mut retry = engine.request(
+                D::WorkspaceRemove {
+                    confirmed: true,
+                    force: true,
+                },
+                "old-residual",
+            );
+            retry.expected_workspace_id = Some(old);
+            reject(&engine, retry, "WORKSPACE_UUID_MISMATCH");
+            let (_, store) = engine
+                .resolver
+                .resolve_existing(engine.selector.clone(), Some(&new_uuid), deadline())
+                .unwrap();
+            store.verify_integrity(deadline()).unwrap();
+        }
+        if case == "root" {
+            std::fs::remove_dir(&root).unwrap();
+            std::fs::rename(outside.path().join("original-root"), &root).unwrap();
+        }
+    }
+}
+
+#[test]
+fn residual_repopulation_before_child_removal_preserves_complete_namespace() {
+    use podway_engine::direct_maintenance::remove_workspace_with_boundary_observer_v1;
+    use std::sync::{Mutex, mpsc};
+    use std::time::Duration;
+
+    for name in ["unknown", "config.toml"] {
+        let engine = engine();
+        let request = maintenance(&engine, "repopulated-residual");
+        engine.success(
+            D::WorkspaceRemove {
+                confirmed: true,
+                force: true,
+            },
+            "remove-initial",
+        );
+        let podway = engine.temporary.path().join(".podway");
+        std::fs::create_dir_all(podway.join("child")).unwrap();
+        let worker_path = podway.clone();
+        let (start_tx, start_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            start_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+            std::fs::write(
+                worker_path.join(name),
+                b"retain original child and late contents",
+            )
+            .unwrap();
+            done_tx.send(residual_image(&worker_path)).unwrap();
+        });
+        let before = std::sync::Arc::new(Mutex::new(None));
+        let saved = std::sync::Arc::clone(&before);
+        let done_rx = Mutex::new(done_rx);
+        let result = remove_workspace_with_boundary_observer_v1(
+            &engine.resolver,
+            request.clone(),
+            &NoClock,
+            move |b| {
+                if b == B::ResidualInspected {
+                    start_tx.send(()).unwrap();
+                    *saved.lock().unwrap() = Some(
+                        done_rx
+                            .lock()
+                            .unwrap()
+                            .recv_timeout(Duration::from_secs(20))
+                            .unwrap(),
+                    );
+                }
+            },
+        );
+        worker.join().unwrap();
+        assert_eq!(
+            before.lock().unwrap().as_ref().unwrap(),
+            &residual_image(&podway),
+            "{name}: reject repopulation before deleting any original child"
+        );
+        let error = residual_public_error(result.unwrap_err(), &request);
+        assert_eq!(error["code"], "WORKSPACE_PATH_UNSAFE");
+        assert_eq!(error["exit_code"], 5);
+        assert_eq!(error["retryable"], false);
+    }
+}
+
 #[test]
 fn reset_marker_resume_accepts_an_exact_root_with_detached_git_identity() {
     let engine = engine();

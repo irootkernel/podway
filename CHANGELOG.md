@@ -32,6 +32,8 @@ This file records concise shipped outcomes and the planned next stable release.
 
 - Check removal compatibility before human confirmation, display path controls visibly, reject paths
   that cannot be confirmed exactly, and explain explicit force for prepared or running sessions.
+- Allow concurrent removal of the same empty workspace remnants to converge while preserving
+  fresh workspaces and refusing changed paths.
 
 ## v0.2.15 - 2026-10-24
 

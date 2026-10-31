@@ -4,7 +4,7 @@ use crate::{
     direct_workspace::DirectWorkspaceErrorV1,
     execution::ExecutionClockV1,
     workspace::{
-        DirectWorkspaceResolverV1, ValidatedPodwayRemovalDirectoryV1,
+        CapturedEmptyResidualV1, DirectWorkspaceResolverV1, ValidatedPodwayRemovalDirectoryV1,
         WorkspaceRemovalFilesystemErrorV1, workspace_identity_fences_v1,
         workspace_request_is_fenced_v1,
     },
@@ -85,6 +85,14 @@ impl From<podway_protocol::ProtocolError> for DirectMaintenanceErrorV1 {
 /// Explicit isolated-fixture instrumentation of Engine-owned marker phases.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirectMaintenanceBoundaryV1 {
+    ResidualClassified,
+    ResidualInspected,
+    ResidualChildOpened {
+        depth: usize,
+    },
+    BeforeResidualDirectoryRemoval {
+        depth: usize,
+    },
     BeforeLeaseAcquisition,
     LeaseAcquired {
         wait: std::time::Duration,
@@ -527,12 +535,17 @@ fn remove_inner<R: GitResolverContractV1>(
         return Err(DirectMaintenanceErrorV1::ConfirmationRequired);
     }
     let (initial, store) = resolver.resolve_candidate(request.selector.clone())?;
+    // Capture before preflight, but preserve its error precedence: only the
+    // absent/Missing branches consume this read-only residual authority.
+    let residual = CapturedEmptyResidualV1::capture(&initial);
     if !store
         .layout()
         .podway_directory()
         .try_exists()
         .map_err(DirectStoreErrorV1::from)?
     {
+        resolver.revalidate_candidate(&initial)?;
+        residual?.confirm_absent(&initial)?;
         return removal_result(
             &request.request_id,
             clock.now(),
@@ -555,12 +568,27 @@ fn remove_inner<R: GitResolverContractV1>(
             // Without a Store or recovery marker, no file is deletion authority.
             // The descriptor traversal accepts directories only and revalidates
             // their ancestry before removing an empty residual.
+            notify(&observer, DirectMaintenanceBoundaryV1::ResidualClassified);
             resolver.revalidate_candidate(&initial)?;
-            let removal = ValidatedPodwayRemovalDirectoryV1::open(&initial)?
-                .ok_or(WorkspaceRemovalFilesystemErrorV1::UnsafePath)?;
-            removal.remove_empty_residual(request.deadline)?;
+            let removed = residual?.remove(
+                &initial,
+                request.deadline,
+                || {
+                    resolver
+                        .revalidate_candidate(&initial)
+                        .map_err(|_| WorkspaceRemovalFilesystemErrorV1::UnsafePath)
+                },
+                |boundary| notify(&observer, boundary),
+            )?;
             notify(&observer, DirectMaintenanceBoundaryV1::DirectoriesRemoved);
-            return removal_result(&request.request_id, clock.now(), &initial, None, true, true);
+            return removal_result(
+                &request.request_id,
+                clock.now(),
+                &initial,
+                None,
+                true,
+                removed,
+            );
         }
         Classification::Maintenance => {
             // Final removal can retain only its operation marker after unlinking both locks.

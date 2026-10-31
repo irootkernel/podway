@@ -249,6 +249,50 @@ prepared closeout do not constitute whole-Epic acceptance: the normal CNTRT-003
 completion commit, independent whole-Epic validation and explicit owner acceptance
 precede final reference relinking, adopted-index removal and dossier retirement.
 
+## Native empty-residual convergence
+
+Engine's [maintenance ports suite](../../crates/podway-engine/tests/int_v2dfc006_maintenance_ports.rs)
+`concurrent_runtime_absent_residual_removals_converge_without_successor` uses two
+real removers and bounded channel acknowledgments at classification/open-use,
+retained-root inspection, final unlink and nested whole-target disappearance.
+The winner reports its actual unlink; the loser confirms full absence with null
+UUID and does not claim the winner's removal. Its active-child case deliberately
+retains refusal while the original parent survives: native metadata on the
+qualified fixture filesystem does not establish that a missing held child was
+unlinked rather than moved. No link-count or last-path predicate grants authority.
+
+`residual_removal_preserves_fresh_init_and_changed_ancestry` owns eleven native
+subcases: completed fresh initialization in a new parent, initialization paused
+under its real lease before publication in the retained parent, a new empty
+parent, root substitution, Git administration replacement, moved child, empty
+child replacement, child symlink, late unknown file, late configuration and new
+empty runtime. Post-injection snapshots compare names, device/inode, modes and
+bytes, including moved-outside data. Refusals retain public codes, exit and
+retryability; actual fresh Stores remain integral and reject old-UUID retries.
+Workers are released and joined before assertions and fixture teardown.
+
+`residual_repopulation_before_child_removal_preserves_complete_namespace` injects
+unknown content and configuration after empty inspection in a parent with an
+original empty child. Its final expectation compares the entire post-injection
+namespace and reproduces deletion of that child before the fix. One bounded
+verification pass over the recorded original plan now refuses before any deletion,
+without opening new entries or rescanning the full tree for every child. Later
+intervening changes remain subject to original-identity checks and atomic empty
+unlink; the test does not claim continuously atomic filesystem capture.
+
+Workspace's `residual_plan_preserves_native_refusal_and_traversal_bounds` uses
+native descriptors for foreign-owner/device validation, depth 128/129, an
+exhausted/exact entry budget, unknown content and symlink refusal. Owner/device
+cases vary the expected identity against actual metadata; they do not claim
+privileged ownership changes or a mounted foreign filesystem. Existing
+`markerless_residual_converges_only_when_descriptor_verified_empty` and
+`markerless_residual_exclusion_expires_without_recreating_names_and_then_converges`
+retain nonempty refusal, original runtime exclusion and deadline behavior.
+The strict renamed-subdirectory unit and marked-flow fresh-init/old-UUID
+regressions remain separate owners. Traversal keeps bounded original-identity
+metadata and active DFS descriptors, with no descriptor per entry, repeated
+whole-tree scan, new lock protocol or restarted deadline.
+
 ## Functional regression owners
 
 Overflow measurement coverage belongs to Config's existing

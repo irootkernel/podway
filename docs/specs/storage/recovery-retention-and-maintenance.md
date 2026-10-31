@@ -239,6 +239,30 @@ idempotent convergence, not retained original-result lookup. An empty residual
 may be removed only after descriptor validation, never by broad recursive
 cleanup based on path text alone.
 
+Store-less residual removal captures the original worktree root, `.podway` and
+runtime presence before consuming preflight observations; capture failures retain
+normal command-specific preflight precedence. It acquires exclusion only on the
+original runtime directory when present, within the original invocation deadline.
+Empty inspection records bounded original directory names and identities. A
+single bounded verification pass compares that recorded namespace before the
+first deletion; observed additions or changed identities refuse with no deletion.
+Verification never opens an unplanned entry, and cleanup never traverses a newly
+added entry or adopts a replacement parent/runtime. These checks do not promise
+an atomic snapshot against all intervening filesystem mutations; later native
+identity checks and atomic empty-directory unlink still fail closed on observed
+changes without deleting new contents.
+Before effects and absence decisions, fresh canonical Git candidate validation
+and retained-root descriptor validation both remain required. Changed ancestry,
+new runtime, unknown contents, symlinks, foreign ownership and device changes
+refuse cleanup. A missing child in a surviving parent remains a refusal when its
+unlink cannot be distinguished from a move. Two removers can converge after
+native revalidation confirms the whole original `.podway` namespace absent under
+the same Git/root identity, without reopening a successor or deleting more data.
+`already_absent` remains true with null UUID because there was no Store;
+`podway_directory_removed` is true only when that invocation unlinked the parent,
+and false when another remover completed it. Shared strict marker-driven cleanup
+and its original recovery authority are unchanged.
+
 ## Legacy state and installed writers
 
 Classification detects Store generations 1–13 and retired `reset.marker`,
