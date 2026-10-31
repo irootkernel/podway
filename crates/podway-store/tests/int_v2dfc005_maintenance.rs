@@ -1,6 +1,6 @@
 //! Native lease, marker, deadline, identity and retention boundary regressions.
 
-use podway_core::{UnixMillis, canonicalize_json_v1};
+use podway_core::{UnixMillis, WorkspaceId, canonicalize_json_v1};
 use podway_store::{
     CanonicalExecutionJsonV1,
     direct_store::{
@@ -382,4 +382,41 @@ fn workspace_outcomes_age_and_count_prune_without_pruning_session_history() {
         })
         .unwrap();
     assert_eq!(count, 200);
+}
+
+#[test]
+fn invalid_current_classification_excludes_io_contention_and_identity_changes() {
+    use podway_store::direct_store::DirectStoreErrorV1 as E;
+    for error in [
+        E::Unreadable,
+        E::SchemaMismatch,
+        E::BindingMismatch,
+        E::WriterMismatch {
+            expected: digest('a'),
+            actual: "foreign".to_owned(),
+        },
+    ] {
+        assert!(error.is_invalid_current_state(), "{error:?}");
+    }
+    for error in [
+        E::Maintenance,
+        E::Busy,
+        E::ConnectionBusy,
+        E::ReadAdmissionBusy,
+        E::NotInitialized,
+        E::UnsupportedGeneration { generation: 99 },
+        E::Legacy {
+            generation: Some(13),
+            marker: None,
+        },
+        E::Storage(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+        E::Storage(std::io::Error::from(std::io::ErrorKind::NotFound)),
+        E::Sqlite(rusqlite::Error::QueryReturnedNoRows),
+        E::ExpectedWorkspaceUuidMismatch {
+            expected: WorkspaceId::new("00000000-0000-4000-8000-000000000001").unwrap(),
+            actual: WorkspaceId::new("00000000-0000-4000-8000-000000000002").unwrap(),
+        },
+    ] {
+        assert!(!error.is_invalid_current_state(), "{error:?}");
+    }
 }

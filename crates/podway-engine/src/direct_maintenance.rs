@@ -5,7 +5,8 @@ use crate::{
     execution::ExecutionClockV1,
     workspace::{
         DirectWorkspaceResolverV1, ValidatedPodwayRemovalDirectoryV1,
-        WorkspaceRemovalFilesystemErrorV1,
+        WorkspaceRemovalFilesystemErrorV1, workspace_identity_fences_v1,
+        workspace_request_is_fenced_v1,
     },
 };
 use podway_core::{Sha256Digest, UnixMillis, WorkspaceId, canonicalize_json_v1};
@@ -272,9 +273,10 @@ fn reset_inner<R: GitResolverContractV1>(
             Classification::Legacy { .. }
             | Classification::Unrecognized
             | Classification::Missing => {
-                if request.expected_workspace_id.is_some()
-                    || request.selector.durable_identity().is_some()
-                {
+                if workspace_request_is_fenced_v1(
+                    request.expected_workspace_id.as_ref(),
+                    &request.selector,
+                ) {
                     return Err(DirectStoreErrorV1::BindingMismatch.into());
                 }
             }
@@ -821,12 +823,9 @@ fn guard_workspace(
     request: &DirectMaintenanceRequestV1,
     actual: &WorkspaceId,
 ) -> Result<(), DirectStoreErrorV1> {
-    for expected in request.expected_workspace_id.iter().chain(
-        request
-            .selector
-            .durable_identity()
-            .map(|i| i.workspace_id()),
-    ) {
+    for expected in
+        workspace_identity_fences_v1(request.expected_workspace_id.as_ref(), &request.selector)
+    {
         if expected != actual {
             return Err(DirectStoreErrorV1::ExpectedWorkspaceUuidMismatch {
                 expected: expected.clone(),
@@ -851,11 +850,10 @@ fn identity(
 }
 
 fn request_parameters(request: &DirectMaintenanceRequestV1) -> serde_json::Value {
-    let selector_workspace = request
-        .selector
-        .durable_identity()
-        .map(|i| i.workspace_id());
-    serde_json::json!({"workspace_uuid":request.expected_workspace_id.as_ref().or(selector_workspace),
+    let workspace =
+        workspace_identity_fences_v1(request.expected_workspace_id.as_ref(), &request.selector)
+            .next();
+    serde_json::json!({"workspace_uuid":workspace,
         "force":request.force})
 }
 
@@ -1078,15 +1076,8 @@ fn unfenced_invalid_current_store(
     request: &DirectMaintenanceRequestV1,
     error: &DirectStoreErrorV1,
 ) -> bool {
-    request.expected_workspace_id.is_none()
-        && request.selector.durable_identity().is_none()
-        && matches!(
-            error,
-            DirectStoreErrorV1::WriterMismatch { .. }
-                | DirectStoreErrorV1::SchemaMismatch
-                | DirectStoreErrorV1::BindingMismatch
-                | DirectStoreErrorV1::Unreadable
-        )
+    !workspace_request_is_fenced_v1(request.expected_workspace_id.as_ref(), &request.selector)
+        && error.is_invalid_current_state()
 }
 
 fn removal_result(

@@ -1099,6 +1099,7 @@ fn confirm_if_required(
     cli: &Cli,
     command: &str,
     target: &WorkspaceTarget,
+    maintenance_fenced: bool,
 ) -> Result<(), LocalFailure> {
     if matches!(cli.command, Command::Start(_)) {
         return Ok(());
@@ -1108,7 +1109,7 @@ fn confirm_if_required(
         Command::Workspace {
             command: WorkspaceCommand::Remove { .. }
         }
-    ) && cli.if_workspace_uuid.is_none();
+    ) && !maintenance_fenced;
     if !cli.command.is_destructive() || (cli.yes && !unfenced_removal) {
         return Ok(());
     }

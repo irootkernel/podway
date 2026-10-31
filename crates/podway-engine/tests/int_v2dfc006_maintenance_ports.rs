@@ -758,3 +758,73 @@ fn reset_rechecks_initially_absent_marker_uuids_after_marker_publication() {
     assert!(engine.store.layout().reset_marker().exists());
     assert!(root.join("original-git").is_dir());
 }
+
+#[test]
+fn maintenance_identity_fences_preserve_valid_and_invalid_store_admission() {
+    use podway_engine::workspace::{workspace_identity_fences_v1, workspace_request_is_fenced_v1};
+    for invalid in [false, true] {
+        for remove in [false, true] {
+            for (explicit, selected) in [(0, 0), (1, 0), (0, 1), (1, 1), (2, 0), (0, 2), (1, 2)] {
+                let source = engine();
+                let engine = engine();
+                let actual = uuid(&engine);
+                let wrong = WorkspaceId::new("00000000-0000-4000-8000-000000049999").unwrap();
+                assert_ne!(actual, wrong);
+                let command = if remove {
+                    D::WorkspaceRemove {
+                        confirmed: true,
+                        force: false,
+                    }
+                } else {
+                    D::WorkspaceResetAll { confirmed: true }
+                };
+                let mut request = engine.request(command, "maintenance-fences");
+                request.expected_workspace_id = match explicit {
+                    0 => None,
+                    1 => Some(actual.clone()),
+                    _ => Some(wrong.clone()),
+                };
+                if selected != 0 {
+                    request.selector =
+                        mismatched_selector(&engine, if selected == 1 { actual } else { wrong });
+                }
+                let fenced = explicit != 0 || selected != 0;
+                assert_eq!(
+                    workspace_request_is_fenced_v1(
+                        request.expected_workspace_id.as_ref(),
+                        &request.selector
+                    ),
+                    fenced
+                );
+                assert_eq!(
+                    workspace_identity_fences_v1(
+                        request.expected_workspace_id.as_ref(),
+                        &request.selector
+                    )
+                    .count(),
+                    usize::from(explicit != 0) + usize::from(selected != 0)
+                );
+                if invalid {
+                    std::fs::copy(
+                        source.store.layout().database(),
+                        engine.store.layout().database(),
+                    )
+                    .unwrap();
+                }
+                if invalid && fenced {
+                    reject(&engine, request, "WORKSPACE_ID_CONFLICT");
+                } else if !invalid && (explicit == 2 || selected == 2) {
+                    reject(&engine, request, "WORKSPACE_UUID_MISMATCH");
+                } else {
+                    let once = engine.output(engine.execute(request, &Clock));
+                    if remove {
+                        assert_eq!(once["result"]["podway_directory_removed"], true);
+                        assert!(!engine.temporary.path().join(".podway").exists());
+                    } else {
+                        assert!(once["workspace"]["uuid"].is_string());
+                    }
+                }
+            }
+        }
+    }
+}

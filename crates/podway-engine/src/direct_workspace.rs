@@ -337,8 +337,10 @@ fn initialize_workspace_inner_v1<R: GitResolverContractV1>(
             return Err(DirectStoreErrorV1::Unreadable.into());
         }
     }
-    if (request.expected_workspace_id.is_some() || request.selector.durable_identity().is_some())
-        && classify_direct_store_v1(store.layout())? == DirectStoreClassificationV1::Missing
+    if crate::workspace::workspace_request_is_fenced_v1(
+        request.expected_workspace_id.as_ref(),
+        &request.selector,
+    ) && classify_direct_store_v1(store.layout())? == DirectStoreClassificationV1::Missing
     {
         return Err(DirectStoreErrorV1::NotInitialized.into());
     }

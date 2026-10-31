@@ -115,6 +115,12 @@ artifact, Procedure and prepared-state identities are revalidated before commit.
 A validated success envelope is persisted with the domain effect. Engine
 maintenance resumes exact persisted intent through the owning Store lease.
 
+The Engine workspace resolver owns the complete explicit-UUID and selector-derived
+identity fence set. Maintenance guards, invalid-current recovery and CLI
+confirmation consume that same set. Store owns the typed classification of
+invalid current state; Engine combines it with request authority and independent
+generation admission.
+
 ### Procedure and configuration loader
 
 `podway-config` parses bounded YAML/JSON, rejects invalid structure and semantics,

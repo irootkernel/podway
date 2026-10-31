@@ -77,6 +77,13 @@ exact retry and receive a human-terminal removal recipe with the original key
 and flags. An unfenced recipe omits `--json` and `--yes`, requiring exact-path
 confirmation. It does not add force or a UUID assertion.
 
+Engine's workspace admission owns that complete fence set, reused by valid-state
+comparison, invalid-current recovery and CLI confirmation. Store classifies
+writer, schema, binding and unreadable-current-state failures; that classification
+alone grants no recovery authority. Confirmed unfenced recovery still requires
+supported generation and stable filesystem witnesses. I/O, contention, changed
+witnesses and foreign markers remain excluded.
+
 The error boundary follows the observed marker kind: an intent-only window
 reports `intent_marker`, independently of the requested command. Interrupted
 initialization gives its original-key `init` recipe, preserving `--repair`. A

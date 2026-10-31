@@ -83,6 +83,20 @@ pub enum DirectStoreErrorV1 {
     Sqlite(rusqlite::Error),
 }
 
+impl DirectStoreErrorV1 {
+    /// Current-state admission failures; filesystem, contention and generation
+    /// failures cannot supply destructive recovery authority.
+    pub fn is_invalid_current_state(&self) -> bool {
+        matches!(
+            self,
+            Self::WriterMismatch { .. }
+                | Self::SchemaMismatch
+                | Self::BindingMismatch
+                | Self::Unreadable
+        )
+    }
+}
+
 impl fmt::Display for DirectStoreErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

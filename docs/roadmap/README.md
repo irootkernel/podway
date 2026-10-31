@@ -22,7 +22,7 @@ identifiers. Do not rename completed work to apply the new convention.
 
 ## MAINT — Maintenance and Recovery Safety
 
-Dependencies: none; required prior implementation is already delivered. Status: Planned.
+Dependencies: none; required prior implementation is already delivered. Status: In Progress.
 Detailed SOT: [Maintenance and recovery safety](../todo/TODO-podway-maintenance-recovery-safety.md).
 
 MAINT adopts DF-029, DF-030, DF-031, DF-032, DF-033, DF-034, DF-036,
@@ -41,7 +41,7 @@ commit or Git publication is selected by this registration.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `MAINT-001` | Unify maintenance admission ownership | Planned | Give Engine one complete fence predicate and consume Store-owned invalid-current classification without widening recovery admission. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#admission-ownership) |
+| `MAINT-001` | Unify maintenance admission ownership | Completed | Give Engine one complete fence predicate and consume Store-owned invalid-current classification without widening recovery admission. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#admission-ownership) |
 | `MAINT-002` | Consolidate compatibility diagnosis | Planned | Share resolver-owned invalid-configuration precedence and retain generation-safe refusal of indeterminate WAL state. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#compatibility-diagnosis) |
 | `MAINT-003` | Harden removal confirmation and guidance | Planned | Precheck compatibility before human confirmation, visibly escape path controls and explain explicit force without changing machine authority. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#confirmation-and-guidance) |
 | `MAINT-004` | Verify checkpoint durability faults | Planned | Inject native checkpoint replacement and post-TRUNCATE sync failure; prove fail-closed witnesses and exact retry durability. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#checkpoint-durability) |

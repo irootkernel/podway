@@ -47,6 +47,28 @@ use podway_store::{
     },
 };
 
+/// The complete request identity assertions for maintenance admission.
+pub fn workspace_identity_fences_v1<'a>(
+    expected_workspace_id: Option<&'a WorkspaceId>,
+    selector: &'a WorktreeSelectorV1,
+) -> impl Iterator<Item = &'a WorkspaceId> {
+    expected_workspace_id.into_iter().chain(
+        selector
+            .durable_identity()
+            .map(|identity| identity.workspace_id()),
+    )
+}
+
+/// Shared by human confirmation and invalid-current recovery admission.
+pub fn workspace_request_is_fenced_v1(
+    expected_workspace_id: Option<&WorkspaceId>,
+    selector: &WorktreeSelectorV1,
+) -> bool {
+    workspace_identity_fences_v1(expected_workspace_id, selector)
+        .next()
+        .is_some()
+}
+
 const STATE_DATABASE_FILE_NAME_V1: &str = "state.sqlite3";
 const STORED_ROOT_DIAGNOSTIC_V1: &str = "store-validated workspace root";
 const MAX_WORKSPACE_REMOVAL_ENTRIES_V1: usize = 100_000;
@@ -1432,11 +1454,7 @@ impl<R: GitResolverContractV1> DirectWorkspaceResolverV1<R> {
         expected_workspace_id: Option<&WorkspaceId>,
         binding: &WorkspaceBindingV1,
     ) -> Result<ResolvedWorkspaceV1, DirectWorkspaceResolutionErrorV1> {
-        for expected in expected_workspace_id.into_iter().chain(
-            selector
-                .durable_identity()
-                .map(|identity| identity.workspace_id()),
-        ) {
+        for expected in workspace_identity_fences_v1(expected_workspace_id, selector) {
             if expected != binding.identity().workspace_uuid() {
                 return Err(WorkspaceResolutionErrorV1::ExpectedWorkspaceUuidMismatch {
                     expected: expected.clone(),

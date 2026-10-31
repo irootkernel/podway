@@ -274,11 +274,15 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     ) {
         target = workspace_removal_target(target)?;
     }
-    confirm_if_required(&cli, route, &target)?;
     let mut fences = ExplicitPreconditions::parse(&cli)?;
     apply_archive_purge_revision(&mut cli.command, &fences)?;
     let mut invocation =
         Invocation::new(&target, cli.timeout.unwrap_or(5_000), started, generation)?;
+    let maintenance_fenced = podway_engine::workspace::workspace_request_is_fenced_v1(
+        fences.workspace_id.as_ref(),
+        &invocation.selector,
+    );
+    confirm_if_required(&cli, route, &target, maintenance_fenced)?;
     let preflight = match preflight::prepare(&mut invocation, &cli, &mut fences)? {
         ControlFlow::Continue(facts) => facts,
         ControlFlow::Break(result) => return Ok(result),
