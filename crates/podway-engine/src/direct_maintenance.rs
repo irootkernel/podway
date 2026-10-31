@@ -660,13 +660,7 @@ fn remove_inner<R: GitResolverContractV1>(
         ) {
             return Err(DirectStoreErrorV1::Unreadable.into());
         }
-        let intent = Marker::new(
-            Kind::Intent,
-            CanonicalExecutionJsonV1::new(
-                canonicalize_json_v1(&value).map_err(|_| DirectStoreErrorV1::Unreadable)?,
-            )
-            .map_err(|_| DirectStoreErrorV1::Unreadable)?,
-        )?;
+        let intent = marker_from_validated_value(Kind::Intent, &value)?;
         lease.write_marker(store.layout(), &intent, None)?;
         existing_intent = Some(intent);
     }
@@ -939,11 +933,18 @@ fn make_marker(
         }
         .into());
     }
-    let canonical = canonicalize_json_v1(&value).map_err(|_| DirectStoreErrorV1::Unreadable)?;
-    Ok(Marker::new(
-        kind,
-        CanonicalExecutionJsonV1::new(canonical).map_err(|_| DirectStoreErrorV1::Unreadable)?,
-    )?)
+    Ok(marker_from_validated_value(kind, &value)?)
+}
+
+/// Callers retain schema validation, field transformations and error policy.
+fn marker_from_validated_value(
+    kind: Kind,
+    value: &serde_json::Value,
+) -> Result<Marker, DirectStoreErrorV1> {
+    let canonical = canonicalize_json_v1(value).map_err(|_| DirectStoreErrorV1::Unreadable)?;
+    let document =
+        CanonicalExecutionJsonV1::new(canonical).map_err(|_| DirectStoreErrorV1::Unreadable)?;
+    Marker::new(kind, document)
 }
 fn validate_marker(
     marker: &Marker,
@@ -1043,13 +1044,7 @@ fn with_phase(marker: &Marker, phase: &str) -> Result<Marker, DirectStoreErrorV1
     if !validate_daemon_free_document_v1(schema, &value) {
         return Err(DirectStoreErrorV1::Unreadable);
     }
-    Marker::new(
-        marker.kind(),
-        CanonicalExecutionJsonV1::new(
-            canonicalize_json_v1(&value).map_err(|_| DirectStoreErrorV1::Unreadable)?,
-        )
-        .map_err(|_| DirectStoreErrorV1::Unreadable)?,
-    )
+    marker_from_validated_value(marker.kind(), &value)
 }
 fn notify(observer: &Option<Observer>, boundary: DirectMaintenanceBoundaryV1) {
     if let Some(observer) = observer {

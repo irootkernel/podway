@@ -249,6 +249,31 @@ prepared closeout do not constitute whole-Epic acceptance: the normal CNTRT-003
 completion commit, independent whole-Epic validation and explicit owner acceptance
 precede final reference relinking, adopted-index removal and dossier retirement.
 
+## Exact maintenance marker construction
+
+Engine's [registered maintenance suite](../../crates/podway-engine/tests/int_v2dfc006_maintenance.rs)
+`sigkill_between_final_removal_markers_preserves_exact_retry_and_original_response`
+uses the authentic first-marker SIGKILL window and the existing final-removal
+callback to observe restored intent. It compares complete preserved membership,
+values and canonical bytes, excluding only schema/phase distinctions, and retains
+the original response/time with a NoEffects clock guard. A different caller-supplied
+retry request ID still returns the original response identity. Wrong-key/writer
+refusal leaves the original lone marker bytes unchanged. These assertions
+establish baseline behavior and verify constructor consolidation.
+
+The same suite's `exact_removal_retry_resumes_markers_then_absence_destroys_retention`,
+`interrupted_removal_refuses_changed_explicit_and_selector_workspace_fences`,
+`removal_force_and_original_workspace_fence_are_required_for_exact_marker_retry`
+and `final_removal_contenders_cannot_recreate_unlinked_locks_or_replace_markers`
+retain exact retry, fence/force refusal and live directory-lease exclusion.
+`exact_reset_retry_resumes_all_owned_marker_and_private_publication_windows`
+covers shared fresh/reset/phase construction and passes NoEffects as both clock
+and ID source during exact recovery. The [maintenance ports suite](../../crates/podway-engine/tests/int_v2dfc006_maintenance_ports.rs)
+`invalid_unfenced_removal_marker_survives_crash_and_requires_exact_retry` owns
+nullable identity and unfenced invalid-current recovery. Caller-specific schema
+validation/order and Store identity-error propagation stay with their existing
+owners; no new production seam or mirror encoding-helper test is required.
+
 ## Native empty-residual convergence
 
 Engine's [maintenance ports suite](../../crates/podway-engine/tests/int_v2dfc006_maintenance_ports.rs)

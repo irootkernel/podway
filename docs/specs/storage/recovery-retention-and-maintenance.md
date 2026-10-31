@@ -65,6 +65,17 @@ Marker publication is atomic and no-clobber. Replacement/removal requires the
 exact previous marker document. Marker identities bind the original key,
 canonical request digest, response request ID, writer contract, canonical root
 and Git identities, time, command and applicable workspace UUID.
+
+Engine keeps fresh marker fields, phase changes and lone-removal-to-intent
+conversion with their respective callers. Each validates its closed schema before
+one private encoding/construction helper canonicalizes the validated value,
+admits the bounded document and invokes Store's marker identity constructor.
+Fresh schema failure retains InvalidInput; restoration/phase validation and
+encoding failures retain Unreadable, with Store identity errors unchanged. Lone
+removal restoration preserves the validated original members, changing only the
+schema and removing phase; it never reconstructs identities, digest, response or
+time. The helper adds no recovery authority or marker protocol.
+
 Reset and removal markers also retain a closed `request` object containing the
 original asserted `workspace_uuid` (nullable) and semantic `force` value. Reset's
 top-level `workspace_uuid` identifies the new generation; it is not the original

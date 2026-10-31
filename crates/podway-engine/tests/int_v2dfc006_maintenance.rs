@@ -1082,6 +1082,7 @@ fn interrupted_removal_refuses_changed_explicit_and_selector_workspace_fences() 
 
 #[test]
 fn sigkill_between_final_removal_markers_preserves_exact_retry_and_original_response() {
+    use podway_core::canonicalize_json_v1;
     use std::os::unix::process::ExitStatusExt;
     let root = fixture();
     let old = initialize(root.path());
@@ -1113,6 +1114,20 @@ fn sigkill_between_final_removal_markers_preserves_exact_retry_and_original_resp
     }
     child.kill().unwrap();
     assert_eq!(child.wait().unwrap().signal(), Some(9));
+    let marker_path = root.path().join(".podway/runtime/removal.marker");
+    let original_bytes = std::fs::read(&marker_path).unwrap();
+    let original: serde_json::Value = serde_json::from_slice(&original_bytes).unwrap();
+    assert_eq!(
+        canonicalize_json_v1(&original).unwrap().as_bytes(),
+        original_bytes
+    );
+    assert_eq!(
+        files(&root.path().join(".podway"))
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["runtime/removal.marker"]
+    );
     let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
     assert!(
         resolver
@@ -1139,9 +1154,46 @@ fn sigkill_between_final_removal_markers_preserves_exact_retry_and_original_resp
         ),
         Err(Error::Workspace(_))
     ));
+    assert_eq!(std::fs::read(&marker_path).unwrap(), original_bytes);
     let mut retry = request(root.path(), "remove", Some(old.clone()));
     retry.request_id = RequestIdV1::new(RESPONSE).unwrap();
-    let output = remove_workspace_v1(&resolver, retry, &NoEffects).unwrap();
+    let restored = Arc::new(Mutex::new(None));
+    let observed = Arc::clone(&restored);
+    let path = root.path().to_path_buf();
+    let output =
+        remove_workspace_with_boundary_observer_v1(&resolver, retry, &NoEffects, move |boundary| {
+            if boundary == Boundary::BeforeFinalRemoval {
+                *observed.lock().unwrap() = Some(
+                    std::fs::read(path.join(".podway/runtime/maintenance-intent.json")).unwrap(),
+                );
+            }
+        })
+        .unwrap();
+    let restored_bytes = restored.lock().unwrap().take().unwrap();
+    let restored: serde_json::Value = serde_json::from_slice(&restored_bytes).unwrap();
+    assert_eq!(
+        canonicalize_json_v1(&restored).unwrap().as_bytes(),
+        restored_bytes
+    );
+    assert_eq!(original["schema"], "podway.workspace-removal-marker/v2");
+    assert_eq!(
+        restored["schema"],
+        "podway.workspace-maintenance-intent-marker/v1"
+    );
+    assert_eq!(original["phase"], "configuration_removed");
+    assert!(restored.get("phase").is_none());
+    // Compare every preserved member, including the original request data,
+    // root/writer identity and recorded response/time, without rebuilding them.
+    let mut original_fields = original.as_object().unwrap().clone();
+    original_fields.remove("schema");
+    original_fields.remove("phase");
+    let mut restored_fields = restored.as_object().unwrap().clone();
+    restored_fields.remove("schema");
+    assert_eq!(restored_fields, original_fields);
+    assert_eq!(
+        canonicalize_json_v1(&restored_fields).unwrap(),
+        canonicalize_json_v1(&original_fields).unwrap()
+    );
     assert_eq!(output.as_value()["request_id"], OTHER);
     assert_eq!(
         output.as_value()["generated_at"],
