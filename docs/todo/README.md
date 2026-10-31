@@ -97,18 +97,20 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-No adopted execution dossiers remain.
+| Epic | Detailed SOT | Outcome |
+|---|---|---|
+| [MAINT](../roadmap/README.md#maint-maintenance-and-recovery-safety) | [Maintenance and recovery safety](TODO-podway-maintenance-recovery-safety.md) | Safe maintenance ownership, human guidance and deterministic fault/concurrency verification; indeterminate WAL deletion stays refused. |
 
 ## Related candidates
 
-These six documents group possible epic scopes. Their working labels reserve
+These five documents group possible epic scopes. Their working labels reserve
 no roadmap identifiers and establish no task order or implementation commitment.
 Each remains `Candidate`; adoption requires closing its decisions and registering
 bounded work in the active roadmap. Existing-interface guidance is adopted as
 CALLS; optional interaction semantics remain a continuing candidate.
 
 Select work from a concrete product need and each finding's revisit condition.
-These groupings are not six sequential implementation commitments: TYPED is
+These groupings are not five sequential implementation commitments: TYPED is
 not a prerequisite for INTEG, and independent improvements do not wait for the
 entire PROOF program. A selected scope carries its applicable correctness and
 verification obligations; grouping does not waive them.
@@ -117,7 +119,6 @@ verification obligations; grouping does not waive them.
 |---|---|---|---|
 | Future interaction semantics | [Agent workflow simplification](TODO-podway-agent-workflow-simplification.md) | Assess combined operations or returned observations against a concrete caller need | Unselected interaction research |
 | TYPED | [Typed boundary ownership](TODO-podway-typed-boundary-ownership.md) | Explicit owners for existing values, bounds, extraction and validation reuse | DF-002, DF-003, DF-005, DF-011, DF-012, DF-013, DF-014, DF-016, DF-017, DF-022, DF-024, DF-025, DF-027 |
-| MAINT | [Maintenance and recovery safety](TODO-podway-maintenance-recovery-safety.md) | Bounded recovery policy, confirmation and fault verification | DF-029, DF-030, DF-031, DF-032, DF-033, DF-034, DF-036, DF-039, DF-040, DF-041, DF-042, DF-043 |
 | INTEG | [Executor integration](TODO-podway-executor-integration.md) | Real adapter and selected-build qualification beyond the local foundation | Existing real executor candidate |
 | PROOF | [Graph evolution feasibility](TODO-podway-graph-evolution-feasibility.md) | Per-shape evidence for coordination and topology-lineage needs | Existing graph and continuation research |
 | WEBUI | [Operations console](TODO-podway-operations-console.md) | Foreground human operations after the graph direction is settled | Existing Web console candidate |

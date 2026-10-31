@@ -20,6 +20,36 @@ sequence, for example `OPTIM-001`. Existing alphanumeric epic IDs, including
 `V2CTR` and `REL12`, and the compact `REL12` task IDs remain unchanged historical
 identifiers. Do not rename completed work to apply the new convention.
 
+## MAINT — Maintenance and Recovery Safety
+
+Dependencies: none; required prior implementation is already delivered. Status: Planned.
+Detailed SOT: [Maintenance and recovery safety](../todo/TODO-podway-maintenance-recovery-safety.md).
+
+MAINT adopts DF-029, DF-030, DF-031, DF-032, DF-033, DF-034, DF-036,
+DF-039, DF-040, DF-041, DF-042 and DF-043. It consolidates maintenance
+admission ownership, improves human confirmation and guidance, and adds
+deterministic fault and concurrency verification. Indeterminate WAL generations
+remain refused; adoption grants no additional destructive authority.
+
+Tasks execute in numeric order with one active task. Each task depends on its
+predecessor; later tasks remain Planned until that predecessor is accepted.
+The roadmap alone owns task order and status. Task completion does not complete
+the Epic: integrated whole-Epic assessment and explicit owner acceptance precede
+its separately approved closeout and last-consumer dossier retirement.
+No release, installation, Store migration, external-consumer change, staging,
+commit or Git publication is selected by this registration.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `MAINT-001` | Unify maintenance admission ownership | Planned | Give Engine one complete fence predicate and consume Store-owned invalid-current classification without widening recovery admission. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#admission-ownership) |
+| `MAINT-002` | Consolidate compatibility diagnosis | Planned | Share resolver-owned invalid-configuration precedence and retain generation-safe refusal of indeterminate WAL state. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#compatibility-diagnosis) |
+| `MAINT-003` | Harden removal confirmation and guidance | Planned | Precheck compatibility before human confirmation, visibly escape path controls and explain explicit force without changing machine authority. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#confirmation-and-guidance) |
+| `MAINT-004` | Verify checkpoint durability faults | Planned | Inject native checkpoint replacement and post-TRUNCATE sync failure; prove fail-closed witnesses and exact retry durability. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#checkpoint-durability) |
+| `MAINT-005` | Verify destructive generation fences | Planned | Deterministically replace database and WAL at existing maintenance guards and preserve unsupported-generation and changed-witness refusal. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#destructive-generation-fences) |
+| `MAINT-006` | Converge residual removal safely | Planned | Converge concurrent empty-residual disappearance while refusing changed ancestry and preserving a fresh successor. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#residual-removal-convergence) |
+| `MAINT-007` | Reuse exact marker construction | Planned | Restore lone-removal intent through canonical construction while preserving request digest, original response and recorded time. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#exact-marker-construction) |
+| `MAINT-008` | Qualify maintenance safety and prepare closeout | Planned | Pass integrated functional verification and the development gate, promote durable owners and prepare later owner-approved dossier retirement. | [Execution contract](../todo/TODO-podway-maintenance-recovery-safety.md#integrated-qualification) |
+
 ## CNTRT — Public Contract Consistency
 
 Dependencies: accepted GUIDE and CALLS completion. Status: Completed.
