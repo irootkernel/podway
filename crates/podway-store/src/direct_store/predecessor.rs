@@ -97,8 +97,7 @@ impl DirectStoreV1 {
                 self.checkpoint_migration(&connection, lease, &database)?;
             } else {
                 // TRUNCATE can have completed before a prior durability sync failed.
-                database.sync_all()?;
-                super::maintenance::open_directory(&self.layout.runtime_directory())?.sync_all()?;
+                self.sync_migration_durability(&database)?;
                 lease.revalidate(&self.layout)?;
                 if !super::maintenance::same_file(&database, &self.layout.database())? {
                     return Err(DirectStoreErrorV1::Maintenance);
@@ -163,10 +162,18 @@ impl DirectStoreV1 {
         if !super::maintenance::same_file(database, &self.layout.database())? {
             return Err(DirectStoreErrorV1::Maintenance);
         }
-        let checkpoint: (i64, i64, i64) =
-            connection.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            })?;
+        #[cfg(test)]
+        tests::install_checkpoint_busy_handler(connection)?;
+        let checkpoint = connection.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        });
+        #[cfg(test)]
+        tests::checkpoint_returned(checkpoint.as_ref().ok().copied());
+        let checkpoint = checkpoint?;
         if checkpoint != (0, 0, 0) {
             return Err(DirectStoreErrorV1::Busy);
         }
@@ -174,8 +181,23 @@ impl DirectStoreV1 {
         if !super::maintenance::same_file(database, &self.layout.database())? {
             return Err(DirectStoreErrorV1::Maintenance);
         }
-        database.sync_all()?;
-        super::maintenance::open_directory(&self.layout.runtime_directory())?.sync_all()?;
+        self.sync_migration_durability(database)
+    }
+
+    fn sync_migration_durability(&self, database: &std::fs::File) -> DirectStoreResultV1<()> {
+        #[cfg(test)]
+        tests::before_sync()?;
+        let synced = database.sync_all();
+        #[cfg(test)]
+        tests::observe_sync("database", &synced);
+        synced?;
+        let directory = super::maintenance::open_directory(&self.layout.runtime_directory())?;
+        #[cfg(test)]
+        tests::before_sync()?;
+        let synced = directory.sync_all();
+        #[cfg(test)]
+        tests::observe_sync("directory", &synced);
+        synced?;
         Ok(())
     }
 
@@ -466,5 +488,372 @@ mod tests {
         drop(_gate);
         drop(lease);
         new.verify_integrity(deadline()).unwrap();
+    }
+    use std::{cell::RefCell, os::unix::fs::MetadataExt, sync::mpsc, time::Duration};
+
+    #[derive(Default)]
+    struct CheckpointFault {
+        busy: Option<(mpsc::SyncSender<()>, mpsc::Receiver<()>)>,
+        fail_sync: bool,
+        events: Vec<&'static str>,
+        native_result: Option<(i64, i64, i64)>,
+        syncs: Vec<&'static str>,
+    }
+    thread_local! {
+        static CHECKPOINT_FAULT: RefCell<Option<CheckpointFault>> = const { RefCell::new(None) };
+    }
+    struct FaultGuard;
+    impl FaultGuard {
+        fn install(fault: CheckpointFault) -> Self {
+            CHECKPOINT_FAULT.with(|state| assert!(state.replace(Some(fault)).is_none()));
+            Self
+        }
+    }
+    impl Drop for FaultGuard {
+        fn drop(&mut self) {
+            CHECKPOINT_FAULT.with(|state| state.replace(None));
+        }
+    }
+    fn event(value: &'static str) {
+        CHECKPOINT_FAULT.with(|state| {
+            if let Some(state) = state.borrow_mut().as_mut() {
+                state.events.push(value);
+            }
+        });
+    }
+    pub(super) fn install_checkpoint_busy_handler(
+        connection: &rusqlite::Connection,
+    ) -> rusqlite::Result<()> {
+        if CHECKPOINT_FAULT.with(|state| {
+            state
+                .borrow()
+                .as_ref()
+                .is_some_and(|state| state.busy.is_some())
+        }) {
+            connection.busy_handler(Some(checkpoint_busy))?;
+        }
+        event("native-entered");
+        Ok(())
+    }
+    fn checkpoint_busy(_: i32) -> bool {
+        let handshake = CHECKPOINT_FAULT.with(|state| {
+            state
+                .borrow_mut()
+                .as_mut()
+                .and_then(|state| state.busy.take())
+        });
+        let Some((entered, acknowledgment)) = handshake else {
+            return false;
+        };
+        event("busy-callback");
+        if entered.send(()).is_err() || acknowledgment.recv_timeout(Duration::from_secs(5)).is_err()
+        {
+            event("handshake-failed");
+            return false;
+        }
+        event("swap-acknowledged");
+        true
+    }
+    pub(super) fn checkpoint_returned(result: Option<(i64, i64, i64)>) {
+        CHECKPOINT_FAULT.with(|state| {
+            if let Some(state) = state.borrow_mut().as_mut() {
+                state.native_result = result;
+                state.events.push("native-returned");
+            }
+        });
+    }
+    pub(super) fn before_sync() -> std::io::Result<()> {
+        let fail = CHECKPOINT_FAULT.with(|state| {
+            state
+                .borrow_mut()
+                .as_mut()
+                .is_some_and(|state| std::mem::take(&mut state.fail_sync))
+        });
+        if fail {
+            event("sync-failed");
+            return Err(std::io::Error::other("injected migration sync failure"));
+        }
+        Ok(())
+    }
+    pub(super) fn observe_sync(target: &'static str, result: &std::io::Result<()>) {
+        if result.is_ok() {
+            CHECKPOINT_FAULT.with(|state| {
+                if let Some(state) = state.borrow_mut().as_mut() {
+                    state.syncs.push(target);
+                }
+            });
+        }
+    }
+
+    fn checkpoint_fixture() -> (tempfile::TempDir, DirectStoreV1, String) {
+        let root = tempfile::TempDir::new().unwrap();
+        let path = std::fs::canonicalize(root.path()).unwrap();
+        let layout = super::super::DirectWorkspaceLayoutV1::new(
+            ValidatedWorkspaceRootV1::from_path(&path).unwrap(),
+        )
+        .unwrap();
+        let old = DirectStoreV1::new(
+            layout.clone(),
+            Sha256Digest::new(OLD).unwrap(),
+            digest('a'),
+            digest('b'),
+        );
+        let request = super::super::DirectMutationRequestV1::new(
+            IdempotencyKeyV1::new("init").unwrap(),
+            digest('d'),
+            "workspace.init",
+            "00000000-0000-4000-8000-000000000002",
+            super::super::DirectOutcomeScopeV1::Workspace,
+        )
+        .unwrap();
+        let lease = ExclusiveMaintenanceLeaseV1::acquire(&layout, deadline(), true).unwrap();
+        old.bootstrap(&lease, WorkspaceId::new("00000000-0000-4000-8000-000000000001").unwrap(), "migration-fault-test", &request, deadline(), ||UnixMillis::new(10), |_|Ok(CanonicalExecutionJsonV1::new(canonicalize_json_v1(&json!({"schema":"podway.output/v4","request_id":request.response_id(),"command":"workspace.init","generated_at":"1970-01-01T00:00:00.010Z","result":{"initialized":true},"warnings":[]})).unwrap()).unwrap())).unwrap();
+        let connection = old.open_connection(false, deadline()).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE predecessor_only(value TEXT); PRAGMA wal_checkpoint(TRUNCATE)",
+            )
+            .unwrap();
+        drop(connection);
+        drop(lease);
+        let ddl = format!(
+            "{}\nCREATE TABLE predecessor_only(value TEXT);",
+            super::super::DIRECT_STORE_DDL_V1
+        );
+        (
+            root,
+            DirectStoreV1::new(layout, digest('e'), digest('a'), digest('b')),
+            ddl,
+        )
+    }
+    fn declaration(ddl: &str) -> DeclaredPredecessor<'_> {
+        DeclaredPredecessor {
+            manifest: OLD,
+            generation: super::super::DIRECT_SCHEMA_GENERATION_V1,
+            ddl,
+            migration_id: "test-forward",
+            migrate: migration,
+        }
+    }
+    fn identity(path: &std::path::Path) -> (u64, u64) {
+        let metadata = std::fs::metadata(path).unwrap();
+        (metadata.dev(), metadata.ino())
+    }
+    fn committed_snapshot(
+        path: &std::path::Path,
+    ) -> (u32, String, Vec<Vec<rusqlite::types::Value>>) {
+        let connection = rusqlite::Connection::open_with_flags(
+            format!("file:{}?immutable=1", path.display()),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )
+        .unwrap();
+        let generation = connection
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        let schema = connection.query_row("SELECT group_concat(sql, char(10)) FROM (SELECT sql FROM sqlite_schema ORDER BY name)",[],|r|r.get(0)).unwrap();
+        let mut rows = Vec::new();
+        for table in [
+            "workspace_state",
+            "writer_contract",
+            "mutation_outcomes",
+            "operational_journal",
+        ] {
+            let mut statement = connection
+                .prepare(&format!("SELECT * FROM {table} ORDER BY 1"))
+                .unwrap();
+            let columns = statement.column_count();
+            rows.extend(
+                statement
+                    .query_map([], |row| (0..columns).map(|i| row.get(i)).collect())
+                    .unwrap()
+                    .map(Result::unwrap),
+            );
+        }
+        (generation, schema, rows)
+    }
+
+    #[test]
+    fn declared_migration_mid_checkpoint_replacement_refuses_changed_witnesses() {
+        for replace_database in [true, false] {
+            let (_root, store, ddl) = checkpoint_fixture();
+            let lease =
+                ExclusiveMaintenanceLeaseV1::acquire(&store.layout, deadline(), false).unwrap();
+            let _gate = super::super::connection::connection_gate(deadline()).unwrap();
+            let reader = rusqlite::Connection::open(store.layout.database()).unwrap();
+            reader.execute_batch("BEGIN DEFERRED").unwrap();
+            assert_eq!(
+                reader
+                    .query_row(
+                        "SELECT contract_manifest_digest FROM writer_contract",
+                        [],
+                        |r| r.get::<_, String>(0)
+                    )
+                    .unwrap(),
+                OLD
+            );
+            let target = if replace_database {
+                store.layout.database()
+            } else {
+                store.layout.maintenance_lock()
+            };
+            let old_identity = identity(&target);
+            let replacement = store.layout.root().to_path_buf().join("replacement");
+            std::fs::copy(&target, &replacement).unwrap();
+            let replacement_identity = identity(&replacement);
+            let replacement_bytes = std::fs::read(&replacement).unwrap();
+            assert_ne!(old_identity, replacement_identity);
+            let (entered_send, entered_receive) = mpsc::sync_channel(0);
+            let (ack_send, ack_receive) = mpsc::sync_channel(0);
+            let worker_target = target.clone();
+            let worker = std::thread::spawn(move || {
+                entered_receive
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("native Busy callback must enter");
+                std::fs::rename(&replacement, &worker_target).unwrap();
+                assert_eq!(identity(&worker_target), replacement_identity);
+                reader.execute_batch("ROLLBACK").unwrap();
+                ack_send.send(()).unwrap();
+                reader
+            });
+            let _fault = FaultGuard::install(CheckpointFault {
+                busy: Some((entered_send, ack_receive)),
+                ..Default::default()
+            });
+            let mut clocks = 0;
+            let result = store.migrate_writer_with_declarations(
+                &lease,
+                deadline(),
+                || {
+                    clocks += 1;
+                    UnixMillis::new(30)
+                },
+                &[declaration(&ddl)],
+            );
+            let reader = worker.join().unwrap();
+            assert!(
+                matches!(result, Err(DirectStoreErrorV1::Maintenance)),
+                "{result:?}"
+            );
+            assert_eq!(clocks, 1);
+            CHECKPOINT_FAULT.with(|state| {
+                let state = state.borrow();
+                let state = state.as_ref().unwrap();
+                assert_eq!(
+                    state.events,
+                    [
+                        "native-entered",
+                        "busy-callback",
+                        "swap-acknowledged",
+                        "native-returned"
+                    ]
+                );
+                assert_eq!(state.native_result, Some((0, 0, 0)));
+                assert!(state.syncs.is_empty());
+            });
+            drop(reader);
+            assert_eq!(identity(&target), replacement_identity);
+            assert_eq!(std::fs::read(&target).unwrap(), replacement_bytes);
+        }
+    }
+
+    #[test]
+    fn declared_migration_sync_failure_retries_both_syncs_with_zero_wal() {
+        let (_root, store, ddl) = checkpoint_fixture();
+        let lease = ExclusiveMaintenanceLeaseV1::acquire(&store.layout, deadline(), false).unwrap();
+        let _gate = super::super::connection::connection_gate(deadline()).unwrap();
+        let keeper = rusqlite::Connection::open(store.layout.database()).unwrap();
+        assert_eq!(
+            keeper
+                .query_row(
+                    "SELECT contract_manifest_digest FROM writer_contract",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            OLD
+        );
+        let _fault = FaultGuard::install(CheckpointFault {
+            fail_sync: true,
+            ..Default::default()
+        });
+        let mut clocks = 0;
+        let result = store.migrate_writer_with_declarations(
+            &lease,
+            deadline(),
+            || {
+                clocks += 1;
+                UnixMillis::new(30)
+            },
+            &[declaration(&ddl)],
+        );
+        assert!(
+            matches!(result, Err(DirectStoreErrorV1::Storage(_))),
+            "{result:?}"
+        );
+        assert_eq!(clocks, 1);
+        assert_eq!(std::fs::metadata(store.layout.wal()).unwrap().len(), 0);
+        CHECKPOINT_FAULT.with(|state| {
+            let state = state.borrow();
+            let state = state.as_ref().unwrap();
+            assert_eq!(
+                state.events,
+                ["native-entered", "native-returned", "sync-failed"]
+            );
+            assert_eq!(state.native_result, Some((0, 0, 0)));
+            assert!(state.syncs.is_empty());
+        });
+        let committed = committed_snapshot(&store.layout.database());
+        assert_eq!(committed.0, super::super::DIRECT_SCHEMA_GENERATION_V1);
+        assert!(
+            !store
+                .migrate_writer_with_declarations(
+                    &lease,
+                    deadline(),
+                    || panic!("committed retry cannot consult clock"),
+                    &[]
+                )
+                .unwrap()
+        );
+        CHECKPOINT_FAULT.with(|state| {
+            let state = state.borrow();
+            let state = state.as_ref().unwrap();
+            assert_eq!(state.syncs, ["database", "directory"]);
+            assert_eq!(
+                state.events,
+                ["native-entered", "native-returned", "sync-failed"]
+            );
+        });
+        assert_eq!(committed_snapshot(&store.layout.database()), committed);
+        assert_eq!(clocks, 1);
+        assert_eq!(std::fs::metadata(store.layout.wal()).unwrap().len(), 0);
+        let main = rusqlite::Connection::open_with_flags(
+            format!("file:{}?immutable=1", store.layout.database().display()),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )
+        .unwrap();
+        assert_eq!(
+            main.query_row(
+                "SELECT COUNT(*) FROM operational_journal WHERE event_name='writer_migrated'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            main.query_row("SELECT recorded_at_ms FROM writer_contract", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            30
+        );
+        assert_eq!(
+            main.query_row(
+                "SELECT contract_manifest_digest FROM writer_contract",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            store.manifest.as_str()
+        );
     }
 }

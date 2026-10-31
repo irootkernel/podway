@@ -145,6 +145,30 @@ completion and one retained/consumed/reused hint for automatic preflight.
 This functional evidence supports the owner-accepted ADMIT closeout recorded by
 the roadmap; it establishes no release or installed-runtime compatibility.
 
+## Native migration checkpoint faults
+
+Store's private [predecessor unit tests](../../crates/podway-store/src/direct_store/predecessor.rs)
+own declared-migration checkpoint durability. Run exact library cases with
+`cargo test --locked -p podway-store --lib <case> -- --exact` through Gaori.
+`declared_migration_mid_checkpoint_replacement_refuses_changed_witnesses` replaces
+the actual database or maintenance-lock inode from an acknowledged native Busy
+callback inside `PRAGMA wal_checkpoint(TRUNCATE)`. It requires callback/swap/return
+ordering, successful native TRUNCATE, unchanged replacement bytes and post-call
+witness refusal before durability sync. Entry/exit-only faults do not prove this
+window.
+
+`declared_migration_sync_failure_retries_both_syncs_with_zero_wal` injects an IO
+failure after successful native TRUNCATE. Its committed zero-WAL retry observes
+successful native database and runtime-directory sync results in order, without
+another clock, migration journal entry or changed identity/time/outcome state.
+The existing `declared_migration_checkpoint_busy_retains_main_and_retry_converges`
+and `empty_production_registry_and_declared_schema_migration_are_atomic` retain
+real reader contention, unchanged-main refusal, atomic schema admission and
+unknown-writer rejection. All fault state is unit-test-only; production and
+`test-support` builds gain no fault API, environment switch or predecessor.
+These fixtures establish no released migration route. Normal executable changes
+still require `make test` after focused checks.
+
 ## CNTRT feedback traceability
 
 The following table preserves the original review observations, deferral reasons
