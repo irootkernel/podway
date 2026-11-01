@@ -27,11 +27,12 @@ impl ExecutionClockV1 for NoClock {
 #[test]
 fn integ003_typed_query_rejects_keys_and_workspace_fences_before_git_or_home() {
     let root = tempfile::tempdir().unwrap();
+    let canonical_root = root.path().canonicalize().unwrap();
     let selector = WorktreeSelectorV1::new(
         WORKTREE_SELECTOR_VERSION_V1,
         None,
         LosslessPathV1::from_raw_bytes(
-            root.path().as_os_str().as_bytes(),
+            canonical_root.as_os_str().as_bytes(),
             DiagnosticPathDisplayV1::new("owned non-Git query fixture").unwrap(),
         )
         .unwrap(),

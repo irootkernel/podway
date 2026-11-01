@@ -12,11 +12,13 @@ TEST_THREADS ?= 4
 DIST_DIR ?= dist
 PRESET_DIR ?= assets/presets
 PRESET_VALIDATOR ?= target/debug/podway
+DEV_PYTHON_ENV := target/dev-python
+DEV_PYTHON := $(DEV_PYTHON_ENV)/bin/python3
 export PRESET_ID PRESET_NAME PRESET_DESCRIPTION PRESET_FILE PRESET_DIR PRESET_VALIDATOR
 
 .PHONY: test test-prepare release-prepare dist-preflight patch-release-preflight release-version-check test-rust test-unit test-int test-fuzzing test-e2e test-e2e-exact contract-verifier-test \
 	toolchain format format-check vet lint lint-all architecture architecture-static preset-validator \
-	preset-create preset-import preset-tool-test dolgorae-connection-test contract-manifest dist dist-patch
+	preset-create preset-import preset-tool-test python-prepare dolgorae-connection-test contract-manifest dist dist-patch
 
 .PHONY: test-native-qualification development-qualification
 
@@ -83,8 +85,15 @@ architecture-static:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/create_dolgorae_handoff.py self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_contracts.py --check
 
-dolgorae-connection-test:
-	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_dolgorae_connection_tests.py
+python-prepare: $(DEV_PYTHON_ENV)/.requirements-ready
+
+$(DEV_PYTHON_ENV)/.requirements-ready: tools/requirements-dev.txt
+	$(RUST_TOOLCHAIN_ENV) python3 -m venv "$(DEV_PYTHON_ENV)"
+	"$(DEV_PYTHON)" -m pip install --disable-pip-version-check -r tools/requirements-dev.txt
+	touch "$@"
+
+dolgorae-connection-test: python-prepare
+	$(RUST_TOOLCHAIN_ENV) "$(DEV_PYTHON)" tools/verify_dolgorae_connection_tests.py
 
 contract-manifest:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/contract_manifest.py --check

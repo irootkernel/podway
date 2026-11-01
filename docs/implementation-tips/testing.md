@@ -1065,6 +1065,8 @@ memberships and configuration-error details. Each CLI child selects an owned
 HOME; no test changes process-global HOME. An open stdin producer verifies the
 query returns without consuming stdin. These checks prove settings/query behavior,
 not actual Dolgorae execution or complete integration qualification. The
+typed query rejection fixture uses a canonical non-Git root so macOS temporary
+directory aliases do not preempt its intended `NOT_A_GIT_WORKTREE` control. The
 [manifest qualification](#integration-manifest-qualification) adds the
 normal Store read/write/original-replay matrix and authentic previous-writer
 refusal alongside that query evidence.
@@ -1075,13 +1077,20 @@ refusal alongside that query evidence.
 `make dolgorae-connection-test` runs every deterministic control in
 [`verify_dolgorae_connection_tests.py`](../../tools/verify_dolgorae_connection_tests.py).
 It is registered in `architecture-static`, hence `make test-prepare` and the
-required `make test` gate. Select a Python environment that already provides
-`jsonschema` and `referencing` through
-[`tools/requirements-dev.txt`](../../tools/requirements-dev.txt). For a new local
-development environment, install that file into an isolated virtual environment
-and put its Python on PATH before Make; no global Python modification is needed.
+required `make test` gate. Its `python-prepare` prerequisite creates the ignored
+`target/dev-python` virtual environment from the selected `python3` and installs
+[`tools/requirements-dev.txt`](../../tools/requirements-dev.txt) there. The first
+preparation, or a requirements change, needs access to the configured package
+index or a populated pip cache. Later runs reuse that environment; no global
+Python modification or PATH override is needed. `make python-prepare` can prepare
+it separately. Installation failure stops Make before the controls run.
 The verifier reports missing validator prerequisites as incomplete; the control
 gate fails rather than skipping positive validation.
+
+The fixtures resolve their temporary root before constructing verifier inputs,
+including macOS `/var` and `/tmp` aliases. A child control uses an explicitly
+symlinked TMPDIR; the verifier still rejects a noncanonical output parent supplied
+directly by its caller.
 
 The controls run owned executable fixtures against the original frozen positive
 capabilities payload. They cover complete nested schemas and error closure,

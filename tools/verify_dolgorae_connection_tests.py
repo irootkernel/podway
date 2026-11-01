@@ -21,7 +21,7 @@ class ConnectionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='podway-integ004-')
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.counter = 0
         self.caps = json.loads((BUNDLE/'workspace-capability-v2.valid.json').read_text())
         self.version = {'name':'dolgorae','version':'v'+self.caps['dolgorae_version']}
@@ -48,6 +48,14 @@ class ConnectionTests(unittest.TestCase):
         self.assertEqual(len(report['probes']),3)
         self.assertEqual(report['bounds']['timeout_seconds'],15)
         self.assertEqual(report['bounds']['stdout_bytes'],1048576)
+
+    def test_symlinked_tmpdir_preserves_positive_controls(self):
+        alias=self.root/'temp-parent-link';alias.symlink_to(self.root.resolve(),target_is_directory=True)
+        environment={**os.environ,'TMPDIR':str(alias)}
+        process=subprocess.run([sys.executable,str(Path(__file__).resolve()),
+                                'ConnectionTests.test_stateless_version_and_exact_suffix_success'],
+                               env=environment,capture_output=True,timeout=8)
+        self.assertEqual(process.returncode,0,process.stderr.decode())
 
     def backend_program(self, version_program, capabilities_program):
         self.selected_backend=self.executable('dolgorae', 'import sys,os,time,json\nif sys.argv[1:]==["version","--json"]:\n '+version_program.replace('\n','\n ')+'\nelif sys.argv[1:]==["runtime","capabilities"]:\n '+capabilities_program.replace('\n','\n ')+'\nelse: raise SystemExit(91)')
@@ -262,7 +270,8 @@ class ConnectionTests(unittest.TestCase):
         existing=self.root/'existing';existing.write_bytes(b'unchanged')
         link=self.root/'link';link.symlink_to(existing)
         directory=self.root/'directory';directory.mkdir()
-        for output in [existing,link,directory,ROOT,ROOT/'docs/integ004-forbidden-report.json']:
+        parent_link=self.root/'parent-link';parent_link.symlink_to(self.root.resolve(),target_is_directory=True)
+        for output in [existing,link,directory,parent_link/'report.json',ROOT,ROOT/'docs/integ004-forbidden-report.json']:
             r=subprocess.run([sys.executable,str(TOOL),'--podway',str(self.selected_podway),'--dolgorae',str(self.selected_backend),'--output',str(output)],capture_output=True,timeout=3)
             self.assertEqual(r.returncode,2);self.assertFalse(marker.exists())
         self.assertEqual(existing.read_bytes(),b'unchanged');self.assertFalse((ROOT/'docs/integ004-forbidden-report.json').exists())
