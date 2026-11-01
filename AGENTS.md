@@ -229,7 +229,14 @@ external consumer modification.
   identities, writer contracts or unsupported state. Record only validated success
   outcomes in the same transaction as their state changes; rejections have none.
 - Keep authoritative task state and maintenance locks under the owning worktree's
-  `.podway/runtime/`. Podway neither reads nor creates user-global account state.
+  `.podway/runtime/`. Podway neither reads nor creates user-global account or
+  runtime state.
+  [ADR-0041](docs/architecture-decision-records/0041-user-integration-settings.md)
+  and [ADR-0042](docs/architecture-decision-records/0042-separate-user-settings-namespace.md)
+  permit only explicit read-only integration settings at
+  `$HOME/.config/podway/config.yaml`; ordinary Direct operations must not read HOME
+  or user settings. This exception grants no global writer, registry, credentials,
+  provider execution or workspace-removal ownership of that file.
 - Podway must not mutate Git, make network requests, execute configured commands,
   store artifact bytes, or act as a security boundary against same-user processes.
 - Treat public JSON, schemas, error codes, command routes, canonicalization,

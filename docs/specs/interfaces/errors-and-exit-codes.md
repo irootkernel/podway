@@ -21,6 +21,17 @@ job, sequence, endpoint, queue, or runtime-mode metadata. Rejected mutations ret
 no outcome. Only uncertain COMMIT I/O emits `MUTATION_OUTCOME_UNKNOWN`; response
 loss or external process termination is caller-side uncertainty.
 
+## Intended integration settings failures
+
+The accepted [integration-settings contract](../operations/integration-settings.md)
+requires `USER_CONFIG_INVALID` for invalid or unavailable HOME/user settings,
+with exit 5, `retryable: false`, empty details and summary
+`User configuration is invalid or unavailable.` The code is not yet registered
+in the current runtime catalog. The intended query retains
+`WORKSPACE_CONFIG_INVALID` for project configuration, without the legacy reset
+guidance, and validates project configuration before HOME/user configuration.
+Neither machine error may expose user-file contents or native home paths.
+
 ## Exit codes
 
 | Exit code | Class | Meaning |

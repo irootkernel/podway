@@ -134,6 +134,19 @@ resolves safe local Procedure files and computes canonical immutable snapshots.
 A running session uses its persisted snapshot. Loading a Procedure never loads
 remote includes, executable plugins or configured commands.
 
+### Integration settings boundary
+
+[ADR-0041](../architecture-decision-records/0041-user-integration-settings.md) and
+[ADR-0042](../architecture-decision-records/0042-separate-user-settings-namespace.md)
+permit a narrow read-only user-settings exception. The
+[settings specification](../specs/operations/integration-settings.md) owns the
+intended behavior; the current CLI has not yet delivered its new route or schemas.
+Config owns bounded documents and pure optional-boolean resolution. Engine owns
+the native Git/config-only read and typed failures, separate from Store-backed
+workspace resolution. Protocol owns result/error validation; CLI owns grammar,
+rendering, help and completion. Core and Store acquire no settings or home lookup.
+Ordinary Direct commands never consult user settings or probe Dolgorae.
+
 ### Store
 
 `podway-store` owns current Store initialization, coherent read snapshots,
@@ -184,8 +197,12 @@ maintenance boundaries.
 | Maintenance locks and recoverable operation markers | Worktree | `.podway/runtime/` |
 | Artifact bytes and external executor effects | External owner | original path or external system |
 
-Podway neither reads nor creates `~/.podway`. Legacy installed services require
-separate retirement by their original owner; the direct binary has no service
+The accepted user-settings location is `$HOME/.config/podway/config.yaml`,
+separate from the worktree configuration and runtime namespace. Only the intended
+explicit settings query reads it; workspace init and removal never own it.
+Podway does not use `~/.podway` as a user-global root, including when HOME itself
+is a Git worktree with ordinary project configuration there. Legacy installed
+services require separate retirement by their original owner; the direct binary has no service
 manager or account cleanup path.
 
 ## Trust boundaries

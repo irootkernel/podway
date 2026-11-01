@@ -11,6 +11,13 @@ its in-process Direct Engine as one product and are grouped by concern:
 - [Historical runtime reset](operations/runtime-reset.md): the retired account-runtime contract, retained for historical reference; it is not a current command surface.
 - [Quality](quality/): tests, acceptance criteria, and traceability.
 
+## Integration permission
+
+- [Integration settings](operations/integration-settings.md): the accepted narrow
+  user-settings exception, worktree override, intended read-only query and
+  compatibility-verification boundary. Its availability section distinguishes
+  the accepted contract from current executable support.
+
 ## Supervised delegation
 
 - [Host-neutral supervised delegation](interfaces/supervised-delegation.md): the opt-in contract, including Direct-work compatibility, package/receipt identity, runtime gates, and separate integration/rollout boundaries. Native routes and explicit custom-Procedure admission are implemented in source; this entry does not claim an installed stable-release capability.

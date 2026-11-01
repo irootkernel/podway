@@ -44,6 +44,17 @@ Git dependency. Executable architecture checks reject cycles, reverse edges and
 unauthorized direct access. Detailed rules are in the
 [Rust codebase reference](rust-codebase.md).
 
+## Integration settings ownership
+
+The accepted [settings boundary](../specs/operations/integration-settings.md)
+assigns bounded document parsing and pure resolution to Config, native
+Git/config-only access to Engine, public result/error validation to Protocol
+and command presentation to CLI. These are intended additions; current
+executable delivery remains separate. Core and Store gain no user-settings
+or provider dependency. Repository-only metadata verification belongs in
+`tools/` and its frozen upstream definitions in `contracts/`; neither becomes
+a product process runner or runtime dependency on a neighboring checkout.
+
 ## Tests
 
 Each crate owns its test targets:

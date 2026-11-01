@@ -23,6 +23,16 @@ schemas are retired by V2DFC-009. No replacement Aquarium publication or activat
 contract is adopted. Development qualification below is a nonpublishable Podway
 verification artifact, not a managed development service generation.
 
+## Integration settings compatibility
+
+The accepted [integration-settings contract](integration-settings.md) adds intended
+workspace v3/user-config v1 documents and one read-only query without changing
+Procedure or Store schemas. Released workspace v1/v2 and default initialization
+bytes remain unchanged. New assets, routes and errors require coherent manifest
+and adapter-catalog regeneration; consumers re-pin the complete manifest.
+This exception declares no Store predecessor or migration and authorizes no
+release, installation, backend activation or external-consumer modification.
+
 ## Contract generations
 
 [ADR-0039](../../architecture-decision-records/0039-opt-in-contract-generations.md)

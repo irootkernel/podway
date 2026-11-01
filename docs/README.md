@@ -24,14 +24,18 @@ write-free snapshot reads are the current product boundaries.
 [Examples](examples/) provide walkthroughs and versioned known-answer payloads.
 
 Current adopted work is tracked by the [active roadmap](roadmap/).
-The planned [INTEG readiness epic](roadmap/README.md#integ-dolgorae-integration-readiness)
+The [INTEG readiness epic](roadmap/README.md#integ-dolgorae-integration-readiness)
 prepares default-disabled user/worktree integration permission and read-only
 diagnostics under [ADR-0041](architecture-decision-records/0041-user-integration-settings.md),
 with the separate user-settings namespace of
 [ADR-0042](architecture-decision-records/0042-separate-user-settings-namespace.md).
 Its [execution dossier](todo/TODO-podway-dolgorae-integration-readiness.md) describes
 intended changes; current commands, configuration and Direct behavior are not
-changed by design adoption. Real adapter qualification remains a separate candidate.
+changed by design adoption. The accepted
+[integration-settings specification](specs/operations/integration-settings.md)
+owns the narrow permission and namespace boundary; its availability section
+identifies the still-intended executable interfaces. Real adapter qualification
+remains a separate candidate.
 
 The [MAINT epic](roadmap/README.md#maint-maintenance-and-recovery-safety)
 delivered maintenance admission ownership, human confirmation and recovery

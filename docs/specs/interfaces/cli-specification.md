@@ -4,7 +4,11 @@
 resolves the owning Git worktree and executes through the typed `podway-engine`
 Direct API in that process; static commands run locally without a Store. Mutations commit synchronously; reads observe one
 committed snapshot without writing. There is no resident process, socket, service,
-queue, runtime mode, or user-global Podway state.
+queue, runtime mode, or user-global Podway runtime state. The accepted
+[integration-settings contract](../operations/integration-settings.md) permits
+only an explicit read-only user-settings query; it does not make ordinary Direct
+commands depend on HOME. Its query and configuration forms remain intended
+interfaces until their executable delivery.
 
 Human error rendering may include the exact Procedure path supplied to `start`
 and a visible truncation summary after a bounded diagnostic window. JSON mode

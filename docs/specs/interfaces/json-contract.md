@@ -53,6 +53,16 @@ Removing a present invalid Store reports `already_absent=false`,
 not be validated. An already-absent Store requires `workspace_uuid=null`;
 `already_absent=false` requires an actual directory removal.
 
+## Intended integration settings result
+
+The accepted [integration-settings contract](../operations/integration-settings.md)
+requires one new closed `podway.integration-settings-result/v1` family for
+`integration.show` in both contract generations, with no workspace or session
+identity. Output v4 and Error v2 remain the envelopes. This family and route are
+intended interfaces, not current registrations; implementation must update the
+command catalog, Protocol validation, Output membership and complete manifest
+identity together without widening an existing family.
+
 ## Previous daemon generation
 
 The following describes the previous generation superseded by the direct CLI.

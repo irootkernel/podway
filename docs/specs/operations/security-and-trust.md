@@ -62,8 +62,13 @@ provide identification and correlation, not authentication or authorization.
 ## Filesystem protections
 
 Runtime directories and created Store/lock files use private permissions where
-supported. Runtime is confined to `.podway/runtime/`; Podway neither reads nor
-creates `~/.podway`. Descriptor-safe opens reject symlink/replacement uncertainty
+supported. Runtime is confined to `.podway/runtime/`; Podway does not use
+`~/.podway` as a user-global root. A Git worktree rooted at HOME still owns its ordinary `.podway` project tree. The accepted
+[integration-settings exception](integration-settings.md) permits only a bounded
+read of `$HOME/.config/podway/config.yaml` on the intended explicit query, with
+no fallback to the old user path and no global writer. Ordinary Direct operations
+remain independent of HOME and user settings. Descriptor-safe opens reject
+symlink/replacement uncertainty
 and preserve lossless internal paths. Local artifacts are opened read-only within
 the worktree and hashed in bounded buffers rather than loaded whole.
 

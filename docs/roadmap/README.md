@@ -22,7 +22,7 @@ identifiers. Do not rename completed work to apply the new convention.
 
 ## INTEG — Dolgorae Integration Readiness
 
-Dependencies: existing Direct and host-neutral delegation foundations. Status: Planned.
+Dependencies: existing Direct and host-neutral delegation foundations. Status: In Progress.
 Detailed SOT: [Dolgorae integration readiness](../todo/TODO-podway-dolgorae-integration-readiness.md).
 Architectural authority: [ADR-0041](../architecture-decision-records/0041-user-integration-settings.md) and
 [ADR-0042](../architecture-decision-records/0042-separate-user-settings-namespace.md).
@@ -43,7 +43,7 @@ qualification remain in the [continuing candidate](../todo/TODO-podway-executor-
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `INTEG-001` | Establish integration settings contracts | Planned | Reconcile the separate user-settings namespace, narrow exception, root guidance and intended interfaces without provider execution or global runtime authority. | [Authority and scope](../todo/TODO-podway-dolgorae-integration-readiness.md#1-status-and-authority) |
+| `INTEG-001` | Establish integration settings contracts | Completed | Reconcile the separate user-settings namespace, narrow exception, root guidance and intended interfaces without provider execution or global runtime authority. | [Authority and scope](../todo/TODO-podway-dolgorae-integration-readiness.md#1-status-and-authority) |
 | `INTEG-002` | Resolve bounded user and worktree settings | Planned | Add closed workspace v3 and user config v1, strict optional booleans, safe native reads and project-over-user resolution while preserving v1/v2 and ordinary Direct behavior. | [Settings resolution](../todo/TODO-podway-dolgorae-integration-readiness.md#settings-and-resolution) |
 | `INTEG-003` | Expose effective integration permission | Planned | Deliver the Git/config-only integration.show route, closed result and errors, help/completion and coherent manifest-bound public contracts. | [Public query](../todo/TODO-podway-dolgorae-integration-readiness.md#public-query) |
 | `INTEG-004` | Verify existing Dolgorae compatibility safely | Planned | Add pinned, bounded public metadata probes with exact version comparison and deterministic outcomes without changing Dolgorae or claiming real integration. | [Connection verification](../todo/TODO-podway-dolgorae-integration-readiness.md#connection-verification) |
