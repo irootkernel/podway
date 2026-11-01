@@ -122,6 +122,7 @@ The table below maps a `WORKSPACE_CONTRACT_MISMATCH` error's
 | `v0.2.13` | `sha256:dc47bcc5449f7c2e60c920c5b820eb793405b5f2d2f573346ee326f90264d2aa` |
 | `v0.2.14` | `sha256:c699977dd232891041f4063d66295b94004702875855baace876f8a7e0c6391d` |
 | `v0.2.15` | `sha256:293cfcf7bcaebb55b55b9e7cabb5842df228dbd9afacea5d1ae78474c25ae01b` |
+| `v0.2.16` | `sha256:57cb8463f0f24033f9bd0437ed1943e77b21b754a888e654bd847bec13f4b91d` |
 
 Identify any other digest with that binary's `podway version --json --identity`
 `contract_manifest_digest`. The table maps releases only; it is not authority

@@ -16,6 +16,8 @@ const V0_2_14_DIGEST: &str =
     "sha256:c699977dd232891041f4063d66295b94004702875855baace876f8a7e0c6391d";
 const V0_2_15_DIGEST: &str =
     "sha256:293cfcf7bcaebb55b55b9e7cabb5842df228dbd9afacea5d1ae78474c25ae01b";
+const V0_2_16_DIGEST: &str =
+    "sha256:57cb8463f0f24033f9bd0437ed1943e77b21b754a888e654bd847bec13f4b91d";
 
 fn fixtures() -> Value {
     serde_json::from_str(include_str!(
@@ -670,10 +672,11 @@ fn guide007_generation_type_and_released_manifests_table() {
     assert_eq!(ContractGenerationV1::Generation1.as_u64(), 1);
     assert_eq!(ContractGenerationV1::Generation2.as_u64(), 2);
 
-    assert_eq!(RELEASED_CONTRACT_MANIFESTS_V1.len(), 3);
+    assert_eq!(RELEASED_CONTRACT_MANIFESTS_V1.len(), 4);
     assert_eq!(released_writer_release_v1(V0_2_13_DIGEST), Some("v0.2.13"));
     assert_eq!(released_writer_release_v1(V0_2_14_DIGEST), Some("v0.2.14"));
     assert_eq!(released_writer_release_v1(V0_2_15_DIGEST), Some("v0.2.15"));
+    assert_eq!(released_writer_release_v1(V0_2_16_DIGEST), Some("v0.2.16"));
     assert_eq!(released_writer_release_v1(DIGEST), None);
 
     for (schema, path, commands) in [
