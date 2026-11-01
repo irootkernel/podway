@@ -11,8 +11,8 @@ authority; the effective path below follows ADR-0042.
 Workspace v3 and user-config v1 parsing, pure permission resolution and the
 explicit Engine native-read seam are implemented. Default initialization still
 writes workspace v1. The explicit CLI/JSON permission query and its public
-configuration errors are implemented. Repository-only metadata verification
-remains pending under INTEG-004.
+configuration errors and repository-only metadata verification are implemented.
+The integrated normal Store compatibility matrix remains INTEG-005 work.
 The [roadmap](../../roadmap/README.md#integ-dolgorae-integration-readiness)
 owns implementation status and the [execution dossier](../../todo/TODO-podway-dolgorae-integration-readiness.md)
 owns the unfinished delivery and verification plan. Adoption alone changes no
@@ -111,3 +111,66 @@ A metadata pass establishes no accepted task/result, receipt, worker disposition
 real adapter qualification or activation authority. Missing or unsupported exports
 remain explicit integration limitations. Release, installation and consumer
 adoption retain their separate authorization boundaries.
+
+## Repository-only metadata verification
+
+Run the repository tool with explicit executable files and an exclusively new
+report in an existing caller-owned canonical directory outside canonical source:
+
+```sh
+python3 tools/verify_dolgorae_connection.py --podway /absolute/path/to/podway \
+  --dolgorae /absolute/path/to/dolgorae --output /private/tmp/owned-run/metadata.json
+```
+
+`--timeout-seconds` is an integer from 1 through 60, default 15. The selected
+Python must provide the dependencies in `tools/requirements-dev.txt`; missing
+validation libraries or missing/corrupt offline definitions produce `incomplete`.
+No installation, executable search, Profile selection or fallback is performed.
+The verifier resolves regular executable files up to 128 MiB, pins their SHA-256 and native
+witnesses, and rechecks both selected bindings after the probes. Only these
+commands run, with no stdin:
+
+1. selected Podway `--json version --identity`;
+2. selected Dolgorae `version --json`;
+3. selected Dolgorae `runtime capabilities`.
+
+One monotonic deadline covers pinning, validation setup and all probes. Each
+probe retains at most 1 MiB stdout and 64 KiB stderr. It may observe one extra
+byte to establish a conclusive ceiling violation, discards that byte and records
+observed counts separately from retained counts/digests. Cleanup kills only its own process group and has bounded leader-reap
+and group-observation allowances of one second each after the probe budget.
+On Darwin, native group inspection excludes zombies, which retain no descriptors;
+unknown group state prevents successful cleanup. No general host process scan is
+performed. Other hosts cannot make a stronger cleanup claim than their available
+native observation; the supported platform remains native Apple Silicon macOS.
+
+Full offline JSON Schema validation uses Podway Output v4/version-result v2,
+stateless Dolgorae version-output v1 and Machine v4 `capabilities` with capabilities
+v2 data. The [frozen registry](../../../contracts/dolgorae-metadata-v1/README.md)
+retains original upstream bytes, embedded resource scopes and complete success/
+error references from its locked commit; IDs never authorize URL retrieval.
+Recognized errors must validate completely. Only the frozen stable codes
+`PROTOCOL_VERSION_UNSUPPORTED` and `UNSUPPORTED_SCHEMA_VERSION` map to
+`unsupported`; valid other errors fail. Human stderr text never identifies an
+unsupported operation. Schema validation enforces the definitions' actual bounds;
+a timestamp pattern alone is not an additional calendar-validity guarantee.
+
+After both Dolgorae success contracts validate, compare exactly
+`version.version == "v" + capabilities.data.dolgorae_version`, preserving every
+suffix and character's case. Complete malformed JSON, supported invalid fields,
+wrong commands, inconsistent metadata, contradictory natural nonzero success,
+changed executables and conclusive output ceiling violations fail. Identifiable
+unsupported families or versions are unsupported. Missing executables, launch
+failures, deadlines and absent/truncated observations are incomplete unless a
+conclusive defect has already been observed. Natural process status, verifier
+termination, full response validation and cleanup are separate evidence fields.
+
+The outcome order is `fail > unsupported > incomplete > pass`, with exit codes
+1, 3, 4 and 0 respectively. Invalid arguments or unsafe/existing output paths exit
+2 without an output requirement or overwrite. Reports use the internal schema
+`podway.dolgorae-connection-report/v1`, retain pinned identities, per-probe checks,
+limits and `probe_outcome`, and always set `activation_qualified` to `false`.
+They record the configured timeout, byte ceilings and cleanup allowances, with
+output counts/digests rather than raw stdout/stderr or credentials.
+A metadata result never proves task/result/receipt or worker disposition, and
+never authorizes backend repair, activation or a replacement assignment.

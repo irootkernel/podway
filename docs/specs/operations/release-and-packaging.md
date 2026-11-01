@@ -33,6 +33,13 @@ and adapter-catalog regeneration; consumers re-pin the complete manifest.
 This exception declares no Store predecessor or migration and authorizes no
 release, installation, backend activation or external-consumer modification.
 
+The repository-only metadata verifier and
+[`contracts/dolgorae-metadata-v1/`](../../../contracts/dolgorae-metadata-v1/)
+registry are development tooling, outside the public manifest asset inventory,
+release archive and adapter catalog. Their frozen foreign schema IDs remain
+offline registry keys. Source qualification includes these repository files;
+adding them changes neither packaged manifest identity nor Store writer identity.
+
 ## Contract generations
 
 [ADR-0039](../../architecture-decision-records/0039-opt-in-contract-generations.md)

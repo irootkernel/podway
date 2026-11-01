@@ -142,7 +142,9 @@ permit a narrow read-only user-settings exception. The
 [settings specification](../specs/operations/integration-settings.md) owns the
 behavior. Config parsing, pure resolution and the explicit Engine read seam are
 implemented, including the explicit `integration.show` CLI/JSON query. Metadata
-verification remains pending under INTEG-004.
+verification is implemented only in repository tooling, outside the product
+process and its Direct dependencies. It runs three explicit public metadata
+commands against pinned executables with a shared deadline and offline schemas.
 Config owns bounded documents and pure optional-boolean resolution. Engine owns
 the native Git/config-only read and typed failures, separate from Store-backed
 workspace resolution. Protocol owns result/error validation; CLI owns grammar,

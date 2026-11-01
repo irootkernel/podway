@@ -16,7 +16,7 @@ export PRESET_ID PRESET_NAME PRESET_DESCRIPTION PRESET_FILE PRESET_DIR PRESET_VA
 
 .PHONY: test test-prepare release-prepare dist-preflight patch-release-preflight release-version-check test-rust test-unit test-int test-fuzzing test-e2e test-e2e-exact contract-verifier-test \
 	toolchain format format-check vet lint lint-all architecture architecture-static preset-validator \
-	preset-create preset-import preset-tool-test contract-manifest dist dist-patch
+	preset-create preset-import preset-tool-test dolgorae-connection-test contract-manifest dist dist-patch
 
 .PHONY: test-native-qualification development-qualification
 
@@ -78,9 +78,13 @@ architecture-static:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_quality_contracts.py
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_qualification_tools.py
+	$(MAKE) dolgorae-connection-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_patch_release.py self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/create_dolgorae_handoff.py self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_contracts.py --check
+
+dolgorae-connection-test:
+	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_dolgorae_connection_tests.py
 
 contract-manifest:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/contract_manifest.py --check

@@ -1065,3 +1065,34 @@ query returns without consuming stdin. These checks prove settings/query behavio
 not actual Dolgorae execution or complete integration qualification. The complete
 manifest-specific normal Store read/write/replay matrix remains INTEG-005 work;
 INTEG-003 separately qualifies its query against an authentic previous-manifest Store.
+
+
+## Repository metadata verifier controls
+
+`make dolgorae-connection-test` runs every deterministic control in
+[`verify_dolgorae_connection_tests.py`](../../tools/verify_dolgorae_connection_tests.py).
+It is registered in `architecture-static`, hence `make test-prepare` and the
+required `make test` gate. Select a Python environment that already provides
+`jsonschema` and `referencing` through
+[`tools/requirements-dev.txt`](../../tools/requirements-dev.txt). For a new local
+development environment, install that file into an isolated virtual environment
+and put its Python on PATH before Make; no global Python modification is needed.
+The verifier reports missing validator prerequisites as incomplete; the control
+gate fails rather than skipping positive validation.
+
+The controls run owned executable fixtures against the original frozen positive
+capabilities payload. They cover complete nested schemas and error closure,
+embedded IDs and offline-only lookup, exact prefix/suffix/case comparison,
+unknown families versus malformed supported instances, validated error mapping,
+complete malformed JSON versus absent/truncated observations, process status,
+shared deadlines, both byte ceilings, executable replacement, owned group reaping,
+unknown cleanup state, exclusive output and privacy. No fixture uses real backend
+accounts or credentials. Native Darwin cleanup observes only the created process
+group and distinguishes zombie-only groups from unknown state.
+
+A separate explicit observation can run the repository verifier against an
+existing selected Dolgorae and the exact candidate Podway. Retain its report and
+executable hashes privately; unsupported/incomplete exports are honest limits,
+and a conclusive mismatch is a failure. Neither this observation nor the mock
+controls qualify actual delegation, results, receipts, disposition or activation.
+The normal Store read/write/replay matrix remains INTEG-005 work.

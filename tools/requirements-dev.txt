@@ -1,0 +1,2 @@
+# Full offline metadata schema validation; use an isolated development environment.
+jsonschema>=4.26,<5

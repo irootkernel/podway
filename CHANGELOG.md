@@ -6,6 +6,9 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Added
 
+- Add repository-only Dolgorae metadata inspection with pinned executables,
+  complete offline contracts and bounded, explicit compatibility outcomes.
+
 - Show effective Dolgorae permission and its source with `integration show dolgorae`,
   independently of workspace initialization and Store writer compatibility.
 

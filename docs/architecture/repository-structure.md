@@ -52,7 +52,11 @@ Git/config-only access to Engine, public result/error validation to Protocol
 and command presentation to CLI. Config parsing, the explicit Engine read
 seam and public `integration.show` query are implemented. Core and Store gain
 no user-settings or provider dependency. Repository-only metadata verification belongs in
-`tools/` and its frozen upstream definitions in `contracts/`; neither becomes
+[`tools/verify_dolgorae_connection.py`](../../tools/verify_dolgorae_connection.py)
+and its frozen upstream definitions in
+[`contracts/dolgorae-metadata-v1/`](../../contracts/dolgorae-metadata-v1/).
+`make dolgorae-connection-test` runs the deterministic controls and is included in
+`architecture-static`; neither the verifier nor its registry becomes
 a product process runner or runtime dependency on a neighboring checkout.
 
 ## Tests

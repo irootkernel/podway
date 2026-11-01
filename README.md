@@ -56,7 +56,9 @@ strict documents and examples.
 Permission does not establish connection readiness or execution. An external
 adapter must adopt the query before new assignments; disabling it preserves
 accepted work, reconciliation, receipts and explicit completion. Repository-only
-metadata verification remains planned under INTEG-004.
+metadata verification is available through
+[`tools/verify_dolgorae_connection.py`](tools/verify_dolgorae_connection.py); see
+the [metadata inspection contract](docs/specs/operations/integration-settings.md#repository-only-metadata-verification).
 
 ## Requirements
 

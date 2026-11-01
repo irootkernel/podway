@@ -1,0 +1,595 @@
+{
+  "schema": "podway.dolgorae-metadata-lock/v1",
+  "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+  "roots": {
+    "version": "https://dolgorae.local/schema/version-output/v1",
+    "machine": "https://dolgorae.local/schema/machine-output/v4",
+    "capabilities": "https://dolgorae.local/schema/capabilities/v2",
+    "error": "https://dolgorae.local/schema/error-contract/v4"
+  },
+  "files": [
+    {
+      "file": "dolgorae-accepted-policy-session-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-accepted-policy-session-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "c17b7f818d9f2465bf64729beac0f59c52cf19cad6a31a16fb7254dbf363c59a",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-agent-configuration-input-v2.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-agent-configuration-input-v2.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "695d54c5e1cc6e0df926c90908b9539661cf8be26c5df1e27aa3eb0c171a82b5",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-agent-configuration-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-agent-configuration-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "40f0b82ad03b8b11b0b0b35fe0e4e2f9c45548a56416c9810f741ed42888226e",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-agent-configuration-v2.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-agent-configuration-v2.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "0c12cbd954eab5c4c08ea0211be3f3b314fe64fc3f273241716f7b3b17158e50",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-artifact-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-artifact-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "319111668259e41dfaa19725c98f704d0098399051346268946eceaa2c93a67b",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-capabilities-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-capabilities-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "bdcb76265d6508f73b791e5f289e09f28fda9a6dcc67a5ca03c2a425e8ea9b79",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-capabilities-v2.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-capabilities-v2.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "adcecc3bfb5346abe0c8217f97318bf6d7eccdf4438d0853a36e8a4154cf4828",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-error-contract-v1.json",
+      "upstream_path": "docs/protocol/dolgorae-error-contract-v1.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "cabe4bb7f237933d16778e1658c4ca812b732cd89dcbd7a06d0c1457dbf3f2cd",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-error-contract-v2.json",
+      "upstream_path": "docs/protocol/dolgorae-error-contract-v2.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "2ed2308c9964694e4231552d5dfb0b1e923944cf1a3f88df3392a813e027d32f",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-error-contract-v3.json",
+      "upstream_path": "docs/protocol/dolgorae-error-contract-v3.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "4e3676942e9922aed37071a4d1e1f05c058d40b3b45c011a7664a040837d81a3",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-error-contract-v4.json",
+      "upstream_path": "docs/protocol/dolgorae-error-contract-v4.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "19eb4af3d76567be12c38ecd27e7928c0d1f576a51a5f066c0981ce63c4d02ac",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-event-delivery-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-event-delivery-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "ede6538acf16895092f2ec9f68b194da15e93f5985ec87d32e9d449ff18c4dc1",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-event-record-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-event-record-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "ee57cbf80be94eecbe858a93228626fd623cb9b503480095eeb5388c57ef6f27",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-external-specialist-facade-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-external-specialist-facade-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "7427285884a82e2ed29ffd7316ea71495de2405bd975385be8d91b4b05ffcacf",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-external-specialist-facade-v2.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-external-specialist-facade-v2.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "d54cfde00614a72aa54c7f46418a2129fe0eb5c4157602d02abffa8f6cc50c17",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-external-specialist-facade-v3.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-external-specialist-facade-v3.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "9edbd4e86f14802b181bc7f23e1c7751dffd53a702b42cbd49f34926a3be8cc8",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-external-specialist-facade-v4.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-external-specialist-facade-v4.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "c62294e6e4a3be31bb5393655b464429ff54de053d082d23a78fac617390af97",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-global-profile-binding-v2.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-global-profile-binding-v2.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "a273a588d2d8b130e4e1689332c94729a785f1d517d8dcb084c4f9beca24a1e2",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-global-profile-registry-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-global-profile-registry-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "021c0cfa3c78f5977dd25c4280d6b3a2742842d58476c02d63eed6d9a3f6bd4f",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-instruction-migration-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-instruction-migration-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "26514febe08f338d108fb6b95673b7f7a74d2244a385bfbde56c367d580684a1",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-interaction-summary-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-interaction-summary-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "dd337129090c61682767944c342a3ce9e3d8cef07b82337b83f8a91a292fd0ef",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-interaction-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-interaction-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "83f942021f61b422ae077ae677b54eec5dc7c1a6e4e8c09921dc8968d2c29894",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-local-profile-registry-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-local-profile-registry-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "6ec9f328277de82ed4792cb288d1ccc635a46540e6e3822b3111b5ec87bce85e",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-machine-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-machine-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "19b97f95a5ea1d5e25d10662d476fb9cefb5c98358c0de5f51b583d7a7a6a630",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-machine-v4.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-machine-v4.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "c88500ee28e68aaeea6c12944f67d604889d53fa3544943c13b992d0a169a665",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-one-shot-operation-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-one-shot-operation-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "d0f33a707986f7eea28407e735f747d9525e916f24149749ff0945f1038220c3",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-profile-event-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-profile-event-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "e796df62c171c18d2cf035d7875868bf11310d6ccfd665fa39e320d4becb3443",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-profile-server-state-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-profile-server-state-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "25634f96c4e07b6eaff4a039b30f98449afe16f97951f95208acbaa434e915c2",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-review-output-diagnostic-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-review-output-diagnostic-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "57c896efb8e85fc82b154dc49d081ff1dc2c605e559d3f5aa6d7695b2922a300",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-review-target-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-review-target-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "bbd9fbba03630dd279319e43b3e66950165bc7d81da12e099b7d66dde9fefbcf",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-review-target-v2.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-review-target-v2.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "c17a086c2cf73e6b408273b508729ff3cd4bf3d2bb393c10b982e161338db940",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-role-source-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-role-source-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "09194cfb55d807083c5dac6b6d04b17dc7495de28980dec9cd42b79f5edd6fba",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-run-manifest-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-run-manifest-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "50e968da7336fe6a109c70312f69f07927cddbfaf3126f1dac9f4955534d087a",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-run-manifest-v2.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-run-manifest-v2.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "6ee38fde259bf884c7760de203ce58b4ea0962f775ec74d3db3793e1e9874b58",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-run-state-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-run-state-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "27c88dfd5231104d91c38d66d2cccc7bf3747380fdd5fe04f9cf7c264039e018",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-specialist-policy-input-v2.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-specialist-policy-input-v2.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "b576b2e4bcabf3d2c2edd4aa175eb7a68afc462f6ed9ea08afa0dbb1f7557cac",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-specialist-policy-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-specialist-policy-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "a7fe102e33c5fbff5f87111e862478402989636fe5cb4631bf92adabe6e0158c",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-specialist-policy-v2.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-specialist-policy-v2.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "fc722d6a61c20202ef6aa56ee8f76c1bdf3d070138223a9f832dfe7bb83fdd5b",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-specialist-review-tool-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-specialist-review-tool-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "fd5f5dda6920f35399b8deebbf858d66d370d34aa425021471bbdd1c6c9cbd63",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-specialist-review-tool-v2.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-specialist-review-tool-v2.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "fc273fd6488ac0d2bd56b03db0a33032b22e1fc21d873722a18afabcfa3a51f0",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-specialist-review-tool-v3.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-specialist-review-tool-v3.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "124f39341770fbe092c224d8e237ca877b48f955547798f504cb7e9c729ac405",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-specialist-review-tool-v4.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-specialist-review-tool-v4.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "9ff1bc187cf7e6e5b15c15560a6127e624a2d7ab5688a22101cbf931258a02c9",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-timeline-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-timeline-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "cabf2c2411197d4cc5d1e903f0016a5d6b975dd11eefce2d4809bf1526d0af50",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-version-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-version-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "f1f98c3d5bca2f57c159e88f9239aeb9d56dc9f8d94c2c04ea08f1968107b64f",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-workspace-execution-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-workspace-execution-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "dfdda7e4731ac0ddec80f43d737525cc6c73c682efb40c6dd5a28d4615c2d9da",
+      "kind": "schema"
+    },
+    {
+      "file": "dolgorae-workspace-record-v1.schema.json",
+      "upstream_path": "docs/protocol/dolgorae-workspace-record-v1.schema.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "937b7dfc73457f39757554f0865e4a02a9943743b1dc30ec20713b3a1671945f",
+      "kind": "schema"
+    },
+    {
+      "file": "workspace-capability-v2.valid.json",
+      "upstream_path": "docs/protocol/examples/workspace-capability-v2.valid.json",
+      "upstream_commit": "5fa36ad896a5bb417bd3ef14e1e4e96caa599d80",
+      "sha256": "da6921e4ac67b0fdfce308f1be4698c8a087e4b757a3284f4eb8b4d51cb6234b",
+      "kind": "example"
+    }
+  ],
+  "resources": [
+    {
+      "id": "https://dolgorae.local/schema/accepted-policy-session/v1",
+      "file": "dolgorae-accepted-policy-session-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/agent-configuration-input/v2",
+      "file": "dolgorae-agent-configuration-input-v2.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/agent-configuration/v1",
+      "file": "dolgorae-agent-configuration-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/agent-configuration/v2",
+      "file": "dolgorae-agent-configuration-v2.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/artifact/v1",
+      "file": "dolgorae-artifact-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/capabilities/v1",
+      "file": "dolgorae-capabilities-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/capabilities/v2",
+      "file": "dolgorae-capabilities-v2.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/client-event-record/v1",
+      "file": "dolgorae-event-record-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/controller-timeline/v1",
+      "file": "dolgorae-timeline-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/error-contract/v1",
+      "file": "dolgorae-error-contract-v1.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/error-contract/v2",
+      "file": "dolgorae-error-contract-v2.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/error-contract/v3",
+      "file": "dolgorae-error-contract-v3.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/error-contract/v4",
+      "file": "dolgorae-error-contract-v4.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/event-delivery/v1",
+      "file": "dolgorae-event-delivery-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/external-specialist-facade/v1",
+      "file": "dolgorae-external-specialist-facade-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/external-specialist-facade/v2",
+      "file": "dolgorae-external-specialist-facade-v2.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/external-specialist-facade/v3",
+      "file": "dolgorae-external-specialist-facade-v3.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/external-specialist-facade/v4",
+      "file": "dolgorae-external-specialist-facade-v4.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/global-profile-binding/v2",
+      "file": "dolgorae-global-profile-binding-v2.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/global-profile-registry/v1",
+      "file": "dolgorae-global-profile-registry-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/instruction-migration/v1",
+      "file": "dolgorae-instruction-migration-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/interaction-summary/v1",
+      "file": "dolgorae-interaction-summary-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/interaction/v1",
+      "file": "dolgorae-interaction-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/local-profile-registry/v1",
+      "file": "dolgorae-local-profile-registry-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/machine-output/v1",
+      "file": "dolgorae-machine-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/machine-output/v4",
+      "file": "dolgorae-machine-v4.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/one-shot-operation/v1",
+      "file": "dolgorae-one-shot-operation-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/profile-event/v1",
+      "file": "dolgorae-profile-event-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/profile-server-state/v1",
+      "file": "dolgorae-profile-server-state-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/review-output-diagnostic/v1",
+      "file": "dolgorae-review-output-diagnostic-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/review-target/v1",
+      "file": "dolgorae-review-target-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/review-target/v2",
+      "file": "dolgorae-review-target-v2.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/role-source/v1",
+      "file": "dolgorae-role-source-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/run-manifest/v1",
+      "file": "dolgorae-run-manifest-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/run-manifest/v2",
+      "file": "dolgorae-run-manifest-v2.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/run-state/v1",
+      "file": "dolgorae-run-state-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/specialist-policy-input/v2",
+      "file": "dolgorae-specialist-policy-input-v2.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/specialist-policy-input/v3",
+      "file": "dolgorae-workspace-execution-v1.schema.json",
+      "pointer": "/$defs/policy_input"
+    },
+    {
+      "id": "https://dolgorae.local/schema/specialist-policy/v1",
+      "file": "dolgorae-specialist-policy-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/specialist-policy/v2",
+      "file": "dolgorae-specialist-policy-v2.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/specialist-policy/v3",
+      "file": "dolgorae-workspace-execution-v1.schema.json",
+      "pointer": "/$defs/policy_snapshot"
+    },
+    {
+      "id": "https://dolgorae.local/schema/specialist-review-tool/v1",
+      "file": "dolgorae-specialist-review-tool-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/specialist-review-tool/v2",
+      "file": "dolgorae-specialist-review-tool-v2.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/specialist-review-tool/v3",
+      "file": "dolgorae-specialist-review-tool-v3.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/specialist-review-tool/v4",
+      "file": "dolgorae-specialist-review-tool-v4.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/version-output/v1",
+      "file": "dolgorae-version-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/workspace-execution/v1",
+      "file": "dolgorae-workspace-execution-v1.schema.json",
+      "pointer": ""
+    },
+    {
+      "id": "https://dolgorae.local/schema/workspace-record/v1",
+      "file": "dolgorae-workspace-record-v1.schema.json",
+      "pointer": ""
+    }
+  ],
+  "unsupported_error_codes": [
+    {
+      "code": "PROTOCOL_VERSION_UNSUPPORTED",
+      "source_id": "https://dolgorae.local/schema/error-contract/v1",
+      "pointer": "/$defs/v_PROTOCOL_VERSION_UNSUPPORTED_false_protocol_version"
+    },
+    {
+      "code": "UNSUPPORTED_SCHEMA_VERSION",
+      "source_id": "https://dolgorae.local/schema/error-contract/v1",
+      "pointer": "/$defs/v_UNSUPPORTED_SCHEMA_VERSION_false_schema_version"
+    }
+  ]
+}
