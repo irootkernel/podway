@@ -12,7 +12,9 @@ Workspace v3 and user-config v1 parsing, pure permission resolution and the
 explicit Engine native-read seam are implemented. Default initialization still
 writes workspace v1. The explicit CLI/JSON permission query and its public
 configuration errors and repository-only metadata verification are implemented.
-The integrated normal Store compatibility matrix remains INTEG-005 work.
+Manifest-specific continuity/refusal qualification is registered in the native
+CLI suite, with authentic selected-previous-binary checks kept separate from
+portable test prerequisites.
 The [roadmap](../../roadmap/README.md#integ-dolgorae-integration-readiness)
 owns implementation status and the [execution dossier](../../todo/TODO-podway-dolgorae-integration-readiness.md)
 owns the unfinished delivery and verification plan. Adoption alone changes no
@@ -174,3 +176,41 @@ They record the configured timeout, byte ceilings and cleanup allowances, with
 output counts/digests rather than raw stdout/stderr or credentials.
 A metadata result never proves task/result/receipt or worker disposition, and
 never authorizes backend repair, activation or a replacement assignment.
+
+
+## Manifest-specific continuity
+
+Permission never changes Store writer admission. The following boundaries apply
+with either valid project toggle and absent or poisoned user HOME:
+
+| Store identity | Ordinary Direct behavior | Explicit settings query |
+|---|---|---|
+| Created by the candidate's own manifest | Reads, fresh writes, original-request replay and outcome recovery retain their ordinary behavior. | Uses Git and configuration only. |
+| Created by an authentic selected previous-manifest CLI with no declared predecessor | Reads, fresh writes and exact retained original-request replay refuse `WORKSPACE_CONTRACT_MISMATCH` without Store/session/Git mutation, new SHM or lease side effects. | Succeeds with valid Git/project/user/HOME in either accepted generation, without Store admission. |
+
+Invalid project configuration precedes unavailable HOME or invalid user input on
+the query even beside a refused Store. A valid project override does not suppress
+invalid user input. These remain normal configuration errors without native-path
+leakage or legacy reset advice. The query does not waive a writer mismatch for
+another route. A config-only permission change never enters Procedure canonical
+bytes/digests, session identity, accepted receipt identity or retained outcomes.
+Turning it off preserves accepted work, lookup/reconciliation, receipt inspection
+and explicit completion; it does not cancel or redispatch existing assignments.
+
+The [supported Store continuity method](../../implementation-tips/testing.md#integration-manifest-qualification)
+retains exact requests and separates stable response fields from rendering
+correlation and the exact stored canonical success. Authentic previous Stores
+are created only through the verified selected previous CLI in owned standalone
+Git fixtures. No edited writer row, inferred predecessor, migration or reset can
+substitute for that observation.
+
+The readiness metadata observation retained an `unsupported` capabilities family.
+Its scope is the selected executable bytes; connection readiness and activation
+remain unqualified. Revalidate the selected tool after changes. The
+[continuing executor candidate](../../todo/TODO-podway-executor-integration.md)
+retains both Primary-host mappings, trusted controller/configuration ownership,
+complete Role/task/result byte domains, actual accepted-task/result/round and
+worker-disposition proof, response-loss recovery and live comparative acceptance.
+No TYPED-wide dependency or executable adapter is selected here. Whole-Epic
+validation, explicit owner acceptance and later dossier retirement are separate
+closeout obligations; preserve the original dossier until those consumers finish.

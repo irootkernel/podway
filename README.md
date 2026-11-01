@@ -60,6 +60,13 @@ metadata verification is available through
 [`tools/verify_dolgorae_connection.py`](tools/verify_dolgorae_connection.py); see
 the [metadata inspection contract](docs/specs/operations/integration-settings.md#repository-only-metadata-verification).
 
+Same-manifest Direct reads, writes, original-request replay and completion remain
+available with either permission value and absent/invalid user HOME. A different
+undeclared Store writer still refuses ordinary operations; the settings query
+can inspect permission independently. See the
+[manifest qualification](docs/implementation-tips/testing.md#integration-manifest-qualification)
+for the owned current/previous-CLI verification and its live-integration limits.
+
 ## Requirements
 
 Podway supports native Apple Silicon macOS only. Intel macOS, Rosetta execution, universal binaries, Linux, and Windows are not supported release targets.

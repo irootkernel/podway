@@ -94,8 +94,10 @@ item with explicit fences and a caller key. Retain the original stdout bytes,
 status, Store generation, writer-contract row and canonical snapshot bytes/digest.
 Use a fresh CLI process for every later observation or mutation.
 
-The candidate must read the same recorded state, replay the original fully fenced
-request byte-for-byte, and return that response through read-only outcome lookup.
+The candidate must read the same recorded state and replay the original fully
+fenced request byte-for-byte. Check the owning response domain independently from
+printing/correlation metadata, and require read-only outcome lookup to return the
+exact stored canonical success.
 Then complete the satisfied action with current explicit fences, verify the next
 node, and replay the original request again with its original old attempt/item
 fences. Both replays and lookups leave logical database state and sequence
@@ -1062,9 +1064,10 @@ completion. Protocol's `int_integ003_settings` validates closed result and envel
 memberships and configuration-error details. Each CLI child selects an owned
 HOME; no test changes process-global HOME. An open stdin producer verifies the
 query returns without consuming stdin. These checks prove settings/query behavior,
-not actual Dolgorae execution or complete integration qualification. The complete
-manifest-specific normal Store read/write/replay matrix remains INTEG-005 work;
-INTEG-003 separately qualifies its query against an authentic previous-manifest Store.
+not actual Dolgorae execution or complete integration qualification. The
+[manifest qualification](#integration-manifest-qualification) adds the
+normal Store read/write/original-replay matrix and authentic previous-writer
+refusal alongside that query evidence.
 
 
 ## Repository metadata verifier controls
@@ -1095,4 +1098,70 @@ existing selected Dolgorae and the exact candidate Podway. Retain its report and
 executable hashes privately; unsupported/incomplete exports are honest limits,
 and a conclusive mismatch is a failure. Neither this observation nor the mock
 controls qualify actual delegation, results, receipts, disposition or activation.
-The normal Store read/write/replay matrix remains INTEG-005 work.
+The [manifest qualification](#integration-manifest-qualification) separately
+checks normal Store continuity/refusal and query isolation.
+
+
+## Integration manifest qualification
+
+The registered `e2e_integ005_continuity` module invokes
+[`qualify_integration_settings.py`](../../tools/qualify_integration_settings.py)
+through the existing real-binary E2E harness. Its portable current-manifest
+scenario is part of `make test`. It creates and accepts a deterministic delegated
+fixture, then exercises all four combinations of absent/poisoned HOME and valid
+project true/false. Reads and lookup preserve logical state; fresh block/unblock
+writes advance sequence once each; original acceptance replay retains its exact
+stdin, key and fences after those revisions. Disabling permission still permits
+receipt recovery and explicitly fenced completion, followed by historical receipt
+inspection and old-request replay. Writer identity and Procedure snapshot bytes
+remain unchanged. A PATH sentinel detects accidental backend launch.
+
+Exact selection runs the entire one-case registered module:
+
+```sh
+make test-e2e-exact E2E_TEST=podway-cli::e2e_suite::e2e_integ005_continuity::integ005_permission_matrix_preserves_receipts_and_original_replay
+```
+
+Authentic previous-manifest qualification is an additional explicit operation,
+not an implicit standard-gate prerequisite. Select a verified local previous
+binary and its retained private identity report (`sha256` plus
+`identity.result`), then use an exclusively new output:
+
+```sh
+python3 tools/qualify_integration_settings.py --podway /absolute/candidate/podway \
+  --previous /absolute/verified-previous/podway --previous-sha256 SELECTED_SHA256 \
+  --previous-identity /absolute/private/previous-identity.json \
+  --output /private/tmp/owned-evidence/matrix.json
+```
+
+The helper rechecks actual binary hashes and embedded identities. It creates the
+old Store and accepted receipt through that selected CLI before any candidate
+observation, retaining exact request argv/stdin and original success/receipt.
+Status, outcome lookup, receipt read, fresh write and original replay must all
+refuse the old writer across the four HOME/toggle cases. Before/after native
+snapshots preserve original Store/Git/runtime bytes, inode/device identities,
+modes and modification/change times, with no new SHM or lease side effects.
+Project configuration changes are setup baselines, not candidate side effects.
+Both-generation settings queries succeed on that same Store; invalid project,
+user and HOME cases preserve normal precedence and redaction. A temporarily
+blocked runtime path supplies a separate executable no-admission control.
+
+Read logical state from quiescent byte-identical main plus present WAL captures
+in separate owned inspection scratch, opened by SQLite in read-only mode. An
+absent WAL stays absent. Check original runtime/Git bytes and native witnesses
+before/after each capture; create no original SQLite connection, SHM or checkpoint.
+SQLite may create SHM beside the disposable inspection copy, which is removed
+immediately after its last read. This proves the observed owned quiescent state,
+not atomic capture against concurrent outside writers. Whole-fixture cleanup and
+bounded CLI child reaping are required; preserve final selected binaries and
+reports while remaining consumers need them.
+
+Compare exact retained canonical `response_json` bytes and lookup response
+identity independently from stdout serialization and top-level per-invocation
+request/time fields. The original request's argv, stdin, key and fences remain
+unchanged; successful exit alone is insufficient. Retain persistence, sequence,
+receipt and byte/native witnesses in the private report. After the final required
+`make test`, bind this qualification to the exact final CLI hash; renew it if the
+artifact changes. The same rule applies to selected-tool metadata observation,
+whose unsupported/incomplete outcome remains explicit and never qualifies live
+execution, models, accepted external results or activation.

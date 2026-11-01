@@ -197,7 +197,7 @@ fn native_config_reads_reject_unreadable_oversized_and_project_symlink_inputs() 
     user(home.path(), "schema: podway.user-config/v1\n");
     let file = home.path().join(".config/podway/config.yaml");
     if !nix::unistd::geteuid().is_root() {
-        fs::set_permissions(&file, fs::Permissions::from_mode(0)).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o0)).unwrap();
         let result = read_integration_settings_v1(&git, Some(home.path().as_os_str()));
         fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
         assert_eq!(result, Err(Error::UserConfigInvalid));

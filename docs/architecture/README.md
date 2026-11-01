@@ -45,6 +45,13 @@ incompatible UUID fails closed. There is no global task copy or workspace regist
 Legacy generations 1–13 are classified without mutation; only an explicitly
 confirmed reset discards their history and creates fresh direct state.
 
+The explicit integration-settings query uses native Git/configuration access
+without Store/maintenance admission or workspace/session identity. Its bounded
+user-settings exception is read-only. Ordinary Direct commands remain independent
+of HOME and backend availability. Permission changes preserve matching-writer
+outcomes and accepted receipt completion; they do not bypass an incompatible
+Store writer or execute an external adapter.
+
 ## Domain boundary
 
 The pure core receives explicit IDs, timestamps, hashes and prepared inputs. It

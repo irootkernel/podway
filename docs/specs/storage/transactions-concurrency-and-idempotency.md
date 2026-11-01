@@ -83,6 +83,22 @@ request. The caller's expected workspace UUID is still checked against the
 actual Store before replay, so a wrong workspace cannot recover another Store's
 success.
 
+### Settings and replay qualification
+
+Integration permission is outside canonical request, Procedure/session and
+receipt identity. With a matching writer manifest, absent/poisoned HOME or a
+valid project permission change does not block ordinary reads, fresh writes,
+original-request replay, outcome recovery or completion of accepted work. An
+undeclared previous manifest is refused before outcome lookup/replay admission;
+a retained successful key cannot bypass writer compatibility.
+
+Retain the original serialized request and fences. Qualification checks exact
+persisted canonical success bytes and the complete response nested in outcome
+lookup, plus unchanged logical state and sequence on replay. Compare the public
+response's stable fields separately from per-invocation outer correlation/time
+and stdout serialization. Do not substitute whole printed-envelope byte equality
+or exit-zero checks for the owning stored-success contract.
+
 ## Rejections and no-ops
 
 A malformed request, stale fence, domain rejection, failed prepared-input check,

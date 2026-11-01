@@ -83,6 +83,13 @@ that does not promise transparent continuation with a new manifest. Verify the
 candidate in freshly initialized isolated fixtures. No migration, predecessor
 declaration, forced reset or installed-runtime update is part of this change.
 
+Integration settings do not participate in writer, Procedure snapshot, session
+or receipt identity. Matching-manifest Direct operations remain HOME-independent
+with either valid project permission; an undeclared previous manifest still
+refuses normal reads, writes and retained replay. Only the explicit Git/config
+settings query bypasses Store/maintenance admission, including beside a refused
+writer. Configuration setup cannot manufacture compatibility or a predecessor.
+
 A declared migration verifies the complete predecessor schema and identity
 before opening a writer, holds the exclusive native lease, applies the reviewed
 migration and writer update atomically, then validates the successor. The

@@ -15,7 +15,8 @@ its in-process Direct Engine as one product and are grouped by concern:
 
 - [Integration settings](operations/integration-settings.md): the accepted narrow
   user-settings exception, worktree override, explicit read-only query and
-  compatibility-verification boundary. Its availability section distinguishes
+  manifest-specific continuity/refusal and compatibility-verification boundary.
+  Its availability section distinguishes
   the accepted contract from current executable support.
 
 ## Supervised delegation

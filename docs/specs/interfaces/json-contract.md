@@ -207,8 +207,8 @@ from the existing read-only `recovery` recipe. See the
 [runtime reset specification](../operations/runtime-reset.md#public-results-errors-and-bounds).
 
 Canonical request identity excludes transport timing but includes all fields that
-can change execution. The daemon stores bounded semantic terminal projections and
-the exact public terminal envelope required for idempotent replay. A lost response
+can change execution. The Store persists bounded successful terminal projections and
+the exact canonical success envelope required for idempotent replay. A lost response
 is reconciled read-only by idempotency key before a caller decides whether to retry.
 
 Contract assets are canonical under `assets/schemas/`; the generated manifest under
@@ -240,6 +240,14 @@ lookup carries a committed mutation response; not-found carries a null outcome.
 The executable route uses the `direct` execution class and `podway-engine` owner.
 Input and output budgets
 remain 1,048,576 bytes independently of IPC framing.
+
+Permission changes do not enter stored success, Procedure/session or receipt
+identity. The Git/config-only `integration.show` result has neither workspace
+nor session and remains available beside a refused writer. Ordinary reads,
+fresh mutations and retained original-request replay still require the matching
+Store manifest. Qualification preserves original argv/stdin/key/fences and exact
+stored canonical success bytes, comparing the complete lookup response separately
+from the outer invocation's request/time fields and JSON printing.
 
 Recovery recipes are constrained by the owning error. `MUTATION_OUTCOME_UNKNOWN`
 uses read-only `outcome.lookup` with the original idempotency key; its detail,

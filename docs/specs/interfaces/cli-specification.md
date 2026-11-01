@@ -31,6 +31,11 @@ See [settings](../operations/integration-settings.md) for bounded input semantic
 Permission does not establish connection readiness or execution. A cooperating
 external adapter must adopt this query before new assignments. Disabling permission
 preserves accepted work, result reconciliation, receipts and explicit completion.
+For a same-manifest Store, these ordinary commands remain independent of absent
+or poisoned HOME and either valid project toggle. A previous undeclared writer
+still refuses normal reads, fresh writes and retained original-request replay;
+the config-only query succeeds independently with valid inputs. It neither opens
+that Store nor grants compatibility to another route.
 
 ## Command groups
 

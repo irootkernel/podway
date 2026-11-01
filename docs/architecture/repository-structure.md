@@ -59,6 +59,13 @@ and its frozen upstream definitions in
 `architecture-static`; neither the verifier nor its registry becomes
 a product process runner or runtime dependency on a neighboring checkout.
 
+[`tools/qualify_integration_settings.py`](../../tools/qualify_integration_settings.py)
+reuses the deterministic delegation fixture for a portable current-manifest
+matrix registered in the CLI E2E suite. Its explicit optional previous-binary
+cluster creates authentic old Stores; selected old executables are never an
+implicit Make prerequisite. Temporary WAL-aware logical inspection copies are
+separate from the authentic Store, with original native witnesses preserved.
+
 ## Tests
 
 Each crate owns its test targets:

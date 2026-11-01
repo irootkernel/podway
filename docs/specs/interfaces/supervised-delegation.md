@@ -19,6 +19,13 @@ defines the separate, default-disabled `integration.show` permission query.
 This interface does not make this foundation dispatch work. A cooperating adapter
 must adopt the query before it controls new assignments; disabling permission
 does not cancel accepted work or disable reconciliation, receipts or completion.
+The local manifest-specific matrix exercises those formal persistence boundaries
+with a deterministic executor fixture. Actual accepted external tasks/results,
+rounds and worker disposition remain unqualified. The
+[continuing integration candidate](../../todo/TODO-podway-executor-integration.md)
+keeps both Primary-host mappings, trusted controller/configuration ownership,
+complete byte domains, response-loss recovery and live comparative acceptance.
+A permission query or metadata observation supplies none of those external facts.
 
 ## SDG-001: Responsibilities and scope
 

@@ -30,6 +30,11 @@ with exit 5, `retryable: false`, empty details and summary
 `WORKSPACE_CONFIG_INVALID` for project configuration, without the legacy reset
 guidance, and validates project configuration before HOME/user configuration.
 Neither machine error may expose user-file contents or native home paths.
+These errors retain their query precedence beside an otherwise refused writer:
+project validation precedes unavailable HOME/invalid user input, and invalid user
+input fails despite a winning project value. Ordinary Direct routes instead keep
+normal writer admission, including outcome lookup and exact original-request
+replay; a successful retained key cannot suppress `WORKSPACE_CONTRACT_MISMATCH`.
 
 ## Exit codes
 

@@ -40,6 +40,18 @@ release archive and adapter catalog. Their frozen foreign schema IDs remain
 offline registry keys. Source qualification includes these repository files;
 adding them changes neither packaged manifest identity nor Store writer identity.
 
+Manifest-specific qualification distinguishes a freshly candidate-created Store
+from an authentic selected previous-manifest Store. Matching-writer Direct
+reads, fresh writes and exact original replay preserve receipt/recovery and
+completion across permission changes and absent/poisoned HOME. An undeclared
+previous writer refuses those operations without mutation; its settings query
+uses Git/configuration only. The
+[qualification method](../../implementation-tips/testing.md#integration-manifest-qualification)
+requires actual selected binaries, original requests and persistent/native
+witnesses, without editing writer identity, migration, predecessor or reset.
+This local matrix and an unsupported metadata observation establish no release,
+installation, external adapter or activation qualification.
+
 ## Contract generations
 
 [ADR-0039](../../architecture-decision-records/0039-opt-in-contract-generations.md)

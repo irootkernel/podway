@@ -150,6 +150,12 @@ the native Git/config-only read and typed failures, separate from Store-backed
 workspace resolution. Protocol owns result/error validation; CLI owns grammar,
 rendering, help and completion. Core and Store acquire no settings or home lookup.
 Ordinary Direct commands never consult user settings or probe Dolgorae.
+With a matching writer, permission changes preserve accepted receipts, original
+outcome replay/recovery and explicit completion. An undeclared previous writer
+continues to refuse normal Store routes before replay; only the Git/config-only
+query bypasses that admission. Native qualification combines source separation,
+blocked runtime paths and byte/native-witness preservation, without claiming a
+kernel file-access trace.
 
 ### Store
 

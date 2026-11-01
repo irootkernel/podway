@@ -36,7 +36,12 @@ retains the remaining integrated qualification plan. The accepted
 [integration-settings specification](specs/operations/integration-settings.md)
 owns the narrow permission and namespace boundary; its availability section
 distinguishes permission and metadata inspection from real execution qualification.
-Real adapter qualification remains a separate candidate.
+The [manifest-specific qualification](implementation-tips/testing.md#integration-manifest-qualification)
+registers same-writer continuity and separately exercises authentic previous-writer
+refusal plus settings-query isolation. Real adapter qualification remains a
+separate candidate. Whole-Epic validation, explicit owner acceptance and later
+dossier retirement remain required; the original dossier is retained for those
+consumers.
 
 The [MAINT epic](roadmap/README.md#maint-maintenance-and-recovery-safety)
 delivered maintenance admission ownership, human confirmation and recovery
