@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
+mod integration_settings;
 mod parser;
 mod procedure_v2_authoring;
 mod procedure_v2_budget;
@@ -82,6 +83,12 @@ pub use procedure_v2_vet::vet_procedure_v2;
 
 pub const WORKSPACE_SCHEMA_V1: &str = "podway.workspace/v1";
 pub const WORKSPACE_SCHEMA_V2: &str = "podway.workspace/v2";
+pub const WORKSPACE_SCHEMA_V3: &str = "podway.workspace/v3";
+pub use integration_settings::{
+    DolgoraeIntegrationV1, IntegrationSettingsSourceV1, IntegrationSettingsV1,
+    ResolvedIntegrationSettingsV1, USER_CONFIG_SCHEMA_V1, UserConfigV1, parse_user_config_v1,
+    parse_user_config_v1_with_limits, resolve_integration_settings_v1,
+};
 /// The complete, explicit v1 workspace configuration written for a new workspace.
 pub const DEFAULT_WORKSPACE_CONFIG_YAML_V1: &[u8] = b"schema: podway.workspace/v1\nprocedure_paths:\n  - .podway/procedures\ndefault_preset: sw-dev-v2\nui:\n  show_stage_in_prompt: false\n";
 
@@ -167,6 +174,8 @@ pub struct WorkspaceConfigV1 {
     pub job_queue: Option<serde_json::Value>,
     #[serde(default)]
     pub ui: UiConfigV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrations: Option<IntegrationSettingsV1>,
 }
 
 impl Default for WorkspaceConfigV1 {
@@ -178,6 +187,7 @@ impl Default for WorkspaceConfigV1 {
             default_preset: default_preset(),
             job_queue: None,
             ui: UiConfigV1::default(),
+            integrations: None,
         }
     }
 }
@@ -195,12 +205,19 @@ impl WorkspaceConfigV1 {
             default_preset: default_preset.into(),
             job_queue: None,
             ui,
+            integrations: None,
         };
         config.validate()?;
         Ok(config)
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.schema != WORKSPACE_SCHEMA_V3 && self.integrations.is_some() {
+            return Err(ConfigError::InvalidValue {
+                field: "integrations",
+                reason: "requires workspace schema v3",
+            });
+        }
         match self.schema.as_str() {
             WORKSPACE_SCHEMA_V1 if self.mode.is_none() => {}
             WORKSPACE_SCHEMA_V1 => {
@@ -216,9 +233,16 @@ impl WorkspaceConfigV1 {
                     reason: "retired runtime mode; remove mode and reset the workspace",
                 });
             }
+            WORKSPACE_SCHEMA_V3 if self.mode.is_none() && self.job_queue.is_none() => {}
+            WORKSPACE_SCHEMA_V3 => {
+                return Err(ConfigError::InvalidValue {
+                    field: "workspace v3",
+                    reason: "legacy mode and job_queue are not allowed",
+                });
+            }
             _ => {
                 return Err(ConfigError::InvalidSchema {
-                    expected: "podway.workspace/v1 or podway.workspace/v2",
+                    expected: "podway.workspace/v1, podway.workspace/v2 or podway.workspace/v3",
                     actual: self.schema.clone(),
                 });
             }

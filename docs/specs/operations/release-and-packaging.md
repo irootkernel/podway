@@ -14,7 +14,7 @@ are not release or support targets.
 Product releases use semantic versioning. Product and contract versions are
 independent. Current public identities are `podway.output/v4`, `podway.error/v2`,
 `podway.version-result/v2`, `podway.contract-manifest/v2`, workspace configuration
-v1/v2, Procedure v2, and direct SQLite generation 15. The manifest has no
+v1/v2/v3, user-config v1, Procedure v2, and direct SQLite generation 15. The manifest has no
 `supported_ipc_ids`. Breaking public changes require an explicit versioned
 contract and adopted compatibility plan; there is no inferred migration promise.
 
@@ -25,8 +25,8 @@ verification artifact, not a managed development service generation.
 
 ## Integration settings compatibility
 
-The accepted [integration-settings contract](integration-settings.md) adds intended
-workspace v3/user-config v1 documents and one read-only query without changing
+The accepted [integration-settings contract](integration-settings.md) provides
+workspace v3/user-config v1 documents and an intended read-only query without changing
 Procedure or Store schemas. Released workspace v1/v2 and default initialization
 bytes remain unchanged. New assets, routes and errors require coherent manifest
 and adapter-catalog regeneration; consumers re-pin the complete manifest.

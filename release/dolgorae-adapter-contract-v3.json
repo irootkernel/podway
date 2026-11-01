@@ -1377,6 +1377,11 @@
         "sha256": "sha256:4df3a072add8e32f2c8160c33dc090e238e9139538fb2382ce2663b698ada8f3"
       },
       {
+        "id": "urn:podway:schema:user-config:v1",
+        "path": "schemas/user-config-v1.schema.json",
+        "sha256": "sha256:332f197a2e93bcaac9c4d65626eec1837319a2e0f65e3083315b37fc97468b9b"
+      },
+      {
         "id": "urn:podway:schema:v2-result-components:v1",
         "path": "schemas/v2-result-components-v1.schema.json",
         "sha256": "sha256:bb3fca998d6c12b2d473aa8da218a925e8b846e5fff7a2dc8dcc01e1f157b4b2"
@@ -1482,6 +1487,11 @@
         "sha256": "sha256:036bc0c41e326a33689ac8d15d02c73a57083579c05380bb46822d308f88a0fb"
       },
       {
+        "id": "urn:podway:schema:workspace:v3",
+        "path": "schemas/workspace-v3.schema.json",
+        "sha256": "sha256:bfb2eb665d5c4199f4afc2b353f917993308b9fe63bce2197f5016e846146e5e"
+      },
+      {
         "id": "urn:podway:schema:writer-predecessor-declaration:v1",
         "path": "schemas/writer-predecessor-declaration-v1.schema.json",
         "sha256": "sha256:20fdb269354fcf253d046d3974d1dd93eac264951af12a173292b6a29e0f2afa"
@@ -1507,7 +1517,7 @@
     "authoring_diagnostics": 59,
     "routes": 57,
     "runtime_errors": 97,
-    "schemas": 88
+    "schemas": 90
   },
   "migration_boundary": {
     "adapter_database_access": "forbidden",

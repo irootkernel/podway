@@ -1515,3 +1515,60 @@ fn reset_all_on_missing_workspace_creates_valid_layout_and_one_generation() {
         .unwrap();
     store.verify_integrity(deadline()).unwrap();
 }
+
+#[test]
+fn integ002_home_root_init_and_removal_preserve_separate_user_settings() {
+    use podway_engine::integration_settings::read_integration_settings_v1;
+    use podway_git::GitResolverContractV1;
+    let home = fixture();
+    let separate = fixture();
+    let user = home.path().join(".config/podway/config.yaml");
+    std::fs::create_dir_all(user.parent().unwrap()).unwrap();
+    let bytes = b"schema: podway.user-config/v1\nintegrations: {dolgorae: {enabled: true}}\n";
+    std::fs::write(&user, bytes).unwrap();
+    let id = initialize(home.path());
+    assert_eq!(std::fs::read(&user).unwrap(), bytes);
+    for root in [home.path(), separate.path()] {
+        let git = NativeGitResolverV1::new().resolve(selector(root)).unwrap();
+        assert!(
+            read_integration_settings_v1(&git, Some(home.path().as_os_str()))
+                .unwrap()
+                .enabled
+        );
+    }
+    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    for enabled in [false, true] {
+        std::fs::write(
+            home.path().join(".podway/config.yaml"),
+            format!(
+                "schema: podway.workspace/v3\nintegrations: {{dolgorae: {{enabled: {enabled}}}}}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(&user, b"invalid user settings").unwrap();
+        resolver
+            .resolve_existing(selector(home.path()), Some(&id), deadline())
+            .unwrap();
+        let git = NativeGitResolverV1::new()
+            .resolve(selector(home.path()))
+            .unwrap();
+        assert!(read_integration_settings_v1(&git, Some(home.path().as_os_str())).is_err());
+    }
+    std::fs::write(&user, bytes).unwrap();
+    remove_workspace_v1(
+        &resolver,
+        request(home.path(), "integ002-home-remove", Some(id)),
+        &Clock,
+    )
+    .unwrap();
+    assert!(!home.path().join(".podway").exists());
+    assert_eq!(std::fs::read(&user).unwrap(), bytes);
+    let git = NativeGitResolverV1::new()
+        .resolve(selector(home.path()))
+        .unwrap();
+    assert!(
+        read_integration_settings_v1(&git, Some(home.path().as_os_str()))
+            .unwrap()
+            .enabled
+    );
+}

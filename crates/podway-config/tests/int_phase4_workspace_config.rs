@@ -221,3 +221,17 @@ fn ignored_queue_and_mode_are_never_written() {
     assert!(document.get("mode").is_none());
     assert!(document.get("job_queue").is_none());
 }
+
+#[test]
+fn integ002_workspace_v3_admits_integration_override_and_rejects_legacy_fields() {
+    let config = parse_workspace_config_v1(
+        "schema: podway.workspace/v3\nintegrations:\n  dolgorae:\n    enabled: false\n",
+    )
+    .expect("workspace v3 must admit explicit integration permission");
+    assert_eq!(config.schema, "podway.workspace/v3");
+    for field in ["mode: prod", "job_queue: {}"] {
+        assert!(
+            parse_workspace_config_v1(format!("schema: podway.workspace/v3\n{field}\n")).is_err()
+        );
+    }
+}

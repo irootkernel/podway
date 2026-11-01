@@ -39,7 +39,8 @@ Failures use `podway.error/v2`. Version identity and the contract manifest use
 their v2 families. Every Procedure observes through `podway.observation-result/v5`
 in the deprecated default generation 1, and through
 `podway.observation-result/v6` under `--contract-generation 2`.
-Workspace configuration and other result families retain their own versions;
+Workspace configuration supports v1/v2/v3; the explicit settings seam also parses
+user-config v1. Other result families retain their own versions;
 Procedure support is identified by `podway.procedure/v2`.
 
 The accepted [integration permission contract](../operations/integration-settings.md)

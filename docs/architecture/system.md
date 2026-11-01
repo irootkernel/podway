@@ -140,7 +140,8 @@ remote includes, executable plugins or configured commands.
 [ADR-0042](../architecture-decision-records/0042-separate-user-settings-namespace.md)
 permit a narrow read-only user-settings exception. The
 [settings specification](../specs/operations/integration-settings.md) owns the
-intended behavior; the current CLI has not yet delivered its new route or schemas.
+behavior. Config parsing, pure resolution and the explicit Engine read seam are
+implemented; the public CLI query remains an intended interface.
 Config owns bounded documents and pure optional-boolean resolution. Engine owns
 the native Git/config-only read and typed failures, separate from Store-backed
 workspace resolution. Protocol owns result/error validation; CLI owns grammar,

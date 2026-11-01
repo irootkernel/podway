@@ -49,8 +49,8 @@ unauthorized direct access. Detailed rules are in the
 The accepted [settings boundary](../specs/operations/integration-settings.md)
 assigns bounded document parsing and pure resolution to Config, native
 Git/config-only access to Engine, public result/error validation to Protocol
-and command presentation to CLI. These are intended additions; current
-executable delivery remains separate. Core and Store gain no user-settings
+and command presentation to CLI. Config parsing and the explicit Engine read
+seam are implemented; public query/presentation remains pending. Core and Store gain no user-settings
 or provider dependency. Repository-only metadata verification belongs in
 `tools/` and its frozen upstream definitions in `contracts/`; neither becomes
 a product process runner or runtime dependency on a neighboring checkout.

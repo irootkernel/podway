@@ -7,8 +7,8 @@ committed snapshot without writing. There is no resident process, socket, servic
 queue, runtime mode, or user-global Podway runtime state. The accepted
 [integration-settings contract](../operations/integration-settings.md) permits
 only an explicit read-only user-settings query; it does not make ordinary Direct
-commands depend on HOME. Its query and configuration forms remain intended
-interfaces until their executable delivery.
+commands depend on HOME. Workspace v3 parsing and an explicit Engine read seam
+are implemented; the public query remains an intended interface.
 
 Human error rendering may include the exact Procedure path supplied to `start`
 and a visible truncation summary after a bounded diagnostic window. JSON mode

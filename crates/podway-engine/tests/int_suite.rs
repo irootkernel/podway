@@ -81,3 +81,5 @@ mod int_guide009_generation2_observation;
 
 #[path = "int_guide010_generation2_error_details.rs"]
 mod int_guide010_generation2_error_details;
+#[path = "int_integ002_settings.rs"]
+mod int_integ002_settings;

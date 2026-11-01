@@ -1,3 +1,5 @@
+#[path = "int_integ002_settings.rs"]
+mod int_integ002_settings;
 #[path = "int_phase4_workspace_config.rs"]
 mod int_phase4_workspace_config;
 #[path = "int_procedure_document.rs"]

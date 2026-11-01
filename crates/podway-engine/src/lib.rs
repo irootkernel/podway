@@ -15,6 +15,7 @@ pub mod direct_sessions;
 pub mod direct_start;
 pub mod direct_workspace;
 pub mod execution;
+pub mod integration_settings;
 pub mod native_execution;
 pub mod v2_read_service;
 pub mod workspace;

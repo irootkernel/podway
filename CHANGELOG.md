@@ -6,6 +6,9 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Added
 
+- Support closed workspace v3 and user integration defaults with bounded explicit settings reads,
+  preserving existing workspace configuration and HOME-independent Direct operations.
+
 - Complete contextual bash, zsh and fish help topics without workspace queries,
   and resolve advertised flag-selected help spellings.
 - Explain combined observation reads, complete nested check-result recording,

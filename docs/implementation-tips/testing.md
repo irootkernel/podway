@@ -1026,3 +1026,29 @@ Store's `test_support` module is disabled in production builds. Standard
 integration Make gates select `podway-store/test-support`; a standalone Store
 `int_suite` invocation must pass `--features test-support`. Engine tests enable
 the same feature only through their development dependency.
+
+## Integration settings regression owners
+
+The [settings contract](../specs/operations/integration-settings.md) separates
+configuration support and the explicit Engine seam from the pending public
+query. Config's registered `int_integ002_settings` suite owns strict booleans,
+inheritance/value precedence, closed nested objects, YAML hazards and user-input
+byte/depth/node limits. `int_phase4_workspace_config` preserves released default
+bytes/canonical output and checks v3 legacy-field refusal.
+
+Engine's registered `int_integ002_settings` suite owns Git/config-only resolution,
+project-before-HOME failure precedence, invalid-user validation despite project
+override, unsafe paths and lossless HOME. The native settings unit regression
+replaces roots, ancestors, files, content and missing leaves deterministically.
+The integration suite also replaces the project root after Git discovery and
+requires refusal before configuration reads; Engine binds the opened project
+descriptor to the original native Git discovery evidence.
+The maintenance suite's
+`integ002_home_root_init_and_removal_preserve_separate_user_settings` uses owned
+Git worktrees to verify HOME-root/separate-worktree lookup and init/removal
+isolation. No test selects the real user home or changes ambient HOME.
+
+Use the existing exact registered-test invocation and Make gates. These checks
+prove the configuration/native seam, not a shipped public query, actual Dolgorae
+execution or complete integration qualification. The manifest-specific Store
+matrix remains separately required by the adopted readiness plan.

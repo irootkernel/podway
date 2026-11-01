@@ -8,9 +8,11 @@ Direct model. [ADR-0042](../../architecture-decision-records/0042-separate-user-
 supersedes only its user-settings location. Accepted ADR bodies remain historical
 authority; the effective path below follows ADR-0042.
 
-This accepted specification defines intended behavior. Current executable
-configuration remains workspace v1/v2 and the CLI does not yet serve the new
-settings query or user-configuration error. The [roadmap](../../roadmap/README.md#integ-dolgorae-integration-readiness)
+Workspace v3 and user-config v1 parsing, pure permission resolution and the
+explicit Engine native-read seam are implemented. Default initialization still
+writes workspace v1. The CLI does not yet serve the settings query or
+user-configuration error; the public query below remains an intended interface.
+The [roadmap](../../roadmap/README.md#integ-dolgorae-integration-readiness)
 owns implementation status and the [execution dossier](../../todo/TODO-podway-dolgorae-integration-readiness.md)
 owns the unfinished delivery and verification plan. Adoption alone changes no
 installed binary, existing configuration or Direct behavior.
@@ -25,7 +27,7 @@ ordinary project configuration in `.podway` and its separate user document in
 tree MUST preserve the user document. There is no old-user-path migration,
 `XDG_CONFIG_HOME`, passwd lookup, alternate-root flag or user-configuration writer.
 
-The new closed workspace v3 and user-config v1 documents expose optional
+Closed workspace v3 and user-config v1 documents expose optional
 `integrations.dolgorae.enabled`. Missing objects or values inherit; explicit
 `true` and `false` are distinct strict booleans. Resolve project value, then user
 value, then `false`. Workspace v3 excludes legacy `mode` and `job_queue`; released
