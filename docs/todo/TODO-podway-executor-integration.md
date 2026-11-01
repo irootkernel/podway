@@ -3,7 +3,7 @@
 ## Status and authority
 
 - Document state: `Candidate`
-- Working label: INTEG
+- Working label: future executor qualification
 - Dossier type: research and design candidate
 - Research baseline: September 16, 2026
 - Contract comparison refinement: September 17, 2026
@@ -15,6 +15,13 @@ This candidate retains the real-executor work excluded when the former
 supervised-delegation candidate was narrowed to the Podway-only foundation.
 It does not block that foundation's local/native deterministic acceptance.
 It authorizes no Dolgorae code change, live run, deployment, or provider access.
+
+The separately adopted [INTEG readiness dossier](TODO-podway-dolgorae-integration-readiness.md)
+selects only default-disabled user/worktree permission settings, their public
+query and bounded read-only compatibility diagnostics. It does not adopt this
+candidate's executable adapter, actual receipt-path qualification or live
+comparison. All requirements and open decisions below remain with this Candidate;
+a metadata probe or a permission toggle does not satisfy them.
 
 ## 1. Context
 

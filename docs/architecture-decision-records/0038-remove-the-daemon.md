@@ -1,6 +1,7 @@
 # ADR-0038: Remove the Daemon and Commit Mutations In-Process
 
 - Status: Accepted
+- Superseded in part by: [ADR-0041](0041-user-integration-settings.md), only the read-only user-settings exception to decision 7; runtime implementation remains with INTEG.
 - Acceptance date: 2026-10-06
 - Date: 2026-10-05
 - Acceptance owner: `V2DFC-002`, following the `V2DFC-001` feasibility gate

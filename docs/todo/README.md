@@ -97,7 +97,9 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-None.
+- [Dolgorae integration readiness](TODO-podway-dolgorae-integration-readiness.md):
+  the bounded INTEG settings/query/diagnostics execution plan. The roadmap owns
+  its task order and status; actual adapter and live qualification remain below.
 
 ## Related candidates
 
@@ -117,7 +119,7 @@ verification obligations; grouping does not waive them.
 |---|---|---|---|
 | Future interaction semantics | [Agent workflow simplification](TODO-podway-agent-workflow-simplification.md) | Assess combined operations or returned observations against a concrete caller need | Unselected interaction research |
 | TYPED | [Typed boundary ownership](TODO-podway-typed-boundary-ownership.md) | Explicit owners for existing values, bounds, extraction and validation reuse | DF-002, DF-003, DF-005, DF-011, DF-012, DF-013, DF-014, DF-016, DF-017, DF-022, DF-024, DF-025, DF-027 |
-| INTEG | [Executor integration](TODO-podway-executor-integration.md) | Real adapter and selected-build qualification beyond the local foundation | Existing real executor candidate |
+| Future executor qualification | [Executor integration](TODO-podway-executor-integration.md) | Real adapter and selected-build qualification beyond the bounded INTEG readiness work | Existing real executor candidate |
 | PROOF | [Graph evolution feasibility](TODO-podway-graph-evolution-feasibility.md) | Per-shape evidence for coordination and topology-lineage needs | Existing graph and continuation research |
 | WEBUI | [Operations console](TODO-podway-operations-console.md) | Foreground human operations after the graph direction is settled | Existing Web console candidate |
 

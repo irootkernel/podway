@@ -20,6 +20,35 @@ sequence, for example `OPTIM-001`. Existing alphanumeric epic IDs, including
 `V2CTR` and `REL12`, and the compact `REL12` task IDs remain unchanged historical
 identifiers. Do not rename completed work to apply the new convention.
 
+## INTEG — Dolgorae Integration Readiness
+
+Dependencies: existing Direct and host-neutral delegation foundations. Status: Planned.
+Detailed SOT: [Dolgorae integration readiness](../todo/TODO-podway-dolgorae-integration-readiness.md).
+Architectural authority: [ADR-0041](../architecture-decision-records/0041-user-integration-settings.md) and
+[ADR-0042](../architecture-decision-records/0042-separate-user-settings-namespace.md).
+Target release: unassigned.
+
+INTEG prepares default-disabled integration permission settings, their public
+read-only query and bounded compatibility diagnostics against an existing
+Dolgorae executable. It does not implement an external adapter, activate a
+backend or qualify real delegated execution. Dolgorae source, configuration,
+installation and account state remain outside its mutation scope.
+
+Execute INTEG-001 through INTEG-005 in numeric order. Each task depends on its
+predecessor. Readiness acceptance requires the complete local regression matrix
+and development gate, honest connection diagnostics, independent whole-Epic
+validation and explicit owner acceptance. A future Dolgorae release is not a
+prerequisite for this bounded outcome. Actual adapter consumption and live
+qualification remain in the [continuing candidate](../todo/TODO-podway-executor-integration.md).
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `INTEG-001` | Establish integration settings contracts | Planned | Reconcile the separate user-settings namespace, narrow exception, root guidance and intended interfaces without provider execution or global runtime authority. | [Authority and scope](../todo/TODO-podway-dolgorae-integration-readiness.md#1-status-and-authority) |
+| `INTEG-002` | Resolve bounded user and worktree settings | Planned | Add closed workspace v3 and user config v1, strict optional booleans, safe native reads and project-over-user resolution while preserving v1/v2 and ordinary Direct behavior. | [Settings resolution](../todo/TODO-podway-dolgorae-integration-readiness.md#settings-and-resolution) |
+| `INTEG-003` | Expose effective integration permission | Planned | Deliver the Git/config-only integration.show route, closed result and errors, help/completion and coherent manifest-bound public contracts. | [Public query](../todo/TODO-podway-dolgorae-integration-readiness.md#public-query) |
+| `INTEG-004` | Verify existing Dolgorae compatibility safely | Planned | Add pinned, bounded public metadata probes with exact version comparison and deterministic outcomes without changing Dolgorae or claiming real integration. | [Connection verification](../todo/TODO-podway-dolgorae-integration-readiness.md#connection-verification) |
+| `INTEG-005` | Qualify readiness and prepare closeout | Planned | Pass integrated checks and make test with explicit candidate/previous-manifest/query cases, preserve live-integration limits and prepare later owner-approved closeout. | [Verification and acceptance](../todo/TODO-podway-dolgorae-integration-readiness.md#7-verification-and-release-acceptance) |
+
 ## MAINT — Maintenance and Recovery Safety
 
 Dependencies: none; required prior implementation is already delivered. Status: Completed.
