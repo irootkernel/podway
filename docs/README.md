@@ -25,23 +25,22 @@ write-free snapshot reads are the current product boundaries.
 
 Current adopted work is tracked by the [active roadmap](roadmap/).
 The [INTEG readiness epic](roadmap/README.md#integ-dolgorae-integration-readiness)
-prepares default-disabled user/worktree integration permission and read-only
-diagnostics under [ADR-0041](architecture-decision-records/0041-user-integration-settings.md),
-with the separate user-settings namespace of
+is completed and owner-accepted. It delivered default-disabled user/worktree
+integration permission, an explicit Git/config-only query and repository-only
+metadata verification under
+[ADR-0041](architecture-decision-records/0041-user-integration-settings.md) and
 [ADR-0042](architecture-decision-records/0042-separate-user-settings-namespace.md).
-Workspace v3/user-config v1 parsing, pure permission resolution and the explicit
-Engine native-read seam, public permission query and repository-only metadata
-verifier are implemented. The [execution dossier](todo/TODO-podway-dolgorae-integration-readiness.md)
-retains the remaining integrated qualification plan. The accepted
-[integration-settings specification](specs/operations/integration-settings.md)
-owns the narrow permission and namespace boundary; its availability section
-distinguishes permission and metadata inspection from real execution qualification.
-The [manifest-specific qualification](implementation-tips/testing.md#integration-manifest-qualification)
-registers same-writer continuity and separately exercises authentic previous-writer
-refusal plus settings-query isolation. Real adapter qualification remains a
-separate candidate. Whole-Epic validation, explicit owner acceptance and later
-dossier retirement remain required; the original dossier is retained for those
-consumers.
+The [integration-settings specification](specs/operations/integration-settings.md)
+owns delivered behavior, namespace separation and permission-versus-readiness
+limits. [Settings regression owners](implementation-tips/testing.md#integration-settings-regression-owners),
+[metadata controls](implementation-tips/testing.md#repository-metadata-verifier-controls)
+and [manifest-specific qualification](implementation-tips/testing.md#integration-manifest-qualification)
+preserve the verification methods, same-writer continuity and authentic
+previous-writer refusal/query-isolation boundaries. The metadata observation
+retained an unsupported capabilities family; real adapter qualification remains
+in the [continuing executor candidate](todo/TODO-podway-executor-integration.md).
+The execution dossier is retired and the roadmap alone owns status. This outcome
+authorizes no release, installation, external-consumer change or activation.
 
 The [MAINT epic](roadmap/README.md#maint-maintenance-and-recovery-safety)
 delivered maintenance admission ownership, human confirmation and recovery

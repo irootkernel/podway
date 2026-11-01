@@ -16,9 +16,11 @@ Manifest-specific continuity/refusal qualification is registered in the native
 CLI suite, with authentic selected-previous-binary checks kept separate from
 portable test prerequisites.
 The [roadmap](../../roadmap/README.md#integ-dolgorae-integration-readiness)
-owns implementation status and the [execution dossier](../../todo/TODO-podway-dolgorae-integration-readiness.md)
-owns the unfinished delivery and verification plan. Adoption alone changes no
-installed binary, existing configuration or Direct behavior.
+owns completed readiness status. This specification owns delivered behavior;
+[testing guidance](../../implementation-tips/testing.md#integration-settings-regression-owners)
+owns regression and qualification methods. The execution dossier is retired.
+Completion changes no installed binary or existing configuration and grants no
+release, installation or activation authority.
 
 ## Namespace and resolution
 
@@ -211,6 +213,6 @@ remain unqualified. Revalidate the selected tool after changes. The
 retains both Primary-host mappings, trusted controller/configuration ownership,
 complete Role/task/result byte domains, actual accepted-task/result/round and
 worker-disposition proof, response-loss recovery and live comparative acceptance.
-No TYPED-wide dependency or executable adapter is selected here. Whole-Epic
-validation, explicit owner acceptance and later dossier retirement are separate
-closeout obligations; preserve the original dossier until those consumers finish.
+No TYPED-wide dependency or executable adapter is selected here. Readiness
+validation and owner acceptance do not close these separate live-integration
+obligations or authorize release, installation or activation.

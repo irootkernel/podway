@@ -6,7 +6,7 @@
 - Supersedes in part: [ADR-0041](0041-user-integration-settings.md), only the user-settings location in decision 1
 - Preserves: all other decisions of [ADR-0041](0041-user-integration-settings.md)
 - Delivery owner: [INTEG](../roadmap/README.md#integ-dolgorae-integration-readiness)
-- Detailed SOT: [Integration readiness](../todo/TODO-podway-dolgorae-integration-readiness.md)
+- Detailed SOT: [Integration settings](../specs/operations/integration-settings.md)
 
 This decision takes effect on exact document approval and application.
 Implementation remains pending under INTEG; it authorizes no product execution,

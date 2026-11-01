@@ -97,9 +97,9 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-- [Dolgorae integration readiness](TODO-podway-dolgorae-integration-readiness.md):
-  the bounded INTEG settings/query/diagnostics execution plan. The roadmap owns
-  its task order and status; actual adapter and live qualification remain below.
+No adopted design dossiers are currently retained here. Completed outcomes are
+linked from the [roadmap](../roadmap/README.md); actual adapter and live
+qualification remain in the continuing candidate below.
 
 ## Related candidates
 

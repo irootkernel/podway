@@ -7,7 +7,7 @@
 - Supersedes in part: [ADR-0038](0038-remove-the-daemon.md), decision 7 only
 - Preserves: [ADR-0010](0010-generic-cli-json-integration.md), [ADR-0035](0035-host-neutral-supervised-delegation.md), [ADR-0039](0039-opt-in-contract-generations.md)
 - Delivery owner: [INTEG](../roadmap/README.md#integ-dolgorae-integration-readiness)
-- Detailed SOT: [Integration readiness](../todo/TODO-podway-dolgorae-integration-readiness.md)
+- Detailed SOT: [Integration settings](../specs/operations/integration-settings.md)
 
 This decision is adopted only when its exact document diff is approved and
 applied. Implementation remains ordered by INTEG; current executable contracts
