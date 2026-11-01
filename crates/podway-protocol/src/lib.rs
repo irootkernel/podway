@@ -836,6 +836,11 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
+        code: "USER_CONFIG_INVALID",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
         code: "WORKSPACE_ALREADY_INITIALIZED",
         exit_code: 1,
         retryable: false,

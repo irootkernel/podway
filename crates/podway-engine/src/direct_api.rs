@@ -59,6 +59,8 @@ pub enum DirectCommandV1 {
         repair: bool,
     },
     WorkspaceShow,
+    /// Explicit native Git/config-only Dolgorae permission query; no Store identity.
+    IntegrationShow,
     WorkspaceDoctor {
         deep: bool,
     },
@@ -88,6 +90,7 @@ impl DirectCommandV1 {
             Self::Session(command) => command.slice().command_name(),
             Self::WorkspaceInit { .. } => "workspace.init",
             Self::WorkspaceShow => "workspace.show",
+            Self::IntegrationShow => "integration.show",
             Self::WorkspaceDoctor { .. } => "workspace.doctor",
             Self::WorkspaceRepair => "workspace.repair",
             Self::DelegationAccept(_) => "delegation.accept",
@@ -820,6 +823,33 @@ fn dispatch<R: GitResolverContractV1>(
             clock,
             ids,
         ),
+        DirectCommandV1::IntegrationShow => {
+            if request.idempotency_key.is_some()
+                || crate::workspace::workspace_request_is_fenced_v1(request.expected_workspace_id.as_ref(), &request.selector)
+            {
+                return Err(DirectExecutionErrorV1::InvalidRequest);
+            }
+            let worktree = NativeGitResolverV1::new().resolve_git_only(request.selector)
+                .map_err(|source| crate::workspace::WorkspaceResolutionErrorV1::Git {
+                    observation: crate::workspace::WorkspaceGitObservationV1::Preliminary,
+                    source,
+                })?;
+            let settings = crate::integration_settings::read_integration_settings_with_home_v1(
+                &worktree, || std::env::var_os("HOME"),
+            ).map_err(DirectExecutionErrorV1::IntegrationSettings)?;
+            Ok(OutputEnvelopeV4::new(podway_protocol::OutputEnvelopeInputV4 {
+                request_id: request.request_id,
+                command: CommandNameV1::new("integration.show")?,
+                generated_at: request.observed_at,
+                workspace: None,
+                session: None,
+                result: serde_json::json!({
+                    "schema": "podway.integration-settings-result/v1",
+                    "integration": "dolgorae", "enabled": settings.enabled, "source": settings.source,
+                }).as_object().expect("result is an object").clone(),
+                warnings: Vec::new(),
+            })?)
+        }
         DirectCommandV1::OutcomeLookup { key } => lookup_outcome_v1(
             resolver,
             OutcomeLookupRequestV1 {

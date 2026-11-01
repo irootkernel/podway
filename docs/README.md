@@ -30,12 +30,12 @@ diagnostics under [ADR-0041](architecture-decision-records/0041-user-integration
 with the separate user-settings namespace of
 [ADR-0042](architecture-decision-records/0042-separate-user-settings-namespace.md).
 Workspace v3/user-config v1 parsing, pure permission resolution and the explicit
-Engine native-read seam are implemented. The public query and metadata verifier
-remain intended changes described by its
+Engine native-read seam and public permission query are implemented. The metadata
+verifier remains planned work described by its
 [execution dossier](todo/TODO-podway-dolgorae-integration-readiness.md). The accepted
 [integration-settings specification](specs/operations/integration-settings.md)
 owns the narrow permission and namespace boundary; its availability section
-distinguishes implemented settings support from the still-intended public query.
+distinguishes implemented settings/query support from planned metadata verification.
 Real adapter qualification remains a separate candidate.
 
 The [MAINT epic](roadmap/README.md#maint-maintenance-and-recovery-safety)

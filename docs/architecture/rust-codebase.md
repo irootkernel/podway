@@ -32,6 +32,12 @@ The daemon and service crates, IPC framing, client transport and service control
 are retired under [ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md).
 Their historical design records remain history rather than current ownership.
 
+The explicit `integration.show` path uses native Git-only discovery with the
+same root/administration object witnesses, excluding workspace/runtime containment
+inspection. Engine then descriptor-validates project configuration against that
+root witness and selects HOME only after project validation. Ordinary Direct
+resolution retains its existing containment and Store admission checks.
+
 ## Dependency rules
 
 The executable [`cargo-adjacency.json`](../../contracts/cargo-adjacency.json)

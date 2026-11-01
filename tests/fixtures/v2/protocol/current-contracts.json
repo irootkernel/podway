@@ -1593,6 +1593,12 @@
         "archived_at_ms": 1,
         "archived_workspace_revision": 3
       }
+    },
+    "podway.integration-settings-result/v1": {
+      "schema": "podway.integration-settings-result/v1",
+      "integration": "dolgorae",
+      "enabled": false,
+      "source": "default"
     }
   },
   "cases": [

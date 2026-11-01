@@ -919,6 +919,15 @@ pub fn render_direct_error_v1(
     context: &DirectErrorContextV1,
 ) -> Result<ErrorEnvelopeV2, ProtocolError> {
     let mut presentation = match error {
+        DirectExecutionErrorV1::InvalidRequest => simple("REQUEST_INVALID"),
+        DirectExecutionErrorV1::IntegrationSettings(error) => simple(match error {
+            crate::integration_settings::IntegrationSettingsReadErrorV1::ProjectConfigInvalid => {
+                "WORKSPACE_CONFIG_INVALID"
+            }
+            crate::integration_settings::IntegrationSettingsReadErrorV1::UserConfigInvalid => {
+                "USER_CONFIG_INVALID"
+            }
+        }),
         DirectExecutionErrorV1::InputTooLarge => simple("REQUEST_TOO_LARGE"),
         DirectExecutionErrorV1::SessionNotTerminal => simple("SESSION_NOT_TERMINAL"),
         DirectExecutionErrorV1::Workspace(DirectWorkspaceResolutionErrorV1::Resolution(error)) => {

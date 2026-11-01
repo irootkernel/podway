@@ -14,7 +14,7 @@ its in-process Direct Engine as one product and are grouped by concern:
 ## Integration permission
 
 - [Integration settings](operations/integration-settings.md): the accepted narrow
-  user-settings exception, worktree override, intended read-only query and
+  user-settings exception, worktree override, explicit read-only query and
   compatibility-verification boundary. Its availability section distinguishes
   the accepted contract from current executable support.
 

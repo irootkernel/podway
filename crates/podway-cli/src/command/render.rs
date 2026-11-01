@@ -439,6 +439,26 @@ fn render_human_output_direct(
         )?;
     }
     let result = &value["result"];
+    if value["command"].as_str() == Some("integration.show") {
+        write_text_line(
+            stdout,
+            format_args!(
+                "Dolgorae integration permission: {} (source: {})",
+                if result["enabled"] == true {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+                result["source"].as_str().unwrap_or_default()
+            ),
+        )?;
+        return write_text_line(
+            stdout,
+            format_args!(
+                "Permission does not establish connection readiness, capability or execution. An external adapter must adopt this query before new assignments."
+            ),
+        );
+    }
     if value["command"].as_str() == Some("session.observe") {
         for guidance in [
             super::grammar::OBSERVATION_READ_GUIDANCE,

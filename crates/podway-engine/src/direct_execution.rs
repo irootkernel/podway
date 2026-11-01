@@ -391,6 +391,8 @@ impl DirectIdSourceV1 for NativeDirectIdSourceV1 {
 #[derive(Debug)]
 pub enum DirectExecutionErrorV1 {
     InputTooLarge,
+    InvalidRequest,
+    IntegrationSettings(crate::integration_settings::IntegrationSettingsReadErrorV1),
     SessionNotTerminal,
     Workspace(DirectWorkspaceResolutionErrorV1),
     Layout(podway_git::WorkspaceLayoutErrorV1),

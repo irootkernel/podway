@@ -220,6 +220,11 @@ pub(super) enum Command {
     },
     /// Atomically record or clear a bounded set of typed item values from JSON stdin.
     Record(RecordArgs),
+    /// Show effective integration permission without opening runtime state.
+    Integration {
+        #[command(subcommand)]
+        command: IntegrationCommand,
+    },
     /// Look up the durable outcome of a direct mutation.
     Outcome {
         #[command(subcommand)]
@@ -230,6 +235,14 @@ pub(super) enum Command {
     CompleteDynamic {
         #[arg(default_value = "items")]
         kind: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(super) enum IntegrationCommand {
+    Show {
+        #[arg(value_name = "INTEGRATION")]
+        integration: String,
     },
 }
 
@@ -691,6 +704,7 @@ impl Command {
             Self::Clear { .. } => Some("item.clear"),
             Self::Record(_) => Some("item.record_many"),
             Self::Outcome { .. } => Some("outcome.lookup"),
+            Self::Integration { .. } => Some("integration.show"),
             Self::Help { .. }
             | Self::Version { .. }
             | Self::Completions { .. }
@@ -1099,6 +1113,7 @@ fn parse_failure_command_context_from_matches(
         "attach" => ParseFailureCommandContext::new("item.attach", true),
         "clear" => ParseFailureCommandContext::new("item.clear", true),
         "record" => ParseFailureCommandContext::new("item.record_many", true),
+        "integration" => nested_parse_failure_context(matches, &[("show", "integration.show")])?,
         "outcome" => nested_parse_failure_context(matches, &[("lookup", "outcome.lookup")])?,
         "__complete" => ParseFailureCommandContext::new("__complete", false),
         _ => return None,
@@ -1735,6 +1750,9 @@ fn route_topic(topic: &str) -> Option<&'static str> {
         "item.record_many" => {
             "Usage:\n  podway record --stdin [--worktree <path>] [--json]\n\nOne atomic batch: either every operation commits with one session revision\nbump, or nothing changes. The closed stdin document is\npodway.item-record-many-input/v1; each field's observation source:\n  schema                  the constant podway.item-record-many-input/v1\n  workspace_uuid          workspace.uuid\n  session_id              result.status.session (id)\n  session_revision        result.status.session (revision)\n  attempt_id              result.status.current.attempt.attempt_id\n  idempotency_key         a new caller-owned key\nEach of the 1..128 unique operations carries:\n  item_id\n  expected_item_revision  that item's active_items[].revision, also shown as\n                          preconditions.item_revision in record templates\n  exactly one of record (a type and its value fields) or clear: true\nRecord value fields follow the input schema: confirm value; text value; choice value; integer value; list value; artifact in path form (type, path, optional media_type) or reference form (type, reference, digest, size_bytes, media_type); check_result operation_id, operation_digest, input_basis, executor, outcome, summary and output_digest. A check_result is caller supplied and structurally bound; Podway does not execute, verify, or attest the named external operation.\n\nExample stdin document (one line):\n  {\"schema\":\"podway.item-record-many-input/v1\",\"workspace_uuid\":\"00000000-0000-4000-8000-000000000001\",\"session_id\":\"00000000-0000-4000-8000-000000000002\",\"session_revision\":3,\"attempt_id\":\"00000000-0000-4000-8000-000000000003\",\"idempotency_key\":\"record-example\",\"operations\":[{\"item_id\":\"summary\",\"expected_item_revision\":1,\"record\":{\"type\":\"text\",\"value\":\"Recorded.\"}}]}\n\nExample:\n  podway record --stdin < record.json"
         }
+        "integration.show" => {
+            "Usage:\n  podway integration show dolgorae [--json]\n\nRead effective integration permission and its source (project > user > false). Works before init and never opens SQLite or a maintenance lease. Only this query reads $HOME/.config/podway/config.yaml. Enabled permission does not establish connection readiness, capability or execution. An external adapter must adopt this query before new assignments. Disabled permission does not cancel accepted work or disable result lookup, reconciliation, receipts, acceptance or explicit completion. No stdin document is read. Idempotency keys, workspace/session identities, revision/attempt/item/goal fences and destructive flags are rejected."
+        }
         "outcome.lookup" => {
             "Usage:\n  podway outcome lookup --idempotency-key <key> [--if-workspace-uuid <uuid>] [--json]\n\nRead the original committed success response without replaying or admitting a mutation."
         }
@@ -1867,6 +1885,7 @@ mod tests {
         (&["clear"], "item.clear"),
         (&["record"], "item.record_many"),
         (&["outcome", "lookup"], "outcome.lookup"),
+        (&["integration", "show"], "integration.show"),
     ];
 
     const GROUP_WORDS: &[&str] = &[
@@ -1877,6 +1896,7 @@ mod tests {
         "delegation",
         "goal",
         "disposition",
+        "integration",
         "outcome",
     ];
 

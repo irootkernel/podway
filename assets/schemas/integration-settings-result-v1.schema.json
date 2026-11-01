@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:integration-settings-result:v1",
+  "title": "Podway Integration Settings Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "integration",
+    "enabled",
+    "source"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.integration-settings-result/v1"
+    },
+    "integration": {
+      "const": "dolgorae"
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "source": {
+      "enum": [
+        "project",
+        "user",
+        "default"
+      ]
+    }
+  }
+}

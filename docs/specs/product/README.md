@@ -45,7 +45,7 @@ Procedure support is identified by `podway.procedure/v2`.
 
 The accepted [integration permission contract](../operations/integration-settings.md)
 allows only explicit read-only user defaults with worktree overrides. Its
-intended query does not authorize backend dispatch or introduce user-global
+query does not authorize backend dispatch or introduce user-global
 runtime state; ordinary Direct work remains independent of HOME and Dolgorae.
 
 ## Principles

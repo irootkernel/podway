@@ -1030,7 +1030,7 @@ the same feature only through their development dependency.
 ## Integration settings regression owners
 
 The [settings contract](../specs/operations/integration-settings.md) separates
-configuration support and the explicit Engine seam from the pending public
+configuration support and the explicit Engine seam from the public Git/config-only
 query. Config's registered `int_integ002_settings` suite owns strict booleans,
 inheritance/value precedence, closed nested objects, YAML hazards and user-input
 byte/depth/node limits. `int_phase4_workspace_config` preserves released default
@@ -1048,7 +1048,20 @@ The maintenance suite's
 Git worktrees to verify HOME-root/separate-worktree lookup and init/removal
 isolation. No test selects the real user home or changes ambient HOME.
 
+Git's paired `integ003_git_only_discovery_ignores_runtime_but_retains_native_root_witnesses`
+regression requires ordinary resolution to reject blocked runtime paths while
+Git-only discovery preserves native root evidence and refuses substituted roots.
+The CLI unsafe-project regression requires project configuration errors without
+legacy reset advice even when `.podway` itself is unsafe.
+
 Use the existing exact registered-test invocation and Make gates. These checks
-prove the configuration/native seam, not a shipped public query, actual Dolgorae
-execution or complete integration qualification. The manifest-specific Store
-matrix remains separately required by the adopted readiness plan.
+include the registered CLI `e2e_integ003_settings` suite: both generations,
+pre-init and blocked runtime paths, all permission sources, project/user/HOME
+failure precedence, rejected fences/names/options, human rendering, help and
+completion. Protocol's `int_integ003_settings` validates closed result and envelope
+memberships and configuration-error details. Each CLI child selects an owned
+HOME; no test changes process-global HOME. An open stdin producer verifies the
+query returns without consuming stdin. These checks prove settings/query behavior,
+not actual Dolgorae execution or complete integration qualification. The complete
+manifest-specific normal Store read/write/replay matrix remains INTEG-005 work;
+INTEG-003 separately qualifies its query against an authentic previous-manifest Store.

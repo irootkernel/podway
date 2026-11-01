@@ -940,3 +940,41 @@ fn competing_fresh_resolutions_expose_distinct_unbound_candidates() {
         &WorkspaceIdentityStateV1::Candidate
     );
 }
+
+#[test]
+fn integ003_git_only_discovery_ignores_runtime_but_retains_native_root_witnesses() {
+    let resolver = NativeGitResolverV1::new();
+    for runtime in ["file", "symlink", "fifo"] {
+        let fixture = TempDir::new().unwrap();
+        let root = fixture.path();
+        create_main(root);
+        let selected = selector(root, None);
+        let ordinary = resolver.resolve(selected.clone()).unwrap();
+        let git_only = resolver.resolve_git_only(selected.clone()).unwrap();
+        assert!(ordinary.same_transient_object_evidence(&git_only));
+        fs::create_dir(root.join(".podway")).unwrap();
+        let runtime_path = root.join(".podway/runtime");
+        match runtime {
+            "file" => fs::write(&runtime_path, b"not a runtime directory").unwrap(),
+            "symlink" => symlink(root.join("unread-target"), &runtime_path).unwrap(),
+            "fifo" => create_fifo(&runtime_path),
+            _ => unreachable!(),
+        }
+        assert!(resolver.resolve(selected.clone()).is_err());
+        let git_only = resolver.resolve_git_only(selected).unwrap();
+        assert_eq!(git_only.roots(), ordinary.roots());
+        let descriptor = fs::File::open(root).unwrap();
+        resolver
+            .validate_open_worktree_root(&git_only, &descriptor)
+            .unwrap();
+        let retired = root.with_extension(format!("integ003-retired-{runtime}"));
+        fs::rename(root, &retired).unwrap();
+        fs::create_dir(root).unwrap();
+        assert!(
+            resolver
+                .validate_open_worktree_root(&git_only, &fs::File::open(root).unwrap())
+                .is_err()
+        );
+        fs::remove_dir_all(&retired).unwrap();
+    }
+}

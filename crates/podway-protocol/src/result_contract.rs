@@ -393,6 +393,11 @@ pub const DAEMON_FREE_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
         "schemas/outcome-lookup-result-v1.schema.json",
         &["outcome.lookup"],
     ),
+    result_schema_v2(
+        "podway.integration-settings-result/v1",
+        "schemas/integration-settings-result-v1.schema.json",
+        &["integration.show"],
+    ),
     result_schema_v2("podway.output/v4", "schemas/output-v4.schema.json", &[]),
     result_schema_v2(
         "podway.prepared-next-result/v3",
@@ -1212,6 +1217,10 @@ pub fn result_schema_top_level_fields_v2(
                 "mutation_templates_total",
                 "mutation_templates_truncated",
             ],
+        )),
+        "podway.integration-settings-result/v1" => Some((
+            &["schema", "integration", "enabled", "source"],
+            &["schema", "integration", "enabled", "source"],
         )),
         "podway.outcome-lookup-result/v1" => Some((
             &["schema", "idempotency_key", "found", "outcome"],

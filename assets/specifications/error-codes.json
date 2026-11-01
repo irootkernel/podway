@@ -566,6 +566,12 @@
       "summary": "The active stage cannot be skipped."
     },
     {
+      "code": "USER_CONFIG_INVALID",
+      "exit_code": 5,
+      "retryable": false,
+      "summary": "User configuration is invalid or unavailable."
+    },
+    {
       "code": "WORKSPACE_ALREADY_INITIALIZED",
       "exit_code": 1,
       "retryable": false,

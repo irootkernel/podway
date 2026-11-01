@@ -6,6 +6,9 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Added
 
+- Show effective Dolgorae permission and its source with `integration show dolgorae`,
+  independently of workspace initialization and Store writer compatibility.
+
 - Support closed workspace v3 and user integration defaults with bounded explicit settings reads,
   preserving existing workspace configuration and HOME-independent Direct operations.
 

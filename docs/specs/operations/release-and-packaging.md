@@ -26,7 +26,7 @@ verification artifact, not a managed development service generation.
 ## Integration settings compatibility
 
 The accepted [integration-settings contract](integration-settings.md) provides
-workspace v3/user-config v1 documents and an intended read-only query without changing
+workspace v3/user-config v1 documents and a read-only permission query without changing
 Procedure or Store schemas. Released workspace v1/v2 and default initialization
 bytes remain unchanged. New assets, routes and errors require coherent manifest
 and adapter-catalog regeneration; consumers re-pin the complete manifest.

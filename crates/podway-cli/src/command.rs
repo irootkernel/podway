@@ -50,8 +50,8 @@ use authoring::{
 };
 use grammar::{
     ArchiveCommand, Cli, Command, DelegationCommand, DispositionCommand, EvidenceCommand,
-    ExistingSessionPolicy, GoalCommand, OutcomeCommand, PresetCommand, ProcedureCommand, ReadArgs,
-    StartArgs, StartTerminalDisposition, WorkspaceCommand, help_text,
+    ExistingSessionPolicy, GoalCommand, IntegrationCommand, OutcomeCommand, PresetCommand,
+    ProcedureCommand, ReadArgs, StartArgs, StartTerminalDisposition, WorkspaceCommand, help_text,
     normalize_top_level_help_alias, parse_failure_command_context, syntax_failure_message,
 };
 #[cfg(test)]
@@ -909,6 +909,13 @@ fn validate_direct_flags(cli: &Cli) -> Result<(), LocalFailure> {
 }
 
 fn validate_command_shape(command: &Command) -> Result<(), LocalFailure> {
+    if let Command::Integration {
+        command: IntegrationCommand::Show { integration },
+    } = command
+        && integration != "dolgorae"
+    {
+        return Err(LocalFailure::request_invalid("unknown integration"));
+    }
     if let Some(id) = item_id(command) {
         ItemId::new(id.to_owned()).map_err(invalid_v2_value)?;
     }

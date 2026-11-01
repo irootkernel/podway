@@ -160,7 +160,7 @@ def adapter_contract() -> dict[str, Any]:
         or len(route_inventory) != len(set(route_inventory))
     ):
         fail("command route catalog contains invalid or duplicate commands")
-    if len(route_inventory) != 57 or any(
+    if len(route_inventory) != 58 or any(
         route.get("availability") != "executable"
         or route.get("execution") not in {"local", "direct"}
         for route in routes

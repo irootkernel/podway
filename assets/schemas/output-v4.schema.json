@@ -143,6 +143,9 @@
     },
     {
       "$ref": "#/$defs/outcomeLookup"
+    },
+    {
+      "$ref": "#/$defs/integrationSettings"
     }
   ],
   "$defs": {
@@ -770,6 +773,30 @@
           }
         }
       ]
+    },
+    "integrationSettings": {
+      "properties": {
+        "command": {
+          "const": "integration.show"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:integration-settings-result:v1"
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "workspace"
+            ]
+          },
+          {
+            "required": [
+              "session"
+            ]
+          }
+        ]
+      }
     }
   },
   "$comment": "Current direct CLI envelope under ADR-0038."

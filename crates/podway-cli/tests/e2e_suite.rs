@@ -4,6 +4,8 @@ mod cli_fixture;
 mod e2e_guide006_generation1_baselines;
 #[path = "e2e_guide009_generation2_lifecycle.rs"]
 mod e2e_guide009_generation2_lifecycle;
+#[path = "e2e_integ003_settings.rs"]
+mod e2e_integ003_settings;
 #[path = "e2e_phase5_user_environment.rs"]
 mod e2e_phase5_user_environment;
 #[path = "e2e_v2_native_qualification.rs"]

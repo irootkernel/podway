@@ -1096,6 +1096,19 @@ const ROUTES: &[Route] = &[
         dynamic: None,
     },
     Route {
+        words: "integration show",
+        flags: &[
+            &JSON,
+            &WORKTREE,
+            &TIMEOUT,
+            &NO_COLOR,
+            &QUIET,
+            &CONTRACT_GENERATION,
+        ],
+        values: "dolgorae",
+        dynamic: None,
+    },
+    Route {
         words: "outcome lookup",
         flags: &[
             &IF_WORKSPACE_UUID,
@@ -1612,6 +1625,63 @@ mod tests {
             .find(|route| route.words == "delegation receipt")
             .expect("delegation receipt completion route must exist");
         assert!(receipt.flags.contains(&&IF_WORKSPACE_UUID));
+    }
+
+    #[test]
+    fn integ003_completion_admits_only_query_flags_and_static_name() {
+        assert_eq!(children("integration"), vec!["show"]);
+        let route = ROUTES
+            .iter()
+            .find(|route| route.words == "integration show")
+            .unwrap();
+        assert_eq!(route.values, "dolgorae");
+        assert!(route.dynamic.is_none());
+        assert_eq!(
+            route.flags.iter().map(|flag| flag.long).collect::<Vec<_>>(),
+            [
+                "json",
+                "worktree",
+                "timeout",
+                "no-color",
+                "quiet",
+                "contract-generation"
+            ]
+        );
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let script = shell.script();
+            let offered = match shell {
+                Shell::Bash | Shell::Zsh => script
+                    .split("\"integration show\")\n")
+                    .nth(1)
+                    .unwrap()
+                    .split(";;")
+                    .next()
+                    .unwrap()
+                    .to_owned(),
+                Shell::Fish => script
+                    .lines()
+                    .filter(|line| line.contains("__podway_route_is \"integration show\""))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            };
+            for refused in [
+                "idempotency-key",
+                "if-workspace-uuid",
+                "if-session-id",
+                "if-session-revision",
+                "if-attempt",
+                "if-item-revision",
+                "if-goal-revision",
+                "--yes",
+                "--force",
+            ] {
+                assert!(!offered.contains(refused), "{shell:?}: {offered}");
+            }
+            assert!(
+                offered.contains("contract-generation"),
+                "{shell:?}: {offered}"
+            );
+        }
     }
 
     #[test]

@@ -10,8 +10,9 @@ authority; the effective path below follows ADR-0042.
 
 Workspace v3 and user-config v1 parsing, pure permission resolution and the
 explicit Engine native-read seam are implemented. Default initialization still
-writes workspace v1. The CLI does not yet serve the settings query or
-user-configuration error; the public query below remains an intended interface.
+writes workspace v1. The explicit CLI/JSON permission query and its public
+configuration errors are implemented. Repository-only metadata verification
+remains pending under INTEG-004.
 The [roadmap](../../roadmap/README.md#integ-dolgorae-integration-readiness)
 owns implementation status and the [execution dossier](../../todo/TODO-podway-dolgorae-integration-readiness.md)
 owns the unfinished delivery and verification plan. Adoption alone changes no
@@ -53,7 +54,7 @@ Ordinary Direct commands MUST NOT read HOME/user settings or probe Dolgorae,
 even when project configuration enables the permission. Core, Store, Procedure
 snapshots, digests and receipt identity acquire no user-settings dependency.
 
-## Intended public query
+## Public query
 
 `podway integration show dolgorae` maps to `integration.show`. Engine performs
 this Git/config-only read before or after workspace initialization without
@@ -75,7 +76,7 @@ and generation precedence. Human output explains permission and source without
 claiming connection readiness.
 
 Invalid project input uses `WORKSPACE_CONFIG_INVALID` without legacy reset advice.
-Invalid or unavailable HOME/user input uses the intended `USER_CONFIG_INVALID`,
+Invalid or unavailable HOME/user input uses `USER_CONFIG_INVALID`,
 exit 5, nonretryable, empty details and summary
 `User configuration is invalid or unavailable.` Neither machine failure exposes
 file contents or native home paths. Preserve existing Git/selector failures.

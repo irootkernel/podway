@@ -8,16 +8,35 @@ queue, runtime mode, or user-global Podway runtime state. The accepted
 [integration-settings contract](../operations/integration-settings.md) permits
 only an explicit read-only user-settings query; it does not make ordinary Direct
 commands depend on HOME. Workspace v3 parsing and an explicit Engine read seam
-are implemented; the public query remains an intended interface.
+and `integration show dolgorae` are implemented. This Git/config-only query
+works before init, opens no Store or maintenance lease and reads no workspace or
+session identity.
 
 Human error rendering may include the exact Procedure path supplied to `start`
 and a visible truncation summary after a bounded diagnostic window. JSON mode
 emits the machine response only; clients never parse human guidance.
 
+## Integration permission query
+
+`podway integration show dolgorae` reports effective permission and the winning
+`project`, `user` or `default` source. It accepts `--worktree`, `--timeout`,
+`--json`, `--quiet`, `--no-color` and `--contract-generation 1|2`. It rejects
+idempotency keys, every workspace/session/revision/attempt/item/goal fence and
+destructive flags as `REQUEST_INVALID`; it takes no stdin document. Unknown
+names/options and unsupported generations fail before configuration access.
+Git discovery precedes project validation, which precedes HOME selection and
+user validation; an invalid user document fails even with a project override.
+See [settings](../operations/integration-settings.md) for bounded input semantics.
+
+Permission does not establish connection readiness or execution. A cooperating
+external adapter must adopt this query before new assignments. Disabling permission
+preserves accepted work, result reconciliation, receipts and explicit completion.
+
 ## Command groups
 
 - Local inspection: `help`, `version`, `completions`, and `preset list|show|explain`.
 - Procedure authoring: `procedure validate|show|format|vet|graph|preview|lint|check|scaffold`.
+- Integration permission: `integration show dolgorae` (Git/config only).
 - Workspace: `init`, `doctor`, `workspace show|repair|remove`, and `reset --all`.
 - Session reads: `status`, `next`, `observe`, `evidence read`,
   `delegation package|receipt`, `archive list|show`, and `outcome lookup`.

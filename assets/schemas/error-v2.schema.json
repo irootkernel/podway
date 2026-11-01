@@ -119,6 +119,7 @@
         "SESSION_START_DECISION_REQUIRED",
         "SESSION_START_STATE_CONFLICT",
         "STAGE_NOT_SKIPPABLE",
+        "USER_CONFIG_INVALID",
         "WORKSPACE_ALREADY_INITIALIZED",
         "WORKSPACE_BUSY",
         "WORKSPACE_CONFIG_INVALID",
@@ -431,7 +432,28 @@
           "details": {
             "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/genericObject"
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "command": {
+                  "const": "integration.show"
+                }
+              },
+              "required": [
+                "command"
+              ]
+            },
+            "then": {
+              "properties": {
+                "details": {
+                  "maxProperties": 0
+                }
+              }
+            }
+          }
+        ]
       }
     },
     {
@@ -2800,6 +2822,32 @@
           },
           "details": {
             "$ref": "urn:podway:schema:session-archive-limit-details:v2"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "code": {
+            "const": "USER_CONFIG_INVALID"
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
+      "then": {
+        "properties": {
+          "exit_code": {
+            "const": 5
+          },
+          "retryable": {
+            "const": false
+          },
+          "details": {
+            "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/genericObject",
+            "maxProperties": 0
           }
         }
       }

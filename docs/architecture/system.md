@@ -141,7 +141,8 @@ remote includes, executable plugins or configured commands.
 permit a narrow read-only user-settings exception. The
 [settings specification](../specs/operations/integration-settings.md) owns the
 behavior. Config parsing, pure resolution and the explicit Engine read seam are
-implemented; the public CLI query remains an intended interface.
+implemented, including the explicit `integration.show` CLI/JSON query. Metadata
+verification remains pending under INTEG-004.
 Config owns bounded documents and pure optional-boolean resolution. Engine owns
 the native Git/config-only read and typed failures, separate from Store-backed
 workspace resolution. Protocol owns result/error validation; CLI owns grammar,
@@ -199,7 +200,7 @@ maintenance boundaries.
 | Artifact bytes and external executor effects | External owner | original path or external system |
 
 The accepted user-settings location is `$HOME/.config/podway/config.yaml`,
-separate from the worktree configuration and runtime namespace. Only the intended
+separate from the worktree configuration and runtime namespace. Only the
 explicit settings query reads it; workspace init and removal never own it.
 Podway does not use `~/.podway` as a user-global root, including when HOME itself
 is a Git worktree with ordinary project configuration there. Legacy installed

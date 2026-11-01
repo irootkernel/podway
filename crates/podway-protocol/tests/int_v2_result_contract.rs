@@ -2773,7 +2773,10 @@ fn current_results_round_trip_every_registered_direct_command_and_reject_discrim
         for command in contract.commands {
             let mut input = authoring_input(command, result);
             if !command.starts_with("procedure.")
-                && !matches!(*command, "version" | "workspace.remove")
+                && !matches!(
+                    *command,
+                    "version" | "workspace.remove" | "integration.show"
+                )
             {
                 input.workspace = Some(
                     serde_json::from_value::<podway_protocol::WorkspaceOutputV1>(json!({
@@ -3024,6 +3027,7 @@ fn current_direct_registry_preserves_the_accepted_known_answer_family_inventory(
         "podway.goal-definition-result/v2",
         "podway.goal-revision-result/v2",
         "podway.idempotency-key-reused-details/v2",
+        "podway.integration-settings-result/v1",
         "podway.internal-error-details/v2",
         "podway.item-mutation-result/v3",
         "podway.item-record-many-result/v2",

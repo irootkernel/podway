@@ -921,6 +921,9 @@ pub(super) fn typed_command(
                 expected_goal_revision: required(fences.goal_revision, "--if-goal-revision")?.get(),
             },
         )),
+        Command::Integration {
+            command: IntegrationCommand::Show { .. },
+        } => Direct::IntegrationShow,
         Command::Outcome {
             command: OutcomeCommand::Lookup,
         } => Direct::OutcomeLookup {

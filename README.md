@@ -44,6 +44,20 @@ citation and writer-mismatch errors carry enriched details; generation 1
 remains the deprecated default and the option is accepted everywhere, including
 the local commands.
 
+## Integration permission
+
+`podway integration show dolgorae --json` reports effective permission and its
+source without requiring workspace initialization. User defaults come from
+`$HOME/.config/podway/config.yaml`; workspace v3 may override them. The default
+is disabled. Ordinary Direct commands do not read user settings or probe Dolgorae.
+See the [settings contract](docs/specs/operations/integration-settings.md) for
+strict documents and examples.
+
+Permission does not establish connection readiness or execution. An external
+adapter must adopt the query before new assignments; disabling it preserves
+accepted work, reconciliation, receipts and explicit completion. Repository-only
+metadata verification remains planned under INTEG-004.
+
 ## Requirements
 
 Podway supports native Apple Silicon macOS only. Intel macOS, Rosetta execution, universal binaries, Linux, and Windows are not supported release targets.

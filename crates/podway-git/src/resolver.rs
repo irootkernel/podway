@@ -239,9 +239,26 @@ impl NativeGitResolverV1 {
         ))
     }
 
+    /// Discover native Git authority without inspecting `.podway` or runtime containment.
+    /// Returned containment paths are lexical locations, not workspace admission evidence.
+    pub fn resolve_git_only(
+        &self,
+        selector: WorktreeSelectorV1,
+    ) -> Result<ValidatedWorktreeV1, GitResolverErrorV1> {
+        self.resolve_native_with_containment(selector, false)
+    }
+
     fn resolve_native(
         &self,
         selector: WorktreeSelectorV1,
+    ) -> Result<ValidatedWorktreeV1, GitResolverErrorV1> {
+        self.resolve_native_with_containment(selector, true)
+    }
+
+    fn resolve_native_with_containment(
+        &self,
+        selector: WorktreeSelectorV1,
+        inspect_workspace: bool,
     ) -> Result<ValidatedWorktreeV1, GitResolverErrorV1> {
         let selected = native::decode_lossless_path(selector.path())?;
         match selector.durable_identity() {
@@ -281,17 +298,25 @@ impl NativeGitResolverV1 {
             b"worktree-administration",
             &layout.kind,
         )?;
-        let containment_snapshot = native::inspect_containment(&layout.worktree_root)?;
+        let containment_snapshot = if inspect_workspace {
+            Some(native::inspect_containment(&layout.worktree_root)?)
+        } else {
+            None
+        };
         #[cfg(test)]
-        synchronize_containment_snapshot_for_test(layout.worktree_root.path());
+        if inspect_workspace {
+            synchronize_containment_snapshot_for_test(layout.worktree_root.path());
+        }
 
         // The result must describe one coherent snapshot, not a mixture of records
         // observed before and after a directory replacement.
         layout.validate_resolution()?;
-        containment_snapshot.validate(
-            &layout.worktree_root,
-            GitInvariantViolationV1::MetadataChangedDuringResolution,
-        )?;
+        if let Some(containment_snapshot) = &containment_snapshot {
+            containment_snapshot.validate(
+                &layout.worktree_root,
+                GitInvariantViolationV1::MetadataChangedDuringResolution,
+            )?;
+        }
         layout.validate_resolution()?;
 
         let worktree_root = native::lossless_path(layout.worktree_root.path())?;
@@ -300,8 +325,18 @@ impl NativeGitResolverV1 {
             native::lossless_path(layout.worktree_administration_root.path())?;
         let containment = ContainmentMetadataV1::new(
             worktree_root.clone(),
-            native::lossless_path(&containment_snapshot.podway_path(layout.worktree_root.path()))?,
-            native::lossless_path(&containment_snapshot.runtime_path(layout.worktree_root.path()))?,
+            native::lossless_path(
+                &containment_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.podway_path(layout.worktree_root.path()))
+                    .unwrap_or_else(|| layout.worktree_root.path().join(".podway")),
+            )?,
+            native::lossless_path(
+                &containment_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.runtime_path(layout.worktree_root.path()))
+                    .unwrap_or_else(|| layout.worktree_root.path().join(".podway/runtime")),
+            )?,
         );
         let roots = WorktreeRootsV1::new(worktree_root.clone(), common_root, administration_root);
 

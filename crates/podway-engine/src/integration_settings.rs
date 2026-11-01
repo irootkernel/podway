@@ -1,6 +1,10 @@
 //! Explicit Git/config-only settings access. Ordinary Direct resolution never calls this seam.
 
-use std::{ffi::OsStr, fmt, fs, path::Path};
+use std::{
+    ffi::{OsStr, OsString},
+    fmt, fs,
+    path::Path,
+};
 
 use podway_config::{
     MAX_WORKSPACE_CONFIG_BYTES_V1, ResolvedIntegrationSettingsV1, parse_user_config_v1,
@@ -31,6 +35,14 @@ pub fn read_integration_settings_v1(
     worktree: &ValidatedWorktreeV1,
     home: Option<&OsStr>,
 ) -> Result<ResolvedIntegrationSettingsV1, IntegrationSettingsReadErrorV1> {
+    read_integration_settings_with_home_v1(worktree, || home.map(OsStr::to_os_string))
+}
+
+/// Select HOME only after project validation, preserving validation precedence.
+pub(crate) fn read_integration_settings_with_home_v1(
+    worktree: &ValidatedWorktreeV1,
+    select_home: impl FnOnce() -> Option<OsString>,
+) -> Result<ResolvedIntegrationSettingsV1, IntegrationSettingsReadErrorV1> {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt;
@@ -50,11 +62,11 @@ pub fn read_integration_settings_v1(
             .map(parse_workspace_config_v1)
             .transpose()
             .map_err(|_| IntegrationSettingsReadErrorV1::ProjectConfigInvalid)?;
-        let home = home
+        let home = select_home()
             .filter(|home| !home.is_empty())
             .ok_or(IntegrationSettingsReadErrorV1::UserConfigInvalid)?;
         let user = read_optional_file(
-            Path::new(home),
+            Path::new(&home),
             &[".config", "podway", "config.yaml"],
             None,
             || {},
@@ -76,7 +88,7 @@ pub fn read_integration_settings_v1(
     }
     #[cfg(not(unix))]
     {
-        let _ = (worktree, home);
+        let _ = (worktree, select_home);
         Err(IntegrationSettingsReadErrorV1::UserConfigInvalid)
     }
 }

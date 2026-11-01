@@ -207,6 +207,7 @@ APPROVED_COMMANDS = frozenset(
         "item.remove",
         "item.set",
         "item.uncheck",
+        "integration.show",
         "outcome.lookup",
         "preset.explain",
         "preset.list",
@@ -297,6 +298,7 @@ PROCEDURE_INDEPENDENT_RUNTIME_ERROR_CODES = (
     'SESSION_START_DECISION_REQUIRED',
     'SESSION_START_STATE_CONFLICT',
     'STAGE_NOT_SKIPPABLE',
+    'USER_CONFIG_INVALID',
     'WORKSPACE_ALREADY_INITIALIZED',
     'WORKSPACE_CONFIG_INVALID',
     'WORKSPACE_ID_CONFLICT',
@@ -570,8 +572,8 @@ def validate_catalog_inventory(root: Path) -> int:
         "DELEGATION_BINDING_MISMATCH",
         "DELEGATION_ALREADY_ACCEPTED",
     }
-    if not isinstance(entries, list) or len(entries) != 97:
-        fail("runtime error catalog must contain the exact 97 direct errors")
+    if not isinstance(entries, list) or len(entries) != 98:
+        fail("runtime error catalog must contain the exact 98 direct errors")
     runtime_codes = [entry.get("code") for entry in entries if isinstance(entry, dict)]
     if len(runtime_codes) != len(entries) or len(set(runtime_codes)) != len(runtime_codes):
         fail("runtime error catalog codes must be unique strings")

@@ -15,8 +15,8 @@ records separate external Dolgorae/managed Primary integration work. No adapter 
 neighboring checkout is required for deterministic Podway tests.
 
 The accepted [integration-settings contract](../operations/integration-settings.md)
-defines a separate, default-disabled permission query. It remains an intended
-interface and does not make this foundation dispatch work. A cooperating adapter
+defines the separate, default-disabled `integration.show` permission query.
+This interface does not make this foundation dispatch work. A cooperating adapter
 must adopt the query before it controls new assignments; disabling permission
 does not cancel accepted work or disable reconciliation, receipts or completion.
 

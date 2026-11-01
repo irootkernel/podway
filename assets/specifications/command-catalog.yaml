@@ -761,6 +761,18 @@ commands:
   idempotency_scope: session
   result_schemas:
   - podway.criterion-assessment-result/v2
+- name: integration.show
+  availability: executable
+  cli:
+  - integration
+  - show
+  - dolgorae
+  operation: query
+  workspace_required: true
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.integration-settings-result/v1
 - name: outcome.lookup
   availability: executable
   cli:

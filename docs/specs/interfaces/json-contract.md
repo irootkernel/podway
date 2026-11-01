@@ -53,15 +53,21 @@ Removing a present invalid Store reports `already_absent=false`,
 not be validated. An already-absent Store requires `workspace_uuid=null`;
 `already_absent=false` requires an actual directory removal.
 
-## Intended integration settings result
+## Integration settings result
 
 The accepted [integration-settings contract](../operations/integration-settings.md)
-requires one new closed `podway.integration-settings-result/v1` family for
+serves one closed `podway.integration-settings-result/v1` family for
 `integration.show` in both contract generations, with no workspace or session
-identity. Output v4 and Error v2 remain the envelopes. This family and route are
-intended interfaces, not current registrations; implementation must update the
-command catalog, Protocol validation, Output membership and complete manifest
-identity together without widening an existing family.
+identity. Output v4 and Error v2 remain the envelopes. The closed result is:
+
+```json
+{"schema":"podway.integration-settings-result/v1","integration":"dolgorae","enabled":false,"source":"default"}
+```
+
+`enabled` is a strict boolean and `source` is exactly `project`, `user` or
+`default`. The command catalog, Protocol registry and Output v4 membership bind
+this separate family; consumers re-pin the complete manifest identity. No existing
+result family, contract-generation default or Store predecessor changes.
 
 ## Previous daemon generation
 

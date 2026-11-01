@@ -456,6 +456,14 @@
       "capabilities": []
     },
     {
+      "command": "integration.show",
+      "availability": "executable",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
+      "capabilities": []
+    },
+    {
       "command": "outcome.lookup",
       "availability": "executable",
       "owner": "podway-engine",

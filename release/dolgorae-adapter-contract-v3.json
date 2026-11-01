@@ -401,6 +401,7 @@
       "goal.define",
       "goal.revise",
       "goal.assess_criterion",
+      "integration.show",
       "outcome.lookup"
     ],
     "runtime_errors": [
@@ -961,6 +962,12 @@
         "summary": "The active stage cannot be skipped."
       },
       {
+        "code": "USER_CONFIG_INVALID",
+        "exit_code": 5,
+        "retryable": false,
+        "summary": "User configuration is invalid or unavailable."
+      },
+      {
         "code": "WORKSPACE_ALREADY_INITIALIZED",
         "exit_code": 1,
         "retryable": false,
@@ -1139,7 +1146,7 @@
       {
         "id": "urn:podway:schema:error:v2",
         "path": "schemas/error-v2.schema.json",
-        "sha256": "sha256:d1c962646c040e8f8bc396a820ee7c3e0c9605d5f80c9e218ee458c3e65c22fa"
+        "sha256": "sha256:806699fd0c68583f5a42c4fa899c79aec2da85658628ef5f1bed1600a4d2b7ca"
       },
       {
         "id": "urn:podway:schema:evidence-read-result:v1",
@@ -1160,6 +1167,11 @@
         "id": "urn:podway:schema:idempotency-key-reused-details:v2",
         "path": "schemas/idempotency-key-reused-details-v2.schema.json",
         "sha256": "sha256:b8ca89e7f7ebb388e2585bd32d54ee274159b0893f9637d221445a491d4c0981"
+      },
+      {
+        "id": "urn:podway:schema:integration-settings-result:v1",
+        "path": "schemas/integration-settings-result-v1.schema.json",
+        "sha256": "sha256:b56738660d564a8db2c3eebafa8942140b414f04d48136f259f1a80cc7941c8a"
       },
       {
         "id": "urn:podway:schema:internal-error-details:v2",
@@ -1214,7 +1226,7 @@
       {
         "id": "urn:podway:schema:output:v4",
         "path": "schemas/output-v4.schema.json",
-        "sha256": "sha256:83f6444175b3543a57456048b51df3cc76e78dcc588e114f5e8864f712fec655"
+        "sha256": "sha256:5bf30aa139eb3bcd84f38f940a08346c04ac0dc9b07acb54f467257a973f052e"
       },
       {
         "id": "urn:podway:schema:prepared-next-result:v3",
@@ -1515,9 +1527,9 @@
   },
   "current_surface_counts": {
     "authoring_diagnostics": 59,
-    "routes": 57,
-    "runtime_errors": 97,
-    "schemas": 90
+    "routes": 58,
+    "runtime_errors": 98,
+    "schemas": 91
   },
   "migration_boundary": {
     "adapter_database_access": "forbidden",
