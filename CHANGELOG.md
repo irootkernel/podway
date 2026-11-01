@@ -27,10 +27,10 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Changed
 
-- Public contract asset updates change the contract manifest. Previous-manifest Stores,
-  including sessions using unchanged presets, refuse normal reads, writes and
-  original-request replay with `WORKSPACE_CONTRACT_MISMATCH`. No migration,
-  predecessor declaration, forced reset or installed-runtime update is included.
+- Re-pin the contract manifest: previous-writer Stores refuse normal reads, writes and original-request replay
+  with `WORKSPACE_CONTRACT_MISMATCH`; no predecessor or migration is declared, even for unchanged presets.
+- Finish or abandon sessions with their original writer before upgrading, then explicitly confirm an
+  unfenced reset-all to discard runtime history and create fresh state.
 
 ### Fixed
 
