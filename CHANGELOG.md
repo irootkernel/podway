@@ -2,7 +2,7 @@
 
 This file records concise shipped outcomes and the planned next stable release.
 
-## v0.2.16 - Unreleased
+## v0.2.16 - 2026-11-02
 
 ### Added
 

@@ -78,7 +78,7 @@ System Settings before its first run.
 
 ## Install a release
 
-This checkout prepares `v0.2.15`; source implementation
+This checkout prepares `v0.2.16`; source implementation
 is not evidence that a matching stable release has been published. Select an
 archive whose identity matches this direct generation, or use an explicitly
 chosen source build without claiming stable-release qualification.
@@ -174,39 +174,39 @@ For a small project-wide policy, add this template to the project's `AGENTS.md`:
 - Podway records assertions; it does not run the work or prove semantic truth.
 ```
 
-After `v0.2.15` is published, install the complete [`use-podway` skill](https://github.com/irootkernel/podway/tree/v0.2.15/skills/use-podway) directory under `~/.agents/skills/`:
+After `v0.2.16` is published, install the complete [`use-podway` skill](https://github.com/irootkernel/podway/tree/v0.2.16/skills/use-podway) directory under `~/.agents/skills/`:
 
 ```bash
 podway_skill_dir="$HOME/.agents/skills/use-podway"
 mkdir -p "$podway_skill_dir/references"
 
 curl -fsSLo "$podway_skill_dir/SKILL.md" \
-  https://raw.githubusercontent.com/irootkernel/podway/v0.2.15/skills/use-podway/SKILL.md
+  https://raw.githubusercontent.com/irootkernel/podway/v0.2.16/skills/use-podway/SKILL.md
 
 for reference in lifecycle goal recovery delegation; do
   curl -fsSLo "$podway_skill_dir/references/$reference.md" \
-    "https://raw.githubusercontent.com/irootkernel/podway/v0.2.15/skills/use-podway/references/$reference.md"
+    "https://raw.githubusercontent.com/irootkernel/podway/v0.2.16/skills/use-podway/references/$reference.md"
 done
 ```
 
 The runtime skill covers the active-session loop and loads separate references only for lifecycle, session-goal, recovery, or explicitly delegated work.
 
-Install [`create-podway-procedure`](https://github.com/irootkernel/podway/tree/v0.2.15/skills/create-podway-procedure) separately only when the agent needs to create, revise, review, or harden custom Procedure source:
+Install [`create-podway-procedure`](https://github.com/irootkernel/podway/tree/v0.2.16/skills/create-podway-procedure) separately only when the agent needs to create, revise, review, or harden custom Procedure source:
 
 ```bash
 procedure_skill_dir="$HOME/.agents/skills/create-podway-procedure"
 mkdir -p "$procedure_skill_dir/references" "$procedure_skill_dir/agents"
 
 curl -fsSLo "$procedure_skill_dir/SKILL.md" \
-  https://raw.githubusercontent.com/irootkernel/podway/v0.2.15/skills/create-podway-procedure/SKILL.md
+  https://raw.githubusercontent.com/irootkernel/podway/v0.2.16/skills/create-podway-procedure/SKILL.md
 
 for reference in authoring capabilities distribution delegation; do
   curl -fsSLo "$procedure_skill_dir/references/$reference.md" \
-    "https://raw.githubusercontent.com/irootkernel/podway/v0.2.15/skills/create-podway-procedure/references/$reference.md"
+    "https://raw.githubusercontent.com/irootkernel/podway/v0.2.16/skills/create-podway-procedure/references/$reference.md"
 done
 
 curl -fsSLo "$procedure_skill_dir/agents/openai.yaml" \
-  https://raw.githubusercontent.com/irootkernel/podway/v0.2.15/skills/create-podway-procedure/agents/openai.yaml
+  https://raw.githubusercontent.com/irootkernel/podway/v0.2.16/skills/create-podway-procedure/agents/openai.yaml
 ```
 
 The authoring skill produces and validates declarative source, then hands off preview's exact digest-fenced start suggestion without starting or mutating a session. Consult the agent's documentation for skill reload requirements. The commands above require network access and `curl`, and overwrite existing files with the same names. Both complete skill directories are pinned to the same release tag; use another exact tag or commit only after verifying its CLI compatibility.
@@ -217,7 +217,7 @@ runtime skill requires generation-2 support and teaches passing
 `--contract-generation 2` on every command (Output v4, Error v2, observation v6,
 success-only outcome lookup), keeping generation-1 notes for deprecated consumers.
 The authoring skill follows its exact validation binary's local grammar, including
-older compatible releases without that selector. Before `v0.2.15` is published,
+older compatible releases without that selector. Before `v0.2.16` is published,
 use the exact reviewed candidate's complete skill directories with its matching
 CLI; the release-tagged downloads above become available only after publication.
 
