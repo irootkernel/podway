@@ -6,7 +6,7 @@
     "object_keys": "unicode-scalar-lexicographic",
     "arrays": "preserve-order",
     "strings": "preserve-code-points",
-    "numbers": "signed-integers-only",
+    "numbers": "signed-and-unsigned-64-bit-integers",
     "whitespace": "none",
     "digest": "sha256-of-canonical-bytes"
   },

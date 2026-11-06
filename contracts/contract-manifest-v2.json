@@ -493,7 +493,7 @@
     {
       "kind": "canonicalization_rules",
       "path": "spec/canonicalization-v1.json",
-      "sha256": "sha256:1efd85254750efb73b2a9272b2fcdc7ae4a5c4c5bc980e7e20b6d7b71310f620"
+      "sha256": "sha256:97e2234d86334179e882a64dd06f199e99aaa18ec6cd405e91b56c3bc6ebc781"
     },
     {
       "kind": "catalog",
@@ -528,7 +528,7 @@
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/contract/canonicalization-v1.json",
-      "sha256": "sha256:fa6e02fb564a739ac0d007cedbeed8d003312647db331084407aa32394dcb538"
+      "sha256": "sha256:b7cc5c5100c3b73ee27681f8f348df0708fb5f71820262dc4f7992a15ea0ac13"
     },
     {
       "kind": "known_answer_fixture",
@@ -636,7 +636,7 @@
       "sha256": "sha256:7de5f4f024eb795ae7fb73594d4847b833016bea6be9f2737c567b524ae5466e"
     }
   ],
-  "digest": "sha256:57cb8463f0f24033f9bd0437ed1943e77b21b754a888e654bd847bec13f4b91d",
+  "digest": "sha256:2f2c5bc9142ba368b403606f2b3cd58d76277bcdf70776785b6e6aa4f4d8bc0c",
   "product": "podway",
   "product_version": "0.2.16",
   "schema_version": "podway.contract-manifest/v2"

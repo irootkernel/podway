@@ -26,7 +26,8 @@ write-free snapshot reads are the current product boundaries.
 Current adopted work is tracked by the [active roadmap](roadmap/).
 [CANON](todo/TODO-podway-canonical-integer-alignment.md) and
 [AGENT](todo/TODO-podway-agent-interaction-simplification.md) are adopted plans,
-with all seven implementation tasks Planned and no target release assigned.
+with CANON-001 Completed, all six AGENT tasks Planned and no target release
+assigned. CANON still awaits whole-Epic validation and owner acceptance.
 [ADR-0043](architecture-decision-records/0043-atomic-assessment-and-commit-bound-observations.md)
 records the future interaction design; registration does not activate it.
 The [INTEG readiness epic](roadmap/README.md#integ-dolgorae-integration-readiness)

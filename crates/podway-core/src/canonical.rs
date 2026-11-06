@@ -152,12 +152,35 @@ mod tests {
 
     #[test]
     fn supports_signed_and_unsigned_integer_edges() {
-        let canonical = canonicalize_json_v1(&json!([i64::MIN, i64::MAX, u64::MAX])).unwrap();
+        let i64_max_plus_one = (i64::MAX as u64) + 1;
+        let canonical = canonicalize_json_v1(&json!({
+            "booleans": [false, true],
+            "edges": [i64::MIN, 0, i64::MAX, i64_max_plus_one, u64::MAX],
+            "nested": {
+                "i64_min": i64::MIN,
+                "i64_max": i64::MAX,
+                "i64_max_plus_one": i64_max_plus_one,
+                "u64_max": u64::MAX,
+                "zero": 0,
+            }
+        }))
+        .unwrap();
 
         assert_eq!(
             canonical,
-            format!("[{},{},{}]", i64::MIN, i64::MAX, u64::MAX)
+            format!(
+                r#"{{"booleans":[false,true],"edges":[{},0,{},{},{}],"nested":{{"i64_max":{},"i64_max_plus_one":{},"i64_min":{},"u64_max":{},"zero":0}}}}"#,
+                i64::MIN,
+                i64::MAX,
+                i64_max_plus_one,
+                u64::MAX,
+                i64::MAX,
+                i64_max_plus_one,
+                i64::MIN,
+                u64::MAX
+            )
         );
+        assert_eq!(verify_canonical_json_v1(canonical.as_bytes()), Ok(()));
     }
 
     #[test]
@@ -166,22 +189,48 @@ mod tests {
             canonicalize_json_v1(&1.5_f64),
             Err(CanonicalJsonErrorV1::UnsupportedNumber)
         );
+        assert_eq!(
+            canonicalize_json_v1(&json!({"nested": [1, 2.5]})),
+            Err(CanonicalJsonErrorV1::UnsupportedNumber)
+        );
     }
 
     #[test]
     fn classifies_invalid_noncanonical_and_unsupported_numbers_exactly() {
-        assert!(matches!(
-            verify_canonical_json_v1(b"{"),
-            Err(CanonicalJsonErrorV1::InvalidJson(_))
-        ));
+        for invalid in [b"{".as_slice(), b"+1".as_slice(), b"01".as_slice()] {
+            assert!(
+                matches!(
+                    verify_canonical_json_v1(invalid),
+                    Err(CanonicalJsonErrorV1::InvalidJson(_))
+                ),
+                "{:?}",
+                std::str::from_utf8(invalid)
+            );
+        }
         assert_eq!(
             verify_canonical_json_v1(br#"{"b":1,"a":2}"#),
             Err(CanonicalJsonErrorV1::NonCanonical)
         );
-        assert_eq!(
-            verify_canonical_json_v1(b"1.0"),
-            Err(CanonicalJsonErrorV1::UnsupportedNumber)
-        );
+        for unsupported in [
+            b"1.0".as_slice(),
+            b"1.25".as_slice(),
+            b"1e0".as_slice(),
+            b"1e2".as_slice(),
+            b"1E-3".as_slice(),
+            b"-0".as_slice(),
+            b"-0.0".as_slice(),
+            b"-9223372036854775809".as_slice(),
+            b"18446744073709551616".as_slice(),
+            br#"{"items":[-9223372036854775809]}"#.as_slice(),
+            br#"{"nested":{"limit":18446744073709551616}}"#.as_slice(),
+        ] {
+            assert_eq!(
+                verify_canonical_json_v1(unsupported),
+                Err(CanonicalJsonErrorV1::UnsupportedNumber),
+                "{:?}",
+                std::str::from_utf8(unsupported)
+            );
+        }
     }
 
     #[test]
@@ -199,7 +248,16 @@ mod tests {
                 "{input}"
             );
         }
-        for input in ["1.0", "1e0", "-0"] {
+        for input in [
+            "1.0",
+            "1e0",
+            "1e2",
+            "-0",
+            "-9223372036854775809",
+            "18446744073709551616",
+            r#"{"items":[-9223372036854775809]}"#,
+            r#"{"nested":{"limit":18446744073709551616}}"#,
+        ] {
             let value = serde_json::from_str(input).unwrap();
             assert_eq!(
                 verify_canonical_json_value_v1(input.as_bytes(), &value),
@@ -207,7 +265,14 @@ mod tests {
                 "{input}"
             );
         }
-        let input = format!(r#"{{"a":[{},{}],"é":"\\\""}}"#, i64::MIN, u64::MAX);
+        let i64_max_plus_one = (i64::MAX as u64) + 1;
+        let input = format!(
+            r#"{{"a":[{},0,{},{},{}],"booleans":[false,true],"é":"\\\""}}"#,
+            i64::MIN,
+            i64::MAX,
+            i64_max_plus_one,
+            u64::MAX
+        );
         let value = serde_json::from_str(&input).unwrap();
         assert_eq!(
             verify_canonical_json_value_v1(input.as_bytes(), &value),

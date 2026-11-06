@@ -4,6 +4,16 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.2.17 - Unreleased
 
+### Changed
+
+- Re-pin canonical integer contract identity; previous-writer Stores refuse reads, writes and replay with
+  `WORKSPACE_CONTRACT_MISMATCH`; no predecessor or migration is declared.
+
+### Fixed
+
+- Align canonical JSON admission on `[-2^63, 2^64 - 1]` across Rust and Python, preserving booleans,
+  accepted canonical bytes and signed `i64` item and predicate bounds.
+
 ## v0.2.16 - 2026-11-02
 
 ### Added

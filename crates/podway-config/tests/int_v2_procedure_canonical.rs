@@ -882,6 +882,158 @@ fn v2acc006_canonical_contract_fields_are_exact_and_reach_a_fixpoint() {
         assert_eq!(round_tripped.canonical_json().as_str(), canonical);
         assert_eq!(round_tripped.digest(), validated.digest());
     }
+
+    let signed_bounds_yaml = concat!(
+        "schema: podway.procedure/v2\n",
+        "id: signed-integer-bounds\n",
+        "version: \"1\"\n",
+        "name: Signed integer bounds\n",
+        "purpose: Verify i64 item and predicate boundaries.\n",
+        "node_definitions:\n",
+        "  work:\n",
+        "    type: action\n",
+        "    title: Record count\n",
+        "    intent: Record a signed integer.\n",
+        "    items:\n",
+        "      - id: count\n",
+        "        type: integer\n",
+        "        prompt: Count?\n",
+        "        required: true\n",
+        "        minimum: -9223372036854775808\n",
+        "        maximum: 9223372036854775807\n",
+        "      - id: note\n",
+        "        type: text\n",
+        "        prompt: Explain the count.\n",
+        "        required: false\n",
+        "        required_when:\n",
+        "          - item: count\n",
+        "            at_least: -9223372036854775808\n",
+        "          - item: count\n",
+        "            at_most: 9223372036854775807\n",
+        "          - item: count\n",
+        "            equals: -9223372036854775808\n",
+        "          - item: count\n",
+        "            not_equals: 9223372036854775807\n",
+        "  gate:\n",
+        "    type: decision\n",
+        "    title: Gate\n",
+        "    objective: Check count.\n",
+        "    prompt: Proceed?\n",
+        "    options:\n",
+        "      - id: proceed\n",
+        "        label: Proceed\n",
+        "        guards:\n",
+        "          - evidence:\n",
+        "              node: perform\n",
+        "              item: count\n",
+        "            at_least: -9223372036854775808\n",
+        "          - evidence:\n",
+        "              node: perform\n",
+        "              item: count\n",
+        "            at_most: 9223372036854775807\n",
+        "          - evidence:\n",
+        "              node: perform\n",
+        "              item: count\n",
+        "            equals: -9223372036854775808\n",
+        "          - evidence:\n",
+        "              node: perform\n",
+        "              item: count\n",
+        "            not_equals: 9223372036854775807\n",
+        "      - id: retry\n",
+        "        label: Retry\n",
+        "    reason:\n",
+        "      required: true\n",
+        "graph:\n",
+        "  entry: perform\n",
+        "  nodes:\n",
+        "    - id: perform\n",
+        "      use: work\n",
+        "      next: decide\n",
+        "    - id: decide\n",
+        "      use: gate\n",
+        "      evidence_from:\n",
+        "        - node: perform\n",
+        "          items:\n",
+        "            - count\n",
+        "      routes:\n",
+        "        proceed:\n",
+        "          to: finish\n",
+        "          effect: advance\n",
+        "        retry:\n",
+        "          to: perform\n",
+        "          effect: rework\n",
+        "    - id: finish\n",
+        "      use: work\n",
+        "      terminal: true\n",
+    );
+    let signed_from_yaml = yaml(signed_bounds_yaml);
+    let signed_canonical = signed_from_yaml.canonical_json().as_str().to_owned();
+    assert_eq!(
+        verify_canonical_json_v1(signed_canonical.as_bytes()),
+        Ok(())
+    );
+    let signed_from_json = json(&signed_canonical);
+    assert_eq!(
+        signed_from_json.canonical_json(),
+        signed_from_yaml.canonical_json()
+    );
+    assert_eq!(signed_from_json.digest(), signed_from_yaml.digest());
+
+    for unsigned_literal in ["9223372036854775808", "18446744073709551615"] {
+        for anchor in [
+            "minimum: -9223372036854775808",
+            "maximum: 9223372036854775807",
+            "            at_least: -9223372036854775808",
+            "            at_most: 9223372036854775807",
+            "            equals: -9223372036854775808",
+            "            not_equals: 9223372036854775807",
+        ] {
+            let key = anchor.split(':').next().unwrap();
+            let replacement = format!("{key}: {unsigned_literal}");
+            let invalid_yaml = signed_bounds_yaml.replacen(anchor, &replacement, 1);
+            assert_ne!(invalid_yaml, signed_bounds_yaml);
+            assert!(
+                admit(&invalid_yaml, ProcedureDocumentFormat::Yaml).is_err(),
+                "YAML Procedure v2 must reject unsigned 64-bit value in `{anchor}`"
+            );
+        }
+        for json_anchor in [
+            r#""minimum":-9223372036854775808"#,
+            r#""maximum":9223372036854775807"#,
+            r#""at_least":-9223372036854775808"#,
+            r#""at_most":9223372036854775807"#,
+            r#""equals":-9223372036854775808"#,
+            r#""not_equals":9223372036854775807"#,
+        ] {
+            let key = json_anchor.split(':').next().unwrap();
+            let replacement = format!("{key}:{unsigned_literal}");
+            let occurrences: Vec<_> = signed_canonical.match_indices(json_anchor).collect();
+            assert_eq!(
+                occurrences.len(),
+                if matches!(key, r#""minimum""# | r#""maximum""#) {
+                    1
+                } else {
+                    2
+                },
+                "fixture must cover every field context for `{json_anchor}`"
+            );
+            for (offset, _) in occurrences {
+                let mut invalid_json = signed_canonical.clone();
+                invalid_json.replace_range(offset..offset + json_anchor.len(), &replacement);
+                assert_eq!(
+                    verify_canonical_json_v1(invalid_json.as_bytes()),
+                    Ok(()),
+                    "Canonical JSON v1 primitive admits `{replacement}`"
+                );
+                let error = admit(&invalid_json, ProcedureDocumentFormat::Json)
+                    .expect_err("JSON Procedure v2 must reject unsigned 64-bit field values");
+                assert!(
+                    matches!(error, ConfigError::InvalidDocument { .. }),
+                    "JSON field `{json_anchor}` at offset {offset} must fail typed admission: {error}"
+                );
+            }
+        }
+    }
 }
 
 #[test]

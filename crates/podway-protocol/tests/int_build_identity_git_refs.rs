@@ -127,17 +127,44 @@ fn rust_build_canonicalization_matches_shared_known_answers() {
             case["sha256"].as_str().expect("digest must be a string"),
             "{identifier} canonical digest drifted"
         );
+        let core_observed = podway_core::canonicalize_json_v1(&case["input"])
+            .unwrap_or_else(|error| panic!("{identifier} must canonicalize in core: {error}"));
+        assert_eq!(
+            core_observed.as_bytes(),
+            expected,
+            "{identifier} core canonical bytes drifted"
+        );
+        assert_eq!(
+            podway_core::verify_canonical_json_v1(expected),
+            Ok(()),
+            "{identifier} canonical bytes must verify in core"
+        );
     }
 }
 
 #[test]
 fn rust_build_canonicalization_rejects_fractional_numbers_recursively() {
-    for source in ["1.5", "[0,1.0]", r#"{"nested":{"value":1e2}}"#] {
-        let value: Value = serde_json::from_str(source).expect("float fixture must parse");
+    for source in [
+        "1.5",
+        "[0,1.0]",
+        r#"{"nested":{"value":1e2}}"#,
+        "-0",
+        "-0.0",
+        "-9223372036854775809",
+        "18446744073709551616",
+        r#"{"items":[-9223372036854775809]}"#,
+        r#"{"nested":{"limit":18446744073709551616}}"#,
+    ] {
+        let value: Value = serde_json::from_str(source).expect("numeric fixture must parse");
         assert_eq!(
             build_support::canonical_json_bytes(&value),
             Err("canonical JSON numbers must be integers"),
             "{source} must be rejected"
+        );
+        assert_eq!(
+            podway_core::verify_canonical_json_v1(source.as_bytes()),
+            Err(podway_core::CanonicalJsonErrorV1::UnsupportedNumber),
+            "{source} must be rejected by core verifier"
         );
     }
 }

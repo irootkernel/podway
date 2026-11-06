@@ -236,6 +236,19 @@ the selected writer example and retained generation tests. Use the registered
 `int_suite` paths and exact E2E selection described above; verify that the intended
 tests actually execute. The local emitter boundary is a library unit test.
 
+Core's [canonical unit tests](../../crates/podway-core/src/canonical.rs),
+Protocol's [build-identity suite](../../crates/podway-protocol/tests/int_build_identity_git_refs.rs),
+the [shared known-answer fixture](../../tests/fixtures/contract/canonicalization-v1.json)
+and `python3 tools/contract_manifest.py --self-test` own the
+`[-9223372036854775808, 18446744073709551615]` integer boundary, boolean
+preservation and recursive float/out-of-range rejection. Protocol's
+[`int_v2agt004_record_many`](../../crates/podway-protocol/tests/int_v2agt004_record_many.rs)
+and Config's [`int_v2_procedure_canonical`](../../crates/podway-config/tests/int_v2_procedure_canonical.rs)
+verify that signed `i64` item, recorded-value and predicate bounds remain
+separate from unsigned `u64` revision and size fields.
+Run the Python `--self-test` negative controls separately; `make test` checks the
+known-answer fixture through the manifest check but does not run these sentinels.
+
 Through Gaori with the pinned repository toolchain, run `make architecture`,
 `make contract-manifest` and `make test-int`. Architecture's static prerequisites
 include documentation/link checks, contract/schema integrity and the prepared

@@ -47,9 +47,21 @@ def fail(message: str) -> None:
     raise ManifestError(message)
 
 
+MIN_CANONICAL_INTEGER = -(1 << 63)  # -9223372036854775808
+MAX_CANONICAL_INTEGER = (1 << 64) - 1  # 18446744073709551615
+
+
 def reject_noncanonical_numbers(value: Any) -> None:
+    if isinstance(value, bool):
+        return
     if isinstance(value, float):
-        fail("cannot canonicalize JSON: numbers must be signed integers")
+        fail("cannot canonicalize JSON: numbers must be 64-bit signed or unsigned integers")
+    if isinstance(value, int) and (
+        value < MIN_CANONICAL_INTEGER or value > MAX_CANONICAL_INTEGER
+    ):
+        fail(
+            "cannot canonicalize JSON: integer out of 64-bit range [-9223372036854775808, 18446744073709551615]"
+        )
     if isinstance(value, dict):
         for item in value.values():
             reject_noncanonical_numbers(item)
@@ -289,10 +301,16 @@ def write(root: Path = ROOT) -> tuple[int, bool]:
 def self_test(root: Path = ROOT) -> list[str]:
     completed = []
     for identifier, value in (
+        ("below_i64_min", -9223372036854775809),
+        ("above_u64_max", 18446744073709551616),
+        ("nested_below_i64_min", {"items": [-9223372036854775809]}),
+        ("nested_above_u64_max", {"nested": {"limit": 18446744073709551616}}),
         ("finite_float", 1.25),
         ("nested_float", {"items": [1, 2.5]}),
+        ("exponent_float", json.loads("1e2")),
         ("nan", float("nan")),
         ("infinity", float("inf")),
+        ("negative_infinity", float("-inf")),
     ):
         try:
             canonical_bytes(value)
@@ -300,6 +318,36 @@ def self_test(root: Path = ROOT) -> list[str]:
             completed.append(f"{identifier}_rejected")
         else:
             fail(f"{identifier} canonicalization sentinel did not fail")
+
+    for identifier, value, expected_bytes in (
+        ("i64_min", -9223372036854775808, b"-9223372036854775808"),
+        ("zero", 0, b"0"),
+        ("i64_max", 9223372036854775807, b"9223372036854775807"),
+        ("i64_max_plus_one", 9223372036854775808, b"9223372036854775808"),
+        ("u64_max", 18446744073709551615, b"18446744073709551615"),
+        ("bool_true", True, b"true"),
+        ("bool_false", False, b"false"),
+        (
+            "nested_boundaries",
+            {
+                "booleans": [False, True],
+                "edges": [
+                    -9223372036854775808,
+                    0,
+                    9223372036854775807,
+                    9223372036854775808,
+                    18446744073709551615,
+                ],
+            },
+            b'{"booleans":[false,true],"edges":[-9223372036854775808,0,9223372036854775807,9223372036854775808,18446744073709551615]}',
+        ),
+    ):
+        actual_bytes = canonical_bytes(value)
+        if actual_bytes != expected_bytes:
+            fail(
+                f"{identifier} canonicalization mismatch: expected {expected_bytes!r}, got {actual_bytes!r}"
+            )
+        completed.append(f"{identifier}_accepted")
 
     with tempfile.TemporaryDirectory(prefix="podway-contract-manifest-") as temporary_name:
         fixture = Path(temporary_name)

@@ -306,6 +306,18 @@ the complete version envelope and manifest through the canonical schema registry
 Store v15 DDL is enrolled in the current
 manifest with asset kind `store_schema` so its bytes affect writer identity.
 
+[`canonicalization-v1.json`](../../../assets/specifications/canonicalization-v1.json),
+Core's canonicalizer and byte verifier, Protocol's build support and
+[`contract_manifest.py`](../../../tools/contract_manifest.py) admit signed and
+unsigned 64-bit integers in `[-9223372036854775808, 18446744073709551615]`,
+preserve JSON booleans, and reject floats, exponent notation and adjacent
+out-of-range integers. Per-field schemas keep their own bounds: Procedure v2
+integer item bounds, recorded integer values and integer predicates remain signed
+`i64`, while revision and size counters remain unsigned `u64`. Updating the
+canonical specification or known-answer fixture updates the contract manifest
+writer identity under current Store compatibility and previous-writer refusal
+rules, with no predecessor declaration or migration.
+
 ## Contract generations
 
 [ADR-0039](../../architecture-decision-records/0039-opt-in-contract-generations.md)

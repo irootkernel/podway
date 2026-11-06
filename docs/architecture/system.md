@@ -260,9 +260,11 @@ uses those facts without parsing the source again. Malformed source retains no
 facts and keeps the plain preview fallback; diagnostics, details gating and
 YAML/JSON equivalence remain unchanged.
 
-The existing [canonicalization asset](../../assets/specifications/canonicalization-v1.json)
-says signed integers only, while Core and its tests admit `i64`/`u64`. PARSE
-preserves current bytes and behavior; this conformance discrepancy remains unresolved.
+The [canonicalization asset](../../assets/specifications/canonicalization-v1.json),
+Core (`canonicalize_json_v1` and `verify_canonical_json_v1`), Protocol build
+support and `tools/contract_manifest.py` all admit signed and unsigned 64-bit
+integers in `[-9223372036854775808, 18446744073709551615]`, preserve JSON
+booleans, and keep per-field schema integer bounds separate.
 
 ## Mutation path
 

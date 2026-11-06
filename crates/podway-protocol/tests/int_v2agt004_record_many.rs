@@ -335,6 +335,118 @@ fn v2agt007_stdin_schema_and_decoder_share_public_string_bounds() {
         decode_item_record_many_input_v1(&document("key".to_owned(), "path", "p".repeat(4_001),))
             .is_err()
     );
+
+    let i64_max_plus_one = (i64::MAX as u64) + 1;
+    assert_eq!(schema["properties"]["session_revision"]["minimum"], 0);
+    assert_eq!(
+        schema["properties"]["session_revision"]["maximum"],
+        u64::MAX
+    );
+    assert_eq!(
+        schema["properties"]["operations"]["items"]["properties"]["expected_item_revision"]["minimum"],
+        0
+    );
+    assert_eq!(
+        schema["properties"]["operations"]["items"]["properties"]["expected_item_revision"]["maximum"],
+        u64::MAX
+    );
+    let integer_variant = record_variants
+        .iter()
+        .find(|variant| variant["properties"]["type"]["const"] == "integer")
+        .unwrap();
+    assert_eq!(
+        integer_variant["properties"]["value"]["minimum"],
+        json!(i64::MIN)
+    );
+    assert_eq!(
+        integer_variant["properties"]["value"]["maximum"],
+        json!(i64::MAX)
+    );
+    let reference_artifact_variant = record_variants
+        .iter()
+        .find(|variant| variant["properties"].get("size_bytes").is_some())
+        .unwrap();
+    assert_eq!(
+        reference_artifact_variant["properties"]["size_bytes"]["minimum"],
+        0
+    );
+    assert_eq!(
+        reference_artifact_variant["properties"]["size_bytes"]["maximum"],
+        u64::MAX
+    );
+
+    for valid_signed in [json!(i64::MIN), json!(0), json!(i64::MAX)] {
+        let payload = input(json!([{
+            "item_id": "count",
+            "expected_item_revision": 0,
+            "record": {"type": "integer", "value": valid_signed}
+        }]));
+        assert!(
+            decode_item_record_many_input_v1(&payload).is_ok(),
+            "signed integer item record must accept {valid_signed}"
+        );
+    }
+    for invalid_signed in [json!(i64_max_plus_one), json!(u64::MAX)] {
+        let payload = input(json!([{
+            "item_id": "count",
+            "expected_item_revision": 0,
+            "record": {"type": "integer", "value": invalid_signed}
+        }]));
+        assert!(
+            podway_core::canonicalize_json_v1(&serde_json::from_slice::<Value>(&payload).unwrap())
+                .is_ok(),
+            "canonical primitive admits unsigned 64-bit integer {invalid_signed}"
+        );
+        assert!(
+            decode_item_record_many_input_v1(&payload).is_err(),
+            "signed integer item record must reject above-i64::MAX value {invalid_signed}"
+        );
+    }
+
+    let mut boundary_request: Value = serde_json::from_slice(&input(json!([
+        {
+            "item_id": "min-int",
+            "expected_item_revision": i64_max_plus_one,
+            "record": {"type": "integer", "value": i64::MIN}
+        },
+        {
+            "item_id": "max-int",
+            "expected_item_revision": u64::MAX,
+            "record": {"type": "integer", "value": i64::MAX}
+        },
+        {
+            "item_id": "artifact",
+            "expected_item_revision": u64::MAX,
+            "record": {
+                "type": "artifact",
+                "reference": "issue:64",
+                "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "size_bytes": u64::MAX,
+                "media_type": "text/plain"
+            }
+        }
+    ])))
+    .unwrap();
+    boundary_request["session_revision"] = json!(u64::MAX);
+    let decoded =
+        decode_item_record_many_input_v1(&serde_json::to_vec(&boundary_request).unwrap()).unwrap();
+    let workspace = podway_core::WorkspaceId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let preimage = canonical_direct_slice_mutation_identity_v1(
+        &SliceCommandV1::ItemRecordMany(ItemRecordManyV1 {
+            preconditions: SessionMutationPreconditionsWireV1 {
+                expected_session_id: decoded.session_id,
+                expected_session_revision: decoded.session_revision,
+                expected_attempt_id: decoded.attempt_id,
+            },
+            operations: decoded.operations,
+        }),
+        &workspace,
+    )
+    .unwrap();
+    assert_eq!(
+        podway_core::verify_canonical_json_v1(preimage.as_bytes()),
+        Ok(())
+    );
 }
 
 #[test]

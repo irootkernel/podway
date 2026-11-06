@@ -22,13 +22,13 @@ identifiers. Do not rename completed work to apply the new convention.
 
 ## CANON — Canonical Integer Contract Alignment
 
-Dependencies: existing canonicalization and contract-generation tooling. Status: Planned.
+Dependencies: existing canonicalization and contract-generation tooling. Status: In Progress.
 Design: [adopted CANON dossier](../todo/TODO-podway-canonical-integer-alignment.md).
 Target release: unassigned.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `CANON-001` | Align numeric admission and canonical evidence | Planned | Align the canonical integer domain, Rust/Python admission, boundary fixtures, generated identities and documentation while preserving accepted-value bytes and field limits. | [Design and acceptance](../todo/TODO-podway-canonical-integer-alignment.md#6-roadmap-ownership-dependencies-and-traceability) |
+| `CANON-001` | Align numeric admission and canonical evidence | Completed | Align the canonical integer domain, Rust/Python admission, boundary fixtures, generated identities and documentation while preserving accepted-value bytes and field limits. | [Design and acceptance](../todo/TODO-podway-canonical-integer-alignment.md#6-roadmap-ownership-dependencies-and-traceability) |
 
 ## AGENT — Agent Interaction Simplification
 
@@ -53,8 +53,9 @@ technical dependencies are AGENT-002 on 001; 003 on 001/002; 004 on 001; 005 on
 | `AGENT-005` | Return commit-bound observations | Planned | Return opt-in observations for selected mutations with precommit admission, lookup headroom and historical replay. | [Requirements and acceptance](../todo/TODO-podway-agent-interaction-simplification.md#agent-005-return-commit-bound-observations) |
 | `AGENT-006` | Align guidance and qualify integrated workflows | Planned | Verify normal and recovery CLI flows, promote durable documentation and prepare independent review and owner-approved closeout. | [Requirements and acceptance](../todo/TODO-podway-agent-interaction-simplification.md#agent-006-align-skills-examples-and-integrated-workflows) |
 
-Registration is planning only: no member implementation has started and no
-release, installation, runtime activation or consumer change is authorized.
+CANON-001 development is complete; CANON awaits whole-Epic validation and owner
+acceptance. AGENT remains Planned. No release, installation, runtime activation
+or consumer change is authorized.
 Each future executable/contract candidate requires focused checks and `make test`.
 Whole-Epic review, explicit owner acceptance and dossier retirement are separate
 completion obligations. Neither epic is assigned to the open release cycle.
