@@ -482,6 +482,20 @@ invoke the operation named by the declaration. Human output calls the value a
 recorded or structurally bound external check result and never describes it as
 verified, trusted, attested, or secure evidence.
 
+[ADR-0043](../../architecture-decision-records/0043-atomic-assessment-and-commit-bound-observations.md)
+reserves `goal assess-criteria --stdin` (`goal.assess_criteria`) and `--with-observation`
+without activating new executable routes in `AGENT-001`. `decode_criterion_assessment_many_input_v1`
+enforces the 1,048,576-byte direct input ceiling, 64-level JSON nesting depth,
+canonical JSON integers, closed fields, non-null defaults (`evidence: []`,
+`items: []`), `1..=16` entries, per-entry resource bounds (`reason <= 2000`
+scalars, `evidence <= 4`, `items <= 4`), and whole-request duplicate
+`criterion_id` rejection before workspace or Store access while preserving raw
+entry order and semantic fields (`status`, `reason`, homogeneous `mode`,
+combined citation limits, and citable source resolution) for post-fence
+evaluation in `AGENT-003`. The reserved `--with-observation` flag applies only to
+non-dry-run `session.start`, `session.begin`, `item.record_many`,
+`session.complete`, `session.decide`, and `goal.assess_criteria` (`AGENT-005`).
+
 ## Output and exits
 
 Successful versioned JSON output uses `podway.output/v4`; failures use `podway.error/v2`.

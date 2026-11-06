@@ -11,10 +11,10 @@ podway-core = { path = "../podway-core" }
 serde.workspace = true
 serde_json.workspace = true
 jsonschema = { version = "0.49.2", default-features = false }
-sha2 = { workspace = true, optional = true }
+sha2.workspace = true
 
 [features]
-release-contract-verifier = ["dep:sha2"]
+release-contract-verifier = []
 
 [build-dependencies]
 serde_json.workspace = true

@@ -1187,3 +1187,13 @@ receipt and byte/native witnesses in the private report. After the final require
 artifact changes. The same rule applies to selected-tool metadata observation,
 whose unsupported/incomplete outcome remains explicit and never qualifies live
 execution, models, accepted external results or activation.
+
+`AGENT-001` registers the reserved `podway.criterion-assessment-many-input/v1`,
+`podway.criterion-assessment-many-result/v1`, and
+`podway.mutation-observation-result/v1` schemas, staged pre-fence batch input
+decoding, opt-in canonical request identity/digest helpers, and non-recursive
+`outcome.lookup` headroom checks in `podway-protocol`, verified through
+`podway-protocol` unit tests and the existing registered `int_suite` modules
+(`int_v2_result_contract`, `int_v2agt004_record_many`,
+`int_v2dfc006_direct_envelopes`, `int_v2dfc008_current_contract`,
+`int_guide007_contract_generations`, and `int_release_contract_verifier`).

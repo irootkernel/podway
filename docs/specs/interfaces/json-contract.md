@@ -509,3 +509,53 @@ also withholds the required details.
 Every derived collection was audited against the declaration it projects. A collection whose ceiling equals its declaration's own ceiling is complete and carries no truncation flag: decision options, evidence guidance, instructions, allowed actions, graph counters, and manual rework targets are all of this kind. A collection that can be narrower than what a declaration may produce is a window, and a window always publishes its exact total and whether it was cut. Raising items per definition to 128 left three collections in the standard status tier able to exceed their own published ceilings: `missing_required_item_ids`, `item_values`, and the `items_total` that describes it. `status-result/v5` retains the released bounds, so each was corrected by raising its numeric ceiling to what a definition can declare rather than by windowing it. Windowing would have required a new member, and a released family never grows one; a bounded numeric update changes no field set and no unknown-field closure, which is the only in-place change the contract permits.
 
 `missing_required_item_count` remains exact while `missing_required_items` returns at most 64 entries plus a truncation flag. Suggestions remain capped at 128, expose exact total and truncation fields, and order currently actionable session-level suggestions before item suggestions in item declaration order.
+
+## Reserved batch criterion assessment and commit-bound observation contracts (`AGENT-001`)
+
+[ADR-0043](../../architecture-decision-records/0043-atomic-assessment-and-commit-bound-observations.md)
+owns the atomic multi-criterion assessment and commit-bound post-mutation
+observation design. `AGENT-001` registers the closed public JSON schemas and
+protocol validation helpers in `podway-protocol` while keeping
+`DAEMON_FREE_DOCUMENT_SCHEMAS_V1` `commands: &[]`, `output-v4.schema.json`, and
+the 58 active command routes unchanged until `AGENT-003` and `AGENT-005` wire
+runtime execution:
+
+- `podway.criterion-assessment-many-input/v1` (`schemas/criterion-assessment-many-input-v1.schema.json`):
+  closed stdin input document carrying `workspace_uuid`, `session_id`,
+  `session_revision` (`0..=2^64 - 1`), `attempt_id`,
+  `goal_revision` (`1..=2^64 - 1`), `idempotency_key` (`1..=256` UTF-8 bytes),
+  optional non-blank `actor` (`1..=256` scalars), and `1..=16`
+  unique-`criterion_id` assessment entries in submitted order (`status`,
+  `reason` `1..=2000` scalars, optional `evidence` `0..=4`, optional `items`
+  `0..=4`).
+- `podway.criterion-assessment-many-result/v1` (`schemas/criterion-assessment-many-result-v1.schema.json`):
+  closed batch assessment result carrying `graph_node_id`, `attempt_id`,
+  `goal_revision`, homogeneous `mode` (`assessment` or `applicability`),
+  `results` (`1..=16` `$defs/criterionResult` items in goal declaration
+  order), `complete`, optional `determined_outcome`, and `revision`. When
+  `complete == false`, `determined_outcome` is omitted. When `complete == true`,
+  `determined_outcome` is `"superseded"` for `applicability`, `"not_achieved"`
+  when any submitted item in `results` is `"unsatisfied"`, and `"achieved"` or
+  `"not_achieved"` when all submitted items in `results` are `"satisfied"`
+  (preserving partial-batch completion after an earlier `"unsatisfied"`
+  criterion in the same attempt).
+- `podway.mutation-observation-result/v1` (`schemas/mutation-observation-result-v1.schema.json`):
+  closed opt-in `--with-observation` result wrapper carrying `mutation_result`
+  (restricted to the 6 supported routes: non-dry-run `session.start`,
+  `session.begin`, `item.record_many`, `session.complete` with
+  `transition == "complete"`, `session.decide`, and `goal.assess_criteria`),
+  `observation` (`podway.observation-result/v6` only, regardless of
+  `--contract-generation`), and `workspace_sequence` matching the outer
+  `OutputEnvelopeV4.workspace.latest_workspace_sequence`. Only a successful,
+  known first submission without hidden retries may replace the next observe on
+  the normal path; after retry, `outcome.lookup`, lost output, contention
+  requiring refresh, or uncertain submission history, callers observe before
+  choosing a new mutation, because a returned observation describes state as of
+  commit and does not guarantee freshness against later writers (fences remain
+  mandatory).
+- Non-recursive `outcome.lookup` headroom (`validate_direct_outcome_lookup_headroom_v1`):
+  any stored `OutputEnvelopeV4` must fit inside a maximum-width legal
+  `outcome.lookup` `OutputEnvelopeV4` wrapper (`root` of `'/'` plus 4,095
+  control scalars, 256-byte control `idempotency_key`, `warnings: []`) within
+  the 1,048,576-byte output ceiling and 64-level nesting depth ceiling (inner
+  stored envelope depth `<= 61`).

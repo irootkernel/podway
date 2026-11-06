@@ -4,6 +4,11 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.2.17 - Unreleased
 
+### Added
+
+- Register reserved `podway.criterion-assessment-many-input/v1`, `podway.criterion-assessment-many-result/v1` and `podway.mutation-observation-result/v1` protocol schemas, staged batch assessment input decoding,
+  opt-in `--with-observation` canonical request digests and `outcome.lookup` envelope headroom checks.
+
 ### Changed
 
 - Re-pin canonical integer contract identity; previous-writer Stores refuse reads, writes and replay with

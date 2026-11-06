@@ -1084,6 +1084,16 @@
         "sha256": "sha256:3b630a103e189e79b3f7e0ab0b08ee744abec8139931d83168d413bb29b1e54b"
       },
       {
+        "id": "urn:podway:schema:criterion-assessment-many-input:v1",
+        "path": "schemas/criterion-assessment-many-input-v1.schema.json",
+        "sha256": "sha256:609a0eb5037997a85b59e12264720fd10ae25577e7240df42ab791e24f27170e"
+      },
+      {
+        "id": "urn:podway:schema:criterion-assessment-many-result:v1",
+        "path": "schemas/criterion-assessment-many-result-v1.schema.json",
+        "sha256": "sha256:63f14e593f616f0d84654382b79a45862c9c1a7f6682ff7c0f6ddf6f753f5a26"
+      },
+      {
         "id": "urn:podway:schema:criterion-assessment-result:v2",
         "path": "schemas/criterion-assessment-result-v2.schema.json",
         "sha256": "sha256:3391d266f592d7c936bb58f8fd5c120174b21bc6085b3a39e7dac05aa710247e"
@@ -1197,6 +1207,11 @@
         "id": "urn:podway:schema:legacy-runtime-state-unsupported-details:v1",
         "path": "schemas/legacy-runtime-state-unsupported-details-v1.schema.json",
         "sha256": "sha256:90ce5bb5a0287c4b425a3469305af9af5c1be3b990c561b0136aeb0fc8b05f0e"
+      },
+      {
+        "id": "urn:podway:schema:mutation-observation-result:v1",
+        "path": "schemas/mutation-observation-result-v1.schema.json",
+        "sha256": "sha256:8441a63713b385d77b5b2d18392754fa48a48da7abd1e139c274ce4b3a50693e"
       },
       {
         "id": "urn:podway:schema:mutation-outcome-unknown-details:v3",
@@ -1529,7 +1544,7 @@
     "authoring_diagnostics": 59,
     "routes": 58,
     "runtime_errors": 98,
-    "schemas": 91
+    "schemas": 94
   },
   "migration_boundary": {
     "adapter_database_access": "forbidden",

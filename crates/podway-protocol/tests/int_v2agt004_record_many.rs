@@ -872,3 +872,402 @@ fn direct_goal_and_decision_identities_bind_optional_and_required_goal_revisions
         .unwrap()
     );
 }
+
+#[test]
+fn agent001_criterion_assessment_many_input_decoder_enforces_pre_fence_bounds_and_order() {
+    use podway_core::{
+        AttemptId, CriterionId, GraphNodeId, ItemId, OptionId, Revision, SessionId, Sha256Digest,
+        WorkspaceId,
+    };
+    use podway_protocol::{
+        CRITERION_ASSESSMENT_MANY_INPUT_SCHEMA_V1, CriterionAssessmentManyEntryWireV1,
+        GoalAssessCriteriaV2, IdempotencyKeyV1, MAX_CRITERION_ASSESSMENT_MANY_ENTRIES_V1,
+        MAX_CRITERION_ASSESSMENT_REASON_SCALARS_V1, MAX_JSON_DEPTH_V1, MAX_SLICE_ACTOR_SCALARS_V1,
+        OBSERVATION_BEARING_MUTATION_COMMANDS_V1, ProcedureV2MutationCommandV1, SessionBeginV1,
+        SessionCompleteV1, SessionDecideV2, SessionIdentityPreconditionsWireV1,
+        SessionMutationPreconditionsWireV1, SessionStartCommandV1, SessionStartSourceV1,
+        SessionStartV1, SliceCommandV1, canonical_direct_slice_mutation_digest_with_observation_v1,
+        canonical_direct_slice_mutation_identity_v1,
+        canonical_direct_slice_mutation_identity_with_observation_v1,
+        canonical_direct_start_digest_with_observation_v1, canonical_direct_start_identity_v1,
+        canonical_direct_start_identity_with_observation_v1,
+        canonical_goal_assess_criteria_digest_v1, canonical_goal_assess_criteria_identity_v1,
+        canonical_procedure_v2_command_digest_with_observation_v1,
+        canonical_procedure_v2_command_identity_v1,
+        canonical_procedure_v2_command_identity_with_observation_v1,
+        decode_criterion_assessment_many_input_v1,
+    };
+
+    assert_eq!(
+        OBSERVATION_BEARING_MUTATION_COMMANDS_V1,
+        &[
+            "session.start",
+            "session.begin",
+            "item.record_many",
+            "session.complete",
+            "session.decide",
+            "goal.assess_criteria",
+        ]
+    );
+
+    let valid_doc = |assessments: Value| {
+        json!({
+            "schema": CRITERION_ASSESSMENT_MANY_INPUT_SCHEMA_V1,
+            "workspace_uuid": "00000000-0000-4000-8000-000000000001",
+            "session_id": "00000000-0000-4000-8000-000000000002",
+            "session_revision": 2,
+            "attempt_id": "00000000-0000-4000-8000-000000000003",
+            "goal_revision": 1,
+            "idempotency_key": "assess-key-1",
+            "assessments": assessments,
+        })
+    };
+
+    // Valid 1..=16 entries with omitted evidence/items/actor defaults and preserved order.
+    for count in [1usize, MAX_CRITERION_ASSESSMENT_MANY_ENTRIES_V1] {
+        let entries: Vec<Value> = (0..count)
+            .rev()
+            .map(|idx| {
+                json!({
+                    "criterion_id": format!("crit-{idx:02}"),
+                    "status": "satisfied",
+                    "reason": format!("Reason {idx}"),
+                })
+            })
+            .collect();
+        let bytes = serde_json::to_vec(&valid_doc(Value::Array(entries))).unwrap();
+        let decoded = decode_criterion_assessment_many_input_v1(&bytes).unwrap();
+        assert_eq!(decoded.actor, None);
+        assert_eq!(decoded.assessments.len(), count);
+        assert_eq!(
+            decoded.assessments[0].criterion_id.as_str(),
+            format!("crit-{:02}", count - 1)
+        );
+        assert!(decoded.assessments[0].evidence.is_empty());
+        assert!(decoded.assessments[0].items.is_empty());
+    }
+
+    // 0 and 17 entries fail closed.
+    assert_eq!(
+        decode_criterion_assessment_many_input_v1(
+            &serde_json::to_vec(&valid_doc(json!([]))).unwrap()
+        ),
+        Err(SliceErrorV1::InvalidValue {
+            field: "criterion assessments"
+        })
+    );
+    let entries_17: Vec<Value> = (0..17)
+        .map(|idx| {
+            json!({
+                "criterion_id": format!("crit-{idx:02}"),
+                "status": "satisfied",
+                "reason": "ok",
+            })
+        })
+        .collect();
+    assert_eq!(
+        decode_criterion_assessment_many_input_v1(
+            &serde_json::to_vec(&valid_doc(Value::Array(entries_17))).unwrap()
+        ),
+        Err(SliceErrorV1::BoundExceeded {
+            field: "criterion assessments",
+            maximum: 16,
+            actual: 17,
+            unit: "entries",
+        })
+    );
+
+    // Duplicate criterion_id rejected before fences.
+    let dup_criteria = valid_doc(json!([
+        {"criterion_id": "c1", "status": "satisfied", "reason": "r1"},
+        {"criterion_id": "c1", "status": "unsatisfied", "reason": "r2"},
+    ]));
+    assert_eq!(
+        decode_criterion_assessment_many_input_v1(&serde_json::to_vec(&dup_criteria).unwrap()),
+        Err(SliceErrorV1::InvalidValue {
+            field: "criterion assessment criterion_id"
+        })
+    );
+
+    // Explicit null and unknown fields fail closed; duplicate JSON keys at top-level or entry fail closed.
+    for raw_json in [
+        r#"{"schema":"podway.criterion-assessment-many-input/v1","workspace_uuid":"00000000-0000-4000-8000-000000000001","session_id":"00000000-0000-4000-8000-000000000002","session_revision":2,"attempt_id":"00000000-0000-4000-8000-000000000003","goal_revision":1,"idempotency_key":"k1","actor":null,"assessments":[{"criterion_id":"c1","status":"satisfied","reason":"ok"}]}"#,
+        r#"{"schema":"podway.criterion-assessment-many-input/v1","workspace_uuid":"00000000-0000-4000-8000-000000000001","session_id":"00000000-0000-4000-8000-000000000002","session_revision":2,"attempt_id":"00000000-0000-4000-8000-000000000003","goal_revision":1,"idempotency_key":"k1","assessments":[{"criterion_id":"c1","status":"satisfied","reason":"ok","evidence":null}]}"#,
+        r#"{"schema":"podway.criterion-assessment-many-input/v1","workspace_uuid":"00000000-0000-4000-8000-000000000001","session_id":"00000000-0000-4000-8000-000000000002","session_revision":2,"attempt_id":"00000000-0000-4000-8000-000000000003","goal_revision":1,"idempotency_key":"k1","assessments":[{"criterion_id":"c1","status":"satisfied","reason":"ok","items":null}]}"#,
+        r#"{"schema":"podway.criterion-assessment-many-input/v1","workspace_uuid":"00000000-0000-4000-8000-000000000001","session_id":"00000000-0000-4000-8000-000000000002","session_revision":2,"attempt_id":"00000000-0000-4000-8000-000000000003","goal_revision":1,"idempotency_key":"k1","extra":1,"assessments":[{"criterion_id":"c1","status":"satisfied","reason":"ok"}]}"#,
+        r#"{"schema":"podway.criterion-assessment-many-input/v1","workspace_uuid":"00000000-0000-4000-8000-000000000001","session_id":"00000000-0000-4000-8000-000000000002","session_revision":2,"attempt_id":"00000000-0000-4000-8000-000000000003","goal_revision":1,"idempotency_key":"k1","idempotency_key":"k2","assessments":[{"criterion_id":"c1","status":"satisfied","reason":"ok"}]}"#,
+        r#"{"schema":"podway.criterion-assessment-many-input/v1","workspace_uuid":"00000000-0000-4000-8000-000000000001","session_id":"00000000-0000-4000-8000-000000000002","session_revision":2,"attempt_id":"00000000-0000-4000-8000-000000000003","goal_revision":1,"idempotency_key":"k1","assessments":[{"criterion_id":"c1","status":"satisfied","status":"unsatisfied","reason":"ok"}]}"#,
+        r#"{"schema":"podway.criterion-assessment-many-input/v1","workspace_uuid":"00000000-0000-4000-8000-000000000001","session_id":"00000000-0000-4000-8000-000000000002","session_revision":2.0,"attempt_id":"00000000-0000-4000-8000-000000000003","goal_revision":1,"idempotency_key":"k1","assessments":[{"criterion_id":"c1","status":"satisfied","reason":"ok"}]}"#,
+        r#"{"schema":"podway.criterion-assessment-many-input/v1","workspace_uuid":"00000000-0000-4000-8000-000000000001","session_id":"00000000-0000-4000-8000-000000000002","session_revision":2,"attempt_id":"00000000-0000-4000-8000-000000000003","goal_revision":0,"idempotency_key":"k1","assessments":[{"criterion_id":"c1","status":"satisfied","reason":"ok"}]}"#,
+    ] {
+        assert!(
+            decode_criterion_assessment_many_input_v1(raw_json.as_bytes()).is_err(),
+            "must reject {raw_json}"
+        );
+    }
+
+    // Actor and reason resource bounds and raw semantic preservation for AGENT-003.
+    let mut actor_ok = valid_doc(json!([{
+        "criterion_id": "c1",
+        "status": "unknown_status_for_post_fence",
+        "reason": "x".repeat(MAX_CRITERION_ASSESSMENT_REASON_SCALARS_V1),
+        "evidence": ["n1", "n2", "n3", "n4"],
+        "items": ["i1", "i2", "i3", "i4"],
+    }]));
+    actor_ok["actor"] = json!("a".repeat(MAX_SLICE_ACTOR_SCALARS_V1));
+    let decoded_raw =
+        decode_criterion_assessment_many_input_v1(&serde_json::to_vec(&actor_ok).unwrap()).unwrap();
+    assert_eq!(
+        decoded_raw.assessments[0].status,
+        "unknown_status_for_post_fence"
+    );
+    assert_eq!(decoded_raw.assessments[0].evidence.len(), 4);
+    assert_eq!(decoded_raw.assessments[0].items.len(), 4);
+
+    let mut actor_too_long = actor_ok.clone();
+    actor_too_long["actor"] = json!("a".repeat(MAX_SLICE_ACTOR_SCALARS_V1 + 1));
+    assert!(
+        decode_criterion_assessment_many_input_v1(&serde_json::to_vec(&actor_too_long).unwrap())
+            .is_err()
+    );
+    let mut actor_blank = actor_ok.clone();
+    actor_blank["actor"] = json!("   ");
+    assert!(
+        decode_criterion_assessment_many_input_v1(&serde_json::to_vec(&actor_blank).unwrap())
+            .is_err()
+    );
+    let mut reason_too_long = actor_ok.clone();
+    reason_too_long["assessments"][0]["reason"] =
+        json!("x".repeat(MAX_CRITERION_ASSESSMENT_REASON_SCALARS_V1 + 1));
+    assert!(
+        decode_criterion_assessment_many_input_v1(&serde_json::to_vec(&reason_too_long).unwrap())
+            .is_err()
+    );
+    let mut evidence_too_many = actor_ok.clone();
+    evidence_too_many["assessments"][0]["evidence"] = json!(["n1", "n2", "n3", "n4", "n5"]);
+    assert!(
+        decode_criterion_assessment_many_input_v1(&serde_json::to_vec(&evidence_too_many).unwrap())
+            .is_err()
+    );
+    let mut items_too_many = actor_ok;
+    items_too_many["assessments"][0]["items"] = json!(["i1", "i2", "i3", "i4", "i5"]);
+    assert!(
+        decode_criterion_assessment_many_input_v1(&serde_json::to_vec(&items_too_many).unwrap())
+            .is_err()
+    );
+
+    // Multibyte UTF-8 idempotency key boundary: 256 bytes accepted, 257 bytes rejected.
+    let key_256 = "가".repeat(85) + "a";
+    assert_eq!(key_256.len(), 256);
+    assert!(IdempotencyKeyV1::new(key_256.clone()).is_ok());
+    let mut doc_key_256 =
+        valid_doc(json!([{"criterion_id": "c1", "status": "satisfied", "reason": "ok"}]));
+    doc_key_256["idempotency_key"] = json!(key_256);
+    assert!(
+        decode_criterion_assessment_many_input_v1(&serde_json::to_vec(&doc_key_256).unwrap())
+            .is_ok()
+    );
+    let key_257 = "가".repeat(85) + "ab";
+    assert_eq!(key_257.len(), 257);
+    assert!(IdempotencyKeyV1::new(key_257.clone()).is_err());
+    doc_key_256["idempotency_key"] = json!(key_257);
+    assert!(
+        decode_criterion_assessment_many_input_v1(&serde_json::to_vec(&doc_key_256).unwrap())
+            .is_err()
+    );
+
+    // 1 MiB +/- 1 byte and depth 64 vs 65 boundaries.
+    let base_bytes = serde_json::to_vec(&valid_doc(
+        json!([{"criterion_id": "c1", "status": "satisfied", "reason": "ok"}]),
+    ))
+    .unwrap();
+    let mut exact_1mib = base_bytes.clone();
+    exact_1mib.resize(MAX_DIRECT_INPUT_BYTES_V1, b' ');
+    assert!(decode_criterion_assessment_many_input_v1(&exact_1mib).is_ok());
+    exact_1mib.push(b' ');
+    assert_eq!(
+        decode_criterion_assessment_many_input_v1(&exact_1mib),
+        Err(SliceErrorV1::ValueTooLong {
+            field: "criterion assessment input",
+            maximum: MAX_DIRECT_INPUT_BYTES_V1,
+            actual: MAX_DIRECT_INPUT_BYTES_V1 + 1,
+        })
+    );
+
+    let mut deep = Value::Null;
+    for _ in 0..MAX_JSON_DEPTH_V1 + 1 {
+        deep = json!([deep]);
+    }
+    assert!(
+        decode_criterion_assessment_many_input_v1(&serde_json::to_vec(&deep).unwrap()).is_err()
+    );
+
+    // Canonical request identity & digest known-answer vectors across all 6 routes.
+    let workspace_id = WorkspaceId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let session_id = SessionId::new("00000000-0000-4000-8000-000000000002").unwrap();
+    let attempt_id = AttemptId::new("00000000-0000-4000-8000-000000000003").unwrap();
+    let proc_digest = Sha256Digest::new(
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+    .unwrap();
+
+    let batch = GoalAssessCriteriaV2 {
+        assessments: vec![
+            CriterionAssessmentManyEntryWireV1 {
+                criterion_id: CriterionId::new("c1").unwrap(),
+                status: "satisfied".to_owned(),
+                reason: "ok 1".to_owned(),
+                evidence: vec![GraphNodeId::new("deliver").unwrap()],
+                items: vec![ItemId::new("notes").unwrap()],
+            },
+            CriterionAssessmentManyEntryWireV1 {
+                criterion_id: CriterionId::new("c2").unwrap(),
+                status: "satisfied".to_owned(),
+                reason: "ok 2".to_owned(),
+                evidence: vec![],
+                items: vec![],
+            },
+        ],
+        actor: Some("agent-to".to_owned()),
+        preconditions: SessionMutationPreconditionsWireV1 {
+            expected_session_id: session_id.clone(),
+            expected_session_revision: Revision::new(2),
+            expected_attempt_id: attempt_id.clone(),
+        },
+        expected_goal_revision: 1,
+    };
+    assert_eq!(
+        canonical_goal_assess_criteria_identity_v1(&batch, &workspace_id, false).unwrap(),
+        "{\"command\":\"goal.assess_criteria\",\"payload\":{\"actor\":\"agent-to\",\"assessments\":[{\"criterion_id\":\"c1\",\"evidence\":[\"deliver\"],\"items\":[\"notes\"],\"reason\":\"ok 1\",\"status\":\"satisfied\"},{\"criterion_id\":\"c2\",\"evidence\":[],\"items\":[],\"reason\":\"ok 2\",\"status\":\"satisfied\"}]},\"preconditions\":{\"attempt_id\":\"00000000-0000-4000-8000-000000000003\",\"goal_revision\":1,\"session_id\":\"00000000-0000-4000-8000-000000000002\",\"session_revision\":2},\"protocol_major\":1,\"workspace_id\":\"00000000-0000-4000-8000-000000000001\"}"
+    );
+    assert_eq!(
+        canonical_goal_assess_criteria_identity_v1(&batch, &workspace_id, true).unwrap(),
+        "{\"command\":\"goal.assess_criteria\",\"payload\":{\"actor\":\"agent-to\",\"assessments\":[{\"criterion_id\":\"c1\",\"evidence\":[\"deliver\"],\"items\":[\"notes\"],\"reason\":\"ok 1\",\"status\":\"satisfied\"},{\"criterion_id\":\"c2\",\"evidence\":[],\"items\":[],\"reason\":\"ok 2\",\"status\":\"satisfied\"}]},\"preconditions\":{\"attempt_id\":\"00000000-0000-4000-8000-000000000003\",\"goal_revision\":1,\"session_id\":\"00000000-0000-4000-8000-000000000002\",\"session_revision\":2},\"protocol_major\":1,\"return_observation\":true,\"workspace_id\":\"00000000-0000-4000-8000-000000000001\"}"
+    );
+    assert_eq!(
+        canonical_goal_assess_criteria_digest_v1(&batch, &workspace_id, false)
+            .unwrap()
+            .as_str(),
+        "sha256:6b9ac5c1bd76f93ae46747a277244c10a604357945c791c101a136e98c3a4ed5"
+    );
+    assert_eq!(
+        canonical_goal_assess_criteria_digest_v1(&batch, &workspace_id, true)
+            .unwrap()
+            .as_str(),
+        "sha256:54beb045545d1b12e05408e91bf44c1e2eb04607e3919f87d4a1c90b74e26392"
+    );
+
+    let start_cmd = SliceCommandV1::SessionStart(SessionStartCommandV1 {
+        start: SessionStartV1 {
+            source: SessionStartSourceV1::Preset {
+                preset: "small-change-v2".to_owned(),
+            },
+            expected_procedure_digest: None,
+            task_title: "Ship".to_owned(),
+            dry_run: false,
+        },
+        preconditions: None,
+    });
+    assert_eq!(
+        canonical_direct_start_identity_with_observation_v1(
+            &start_cmd,
+            &workspace_id,
+            &proc_digest,
+            false
+        )
+        .unwrap(),
+        canonical_direct_start_identity_v1(&start_cmd, &workspace_id, &proc_digest).unwrap()
+    );
+    assert_ne!(
+        canonical_direct_start_digest_with_observation_v1(
+            &start_cmd,
+            &workspace_id,
+            &proc_digest,
+            false
+        )
+        .unwrap(),
+        canonical_direct_start_digest_with_observation_v1(
+            &start_cmd,
+            &workspace_id,
+            &proc_digest,
+            true
+        )
+        .unwrap()
+    );
+
+    let begin_cmd = ProcedureV2MutationCommandV1::SessionBegin(SessionBeginV1 {
+        initial_goal: None,
+        preconditions: SessionIdentityPreconditionsWireV1 {
+            expected_session_id: session_id.clone(),
+            expected_session_revision: Revision::new(0),
+        },
+    });
+    assert_eq!(
+        canonical_procedure_v2_command_identity_with_observation_v1(
+            &begin_cmd,
+            &workspace_id,
+            false
+        )
+        .unwrap(),
+        canonical_procedure_v2_command_identity_v1(&begin_cmd, &workspace_id).unwrap()
+    );
+    assert_ne!(
+        canonical_procedure_v2_command_digest_with_observation_v1(&begin_cmd, &workspace_id, false)
+            .unwrap(),
+        canonical_procedure_v2_command_digest_with_observation_v1(&begin_cmd, &workspace_id, true)
+            .unwrap()
+    );
+
+    let decide_cmd = ProcedureV2MutationCommandV1::SessionDecide(SessionDecideV2 {
+        option_id: OptionId::new("proceed").unwrap(),
+        reason: "Ready".to_owned(),
+        actor: None,
+        preconditions: SessionMutationPreconditionsWireV1 {
+            expected_session_id: session_id.clone(),
+            expected_session_revision: Revision::new(2),
+            expected_attempt_id: attempt_id.clone(),
+        },
+        expected_goal_revision: Some(1),
+    });
+    assert_ne!(
+        canonical_procedure_v2_command_digest_with_observation_v1(
+            &decide_cmd,
+            &workspace_id,
+            false
+        )
+        .unwrap(),
+        canonical_procedure_v2_command_digest_with_observation_v1(&decide_cmd, &workspace_id, true)
+            .unwrap()
+    );
+
+    let complete_cmd = SliceCommandV1::SessionComplete(SessionCompleteV1 {
+        preconditions: SessionMutationPreconditionsWireV1 {
+            expected_session_id: session_id,
+            expected_session_revision: Revision::new(2),
+            expected_attempt_id: attempt_id,
+        },
+    });
+    assert_eq!(
+        canonical_direct_slice_mutation_identity_with_observation_v1(
+            &complete_cmd,
+            &workspace_id,
+            false
+        )
+        .unwrap(),
+        canonical_direct_slice_mutation_identity_v1(&complete_cmd, &workspace_id).unwrap()
+    );
+    assert_ne!(
+        canonical_direct_slice_mutation_digest_with_observation_v1(
+            &complete_cmd,
+            &workspace_id,
+            false
+        )
+        .unwrap(),
+        canonical_direct_slice_mutation_digest_with_observation_v1(
+            &complete_cmd,
+            &workspace_id,
+            true
+        )
+        .unwrap()
+    );
+}

@@ -1599,6 +1599,271 @@
       "integration": "dolgorae",
       "enabled": false,
       "source": "default"
+    },
+    "podway.criterion-assessment-many-input/v1": {
+      "schema": "podway.criterion-assessment-many-input/v1",
+      "workspace_uuid": "00000000-0000-4000-8000-000000000001",
+      "session_id": "00000000-0000-4000-8000-000000000002",
+      "session_revision": 2,
+      "attempt_id": "00000000-0000-4000-8000-000000000003",
+      "goal_revision": 1,
+      "idempotency_key": "assess-criteria-1",
+      "actor": "agent-to",
+      "assessments": [
+        {
+          "criterion_id": "c1",
+          "status": "satisfied",
+          "reason": "Criterion 1 satisfied",
+          "evidence": [
+            "deliver"
+          ],
+          "items": [
+            "notes"
+          ]
+        },
+        {
+          "criterion_id": "c2",
+          "status": "satisfied",
+          "reason": "Criterion 2 satisfied",
+          "evidence": [],
+          "items": []
+        }
+      ]
+    },
+    "podway.criterion-assessment-many-result/v1": {
+      "schema": "podway.criterion-assessment-many-result/v1",
+      "graph_node_id": "assess",
+      "attempt_id": "00000000-0000-4000-8000-000000000003",
+      "goal_revision": 1,
+      "mode": "assessment",
+      "results": [
+        {
+          "criterion_id": "c1",
+          "status": "satisfied",
+          "reason": "Criterion 1 satisfied",
+          "citations": [
+            {
+              "reference_graph_node_id": "deliver"
+            },
+            {
+              "local_item_id": "notes"
+            }
+          ]
+        },
+        {
+          "criterion_id": "c2",
+          "status": "satisfied",
+          "reason": "Criterion 2 satisfied",
+          "citations": []
+        }
+      ],
+      "complete": true,
+      "determined_outcome": "achieved",
+      "revision": 3
+    },
+    "podway.mutation-observation-result/v1": {
+      "schema": "podway.mutation-observation-result/v1",
+      "mutation_result": {
+        "schema": "podway.item-record-many-result/v2",
+        "changed": true,
+        "graph_node_id": "work",
+        "attempt_id": "00000000-0000-4000-8000-000000000001",
+        "attempt_number": 1,
+        "revision": 2,
+        "items": [
+          {
+            "item_id": "result",
+            "expected_item_revision": 0,
+            "changed": true,
+            "item_revision": 1
+          }
+        ]
+      },
+      "observation": {
+        "schema": "podway.observation-result/v6",
+        "status": {
+          "procedure": {
+            "schema": "podway.procedure/v2",
+            "id": "workflow",
+            "version": "1",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "session": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "lifecycle": "prepared",
+            "revision": 0
+          },
+          "current": null,
+          "goal_tracking": true,
+          "goal_defined": false,
+          "trace_length": 0,
+          "counters": [],
+          "items": [],
+          "items_total": 0,
+          "items_truncated": false,
+          "delegation": {
+            "state": "inactive",
+            "reason": "no_active_attempt",
+            "safe_next_action": "begin_or_inspect"
+          }
+        },
+        "guidance": {
+          "schema": "podway.prepared-next-result/v3",
+          "procedure_schema": "podway.procedure/v2",
+          "procedure_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "session_id": "00000000-0000-4000-8000-000000000001",
+          "session_state": "prepared",
+          "revision": 0,
+          "goal_tracking": true,
+          "goal_defined": false,
+          "trace_length": 0,
+          "allowed_actions": [
+            "session.begin",
+            "session.reset",
+            "session.start_replace"
+          ],
+          "suggestions": [
+            {
+              "command": "session.begin",
+              "argv": [
+                "podway",
+                "begin"
+              ]
+            },
+            {
+              "command": "session.reset",
+              "argv": [
+                "podway",
+                "reset"
+              ]
+            },
+            {
+              "command": "session.start_replace",
+              "argv": [
+                "podway",
+                "start",
+                "--on-existing",
+                "delete"
+              ]
+            }
+          ],
+          "delegated_placement_count": 1
+        },
+        "active_items": [],
+        "active_items_total": 0,
+        "active_items_truncated": false,
+        "mutation_templates": [
+          {
+            "command": "session.begin",
+            "argv": [
+              "podway",
+              "begin",
+              "--if-workspace-uuid",
+              "00000000-0000-4000-8000-000000000001",
+              "--if-session-id",
+              "00000000-0000-4000-8000-000000000001",
+              "--if-session-revision",
+              "0",
+              "--idempotency-key",
+              "<idempotency-key>"
+            ],
+            "preconditions": {
+              "workspace_uuid": "00000000-0000-4000-8000-000000000001",
+              "session_id": "00000000-0000-4000-8000-000000000001",
+              "session_revision": 0
+            },
+            "authority": "optimistic_concurrency_only",
+            "idempotency_key_required": true,
+            "requires_explicit_authorization": false
+          },
+          {
+            "command": "session.reset",
+            "argv": [
+              "podway",
+              "reset",
+              "--if-workspace-uuid",
+              "00000000-0000-4000-8000-000000000001",
+              "--if-session-id",
+              "00000000-0000-4000-8000-000000000001",
+              "--if-session-revision",
+              "0",
+              "--idempotency-key",
+              "<idempotency-key>"
+            ],
+            "preconditions": {
+              "workspace_uuid": "00000000-0000-4000-8000-000000000001",
+              "session_id": "00000000-0000-4000-8000-000000000001",
+              "session_revision": 0
+            },
+            "authority": "optimistic_concurrency_only",
+            "idempotency_key_required": true,
+            "requires_explicit_authorization": true
+          },
+          {
+            "command": "session.start_replace",
+            "argv": [
+              "podway",
+              "start",
+              "--on-existing",
+              "delete",
+              "--preset",
+              "<preset>",
+              "--task",
+              "<task>",
+              "--if-workspace-uuid",
+              "00000000-0000-4000-8000-000000000001",
+              "--if-session-id",
+              "00000000-0000-4000-8000-000000000001",
+              "--if-session-revision",
+              "0",
+              "--idempotency-key",
+              "<idempotency-key>"
+            ],
+            "preconditions": {
+              "workspace_uuid": "00000000-0000-4000-8000-000000000001",
+              "session_id": "00000000-0000-4000-8000-000000000001",
+              "session_revision": 0
+            },
+            "authority": "optimistic_concurrency_only",
+            "idempotency_key_required": true,
+            "requires_explicit_authorization": true
+          },
+          {
+            "command": "session.start_replace",
+            "argv": [
+              "podway",
+              "start",
+              "--on-existing",
+              "delete",
+              "--procedure",
+              "<procedure-file>",
+              "--expect-procedure-digest",
+              "<procedure-digest>",
+              "--task",
+              "<task>",
+              "--if-workspace-uuid",
+              "00000000-0000-4000-8000-000000000001",
+              "--if-session-id",
+              "00000000-0000-4000-8000-000000000001",
+              "--if-session-revision",
+              "0",
+              "--idempotency-key",
+              "<idempotency-key>"
+            ],
+            "preconditions": {
+              "workspace_uuid": "00000000-0000-4000-8000-000000000001",
+              "session_id": "00000000-0000-4000-8000-000000000001",
+              "session_revision": 0
+            },
+            "authority": "optimistic_concurrency_only",
+            "idempotency_key_required": true,
+            "requires_explicit_authorization": true
+          }
+        ],
+        "mutation_templates_total": 4,
+        "mutation_templates_truncated": false
+      },
+      "workspace_sequence": 2
     }
   },
   "cases": [

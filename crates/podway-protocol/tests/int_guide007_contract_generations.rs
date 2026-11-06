@@ -703,4 +703,23 @@ fn guide007_generation_type_and_released_manifests_table() {
         assert_eq!(contract.schema_path, path);
         assert_eq!(contract.commands, commands);
     }
+
+    // AGENT-001: mutation-observation-result/v1 embeds observation-result/v6 only without
+    // altering Generation 1/2 session.observe contracts.
+    let fixtures = fixtures();
+    let wrapper = fixtures["fixtures"]["podway.mutation-observation-result/v1"].clone();
+    assert_eq!(
+        wrapper["observation"]["schema"],
+        json!("podway.observation-result/v6")
+    );
+    assert!(validate_daemon_free_document_v1(
+        "podway.mutation-observation-result/v1",
+        &wrapper
+    ));
+    let mut wrapper_v5 = wrapper;
+    wrapper_v5["observation"] = fixtures["fixtures"]["podway.observation-result/v5"].clone();
+    assert!(!validate_daemon_free_document_v1(
+        "podway.mutation-observation-result/v1",
+        &wrapper_v5
+    ));
 }

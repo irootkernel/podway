@@ -28,7 +28,7 @@
     {
       "kind": "catalog",
       "path": "release/dolgorae-adapter-contract-v3.json",
-      "sha256": "sha256:d155c27e2a9d1ad539e3bfb447ec1018049bd27d2c43be4fc46bc2fce0ab5d59"
+      "sha256": "sha256:6a7e1d8782c77e1e0b678360be1756f4208766e8a280c9872e71429e8fdc9449"
     },
     {
       "kind": "schema",
@@ -59,6 +59,16 @@
       "kind": "schema",
       "path": "schemas/contract-manifest-v2.schema.json",
       "sha256": "sha256:3b630a103e189e79b3f7e0ab0b08ee744abec8139931d83168d413bb29b1e54b"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/criterion-assessment-many-input-v1.schema.json",
+      "sha256": "sha256:609a0eb5037997a85b59e12264720fd10ae25577e7240df42ab791e24f27170e"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/criterion-assessment-many-result-v1.schema.json",
+      "sha256": "sha256:63f14e593f616f0d84654382b79a45862c9c1a7f6682ff7c0f6ddf6f753f5a26"
     },
     {
       "kind": "schema",
@@ -174,6 +184,11 @@
       "kind": "schema",
       "path": "schemas/legacy-runtime-state-unsupported-details-v1.schema.json",
       "sha256": "sha256:90ce5bb5a0287c4b425a3469305af9af5c1be3b990c561b0136aeb0fc8b05f0e"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/mutation-observation-result-v1.schema.json",
+      "sha256": "sha256:8441a63713b385d77b5b2d18392754fa48a48da7abd1e139c274ce4b3a50693e"
     },
     {
       "kind": "schema",
@@ -628,7 +643,7 @@
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/protocol/current-contracts.json",
-      "sha256": "sha256:1ebd8a4605599d8f347f037775cefb0fcffa4010b1497583472c54af813f1bab"
+      "sha256": "sha256:ffcd91b6158dffd29f57744695c3abe1e961650b47dfd348691dbaa20f754dee"
     },
     {
       "kind": "known_answer_fixture",
@@ -636,7 +651,7 @@
       "sha256": "sha256:7de5f4f024eb795ae7fb73594d4847b833016bea6be9f2737c567b524ae5466e"
     }
   ],
-  "digest": "sha256:2f2c5bc9142ba368b403606f2b3cd58d76277bcdf70776785b6e6aa4f4d8bc0c",
+  "digest": "sha256:779396c8904d3bc69b050c8ac2a40fc9c81d2f416a8481ec4dbf241c129d42f8",
   "product": "podway",
   "product_version": "0.2.16",
   "schema_version": "podway.contract-manifest/v2"

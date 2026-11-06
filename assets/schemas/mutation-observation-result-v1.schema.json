@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:mutation-observation-result:v1",
+  "title": "Podway Mutation Observation Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "mutation_result",
+    "observation",
+    "workspace_sequence"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.mutation-observation-result/v1"
+    },
+    "mutation_result": {
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "urn:podway:schema:session-start-result:v4"
+            },
+            {
+              "properties": {
+                "dry_run": {
+                  "const": false
+                }
+              }
+            }
+          ]
+        },
+        {
+          "$ref": "urn:podway:schema:session-begin-result:v2"
+        },
+        {
+          "$ref": "urn:podway:schema:item-record-many-result:v2"
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "urn:podway:schema:stage-transition-result:v3"
+            },
+            {
+              "properties": {
+                "transition": {
+                  "const": "complete"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "$ref": "urn:podway:schema:decision-result:v2"
+        },
+        {
+          "$ref": "urn:podway:schema:criterion-assessment-many-result:v1"
+        }
+      ]
+    },
+    "observation": {
+      "$ref": "urn:podway:schema:observation-result:v6"
+    },
+    "workspace_sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    }
+  },
+  "$comment": "Reserved by AGENT-001 under ADR-0043; combined mutation and observation result wrapper."
+}

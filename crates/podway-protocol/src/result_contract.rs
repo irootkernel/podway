@@ -9,7 +9,8 @@ use jsonschema::{Retrieve, Uri, Validator};
 use serde_json::{Map, Value};
 
 use crate::{
-    ProtocolError, serialized_json_len_v1, validate_json_document_depth, validate_json_map_depth,
+    CommandNameV1, MAX_WORKSPACE_ROOT_SCALARS_V1, ProtocolError, RequestIdV1, Rfc3339MillisV1,
+    serialized_json_len_v1, validate_json_document_depth, validate_json_map_depth,
 };
 
 mod embedded_schemas {
@@ -300,6 +301,16 @@ pub const DAEMON_FREE_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
         &[],
     ),
     result_schema_v2(
+        "podway.criterion-assessment-many-input/v1",
+        "schemas/criterion-assessment-many-input-v1.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.criterion-assessment-many-result/v1",
+        "schemas/criterion-assessment-many-result-v1.schema.json",
+        &[],
+    ),
+    result_schema_v2(
         "podway.criterion-assessment-result/v2",
         "schemas/criterion-assessment-result-v2.schema.json",
         &["goal.assess_criterion"],
@@ -366,6 +377,11 @@ pub const DAEMON_FREE_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
     result_schema_v2(
         "podway.legacy-runtime-state-unsupported-details/v1",
         "schemas/legacy-runtime-state-unsupported-details-v1.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.mutation-observation-result/v1",
+        "schemas/mutation-observation-result-v1.schema.json",
         &[],
     ),
     result_schema_v2(
@@ -926,6 +942,29 @@ pub fn result_schema_top_level_fields_v2(
                 "delegation",
             ],
         )),
+        "podway.criterion-assessment-many-result/v1" => Some((
+            &[
+                "schema",
+                "graph_node_id",
+                "attempt_id",
+                "goal_revision",
+                "mode",
+                "results",
+                "complete",
+                "revision",
+            ],
+            &[
+                "schema",
+                "graph_node_id",
+                "attempt_id",
+                "goal_revision",
+                "mode",
+                "results",
+                "complete",
+                "determined_outcome",
+                "revision",
+            ],
+        )),
         "podway.criterion-assessment-result/v2" => Some((
             &[
                 "schema",
@@ -1100,6 +1139,20 @@ pub fn result_schema_top_level_fields_v2(
                 "attempt_number",
                 "revision",
                 "items",
+            ],
+        )),
+        "podway.mutation-observation-result/v1" => Some((
+            &[
+                "schema",
+                "mutation_result",
+                "observation",
+                "workspace_sequence",
+            ],
+            &[
+                "schema",
+                "mutation_result",
+                "observation",
+                "workspace_sequence",
             ],
         )),
         "podway.next-result/v5" => Some((
@@ -1595,6 +1648,12 @@ fn validate_result_correlations_v2(schema: &str, result: &Map<String, Value>) ->
             .and_then(Value::as_object)
             .is_some_and(delegation_projection_matches_current_attempt_v2),
         "podway.observation-result/v6" => observation_v6_correlations_v2(result),
+        "podway.criterion-assessment-many-result/v1" => {
+            criterion_assessment_many_result_v1_correlations(result)
+        }
+        "podway.mutation-observation-result/v1" => {
+            mutation_observation_result_v1_correlations(result)
+        }
         "podway.session-archive-show-result/v3" => result
             .get("state")
             .and_then(Value::as_object)
@@ -1806,6 +1865,138 @@ fn workspace_mismatch_v2_release_agrees_v1(details: &Map<String, Value>) -> bool
     }
 }
 
+fn criterion_assessment_many_input_v1_correlations(value: &Map<String, Value>) -> bool {
+    if !value
+        .get("idempotency_key")
+        .and_then(Value::as_str)
+        .is_some_and(|key| crate::IdempotencyKeyV1::new(key).is_ok())
+    {
+        return false;
+    }
+    let Some(assessments) = value.get("assessments").and_then(Value::as_array) else {
+        return false;
+    };
+    if !(1..=16).contains(&assessments.len()) {
+        return false;
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    assessments.iter().all(|entry| {
+        entry
+            .get("criterion_id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| seen.insert(id))
+    })
+}
+
+fn criterion_assessment_many_result_v1_correlations(result: &Map<String, Value>) -> bool {
+    let Some(mode) = result.get("mode").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(complete) = result.get("complete").and_then(Value::as_bool) else {
+        return false;
+    };
+    let Some(results) = result.get("results").and_then(Value::as_array) else {
+        return false;
+    };
+    if !(1..=16).contains(&results.len()) {
+        return false;
+    }
+    let mut seen_criteria = std::collections::BTreeSet::new();
+    let mut has_unsatisfied = false;
+    for item_value in results {
+        let Some(item) = item_value.as_object() else {
+            return false;
+        };
+        let Some(criterion_id) = item.get("criterion_id").and_then(Value::as_str) else {
+            return false;
+        };
+        if !seen_criteria.insert(criterion_id) {
+            return false;
+        }
+        let Some(status) = item.get("status").and_then(Value::as_str) else {
+            return false;
+        };
+        let Some(citations) = item.get("citations").and_then(Value::as_array) else {
+            return false;
+        };
+        if citations.len() > podway_core::MAX_CRITERION_CITATIONS_V2 {
+            return false;
+        }
+        let mut seen_citations = Vec::with_capacity(citations.len());
+        for citation in citations {
+            if seen_citations.contains(&citation) {
+                return false;
+            }
+            seen_citations.push(citation);
+        }
+        match mode {
+            "assessment" => match status {
+                "satisfied" => {}
+                "unsatisfied" => has_unsatisfied = true,
+                _ => return false,
+            },
+            "applicability" => {
+                if status != "not_applicable" || !citations.is_empty() {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+
+    if !complete {
+        return !result.contains_key("determined_outcome");
+    }
+
+    let Some(determined_outcome) = result.get("determined_outcome").and_then(Value::as_str) else {
+        return false;
+    };
+    match mode {
+        "applicability" => determined_outcome == "superseded",
+        "assessment" => {
+            if has_unsatisfied {
+                determined_outcome == "not_achieved"
+            } else {
+                matches!(determined_outcome, "achieved" | "not_achieved")
+            }
+        }
+        _ => false,
+    }
+}
+
+fn mutation_observation_result_v1_correlations(result: &Map<String, Value>) -> bool {
+    let Some(observation) = result.get("observation").and_then(Value::as_object) else {
+        return false;
+    };
+    if observation.get("schema").and_then(Value::as_str) != Some("podway.observation-result/v6")
+        || !observation_v6_correlations_v2(observation)
+    {
+        return false;
+    }
+    let Some(mutation_result_val) = result.get("mutation_result") else {
+        return false;
+    };
+    let Some(mutation_result) = mutation_result_val.as_object() else {
+        return false;
+    };
+    let Some(inner_schema) = mutation_result.get("schema").and_then(Value::as_str) else {
+        return false;
+    };
+    if !matches!(
+        inner_schema,
+        "podway.session-start-result/v4"
+            | "podway.session-begin-result/v2"
+            | "podway.item-record-many-result/v2"
+            | "podway.stage-transition-result/v3"
+            | "podway.decision-result/v2"
+            | "podway.criterion-assessment-many-result/v1"
+    ) {
+        return false;
+    }
+    validate_daemon_free_document_v1(inner_schema, mutation_result_val)
+        && validate_result_correlations_v2(inner_schema, mutation_result)
+}
+
 // Generation-family correlations for standalone documents and the envelopes
 // carrying them, layered after schema validation like the recovery identity.
 fn daemon_free_generation_correlations_v1(schema: &str, value: &Value) -> bool {
@@ -1813,6 +2004,15 @@ fn daemon_free_generation_correlations_v1(schema: &str, value: &Value) -> bool {
         "podway.observation-result/v6" => value
             .as_object()
             .is_some_and(observation_v6_correlations_v2),
+        "podway.criterion-assessment-many-input/v1" => value
+            .as_object()
+            .is_some_and(criterion_assessment_many_input_v1_correlations),
+        "podway.criterion-assessment-many-result/v1" => value
+            .as_object()
+            .is_some_and(criterion_assessment_many_result_v1_correlations),
+        "podway.mutation-observation-result/v1" => value
+            .as_object()
+            .is_some_and(mutation_observation_result_v1_correlations),
         "podway.workspace-contract-mismatch-details/v2" => value
             .as_object()
             .is_some_and(workspace_mismatch_v2_release_agrees_v1),
@@ -1898,6 +2098,221 @@ pub fn validate_command_result_v2(command: &str, result: &Value) -> Result<(), P
             command: command.to_owned(),
         })
     }
+}
+
+pub fn validate_mutation_observation_command_result_v1(
+    command: &str,
+    result: &Value,
+) -> Result<(), ProtocolError> {
+    if !validate_daemon_free_document_v1("podway.mutation-observation-result/v1", result) {
+        return Err(ProtocolError::InvalidCommandResult {
+            command: command.to_owned(),
+        });
+    }
+    let mutation_result = &result["mutation_result"];
+    let inner_schema = mutation_result["schema"].as_str();
+    let valid_pair = match (command, inner_schema) {
+        ("session.start", Some("podway.session-start-result/v4")) => {
+            mutation_result.get("dry_run") == Some(&Value::Bool(false))
+        }
+        ("session.begin", Some("podway.session-begin-result/v2")) => true,
+        ("item.record_many", Some("podway.item-record-many-result/v2")) => true,
+        ("session.complete", Some("podway.stage-transition-result/v3")) => {
+            mutation_result.get("transition").and_then(Value::as_str) == Some("complete")
+        }
+        ("session.decide", Some("podway.decision-result/v2")) => true,
+        ("goal.assess_criteria", Some("podway.criterion-assessment-many-result/v1")) => true,
+        _ => false,
+    };
+    if valid_pair {
+        Ok(())
+    } else {
+        Err(ProtocolError::InvalidCommandResult {
+            command: command.to_owned(),
+        })
+    }
+}
+
+pub fn validate_mutation_observation_output_envelope_v1(
+    envelope: &Value,
+) -> Result<(), ProtocolError> {
+    let command = envelope
+        .get("command")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let invalid = || ProtocolError::InvalidCommandResult {
+        command: command.clone(),
+    };
+    validate_json_document_depth(envelope)?;
+    let byte_len = serialized_json_len_v1(envelope).map_err(|_| invalid())?;
+    if byte_len > MAX_DIRECT_OUTPUT_BYTES_V1 {
+        return Err(invalid());
+    }
+    let Some(object) = envelope.as_object() else {
+        return Err(invalid());
+    };
+    const EXPECTED_KEYS: &[&str] = &[
+        "schema",
+        "request_id",
+        "command",
+        "generated_at",
+        "workspace",
+        "session",
+        "result",
+        "warnings",
+    ];
+    if object.len() != EXPECTED_KEYS.len()
+        || !EXPECTED_KEYS.iter().all(|key| object.contains_key(*key))
+    {
+        return Err(invalid());
+    }
+    if object.get("schema").and_then(Value::as_str) != Some("podway.output/v4") {
+        return Err(invalid());
+    }
+    let Some(request_id) = object.get("request_id").and_then(Value::as_str) else {
+        return Err(invalid());
+    };
+    RequestIdV1::new(request_id).map_err(|_| invalid())?;
+    CommandNameV1::new(command.clone()).map_err(|_| invalid())?;
+    let Some(generated_at) = object.get("generated_at").and_then(Value::as_str) else {
+        return Err(invalid());
+    };
+    Rfc3339MillisV1::new(generated_at).map_err(|_| invalid())?;
+
+    let Some(workspace) = object.get("workspace").and_then(Value::as_object) else {
+        return Err(invalid());
+    };
+    if workspace.len() != 3 {
+        return Err(invalid());
+    }
+    let Some(workspace_uuid) = workspace.get("uuid").and_then(Value::as_str) else {
+        return Err(invalid());
+    };
+    podway_core::WorkspaceId::new(workspace_uuid).map_err(|_| invalid())?;
+    let Some(workspace_root) = workspace.get("root").and_then(Value::as_str) else {
+        return Err(invalid());
+    };
+    let root_scalars = workspace_root.chars().count();
+    if !workspace_root.starts_with('/')
+        || !(1..=MAX_WORKSPACE_ROOT_SCALARS_V1).contains(&root_scalars)
+    {
+        return Err(invalid());
+    }
+    let Some(latest_workspace_sequence) = workspace
+        .get("latest_workspace_sequence")
+        .and_then(Value::as_u64)
+    else {
+        return Err(invalid());
+    };
+
+    let Some(session) = object.get("session").and_then(Value::as_object) else {
+        return Err(invalid());
+    };
+    if session.len() != 5 {
+        return Err(invalid());
+    }
+    let Some(session_id) = session.get("id").and_then(Value::as_str) else {
+        return Err(invalid());
+    };
+    podway_core::SessionId::new(session_id).map_err(|_| invalid())?;
+    let Some(title) = session.get("title").and_then(Value::as_str) else {
+        return Err(invalid());
+    };
+    if title.chars().count() > 256 {
+        return Err(invalid());
+    }
+    let Some(lifecycle) = session.get("lifecycle").and_then(Value::as_str) else {
+        return Err(invalid());
+    };
+    if !matches!(
+        lifecycle,
+        "prepared" | "running" | "completed" | "cancelled"
+    ) {
+        return Err(invalid());
+    }
+    if session
+        .get("revision_before")
+        .and_then(Value::as_u64)
+        .is_none()
+        || session
+            .get("revision_after")
+            .and_then(Value::as_u64)
+            .is_none()
+    {
+        return Err(invalid());
+    }
+
+    let Some(warnings_array) = object.get("warnings").and_then(Value::as_array) else {
+        return Err(invalid());
+    };
+    let mut warnings = Vec::with_capacity(warnings_array.len());
+    for warning in warnings_array {
+        let Some(warning_obj) = warning.as_object() else {
+            return Err(invalid());
+        };
+        warnings.push(warning_obj.clone());
+    }
+    if !validate_v2_output_warnings(&warnings) {
+        return Err(invalid());
+    }
+
+    let Some(result) = object.get("result") else {
+        return Err(invalid());
+    };
+    validate_mutation_observation_command_result_v1(&command, result)?;
+    if result.get("workspace_sequence").and_then(Value::as_u64) != Some(latest_workspace_sequence) {
+        return Err(invalid());
+    }
+    validate_direct_outcome_lookup_headroom_v1(envelope)
+}
+
+pub fn validate_direct_outcome_lookup_headroom_v1(
+    stored_envelope: &Value,
+) -> Result<(), ProtocolError> {
+    if !stored_envelope.is_object() {
+        return Err(ProtocolError::InvalidCommandResult {
+            command: "outcome.lookup".to_owned(),
+        });
+    }
+    let max_root = format!("/{}", "\u{001f}".repeat(4095));
+    let max_idempotency_key = "\u{001f}".repeat(256);
+    let lookup_value = serde_json::json!({
+        "schema": "podway.output/v4",
+        "request_id": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        "command": "outcome.lookup",
+        "generated_at": "9999-12-31T23:59:59.999Z",
+        "workspace": {
+            "uuid": "ffffffff-ffff-4fff-bfff-ffffffffffff",
+            "root": max_root,
+            "latest_workspace_sequence": u64::MAX,
+        },
+        "result": {
+            "schema": "podway.outcome-lookup-result/v1",
+            "idempotency_key": max_idempotency_key,
+            "found": true,
+            "outcome": {
+                "request_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "recorded_at": "9999-12-31T23:59:59.999Z",
+                "scope": "workspace",
+                "response": stored_envelope.clone(),
+            },
+        },
+        "warnings": [],
+    });
+    validate_json_document_depth(&lookup_value)?;
+    let actual =
+        serialized_json_len_v1(&lookup_value).map_err(|_| ProtocolError::InvalidCommandResult {
+            command: "outcome.lookup".to_owned(),
+        })?;
+    if actual > MAX_DIRECT_OUTPUT_BYTES_V1 {
+        return Err(ProtocolError::ValueTooLong {
+            field: "outcome.lookup response",
+            maximum: MAX_DIRECT_OUTPUT_BYTES_V1,
+            actual,
+        });
+    }
+    Ok(())
 }
 pub fn ensure_procedure_independent_result_schema_v1(
     command: &str,

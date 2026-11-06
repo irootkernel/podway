@@ -36,7 +36,9 @@ pub use result_contract::{
     ensure_procedure_independent_result_schema_v1, released_writer_release_v1,
     result_schema_top_level_fields_v2, validate_command_result_v2,
     validate_daemon_free_document_v1, validate_delegation_document_v1,
-    validate_procedure_independent_result_v1, validate_v2_output_warnings,
+    validate_direct_outcome_lookup_headroom_v1, validate_mutation_observation_command_result_v1,
+    validate_mutation_observation_output_envelope_v1, validate_procedure_independent_result_v1,
+    validate_v2_output_warnings,
 };
 pub use slice::*;
 pub const MAX_COMMAND_BYTES_V1: usize = 128;

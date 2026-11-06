@@ -3018,6 +3018,8 @@ fn current_direct_registry_preserves_the_accepted_known_answer_family_inventory(
         "podway.command-retired-details/v1",
         "podway.compact-status-result/v5",
         "podway.contract-manifest/v2",
+        "podway.criterion-assessment-many-input/v1",
+        "podway.criterion-assessment-many-result/v1",
         "podway.criterion-assessment-result/v2",
         "podway.criterion-citation-invalid-details/v1",
         "podway.decision-result/v2",
@@ -3032,6 +3034,7 @@ fn current_direct_registry_preserves_the_accepted_known_answer_family_inventory(
         "podway.item-mutation-result/v3",
         "podway.item-record-many-result/v2",
         "podway.legacy-runtime-state-unsupported-details/v1",
+        "podway.mutation-observation-result/v1",
         "podway.mutation-outcome-unknown-details/v3",
         "podway.next-result/v5",
         "podway.observation-result/v5",
@@ -3524,4 +3527,404 @@ fn cntrt002_writer_mismatch_example_matches_catalog_and_writer_recovery() {
             .starts_with("Inspect writer identity")
     );
     assert_current_error_validation(&current_error_validator(), example, true);
+}
+
+#[test]
+fn agent001_reserved_batch_assessment_and_mutation_observation_contracts_validate_closed() {
+    use podway_protocol::{
+        DAEMON_FREE_DOCUMENT_SCHEMAS_V1, result_schema_top_level_fields_v2,
+        validate_daemon_free_document_v1, validate_mutation_observation_command_result_v1,
+    };
+
+    for (schema, path) in [
+        (
+            "podway.criterion-assessment-many-input/v1",
+            "schemas/criterion-assessment-many-input-v1.schema.json",
+        ),
+        (
+            "podway.criterion-assessment-many-result/v1",
+            "schemas/criterion-assessment-many-result-v1.schema.json",
+        ),
+        (
+            "podway.mutation-observation-result/v1",
+            "schemas/mutation-observation-result-v1.schema.json",
+        ),
+    ] {
+        let entry = DAEMON_FREE_DOCUMENT_SCHEMAS_V1
+            .iter()
+            .find(|contract| contract.schema == schema)
+            .expect("reserved AGENT-001 schema registered");
+        assert_eq!(entry.schema_path, path);
+        assert!(
+            entry.commands.is_empty(),
+            "{schema} must remain commands: &[] in AGENT-001"
+        );
+    }
+
+    assert_eq!(
+        result_schema_top_level_fields_v2("podway.criterion-assessment-many-result/v1"),
+        Some((
+            &[
+                "schema",
+                "graph_node_id",
+                "attempt_id",
+                "goal_revision",
+                "mode",
+                "results",
+                "complete",
+                "revision",
+            ][..],
+            &[
+                "schema",
+                "graph_node_id",
+                "attempt_id",
+                "goal_revision",
+                "mode",
+                "results",
+                "complete",
+                "determined_outcome",
+                "revision",
+            ][..],
+        ))
+    );
+    assert_eq!(
+        result_schema_top_level_fields_v2("podway.mutation-observation-result/v1"),
+        Some((
+            &[
+                "schema",
+                "mutation_result",
+                "observation",
+                "workspace_sequence",
+            ][..],
+            &[
+                "schema",
+                "mutation_result",
+                "observation",
+                "workspace_sequence",
+            ][..],
+        ))
+    );
+
+    let docs: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/v2/protocol/current-contracts.json"
+    ))
+    .unwrap();
+    let input_fixture = docs["fixtures"]["podway.criterion-assessment-many-input/v1"].clone();
+    assert!(validate_daemon_free_document_v1(
+        "podway.criterion-assessment-many-input/v1",
+        &input_fixture
+    ));
+    let mut dup_input = input_fixture.clone();
+    dup_input["assessments"][1]["criterion_id"] = json!("c1");
+    assert!(!validate_daemon_free_document_v1(
+        "podway.criterion-assessment-many-input/v1",
+        &dup_input
+    ));
+    let mut multibyte_key_input = input_fixture.clone();
+    multibyte_key_input["idempotency_key"] = json!(format!("{}a", "🦀".repeat(64)));
+    assert!(!validate_daemon_free_document_v1(
+        "podway.criterion-assessment-many-input/v1",
+        &multibyte_key_input
+    ));
+
+    // Partial-batch and complete/determined_outcome correlations for criterion-assessment-many-result/v1.
+    let batch_result = docs["fixtures"]["podway.criterion-assessment-many-result/v1"].clone();
+    assert!(validate_daemon_free_document_v1(
+        "podway.criterion-assessment-many-result/v1",
+        &batch_result
+    ));
+
+    // Partial batch where all submitted items are satisfied, but an earlier criterion in the
+    // same attempt was unsatisfied so determined_outcome is "not_achieved".
+    let mut partial_not_achieved = batch_result.clone();
+    partial_not_achieved["determined_outcome"] = json!("not_achieved");
+    assert!(validate_daemon_free_document_v1(
+        "podway.criterion-assessment-many-result/v1",
+        &partial_not_achieved
+    ));
+
+    // Incomplete batch forbids determined_outcome.
+    let mut incomplete = batch_result.clone();
+    incomplete["complete"] = json!(false);
+    assert!(!validate_daemon_free_document_v1(
+        "podway.criterion-assessment-many-result/v1",
+        &incomplete
+    ));
+    incomplete
+        .as_object_mut()
+        .unwrap()
+        .remove("determined_outcome");
+    assert!(validate_daemon_free_document_v1(
+        "podway.criterion-assessment-many-result/v1",
+        &incomplete
+    ));
+
+    // Complete batch with any unsatisfied item must be not_achieved, never achieved or superseded.
+    let mut unsatisfied_batch = batch_result.clone();
+    unsatisfied_batch["results"][1]["status"] = json!("unsatisfied");
+    assert!(!validate_daemon_free_document_v1(
+        "podway.criterion-assessment-many-result/v1",
+        &unsatisfied_batch
+    ));
+    unsatisfied_batch["determined_outcome"] = json!("not_achieved");
+    assert!(validate_daemon_free_document_v1(
+        "podway.criterion-assessment-many-result/v1",
+        &unsatisfied_batch
+    ));
+
+    // Applicability batch requires not_applicable, empty citations, and superseded when complete.
+    let mut applicability_batch = batch_result.clone();
+    applicability_batch["mode"] = json!("applicability");
+    applicability_batch["results"][0]["status"] = json!("not_applicable");
+    applicability_batch["results"][0]["citations"] = json!([]);
+    applicability_batch["results"][1]["status"] = json!("not_applicable");
+    applicability_batch["results"][1]["citations"] = json!([]);
+    applicability_batch["determined_outcome"] = json!("superseded");
+    assert!(validate_daemon_free_document_v1(
+        "podway.criterion-assessment-many-result/v1",
+        &applicability_batch
+    ));
+    applicability_batch["determined_outcome"] = json!("achieved");
+    assert!(!validate_daemon_free_document_v1(
+        "podway.criterion-assessment-many-result/v1",
+        &applicability_batch
+    ));
+
+    // Duplicate criterion_id or duplicate citation in result fails closed.
+    let mut dup_result_id = batch_result.clone();
+    dup_result_id["results"][1]["criterion_id"] = json!("c1");
+    assert!(!validate_daemon_free_document_v1(
+        "podway.criterion-assessment-many-result/v1",
+        &dup_result_id
+    ));
+    let mut dup_citation = batch_result.clone();
+    let first_citation = dup_citation["results"][0]["citations"][0].clone();
+    dup_citation["results"][0]["citations"] = json!([first_citation.clone(), first_citation]);
+    assert!(!validate_daemon_free_document_v1(
+        "podway.criterion-assessment-many-result/v1",
+        &dup_citation
+    ));
+
+    // > 4 citations in result or > 4 evidence/items in input fail closed.
+    let mut five_citations_result = batch_result.clone();
+    five_citations_result["results"][0]["citations"] = json!([
+        {"reference_graph_node_id": "n1"},
+        {"reference_graph_node_id": "n2"},
+        {"reference_graph_node_id": "n3"},
+        {"reference_graph_node_id": "n4"},
+        {"local_item_id": "i1"},
+    ]);
+    assert!(!validate_daemon_free_document_v1(
+        "podway.criterion-assessment-many-result/v1",
+        &five_citations_result
+    ));
+    let mut five_evidence_input = input_fixture.clone();
+    five_evidence_input["assessments"][0]["evidence"] = json!(["n1", "n2", "n3", "n4", "n5"]);
+    assert!(!validate_daemon_free_document_v1(
+        "podway.criterion-assessment-many-input/v1",
+        &five_evidence_input
+    ));
+    let mut five_items_input = input_fixture;
+    five_items_input["assessments"][0]["items"] = json!(["i1", "i2", "i3", "i4", "i5"]);
+    assert!(!validate_daemon_free_document_v1(
+        "podway.criterion-assessment-many-input/v1",
+        &five_items_input
+    ));
+
+    // Six-route validate_mutation_observation_command_result_v1 pairings and rejections.
+    let obs_v6 = docs["fixtures"]["podway.observation-result/v6"].clone();
+    let examples_map = examples();
+    let mut complete_transition = examples_map["podway.stage-transition-result/v3"].clone();
+    complete_transition["transition"] = json!("complete");
+    let mut non_dry_start = docs["fixtures"]["podway.session-start-result/v4"].clone();
+    non_dry_start["dry_run"] = json!(false);
+
+    for (command, inner) in [
+        ("session.start", non_dry_start.clone()),
+        (
+            "session.begin",
+            examples_map["podway.session-begin-result/v2"].clone(),
+        ),
+        (
+            "item.record_many",
+            docs["fixtures"]["podway.item-record-many-result/v2"].clone(),
+        ),
+        ("session.complete", complete_transition.clone()),
+        (
+            "session.decide",
+            examples_map["podway.decision-result/v2"].clone(),
+        ),
+        ("goal.assess_criteria", batch_result.clone()),
+    ] {
+        let wrapper = json!({
+            "schema": "podway.mutation-observation-result/v1",
+            "mutation_result": inner,
+            "observation": obs_v6,
+            "workspace_sequence": 2,
+        });
+        assert!(
+            validate_mutation_observation_command_result_v1(command, &wrapper).is_ok(),
+            "{command}"
+        );
+        assert!(validate_mutation_observation_command_result_v1("session.skip", &wrapper).is_err());
+        assert!(
+            validate_mutation_observation_command_result_v1("session.start_replace", &wrapper)
+                .is_err()
+        );
+        assert!(
+            validate_mutation_observation_command_result_v1("goal.assess_criterion", &wrapper)
+                .is_err()
+        );
+    }
+
+    // Single-criterion assessment result wrapper fails closed on both single and batch commands.
+    let single_assess_wrapper = json!({
+        "schema": "podway.mutation-observation-result/v1",
+        "mutation_result": docs["fixtures"]["podway.criterion-assessment-result/v2"],
+        "observation": obs_v6,
+        "workspace_sequence": 2,
+    });
+    assert!(!validate_daemon_free_document_v1(
+        "podway.mutation-observation-result/v1",
+        &single_assess_wrapper
+    ));
+    assert!(
+        validate_mutation_observation_command_result_v1(
+            "goal.assess_criterion",
+            &single_assess_wrapper
+        )
+        .is_err()
+    );
+    assert!(
+        validate_mutation_observation_command_result_v1(
+            "goal.assess_criteria",
+            &single_assess_wrapper
+        )
+        .is_err()
+    );
+
+    // Schema-valid but correlation-invalid observation-result/v6 or inner mutation_result fails closed.
+    let mut bad_obs_v6 = obs_v6.clone();
+    bad_obs_v6["status"]["session"]["id"] = json!("00000000-0000-4000-8000-000000000099");
+    assert!(!validate_daemon_free_document_v1(
+        "podway.observation-result/v6",
+        &bad_obs_v6
+    ));
+    let bad_obs_wrapper = json!({
+        "schema": "podway.mutation-observation-result/v1",
+        "mutation_result": non_dry_start.clone(),
+        "observation": bad_obs_v6,
+        "workspace_sequence": 2,
+    });
+    assert!(!validate_daemon_free_document_v1(
+        "podway.mutation-observation-result/v1",
+        &bad_obs_wrapper
+    ));
+    assert!(
+        validate_mutation_observation_command_result_v1("session.start", &bad_obs_wrapper).is_err()
+    );
+
+    let mut bad_obs_placeholder_v6 = obs_v6.clone();
+    bad_obs_placeholder_v6["mutation_templates"][0]["argv"] = json!([
+        "podway",
+        "begin",
+        "--if-workspace-uuid",
+        "00000000-0000-4000-8000-000000000001",
+        "--if-session-id",
+        "00000000-0000-4000-8000-000000000001",
+        "--if-session-revision",
+        "0",
+        "--idempotency-key",
+        "fixed-key",
+    ]);
+    assert!(!validate_daemon_free_document_v1(
+        "podway.observation-result/v6",
+        &bad_obs_placeholder_v6
+    ));
+    let bad_obs_placeholder_wrapper = json!({
+        "schema": "podway.mutation-observation-result/v1",
+        "mutation_result": non_dry_start.clone(),
+        "observation": bad_obs_placeholder_v6,
+        "workspace_sequence": 2,
+    });
+    assert!(
+        validate_mutation_observation_command_result_v1(
+            "session.start",
+            &bad_obs_placeholder_wrapper
+        )
+        .is_err()
+    );
+
+    let mut bad_decision = examples_map["podway.decision-result/v2"].clone();
+    bad_decision["option_id"] = json!("other-option");
+    let bad_decision_wrapper = json!({
+        "schema": "podway.mutation-observation-result/v1",
+        "mutation_result": bad_decision,
+        "observation": obs_v6,
+        "workspace_sequence": 2,
+    });
+    assert!(!validate_daemon_free_document_v1(
+        "podway.mutation-observation-result/v1",
+        &bad_decision_wrapper
+    ));
+    assert!(
+        validate_mutation_observation_command_result_v1("session.decide", &bad_decision_wrapper)
+            .is_err()
+    );
+
+    let mut bad_batch_inner = batch_result;
+    bad_batch_inner["results"][1]["status"] = json!("unsatisfied");
+    bad_batch_inner["determined_outcome"] = json!("achieved");
+    let bad_batch_wrapper = json!({
+        "schema": "podway.mutation-observation-result/v1",
+        "mutation_result": bad_batch_inner,
+        "observation": obs_v6,
+        "workspace_sequence": 2,
+    });
+    assert!(!validate_daemon_free_document_v1(
+        "podway.mutation-observation-result/v1",
+        &bad_batch_wrapper
+    ));
+    assert!(
+        validate_mutation_observation_command_result_v1("goal.assess_criteria", &bad_batch_wrapper)
+            .is_err()
+    );
+
+    // Dry-run session.start, non-complete stage transition, and observation-result/v5 fail closed.
+    let mut dry_start = non_dry_start;
+    dry_start["dry_run"] = json!(true);
+    dry_start.as_object_mut().unwrap().remove("session_id");
+    dry_start.as_object_mut().unwrap().remove("session_state");
+    dry_start.as_object_mut().unwrap().remove("revision");
+    let dry_wrapper = json!({
+        "schema": "podway.mutation-observation-result/v1",
+        "mutation_result": dry_start,
+        "observation": obs_v6,
+        "workspace_sequence": 2,
+    });
+    assert!(
+        validate_mutation_observation_command_result_v1("session.start", &dry_wrapper).is_err()
+    );
+
+    let mut skip_transition = complete_transition;
+    skip_transition["transition"] = json!("skip");
+    let skip_wrapper = json!({
+        "schema": "podway.mutation-observation-result/v1",
+        "mutation_result": skip_transition,
+        "observation": obs_v6,
+        "workspace_sequence": 2,
+    });
+    assert!(
+        validate_mutation_observation_command_result_v1("session.complete", &skip_wrapper).is_err()
+    );
+
+    let v5_wrapper = json!({
+        "schema": "podway.mutation-observation-result/v1",
+        "mutation_result": docs["fixtures"]["podway.item-record-many-result/v2"],
+        "observation": docs["fixtures"]["podway.observation-result/v5"],
+        "workspace_sequence": 2,
+    });
+    assert!(
+        validate_mutation_observation_command_result_v1("item.record_many", &v5_wrapper).is_err()
+    );
 }

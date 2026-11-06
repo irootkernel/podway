@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:criterion-assessment-many-input:v1",
+  "title": "Podway Atomic Criterion Assessment Input v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "workspace_uuid",
+    "session_id",
+    "session_revision",
+    "attempt_id",
+    "goal_revision",
+    "idempotency_key",
+    "assessments"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.criterion-assessment-many-input/v1"
+    },
+    "workspace_uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "session_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "attempt_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "goal_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "actor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "\\S"
+    },
+    "assessments": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "$ref": "#/$defs/assessmentItem"
+      }
+    }
+  },
+  "$defs": {
+    "assessmentItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "criterion_id",
+        "status",
+        "reason"
+      ],
+      "properties": {
+        "criterion_id": {
+          "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/identifier"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "satisfied",
+            "unsatisfied",
+            "not_applicable"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "pattern": "\\S"
+        },
+        "evidence": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/identifier"
+          }
+        },
+        "items": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/identifier"
+          }
+        }
+      }
+    }
+  },
+  "$comment": "Reserved by AGENT-001 under ADR-0043; whole-request input contract for goal.assess_criteria."
+}

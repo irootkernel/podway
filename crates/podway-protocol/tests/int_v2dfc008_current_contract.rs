@@ -605,3 +605,24 @@ fn generic_direct_error_uses_the_same_exact_aggregate_byte_bound() {
     ));
     assert!(serde_json::from_value::<podway_protocol::ErrorEnvelopeV2>(envelope).is_err());
 }
+
+#[test]
+fn agent001_reserved_schemas_validate_without_expanding_active_command_routes() {
+    let answers = known_answers();
+    for schema in [
+        "podway.criterion-assessment-many-input/v1",
+        "podway.criterion-assessment-many-result/v1",
+        "podway.mutation-observation-result/v1",
+    ] {
+        let fixture = &answers["fixtures"][schema];
+        assert!(
+            validate_daemon_free_document_v1(schema, fixture),
+            "{schema}"
+        );
+        let entry = DAEMON_FREE_DOCUMENT_SCHEMAS_V1
+            .iter()
+            .find(|contract| contract.schema == schema)
+            .unwrap();
+        assert!(entry.commands.is_empty());
+    }
+}
