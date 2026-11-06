@@ -52,7 +52,8 @@ narrative architecture and specifications when sources conflict.
 - [ADR-0036](0036-use-canonical-git-paths-for-workspace-identity.md): canonical-path workspace identity with schema-v13 migration and reset recovery (superseded in part by ADR-0038)
 - [ADR-0037](0037-bound-procedure-graphs-at-1024-nodes.md): bounded 1,024-node Procedure graphs
 - [ADR-0038](0038-remove-the-daemon.md): accepted daemon-free core with in-process Store transactions (superseded in part by ADR-0041)
-- [ADR-0039](0039-opt-in-contract-generations.md): opt-in contract generations with deprecation (superseded in part by ADR-0040)
+- [ADR-0039](0039-opt-in-contract-generations.md): opt-in contract generations with deprecation (superseded in part by ADR-0040 and the future AGENT selection in ADR-0043)
 - [ADR-0040](0040-deprecation-in-changelog-changed-section.md): record generation deprecation in the CHANGELOG Changed section
 - [ADR-0041](0041-user-integration-settings.md): explicit read-only user integration settings with worktree overrides (settings path superseded by ADR-0042); settings/query and repository-only metadata tooling implemented, with readiness closeout tracked by INTEG
 - [ADR-0042](0042-separate-user-settings-namespace.md): fixed HOME-derived user settings outside the workspace configuration and removal namespace
+- [ADR-0043](0043-atomic-assessment-and-commit-bound-observations.md): accepted future atomic criterion batches and opt-in commit-bound observations; implementation remains planned under AGENT

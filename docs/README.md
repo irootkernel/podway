@@ -24,6 +24,11 @@ write-free snapshot reads are the current product boundaries.
 [Examples](examples/) provide walkthroughs and versioned known-answer payloads.
 
 Current adopted work is tracked by the [active roadmap](roadmap/).
+[CANON](todo/TODO-podway-canonical-integer-alignment.md) and
+[AGENT](todo/TODO-podway-agent-interaction-simplification.md) are adopted plans,
+with all seven implementation tasks Planned and no target release assigned.
+[ADR-0043](architecture-decision-records/0043-atomic-assessment-and-commit-bound-observations.md)
+records the future interaction design; registration does not activate it.
 The [INTEG readiness epic](roadmap/README.md#integ-dolgorae-integration-readiness)
 is completed and owner-accepted. It delivered default-disabled user/worktree
 integration permission, an explicit Git/config-only query and repository-only
@@ -83,8 +88,10 @@ Implemented guidance is owned by the [CLI specification](specs/interfaces/cli-sp
 [built-in preset specification](specs/domain/built-in-presets.md) and
 [durable feedback and regression ownership](implementation-tips/testing.md#guidance-source-feedback-and-revisit-conditions).
 The roadmap retains the qualification and final acceptance boundaries.
-Optional combined operations and returned
-observations remain in the [interaction candidate](todo/TODO-podway-agent-workflow-simplification.md).
+Optional combined operations remain in the
+[interaction candidate](todo/TODO-podway-agent-workflow-simplification.md).
+Selected atomic criterion batches and returned observations are planned under
+[AGENT](todo/TODO-podway-agent-interaction-simplification.md), not implemented by CALLS.
 This program selects no release or external-consumer change.
 
 The preceding [internal-improvement sequence](roadmap/README.md#current-internal-improvements)

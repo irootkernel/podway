@@ -20,6 +20,45 @@ sequence, for example `OPTIM-001`. Existing alphanumeric epic IDs, including
 `V2CTR` and `REL12`, and the compact `REL12` task IDs remain unchanged historical
 identifiers. Do not rename completed work to apply the new convention.
 
+## CANON — Canonical Integer Contract Alignment
+
+Dependencies: existing canonicalization and contract-generation tooling. Status: Planned.
+Design: [adopted CANON dossier](../todo/TODO-podway-canonical-integer-alignment.md).
+Target release: unassigned.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `CANON-001` | Align numeric admission and canonical evidence | Planned | Align the canonical integer domain, Rust/Python admission, boundary fixtures, generated identities and documentation while preserving accepted-value bytes and field limits. | [Design and acceptance](../todo/TODO-podway-canonical-integer-alignment.md#6-roadmap-ownership-dependencies-and-traceability) |
+
+## AGENT — Agent Interaction Simplification
+
+Dependencies: existing Direct and goal-assessment foundations. Status: Planned.
+Design: [adopted AGENT dossier](../todo/TODO-podway-agent-interaction-simplification.md).
+Architectural authority: [ADR-0043](../architecture-decision-records/0043-atomic-assessment-and-commit-bound-observations.md).
+Target release: unassigned.
+
+Scheduling for these two newly adopted epics is CANON-001, then AGENT-001 through
+AGENT-006 in numeric order. CANON is a scheduling preference, not an AGENT
+technical prerequisite. At most the first incomplete task in this sequence may
+be In Progress, In Review or Blocked; all later tasks remain Planned. Direct
+technical dependencies are AGENT-002 on 001; 003 on 001/002; 004 on 001; 005 on
+003/004; and 006 on 005. TYPED as a whole is not a prerequisite.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `AGENT-001` | Establish interaction contracts | Planned | Implement the accepted closed contracts, response identity and budgets with coherent reservations and existing-generation compatibility. | [Requirements and acceptance](../todo/TODO-podway-agent-interaction-simplification.md#agent-001-establish-interaction-contracts) |
+| `AGENT-002` | Share stdin-owned fence classification | Planned | Transfer DF-014 into one local CLI classifier while preserving document fences, flag rejection and error precedence. | [Requirements and acceptance](../todo/TODO-podway-agent-interaction-simplification.md#agent-002-share-stdin-owned-fence-classification) |
+| `AGENT-003` | Implement atomic criterion assessment batches | Planned | Apply a bounded partial or full batch as one successor with atomic rollback, stable cursor/goal revision and exact replay. | [Requirements and acceptance](../todo/TODO-podway-agent-interaction-simplification.md#agent-003-implement-atomic-criterion-assessment-batches) |
+| `AGENT-004` | Extract coherent observation composition and budget reuse | Planned | Share only feature-required projection/budget logic while preserving observation v5/v6 and snapshot-owned readiness facts. | [Requirements and acceptance](../todo/TODO-podway-agent-interaction-simplification.md#agent-004-extract-coherent-observation-composition-and-budget-reuse) |
+| `AGENT-005` | Return commit-bound observations | Planned | Return opt-in observations for selected mutations with precommit admission, lookup headroom and historical replay. | [Requirements and acceptance](../todo/TODO-podway-agent-interaction-simplification.md#agent-005-return-commit-bound-observations) |
+| `AGENT-006` | Align guidance and qualify integrated workflows | Planned | Verify normal and recovery CLI flows, promote durable documentation and prepare independent review and owner-approved closeout. | [Requirements and acceptance](../todo/TODO-podway-agent-interaction-simplification.md#agent-006-align-skills-examples-and-integrated-workflows) |
+
+Registration is planning only: no member implementation has started and no
+release, installation, runtime activation or consumer change is authorized.
+Each future executable/contract candidate requires focused checks and `make test`.
+Whole-Epic review, explicit owner acceptance and dossier retirement are separate
+completion obligations. Neither epic is assigned to the open release cycle.
+
 ## INTEG — Dolgorae Integration Readiness
 
 Dependencies: existing Direct and host-neutral delegation foundations. Status: Completed.

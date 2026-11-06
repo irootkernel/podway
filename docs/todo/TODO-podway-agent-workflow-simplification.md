@@ -16,14 +16,22 @@ owns only the unselected interaction-semantics questions. It reserves no roadmap
 ID and establishes no implementation commitment. The original research baseline
 is not a claim that later feedback was inspected at that revision.
 
+The owner adopted atomic criterion batches and opt-in commit-bound observations
+under [AGENT](TODO-podway-agent-interaction-simplification.md) on 2026-11-06.
+Their future interfaces are fixed by
+[ADR-0043](../architecture-decision-records/0043-atomic-assessment-and-commit-bound-observations.md).
+This continuing candidate now covers unselected combined operations only;
+it does not own AGENT implementation or acceptance.
+
 ## 1. Context
 
 Internal request reuse and external CLI interaction are separate design
 questions. The completed
 [structural simplification program](../roadmap/README.md#structural-simplification-program)
 preserved current CLI behavior; it did not authorize fewer observations,
-combined mutation commands or changes to external consumers. CALLS adopts only
-existing-interface guidance and leaves these optional API directions unadopted.
+combined mutation commands or changes to external consumers. CALLS adopted only
+existing-interface guidance. AGENT separately adopts the selected interaction
+plan; the remaining combined-operation directions are unadopted.
 
 Existing `observe` may satisfy a caller that otherwise obtains status and next
 separately, but it is not a substitute when complete Standard status or history
@@ -53,10 +61,6 @@ Potential directions, all non-contractual and requiring their own use case:
 
 - Explore a combined record-and-complete request only with an explicit decision
   on transaction boundaries, intermediate failure and exact replay identity.
-- Explore returning a next observation with a mutation only with an explicit
-  decision on its snapshot, bounds and replay meaning.
-- Evaluate duplicated caller-side observations separately from internal Standard
-  preflight, which still validates projection/schema/envelope failures.
 
 Separate terminal-start reset dry-run and interactive post-decision observations
 remain intentional existing behavior until independently reconsidered. A shorter
@@ -76,8 +80,6 @@ and acceptance. They are not Open feedback owned by this continuing candidate.
 
 - Which concrete caller need cannot be met adequately by existing interfaces,
   and what information and failure behavior must remain available?
-- For a returned observation, is it tied to mutation commit state or a later
-  snapshot? Does replay return the original observation or perform a new read?
 - For a combined operation, is it wholly atomic, and which error wins if record
   and completion would both fail? How are caller keys and digests defined?
 - Would changed output require new schemas/result generations, compatibility

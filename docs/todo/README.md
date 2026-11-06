@@ -97,9 +97,12 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-No adopted design dossiers are currently retained here. Completed outcomes are
-linked from the [roadmap](../roadmap/README.md); actual adapter and live
-qualification remain in the continuing candidate below.
+- [CANON: Canonical integer contract alignment](TODO-podway-canonical-integer-alignment.md)
+- [AGENT: Agent interaction simplification](TODO-podway-agent-interaction-simplification.md)
+
+These are adopted plans, not implemented capabilities. The roadmap alone owns
+order and status. Neither selects a release. Actual adapter and live
+qualification remain in the continuing executor candidate below.
 
 ## Related candidates
 
@@ -107,7 +110,8 @@ These five documents group possible epic scopes. Their working labels reserve
 no roadmap identifiers and establish no task order or implementation commitment.
 Each remains `Candidate`; adoption requires closing its decisions and registering
 bounded work in the active roadmap. Existing-interface guidance is adopted as
-CALLS; optional interaction semantics remain a continuing candidate.
+CALLS; AGENT selects batches and returned observations, while combined operations
+remain a continuing candidate.
 
 Select work from a concrete product need and each finding's revisit condition.
 These groupings are not five sequential implementation commitments: TYPED is
@@ -117,8 +121,8 @@ verification obligations; grouping does not waive them.
 
 | Working label | Candidate | Proposed outcome | Source feedback |
 |---|---|---|---|
-| Future interaction semantics | [Agent workflow simplification](TODO-podway-agent-workflow-simplification.md) | Assess combined operations or returned observations against a concrete caller need | Unselected interaction research |
-| TYPED | [Typed boundary ownership](TODO-podway-typed-boundary-ownership.md) | Explicit owners for existing values, bounds, extraction and validation reuse | DF-002, DF-003, DF-005, DF-011, DF-012, DF-013, DF-014, DF-016, DF-017, DF-022, DF-024, DF-025, DF-027 |
+| Future interaction semantics | [Agent workflow simplification](TODO-podway-agent-workflow-simplification.md) | Assess unselected combined operations against a concrete caller need | Unselected interaction research |
+| TYPED | [Typed boundary ownership](TODO-podway-typed-boundary-ownership.md) | Explicit owners for existing values, bounds, extraction and validation reuse | DF-002, DF-003, DF-005, DF-011, DF-012, DF-013, DF-016, DF-017, DF-022, DF-024, DF-025, DF-027 |
 | Future executor qualification | [Executor integration](TODO-podway-executor-integration.md) | Real adapter and selected-build qualification beyond the bounded INTEG readiness work | Existing real executor candidate |
 | PROOF | [Graph evolution feasibility](TODO-podway-graph-evolution-feasibility.md) | Per-shape evidence for coordination and topology-lineage needs | Existing graph and continuation research |
 | WEBUI | [Operations console](TODO-podway-operations-console.md) | Foreground human operations after the graph direction is settled | Existing Web console candidate |

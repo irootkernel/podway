@@ -41,12 +41,16 @@ executor compatibility and qualification.
   explicit owners consistent with the existing dependency direction.
 - Explore typed acceptance extraction at the protocol boundary, preserving
   separate Store validation, malformed-input refusal and exact replay identity.
-- Consolidate stdin-fence classification without replacing document-owned fences
-  during CLI preflight; keep Config parsing and Store structural detection apart.
+- Keep Config parsing and Store structural detection apart; stdin-fence
+  classification is separately adopted under AGENT-002.
 - Review workspace identity comparison, pure artifact/item preparation and bounded
   citation diagnostics while retaining native descriptor checks and error order.
 - Carry decision-current delegation, human success rendering and actual in-writer
   artifact-read coverage into the relevant adopted changes.
+
+DF-014 was promoted to AGENT-002 on 2026-11-06. Its full original details now
+belong to the [AGENT dossier](TODO-podway-agent-interaction-simplification.md#selected-feedback-df-014).
+Promotion closes the deferral only, not implementation or acceptance.
 
 ### Source feedback
 
@@ -63,7 +67,6 @@ already delivered subparts are preserved as context.
 | DF-011 | V2SDG final epic maintainability review | Receipt byte limits are repeated in Store and protocol validation, and delegation result limits are repeated in protocol and Engine projection. | Current constants, schemas, Store DDL, and emitted bounds agree; consolidating ownership is future drift prevention rather than a current correctness fix. | Before changing receipt or delegation result byte limits, give shared bounds a core owner and verify decoder, Store DDL, schema, and emission agreement. |
 | DF-012 | V2SDG final epic maintainability review | Store receipt validation repeats core RoleRef, round-count, and after-acceptance disposition predicates. | Current core, Store, and protocol validators agree; sharing their implementation is independent maintainability work. | Before changing role references, round bounds, or after-acceptance dispositions, reuse core constructors or named bounds while preserving closed JSON shapes and verify authoring, receipts, protocol, and schemas together. |
 | DF-013 | V2SDG validation maintainability review | Delegation acceptance passes validated JSON between protocol, CLI, Engine, and Store through repeated string-keyed field access. | Closed protocol validation and transaction-time input-to-receipt checks currently reject malformed input; a shared typed carrier would prevent future field drift rather than repair current behavior. | Before changing acceptance-input fields, consolidate their typed extraction at the existing protocol boundary while retaining independent Store validation and the closed wire shape; verify malformed inputs and replay identity. |
-| DF-014 | V2SDG validation maintainability review | `record --stdin` and `delegation accept` duplicate identity-flag rejection and use different CLI preflight paths for stdin-owned fences. | Both commands currently reject conflicting flags and preserve document-owned identity; the duplication is a future maintenance risk. | Before adding an identity flag or another stdin-fenced mutation, share its CLI classification and flag-rejection logic, then verify that preflight never replaces document fences and conflicting flags remain rejected. |
 | DF-016 | V2SDG validation testing review | Native delegation route tests do not separately assert package and acceptance rejection while a decision placement is current. | Both routes use the same explicit non-action rejection in the package projector; Direct rejection and valid decision-source evidence are covered, and no current result defect is known. This is additional branch coverage. | Before changing active-placement classification or delegation error mapping, add a decision-current route case asserting the error code and reason for package and acceptance, plus unchanged session and attempt state. |
 | DF-017 | V2SDG validation testing review | Delegation command success paths lack dedicated human-output smoke cases. | All three use the existing generic v2 success renderer, whose complete result rendering is already tested; there is no missing delegation-specific rendering branch. Dedicated cases are future coverage. | Before changing delegation success rendering or adding schema-specific output, assert successful non-JSON package, acceptance, and receipt output through the CLI, including meaningful result content and absence of error output. |
 | DF-022 | V2DFC-013 maintainability review | The expected workspace UUID comparison is duplicated in the workspace resolver and the token-backed read path. | Both paths currently preserve the same typed error and details, and public ordering tests cover their intentional placement. Consolidating them is independent maintenance work with no current behavior defect. | Before changing workspace identity fence rules or their public error context, consolidate the comparison under one owner and verify both token-backed and ordinary reads retain their ordering and typed details. |
@@ -78,7 +81,7 @@ already delivered subparts are preserved as context.
 - Which duplicate checks are intentional independent admission rather than
   reusable computation, and which pure facts can safely be shared?
 - What bounded subset has one coherent acceptance contract? Split independently
-  motivated subsets before adoption rather than making all 13 findings mandatory
+  motivated subsets before adoption rather than making all 12 remaining findings mandatory
   members of one implementation epic.
 - What error, ordering, schema, canonical-byte, projection and replay fixtures
   demonstrate preserved behavior for each selected seam?
