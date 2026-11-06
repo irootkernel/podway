@@ -29,8 +29,9 @@ its integer rules and compatibility boundaries are in the
 [JSON contract](specs/interfaces/json-contract.md), and its regression owners are
 in [testing guidance](implementation-tips/testing.md).
 [AGENT](todo/TODO-podway-agent-interaction-simplification.md) is In Progress:
-AGENT-001 is Completed for the accepted contract foundation, while AGENT-002
-through AGENT-006 remain Planned. No target release is assigned.
+AGENT-001 and AGENT-002 are Completed for the accepted contract foundation
+and shared stdin-owned fence classification. AGENT-003 through AGENT-006
+remain Planned. No target release is assigned.
 [ADR-0043](architecture-decision-records/0043-atomic-assessment-and-commit-bound-observations.md)
 records the future interaction design; registration does not activate it.
 The [INTEG readiness epic](roadmap/README.md#integ-dolgorae-integration-readiness)

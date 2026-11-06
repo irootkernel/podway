@@ -154,9 +154,14 @@ Route help appends applicable global options to its usage lines. Local routes
 show rendering controls and contract generation without worktree request options.
 Workspace mutations explain that automation supplies a caller-owned idempotency
 key; interactive key generation remains available. `start` and `reset` dry runs
-are read-only and reject keys. Atomic `record` and `delegation accept` documents
-own their keys and fences in stdin, while read-only `outcome lookup` requires the
-original key on the CLI.
+are read-only and reject keys. Atomic `record --stdin` (`item.record_many`) and
+`delegation accept --stdin` (`delegation.accept`) share one stdin-fenced
+mutation classification: their stdin JSON documents own the idempotency key and
+fences, automatic CLI preflight never runs, and passing `--idempotency-key` or
+any `--if-*` flag on argv fails with `REQUEST_INVALID`. By contrast, `set <ITEM>
+--stdin` (`item.set`) reads only raw item text from stdin and uses normal argv
+fences and CLI preflight, while read-only `outcome lookup` requires the original
+key on the CLI.
 
 `observe` combines compact current status, progression guidance, active items and
 mutation templates, replacing repeated narrow current-state reads. `status`
@@ -324,9 +329,10 @@ session precondition flags. Both commands are read-only.
 
 `delegation accept --stdin` reads one closed acceptance document of at most
 32 KiB and commits acceptance synchronously with its success outcome. The
-document alone supplies workspace,
-session, revision, attempt, and idempotency identities; command-line identity
-flags cannot override it. `session_revision` and `rounds_used` require unsigned
+document alone supplies top-level `workspace_uuid`, `session_id`,
+`session_revision`, `attempt_id`, and `idempotency_key` (with no item fence);
+automatic CLI preflight never runs, and command-line `--idempotency-key` or
+`--if-*` flags cannot override it and are rejected as `REQUEST_INVALID`. `session_revision` and `rounds_used` require unsigned
 integer JSON literals; a zero-fraction float such as `1.0` is rejected even
 though JSON Schema's `integer` type admits it. Record final action evidence and
 settle the worker before acceptance. Acceptance does not complete the action:
@@ -338,7 +344,11 @@ response with `outcome lookup` using the same idempotency key before exact repla
 Automation must retain an explicit idempotency key and the complete resolved
 request, including original identity and revision fences. The CLI may fill omitted
 fences from a fresh direct observation; automation should supply observed fences
-to prevent that preflight from changing the intended target. Interactive human
+to prevent that preflight from changing the intended target. Stdin-fenced JSON
+mutations (`record --stdin` and `delegation accept --stdin`) never run automatic
+CLI preflight or replace document-owned fences, whereas `set <ITEM> --stdin`
+reads only item text from stdin and retains ordinary argv fence validation and
+CLI preflight. Interactive human
 mutations may generate a key and print it to stderr; automation mutations require
 a caller-owned key. The same closed transition evaluator serves both paths.
 
@@ -464,11 +474,14 @@ proposed action without mutation; a fenced dry run verifies the fences read-only
 and reports the same refusals.
 
 `record --stdin` is the only multi-item mutation grammar. It reads at most 1 MiB
-of closed `podway.item-record-many-input/v1` JSON. The document supplies the
-workspace, session revision, active attempt, idempotency key, and 1..128 unique
-item-local revision fences. The Engine canonicalizes operations by item ID and
+of closed `podway.item-record-many-input/v1` JSON. The document supplies top-level
+`workspace_uuid`, `session_id`, `session_revision`, `attempt_id`, and
+`idempotency_key`, plus required per-operation `expected_item_revision` across
+1..128 unique item operations. The Engine canonicalizes operations by item ID and
 records or clears the complete set atomically without advancing the cursor.
-Identity, revision, and idempotency flags must not duplicate the stdin fields.
+Under the shared stdin-fenced classification, automatic CLI preflight never
+replaces document fences and passing `--idempotency-key` or any `--if-*` flag on
+argv fails with `REQUEST_INVALID`.
 The same 1,048,576-byte aggregate ceiling covers the canonical complete input,
 including fences and key, for typed Direct API callers as for stdin callers;
 per-item limits do not replace it. Oversize input returns `REQUEST_TOO_LARGE`

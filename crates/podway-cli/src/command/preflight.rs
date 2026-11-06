@@ -146,6 +146,9 @@ impl StatusPreflight {
     }
 }
 fn needs_facts(command: &Command, fences: &ExplicitPreconditions) -> bool {
+    if command.uses_stdin_fences() {
+        return false;
+    }
     if command.is_item_mutation() {
         return fences.session_id.is_none()
             || fences.attempt_id.is_none()
@@ -159,7 +162,7 @@ fn needs_facts(command: &Command, fences: &ExplicitPreconditions) -> bool {
     ) {
         return false;
     }
-    if !command.needs_preflight() || matches!(command, Command::Record(_)) {
+    if !command.needs_preflight() {
         return false;
     }
     if fences.session_id.is_none() || fences.session_revision.is_none() {

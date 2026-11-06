@@ -4812,3 +4812,525 @@ fn maint003_native_non_utf8_argument_cannot_select_a_lossy_alias() {
     fixture.assert_podway_snapshot(&before);
     assert!(fixture.0.join(".git").is_dir());
 }
+
+#[test]
+fn agent002_stdin_fenced_mutations_share_conflict_rejection_and_preserve_set_stdin_preflight() {
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    fs::write(
+        fixture.0.join("delegated-record.yaml"),
+        concat!(
+            "schema: podway.procedure/v2\n",
+            "id: delegated-record\n",
+            "version: \"1\"\n",
+            "name: Delegated record and accept\n",
+            "purpose: Verify shared stdin-fenced classification.\n",
+            "node_definitions:\n",
+            "  work:\n",
+            "    type: action\n",
+            "    title: Work\n",
+            "    intent: Record evidence and accept delegation.\n",
+            "    items:\n",
+            "      - id: done\n",
+            "        type: confirm\n",
+            "        prompt: Confirm the final result.\n",
+            "        required: true\n",
+            "      - id: notes\n",
+            "        type: text\n",
+            "        prompt: Record optional notes.\n",
+            "        required: false\n",
+            "graph:\n",
+            "  entry: work\n",
+            "  nodes:\n",
+            "    - id: work\n",
+            "      use: work\n",
+            "      terminal: true\n",
+            "      delegation:\n",
+            "        binding_ref: local-specialist\n",
+            "        role_ref: reviewer\n",
+            "        role_snapshot_digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+            "        max_rounds: 3\n",
+            "        after_accept: retain\n",
+        ),
+    )
+    .unwrap();
+    let preview = fixture.run(&["procedure", "preview", "delegated-record.yaml"]);
+    fixture.run(&[
+        "start",
+        "--procedure",
+        "delegated-record.yaml",
+        "--expect-procedure-digest",
+        preview["result"]["procedure_digest"].as_str().unwrap(),
+        "--task",
+        "agent002 stdin fences",
+        "--idempotency-key",
+        "start",
+    ]);
+    fixture.run(&["begin", "--idempotency-key", "begin"]);
+    let package = fixture.run(&["delegation", "package"]);
+    let before = fixture.run(&["status"]);
+    let status = &before["result"];
+    let workspace = before["workspace"]["uuid"].as_str().unwrap();
+    let session = status["session"]["id"].as_str().unwrap();
+    let attempt = status["current"]["attempt"]["attempt_id"].as_str().unwrap();
+    let digest = |letter: char| format!("sha256:{}", letter.to_string().repeat(64));
+
+    let record_input = json!({
+        "schema": "podway.item-record-many-input/v1",
+        "workspace_uuid": workspace,
+        "session_id": session,
+        "session_revision": status["session"]["revision"],
+        "attempt_id": attempt,
+        "idempotency_key": "agent002-record",
+        "operations": [
+            {"item_id": "done", "expected_item_revision": 0, "record": {"type": "confirm", "value": true}},
+            {"item_id": "notes", "expected_item_revision": 0, "record": {"type": "text", "value": "batch"}}
+        ]
+    });
+    let record_bytes = serde_json::to_vec(&record_input).unwrap();
+
+    let accept_input = json!({
+        "schema": "podway.delegation-accept-input/v1",
+        "workspace_uuid": workspace,
+        "session_id": session,
+        "session_revision": status["session"]["revision"],
+        "attempt_id": attempt,
+        "idempotency_key": "agent002-accept",
+        "package_digest": package["result"]["package_digest"],
+        "execution": {
+            "binding_ref": "local-specialist",
+            "adapter_id": "fixture",
+            "adapter_version": "1",
+            "primary_host": "external",
+            "scope_kind": "test",
+            "scope_ref": "scope-1",
+            "supervisor_ref": "supervisor-1",
+            "worker_ref": "worker-1",
+            "task_ref": "task-1",
+            "role_ref": "reviewer",
+            "role_snapshot_digest": digest('a'),
+            "agent_configuration_digest": digest('b'),
+            "accepted_task_digest": digest('c')
+        },
+        "rounds_used": 2,
+        "result_digest": digest('d'),
+        "summary": "Reviewed and accepted.",
+        "worker_disposition": "idle",
+        "accepted": true
+    });
+    let accept_bytes = serde_json::to_vec(&accept_input).unwrap();
+    let snapshot = fixture.podway_snapshot();
+
+    let record_conflict_msg =
+        "record identity, revision, and idempotency fences must come only from stdin";
+    let accept_conflict_msg =
+        "delegation acceptance identity and idempotency must come only from stdin";
+
+    for (flag, value) in [
+        ("--idempotency-key", "conflict-key"),
+        ("--if-workspace-uuid", workspace),
+        ("--if-session-id", session),
+        ("--if-session-revision", "1"),
+        ("--if-attempt", attempt),
+        ("--if-item-revision", "0"),
+        ("--if-goal-revision", "1"),
+    ] {
+        for (base_args, body, expected_command, expected_msg) in [
+            (
+                &["record", "--stdin"][..],
+                &record_bytes[..],
+                "item.record_many",
+                record_conflict_msg,
+            ),
+            (
+                &["delegation", "accept", "--stdin"][..],
+                &accept_bytes[..],
+                "delegation.accept",
+                accept_conflict_msg,
+            ),
+        ] {
+            let mut args = base_args.to_vec();
+            args.extend_from_slice(&[flag, value]);
+            let output = output_with_stdin_counted(&fixture, &args, body);
+            assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+            assert_read004_counters(&output, (0, 0));
+            let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
+                .unwrap()
+                .into_value();
+            assert_eq!(error["code"], "REQUEST_INVALID");
+            assert_eq!(error["command"], expected_command);
+            assert_eq!(error["message"], expected_msg);
+            fixture.assert_podway_snapshot(&snapshot);
+        }
+    }
+
+    for (base_args, body, expected_command, expected_conflict_msg, expected_malformed_msg) in [
+        (
+            &["record", "--stdin"][..],
+            &record_bytes[..],
+            "item.record_many",
+            record_conflict_msg,
+            "invalid command payload: expected ident at line 1 column 2",
+        ),
+        (
+            &["delegation", "accept", "--stdin"][..],
+            &accept_bytes[..],
+            "delegation.accept",
+            accept_conflict_msg,
+            "delegation acceptance stdin is not JSON",
+        ),
+    ] {
+        let mut gen_args = vec!["--contract-generation", "3"];
+        gen_args.extend_from_slice(base_args);
+        let output = output_with_stdin_counted(&fixture, &gen_args, b"not-json");
+        assert_eq!(output.status.code(), Some(2), "{gen_args:?}: {output:?}");
+        assert_read004_counters(&output, (0, 0));
+        let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
+            .unwrap()
+            .into_value();
+        assert_eq!(error["code"], "REQUEST_INVALID");
+        assert_eq!(error["command"], expected_command);
+        assert_eq!(error["message"], "--contract-generation accepts 1 or 2");
+        fixture.assert_podway_snapshot(&snapshot);
+
+        let mut malformed_conflict = base_args.to_vec();
+        malformed_conflict.extend_from_slice(&["--idempotency-key", "conflict-key"]);
+        let output = output_with_stdin_counted(&fixture, &malformed_conflict, b"not-json");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{malformed_conflict:?}: {output:?}"
+        );
+        assert_read004_counters(&output, (0, 0));
+        let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
+            .unwrap()
+            .into_value();
+        assert_eq!(error["code"], "REQUEST_INVALID");
+        assert_eq!(error["command"], expected_command);
+        assert_ne!(error["message"], expected_conflict_msg);
+        assert_eq!(error["message"], expected_malformed_msg);
+        fixture.assert_podway_snapshot(&snapshot);
+
+        let mut conflict_and_yes = base_args.to_vec();
+        conflict_and_yes.extend_from_slice(&["--idempotency-key", "conflict-key", "--yes"]);
+        let output = output_with_stdin_counted(&fixture, &conflict_and_yes, body);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{conflict_and_yes:?}: {output:?}"
+        );
+        assert_read004_counters(&output, (0, 0));
+        let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
+            .unwrap()
+            .into_value();
+        assert_eq!(error["code"], "REQUEST_INVALID");
+        assert_eq!(error["command"], expected_command);
+        assert_eq!(error["message"], expected_conflict_msg);
+        fixture.assert_podway_snapshot(&snapshot);
+
+        let mut yes_only = base_args.to_vec();
+        yes_only.push("--yes");
+        let output = output_with_stdin_counted(&fixture, &yes_only, body);
+        assert_eq!(output.status.code(), Some(2), "{yes_only:?}: {output:?}");
+        assert_read004_counters(&output, (0, 0));
+        let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
+            .unwrap()
+            .into_value();
+        assert_eq!(error["code"], "REQUEST_INVALID");
+        assert_eq!(error["command"], expected_command);
+        assert_eq!(
+            error["message"],
+            "--yes applies only to destructive commands"
+        );
+        fixture.assert_podway_snapshot(&snapshot);
+    }
+
+    let set_bad_rev = output_with_stdin_counted(
+        &fixture,
+        &[
+            "set",
+            "notes",
+            "--stdin",
+            "--idempotency-key",
+            "set-bad-rev",
+            "--if-session-revision",
+            "1",
+        ],
+        b"ignored",
+    );
+    assert_eq!(set_bad_rev.status.code(), Some(2), "{set_bad_rev:?}");
+    assert_read004_counters(&set_bad_rev, (0, 0));
+    let error = serde_json::from_slice::<ErrorEnvelopeV2>(&set_bad_rev.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(error["code"], "REQUEST_INVALID");
+    assert_eq!(error["command"], "item.set");
+    assert_eq!(
+        error["message"],
+        "--if-session-revision does not apply to item commands"
+    );
+    fixture.assert_podway_snapshot(&snapshot);
+
+    let set_preflight = output_with_stdin_counted(
+        &fixture,
+        &[
+            "set",
+            "notes",
+            "--stdin",
+            "--idempotency-key",
+            "set-preflight",
+        ],
+        b"from automatic preflight",
+    );
+    assert_eq!(set_preflight.status.code(), Some(0), "{set_preflight:?}");
+    assert_read004_counters(&set_preflight, (1, 0));
+
+    let set_explicit = output_with_stdin_counted(
+        &fixture,
+        &[
+            "set",
+            "notes",
+            "--stdin",
+            "--idempotency-key",
+            "set-explicit",
+            "--if-workspace-uuid",
+            workspace,
+            "--if-session-id",
+            session,
+            "--if-attempt",
+            attempt,
+            "--if-item-revision",
+            "1",
+        ],
+        b"from explicit fences",
+    );
+    assert_eq!(set_explicit.status.code(), Some(0), "{set_explicit:?}");
+    assert_read004_counters(&set_explicit, (0, 0));
+
+    let after_set = fixture.run(&["status"]);
+    let current_rev = after_set["result"]["session"]["revision"].clone();
+    let other_attempt = "00000000-0000-4000-8000-000000000099";
+
+    let stale_record_output =
+        output_with_stdin_counted(&fixture, &["record", "--stdin"], &record_bytes);
+    assert_eq!(
+        stale_record_output.status.code(),
+        Some(4),
+        "{stale_record_output:?}"
+    );
+    assert_read004_counters(&stale_record_output, (0, 0));
+    assert_eq!(
+        serde_json::from_slice::<ErrorEnvelopeV2>(&stale_record_output.stdout)
+            .unwrap()
+            .as_value()["code"],
+        "SESSION_REVISION_CONFLICT"
+    );
+
+    let mut wrong_attempt_record = record_input.clone();
+    wrong_attempt_record["idempotency_key"] = json!("agent002-record-wrong-attempt");
+    wrong_attempt_record["session_revision"] = current_rev.clone();
+    wrong_attempt_record["attempt_id"] = json!(other_attempt);
+    let output = output_with_stdin_counted(
+        &fixture,
+        &["record", "--stdin"],
+        &serde_json::to_vec(&wrong_attempt_record).unwrap(),
+    );
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+    assert_read004_counters(&output, (0, 0));
+    assert_eq!(
+        serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
+            .unwrap()
+            .as_value()["code"],
+        "ATTEMPT_NOT_CURRENT"
+    );
+
+    let mut stale_item_record = record_input.clone();
+    stale_item_record["idempotency_key"] = json!("agent002-record-stale-item");
+    stale_item_record["session_revision"] = current_rev.clone();
+    stale_item_record["operations"][1]["expected_item_revision"] = json!(1);
+    let output = output_with_stdin_counted(
+        &fixture,
+        &["record", "--stdin"],
+        &serde_json::to_vec(&stale_item_record).unwrap(),
+    );
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+    assert_read004_counters(&output, (0, 0));
+    assert_eq!(
+        serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
+            .unwrap()
+            .as_value()["code"],
+        "ITEM_REVISION_CONFLICT"
+    );
+
+    let mut current_record = record_input.clone();
+    current_record["session_revision"] = current_rev;
+    current_record["operations"][1]["expected_item_revision"] = json!(2);
+    let current_record_bytes = serde_json::to_vec(&current_record).unwrap();
+
+    let record_ok = output_with_stdin_counted(
+        &fixture,
+        &["--contract-generation", "1", "record", "--stdin"],
+        &current_record_bytes,
+    );
+    assert_eq!(record_ok.status.code(), Some(0), "{record_ok:?}");
+    assert_read004_counters(&record_ok, (0, 0));
+    let record_envelope = serde_json::from_slice::<OutputEnvelopeV4>(&record_ok.stdout)
+        .unwrap()
+        .into_value();
+    let after_record = fixture.run(&["status"]);
+
+    let record_replay = output_with_stdin_counted(
+        &fixture,
+        &["--contract-generation", "2", "record", "--stdin"],
+        &current_record_bytes,
+    );
+    assert_eq!(record_replay.status.code(), Some(0), "{record_replay:?}");
+    assert_read004_counters(&record_replay, (0, 0));
+    assert_eq!(
+        serde_json::from_slice::<OutputEnvelopeV4>(&record_replay.stdout)
+            .unwrap()
+            .into_value(),
+        record_envelope
+    );
+    let after_record_replay = fixture.run(&["status"]);
+    assert_eq!(after_record_replay["result"], after_record["result"]);
+    assert_eq!(
+        after_record_replay["workspace"]["latest_workspace_sequence"]
+            .as_u64()
+            .unwrap(),
+        after_record["workspace"]["latest_workspace_sequence"]
+            .as_u64()
+            .unwrap()
+    );
+
+    let mut reused_record = current_record;
+    reused_record["operations"][1]["record"]["value"] = json!("changed batch");
+    let reused_record_out = output_with_stdin_counted(
+        &fixture,
+        &["record", "--stdin"],
+        &serde_json::to_vec(&reused_record).unwrap(),
+    );
+    assert_eq!(
+        reused_record_out.status.code(),
+        Some(2),
+        "{reused_record_out:?}"
+    );
+    assert_read004_counters(&reused_record_out, (0, 0));
+    assert_eq!(
+        serde_json::from_slice::<ErrorEnvelopeV2>(&reused_record_out.stdout)
+            .unwrap()
+            .as_value()["code"],
+        "IDEMPOTENCY_KEY_REUSED"
+    );
+
+    let stale_accept_out = output_with_stdin_counted(
+        &fixture,
+        &["delegation", "accept", "--stdin"],
+        &accept_bytes,
+    );
+    assert_eq!(
+        stale_accept_out.status.code(),
+        Some(4),
+        "{stale_accept_out:?}"
+    );
+    assert_read004_counters(&stale_accept_out, (0, 0));
+    assert_eq!(
+        serde_json::from_slice::<ErrorEnvelopeV2>(&stale_accept_out.stdout)
+            .unwrap()
+            .as_value()["code"],
+        "SESSION_REVISION_CONFLICT"
+    );
+
+    let post_record_rev = after_record["result"]["session"]["revision"].clone();
+    let mut wrong_attempt_accept = accept_input.clone();
+    wrong_attempt_accept["idempotency_key"] = json!("agent002-accept-wrong-attempt");
+    wrong_attempt_accept["session_revision"] = post_record_rev.clone();
+    wrong_attempt_accept["attempt_id"] = json!(other_attempt);
+    let output = output_with_stdin_counted(
+        &fixture,
+        &["delegation", "accept", "--stdin"],
+        &serde_json::to_vec(&wrong_attempt_accept).unwrap(),
+    );
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+    assert_read004_counters(&output, (0, 0));
+    assert_eq!(
+        serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
+            .unwrap()
+            .as_value()["code"],
+        "ATTEMPT_NOT_CURRENT"
+    );
+
+    let current_package = fixture.run(&["delegation", "package"]);
+    let mut current_accept = accept_input;
+    current_accept["session_revision"] = post_record_rev;
+    current_accept["package_digest"] = current_package["result"]["package_digest"].clone();
+    let current_accept_bytes = serde_json::to_vec(&current_accept).unwrap();
+
+    let accept_ok = output_with_stdin_counted(
+        &fixture,
+        &[
+            "--contract-generation",
+            "2",
+            "delegation",
+            "accept",
+            "--stdin",
+        ],
+        &current_accept_bytes,
+    );
+    assert_eq!(accept_ok.status.code(), Some(0), "{accept_ok:?}");
+    assert_read004_counters(&accept_ok, (0, 0));
+    let accept_envelope = serde_json::from_slice::<OutputEnvelopeV4>(&accept_ok.stdout)
+        .unwrap()
+        .into_value();
+    let after_accept = fixture.run(&["status"]);
+
+    let accept_replay = output_with_stdin_counted(
+        &fixture,
+        &[
+            "--contract-generation",
+            "1",
+            "delegation",
+            "accept",
+            "--stdin",
+        ],
+        &current_accept_bytes,
+    );
+    assert_eq!(accept_replay.status.code(), Some(0), "{accept_replay:?}");
+    assert_read004_counters(&accept_replay, (0, 0));
+    assert_eq!(
+        serde_json::from_slice::<OutputEnvelopeV4>(&accept_replay.stdout)
+            .unwrap()
+            .into_value(),
+        accept_envelope
+    );
+    let after_accept_replay = fixture.run(&["status"]);
+    assert_eq!(after_accept_replay["result"], after_accept["result"]);
+    assert_eq!(
+        after_accept_replay["workspace"]["latest_workspace_sequence"]
+            .as_u64()
+            .unwrap(),
+        after_accept["workspace"]["latest_workspace_sequence"]
+            .as_u64()
+            .unwrap()
+    );
+
+    let mut reused_accept = current_accept;
+    reused_accept["summary"] = json!("Different summary.");
+    let reused_accept_out = output_with_stdin_counted(
+        &fixture,
+        &["delegation", "accept", "--stdin"],
+        &serde_json::to_vec(&reused_accept).unwrap(),
+    );
+    assert_eq!(
+        reused_accept_out.status.code(),
+        Some(2),
+        "{reused_accept_out:?}"
+    );
+    assert_read004_counters(&reused_accept_out, (0, 0));
+    assert_eq!(
+        serde_json::from_slice::<ErrorEnvelopeV2>(&reused_accept_out.stdout)
+            .unwrap()
+            .as_value()["code"],
+        "IDEMPOTENCY_KEY_REUSED"
+    );
+}

@@ -737,12 +737,7 @@ fn validate_direct_flags(cli: &Cli) -> Result<(), LocalFailure> {
         && !command.needs_preflight()
         && !plain_start_fenced
         && !(matches!(command, Command::Evidence { .. }) && explicit.session_revision.is_none())
-        && !matches!(
-            command,
-            Command::Delegation {
-                command: DelegationCommand::Accept(_)
-            }
-        )
+        && !command.uses_stdin_fences()
     {
         return Err(LocalFailure::request_invalid(
             "explicit preconditions do not apply to this command",
@@ -1283,6 +1278,23 @@ fn prepare_stdin_payload(command: &mut Command) -> Result<(), LocalFailure> {
 }
 
 fn apply_record_input(cli: &mut Cli) -> Result<(), LocalFailure> {
+    if !cli.command.uses_stdin_fences() {
+        return Ok(());
+    }
+    match &cli.command {
+        Command::Delegation {
+            command: DelegationCommand::Accept(args),
+        } if args.input.is_none() => {
+            return Err(LocalFailure::request_invalid(
+                "delegation accept requires --stdin",
+            ));
+        }
+        Command::Record(args) if args.input.is_none() => {
+            return Err(LocalFailure::request_invalid("record requires --stdin"));
+        }
+        _ => {}
+    }
+    cli.reject_stdin_conflicting_fences()?;
     if let Command::Delegation {
         command: DelegationCommand::Accept(args),
     } = &cli.command
@@ -1291,18 +1303,6 @@ fn apply_record_input(cli: &mut Cli) -> Result<(), LocalFailure> {
             .input
             .as_ref()
             .ok_or_else(|| LocalFailure::request_invalid("delegation accept requires --stdin"))?;
-        if cli.idempotency_key.is_some()
-            || cli.if_workspace_uuid.is_some()
-            || cli.if_session_id.is_some()
-            || cli.if_session_revision.is_some()
-            || cli.if_attempt.is_some()
-            || cli.if_item_revision.is_some()
-            || cli.if_goal_revision.is_some()
-        {
-            return Err(LocalFailure::request_invalid(
-                "delegation acceptance identity and idempotency must come only from stdin",
-            ));
-        }
         let field = |name: &str| {
             input
                 .get(name)
@@ -1326,18 +1326,6 @@ fn apply_record_input(cli: &mut Cli) -> Result<(), LocalFailure> {
             .ok_or_else(|| LocalFailure::request_invalid("record requires --stdin"))?,
         _ => return Ok(()),
     };
-    if cli.idempotency_key.is_some()
-        || cli.if_workspace_uuid.is_some()
-        || cli.if_session_id.is_some()
-        || cli.if_session_revision.is_some()
-        || cli.if_attempt.is_some()
-        || cli.if_item_revision.is_some()
-        || cli.if_goal_revision.is_some()
-    {
-        return Err(LocalFailure::request_invalid(
-            "record identity, revision, and idempotency fences must come only from stdin",
-        ));
-    }
     cli.idempotency_key = Some(input.idempotency_key.as_str().to_owned());
     cli.if_workspace_uuid = Some(input.workspace_uuid.as_str().to_owned());
     cli.if_session_id = Some(input.session_id.as_str().to_owned());

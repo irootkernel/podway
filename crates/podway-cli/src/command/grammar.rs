@@ -93,6 +93,56 @@ pub(super) struct Cli {
     pub(super) command: Command,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum StdinFencedRoute {
+    RecordMany,
+    DelegationAccept,
+}
+
+impl StdinFencedRoute {
+    pub(super) fn from_route(route: &str) -> Option<Self> {
+        match route {
+            "item.record_many" => Some(Self::RecordMany),
+            "delegation.accept" => Some(Self::DelegationAccept),
+            _ => None,
+        }
+    }
+
+    pub(super) const fn conflict_message(self) -> &'static str {
+        match self {
+            Self::RecordMany => {
+                "record identity, revision, and idempotency fences must come only from stdin"
+            }
+            Self::DelegationAccept => {
+                "delegation acceptance identity and idempotency must come only from stdin"
+            }
+        }
+    }
+}
+
+pub(super) fn is_stdin_fenced_mutation_route(route: &str) -> bool {
+    StdinFencedRoute::from_route(route).is_some()
+}
+
+impl Cli {
+    pub(super) fn reject_stdin_conflicting_fences(&self) -> Result<(), LocalFailure> {
+        let Some(route) = self.command.stdin_fenced_route() else {
+            return Ok(());
+        };
+        if self.idempotency_key.is_some()
+            || self.if_workspace_uuid.is_some()
+            || self.if_session_id.is_some()
+            || self.if_session_revision.is_some()
+            || self.if_attempt.is_some()
+            || self.if_item_revision.is_some()
+            || self.if_goal_revision.is_some()
+        {
+            return Err(LocalFailure::request_invalid(route.conflict_message()));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub(super) enum Command {
     /// Show offline help and examples.
@@ -761,6 +811,14 @@ impl Command {
         }
     }
 
+    pub(super) fn stdin_fenced_route(&self) -> Option<StdinFencedRoute> {
+        StdinFencedRoute::from_route(self.canonical_route())
+    }
+
+    pub(super) fn uses_stdin_fences(&self) -> bool {
+        self.stdin_fenced_route().is_some()
+    }
+
     pub(super) const fn is_mutation(&self) -> bool {
         match self {
             Self::Init { .. }
@@ -819,8 +877,7 @@ impl Command {
             | Self::Add { .. }
             | Self::Remove { .. }
             | Self::Attach(_)
-            | Self::Clear { .. }
-            | Self::Record(_) => true,
+            | Self::Clear { .. } => true,
             Self::Start(args) => {
                 args.on_existing.is_some()
                     || args.auto_archive_terminal
@@ -1467,7 +1524,7 @@ fn route_help(topic: &str) -> Option<String> {
     let Some((context, local)) = topic_context(topic, &grammar) else {
         return Some(text.to_owned());
     };
-    let stdin_owned = matches!(topic, "item.record_many" | "delegation.accept");
+    let stdin_owned = is_stdin_fenced_mutation_route(topic);
     let mutation = context.mutation || matches!(topic, "workspace.repair" | "workspace.remove");
     let key = !stdin_owned && (mutation || topic == "outcome.lookup");
     let options: Vec<_> = grammar

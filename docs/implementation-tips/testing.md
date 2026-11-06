@@ -559,7 +559,8 @@ batch behavior:
   `optim003_sorted_position_failures_publish_nothing`,
   `optim003_supported_forms_follow_sorted_item_order`
 - [Direct CLI](../../crates/podway-cli/tests/e2e_v2dfc007_direct_cli.rs):
-  `record_stdin_preserves_identity_applies_one_atomic_batch_and_replays_without_preflight`
+  `record_stdin_preserves_identity_applies_one_atomic_batch_and_replays_without_preflight`,
+  `agent002_stdin_fenced_mutations_share_conflict_rejection_and_preserve_set_stdin_preflight`
 
 The preloaded overflow oracle is
 `optim001_preloaded_attempt_rejects_earlier_overflow_before_later_reduction`
@@ -784,7 +785,10 @@ ADMIT request admission and invocation-local reuse checks use these registered o
   `admit003_real_cli_wires_reuse_and_preserves_previews_key_errors_and_later_invocations`
   pins actual wiring, input/key ordering, separate observations and invocation
   lifetime. The [Invocation unit check](../../crates/podway-cli/src/command/direct.rs)
-  pins distinct request IDs and one original deadline. Stdin record/delegation,
+  pins distinct request IDs and one original deadline. Stdin record/delegation
+  (`record_stdin_preserves_identity_applies_one_atomic_batch_and_replays_without_preflight`,
+  `delegation_stdin_acceptance_receipt_and_completion_preserve_the_real_attempt`,
+  and `agent002_stdin_fenced_mutations_share_conflict_rejection_and_preserve_set_stdin_preflight`),
   retained-command replay/lookup and postcommit-before-stdout SIGKILL owners
   remain required; the PARSE owners above retain old-attempt and file-loss replay.
 
