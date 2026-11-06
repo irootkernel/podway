@@ -97,12 +97,11 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-- [CANON: Canonical integer contract alignment](TODO-podway-canonical-integer-alignment.md)
 - [AGENT: Agent interaction simplification](TODO-podway-agent-interaction-simplification.md)
 
-These are adopted plans, not implemented capabilities. The roadmap alone owns
-order and status. Neither selects a release. Actual adapter and live
-qualification remain in the continuing executor candidate below.
+AGENT remains adopted, with implementation status owned by the roadmap and no
+assigned release. Actual adapter and live qualification remain in the continuing
+executor candidate below.
 
 ## Related candidates
 
