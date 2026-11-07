@@ -36,18 +36,13 @@ use podway_core::{
     ItemPredicateOperatorV2,
     ItemSpecV2,
     ItemTypeV1,
-    MAX_ACTIVE_ITEM_WINDOW_V2,
     MAX_EVIDENCE_PAGE_BYTES_V2,
     MAX_EVIDENCE_PREVIEW_BYTES_V2,
     MAX_EVIDENCE_PREVIEW_SCALARS_V2,
     MAX_EVIDENCE_PREVIEW_SLOTS_V2,
     MAX_EVIDENCE_RESPONSE_BYTES_V2,
     MAX_MISSING_ITEM_WINDOW_V2,
-    MAX_MUTATION_TEMPLATE_WINDOW_V2,
-    MAX_OBSERVATION_ACTIVE_ITEM_BYTES_V2,
     MAX_OBSERVATION_CHOICE_WINDOW_V2,
-    MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2,
-    MAX_OBSERVATION_TEMPLATE_BYTES_V2,
     MAX_SUGGESTION_WINDOW_V2,
     PROCEDURE_SCHEMA_V2,
     PredicateActualV2,
@@ -75,6 +70,14 @@ use podway_store::{
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
+
+mod observation;
+
+pub(crate) use self::observation::finalize_direct_observation_in;
+use self::observation::{
+    project_graph_observation_in, project_prepared_next_v1, serialized_bytes_v1,
+    serialized_object_bytes_v1,
+};
 
 const ITEM_DISPLAY_CHARS_MAX: usize = 2_048;
 const STATUS_VALUES_BYTES_MAX: usize = 262_144;
@@ -1271,247 +1274,6 @@ pub fn project_graph_observation_v1(
     )
 }
 
-pub(crate) fn project_graph_observation_in(
-    scope: &ReadScope<'_>,
-    generation: ContractGenerationV1,
-) -> Result<Map<String, Value>, GraphViewErrorV2> {
-    let state = scope.graph()?;
-    let procedure = scope.procedure()?;
-    let current = CurrentProjection::derive(scope, state, &procedure)?;
-    let delegated = delegated_placement_count(&procedure) != 0;
-    // ADR-0024 reduces the observation status member to a value-free compact projection: guidance
-    // and the active-item window already carry what a mutation needs, and a caller that wants the
-    // standard or verbose status projection calls `session.status`.
-    let mut status = observation_status_v1(state, current.as_ref())?;
-    if delegated {
-        status.insert(
-            "delegation".to_owned(),
-            delegation_projection(scope, state, current.as_ref()),
-        );
-    }
-    let guidance = if current.is_some() || state.trace().lifecycle() == SessionLifecycle::Prepared {
-        let next = if state.trace().lifecycle() == SessionLifecycle::Prepared {
-            project_prepared_next_v1(state, &procedure)?
-        } else {
-            // Suppressed guidance admits previews through the same slot and truncation gates as
-            // `session.next` — including the snapshot, consumer, and token-constructibility
-            // checks — without materializing the preview payloads ADR-0024 removes here.
-            project_running_next(
-                scope,
-                state,
-                &procedure,
-                current.as_ref().unwrap(),
-                EvidencePreviewDisplay::Suppress,
-            )?
-        };
-        Value::Object(next)
-    } else {
-        Value::Null
-    };
-
-    // Status and guidance are single structured members, not windows. Both carry the complete
-    // graph-wide counter set, so they share one allocation: long graphs spend more on counters,
-    // while content-rich active placements spend more on guidance. Neither member is trimmed.
-    let status = Value::Object(status);
-    admit_members_within_bytes_v1(
-        [&status, &guidance],
-        MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2,
-    )?;
-
-    let mut result = Map::new();
-    let observation_schema = match generation {
-        ContractGenerationV1::Generation1 => "podway.observation-result/v5",
-        ContractGenerationV1::Generation2 => "podway.observation-result/v6",
-    };
-    result.insert("schema".to_owned(), json!(observation_schema));
-    result.insert("status".to_owned(), status);
-    result.insert("guidance".to_owned(), guidance);
-    let active_items = current
-        .as_ref()
-        .map(CurrentProjection::active_item_descriptors)
-        .unwrap_or_default();
-    // Each window keeps its exact total and admits entries in declaration order until its byte
-    // allocation is spent. ADR-0024 forbids a silent cut, so the flag travels with the count.
-    let (active_items, active_items_total) = admit_within_bytes_v1(
-        active_items,
-        MAX_OBSERVATION_ACTIVE_ITEM_BYTES_V2,
-        MAX_ACTIVE_ITEM_WINDOW_V2,
-    );
-    result.insert("active_items_total".to_owned(), json!(active_items_total));
-    result.insert(
-        "active_items_truncated".to_owned(),
-        json!(active_items.len() < active_items_total),
-    );
-    result.insert("active_items".to_owned(), Value::Array(active_items));
-    let mutation_templates = if state.trace().lifecycle() == SessionLifecycle::Prepared {
-        match generation {
-            ContractGenerationV1::Generation1 => prepared_mutation_templates(scope, state),
-            ContractGenerationV1::Generation2 => prepared_mutation_templates_v6(scope, state),
-        }
-    } else if matches!(
-        state.trace().lifecycle(),
-        SessionLifecycle::Completed | SessionLifecycle::Cancelled
-    ) {
-        match generation {
-            ContractGenerationV1::Generation1 => terminal_mutation_templates(scope, state),
-            ContractGenerationV1::Generation2 => terminal_mutation_templates_v6(scope, state),
-        }
-    } else {
-        current
-            .as_ref()
-            .map(|current| current.mutation_templates(scope, state, &procedure))
-            .unwrap_or_default()
-    };
-    let (mutation_templates, mutation_templates_total) = admit_templates_within_bytes_v1(
-        mutation_templates,
-        MAX_OBSERVATION_TEMPLATE_BYTES_V2,
-        MAX_MUTATION_TEMPLATE_WINDOW_V2,
-    )?;
-    result.insert(
-        "mutation_templates_total".to_owned(),
-        json!(mutation_templates_total),
-    );
-    result.insert(
-        "mutation_templates_truncated".to_owned(),
-        json!(mutation_templates.len() < mutation_templates_total),
-    );
-    result.insert(
-        "mutation_templates".to_owned(),
-        Value::Array(mutation_templates),
-    );
-    Ok(result)
-}
-
-/// Measures complete observation members against their shared allocation.
-///
-/// A member is not a window: there is no honest way to return half a status or half a guidance
-/// object, and their own collections are already bounded. So a member that outgrows its allocation
-/// is an inconsistency in the composition rather than something to ship over budget.
-fn admit_members_within_bytes_v1<const N: usize>(
-    members: [&Value; N],
-    allocation: usize,
-) -> Result<(), GraphViewErrorV2> {
-    let charged = members.iter().fold(0usize, |total, member| {
-        total.saturating_add(serialized_bytes_v1(member))
-    });
-    if charged > allocation {
-        return Err(GraphViewErrorV2::InconsistentState(
-            "the complete observation members exceeded their shared byte allocation",
-        ));
-    }
-    Ok(())
-}
-
-/// Admits window entries in declaration order until either allocation is spent.
-///
-/// Returns the admitted entries and the exact total the caller must publish alongside them. The
-/// first entry is always admitted: a window that can answer nothing tells a caller less than a
-/// window that answers once and says it was cut.
-fn admit_within_bytes_v1(entries: Vec<Value>, budget: usize, window: usize) -> (Vec<Value>, usize) {
-    let total = entries.len();
-    let mut charged = 0usize;
-    let mut admitted = 0usize;
-    for entry in entries.iter().take(window) {
-        let cost = serialized_bytes_v1(entry);
-        if admitted > 0 && charged.saturating_add(cost) > budget {
-            break;
-        }
-        charged = charged.saturating_add(cost);
-        admitted += 1;
-    }
-    let mut entries = entries;
-    entries.truncate(admitted);
-    (entries, total)
-}
-
-/// Admits mutation templates, keeping one per command before spending the rest of the allocation.
-///
-/// Guidance publishes `allowed_actions`, and a caller turns each one into a request by finding its
-/// template. Cutting purely in declaration order can therefore leave an allowed action with no
-/// template at all, which reads as a contradiction rather than as a truncated window. Reserving
-/// the first template of each command keeps the window's cut confined to repetition.
-fn admit_templates_within_bytes_v1(
-    templates: Vec<Value>,
-    budget: usize,
-    window: usize,
-) -> Result<(Vec<Value>, usize), GraphViewErrorV2> {
-    let total = templates.len();
-    let mut seen: Vec<&str> = Vec::new();
-    let mut reserved = vec![false; total];
-    for (index, template) in templates.iter().enumerate() {
-        let Some(command) = template.get("command").and_then(Value::as_str) else {
-            continue;
-        };
-        if !seen.contains(&command) {
-            seen.push(command);
-            reserved[index] = true;
-        }
-    }
-
-    // The reservation is admitted whole, because dropping it would leave an `allowed_actions`
-    // entry with no template — a contradiction, not a truncation. It is still charged: the command
-    // set is closed and small, so it fits by construction, and if it ever stopped fitting that is
-    // an inconsistency in the composition rather than something to silently ship over budget.
-    let mut charged = 0usize;
-    let mut admitted = 0usize;
-    let mut keep = reserved.clone();
-    for (index, template) in templates.iter().enumerate() {
-        if !reserved[index] {
-            continue;
-        }
-        charged = charged.saturating_add(serialized_bytes_v1(template));
-        admitted += 1;
-    }
-    if charged > budget || admitted > window {
-        return Err(GraphViewErrorV2::InconsistentState(
-            "one template per command does not fit the template allocation",
-        ));
-    }
-    for (index, template) in templates.iter().enumerate() {
-        if keep[index] {
-            continue;
-        }
-        if admitted >= window {
-            break;
-        }
-        let cost = serialized_bytes_v1(template);
-        if charged.saturating_add(cost) > budget {
-            continue;
-        }
-        charged = charged.saturating_add(cost);
-        admitted += 1;
-        keep[index] = true;
-    }
-
-    let admitted_templates = templates
-        .into_iter()
-        .zip(keep)
-        .filter_map(|(template, keep)| keep.then_some(template))
-        .collect();
-    Ok((admitted_templates, total))
-}
-
-/// The bytes one projected value serializes to, plus its array-element structure.
-fn serialized_bytes_v1(value: &Value) -> usize {
-    serde_json::to_vec(value)
-        .map(|encoded| encoded.len())
-        .unwrap_or(usize::MAX)
-        .saturating_add(EVIDENCE_ENTRY_OVERHEAD_BYTES)
-}
-
-/// The bytes one projected result map serializes to, plus the same entry overhead
-/// [`serialized_bytes_v1`] charges, measured without wrapping the map in an owned `Value`.
-///
-/// `Value::Object` serializes by delegating to the map's own `Serialize` implementation, so the
-/// measured bytes are identical to the wrapped form this replaces; the difference is that the
-/// measured map is no longer cloned once just to carry it into the measurement.
-fn serialized_object_bytes_v1(result: &Map<String, Value>) -> usize {
-    serde_json::to_vec(result)
-        .map(|encoded| encoded.len())
-        .unwrap_or(usize::MAX)
-        .saturating_add(EVIDENCE_ENTRY_OVERHEAD_BYTES)
-}
-
 /// Extracts the object map from an owned projection `Value` without copying it.
 ///
 /// The `json!` macro finalizes every expression through `to_value`, and the extraction sites
@@ -1524,285 +1286,6 @@ fn into_object(value: Value) -> Map<String, Value> {
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
             panic!("projection result is not an object")
         }
-    }
-}
-
-/// The observation-scoped compact status projection.
-///
-/// It is embedded structured status and carries the item window's exact total and truncation state.
-fn observation_status_v1(
-    state: &GraphSessionStateV2,
-    current: Option<&CurrentProjection<'_>>,
-) -> Result<Map<String, Value>, GraphViewErrorV2> {
-    let mut status = Map::new();
-    status.insert("procedure".to_owned(), procedure_identity(state));
-    status.insert("session".to_owned(), session_identity(state));
-    status.insert(
-        "current".to_owned(),
-        current
-            .map(CurrentProjection::identity)
-            .unwrap_or(Value::Null),
-    );
-    status.insert(
-        "goal_tracking".to_owned(),
-        json!(state.snapshot().goal_tracking()),
-    );
-    status.insert(
-        "goal_defined".to_owned(),
-        json!(state.goal_state().current_revision().is_some()),
-    );
-    add_goal_summary(&mut status, state);
-    status.insert(
-        "trace_length".to_owned(),
-        json!(state.trace().attempts().len()),
-    );
-    status.insert("counters".to_owned(), counters(state));
-    let items = current
-        .map(CurrentProjection::compact_items)
-        .unwrap_or_default();
-    status.insert("items_total".to_owned(), json!(items.len()));
-    status.insert("items_truncated".to_owned(), json!(false));
-    status.insert("items".to_owned(), Value::Array(items));
-    Ok(status)
-}
-
-fn project_prepared_next_v1(
-    state: &GraphSessionStateV2,
-    procedure: &ParsedProcedureV2,
-) -> Result<Map<String, Value>, GraphViewErrorV2> {
-    let delegated_placement_count = delegated_placement_count(procedure);
-    let mut result = into_object(json!({
-        "schema": "podway.prepared-next-result/v3",
-        "procedure_schema": "podway.procedure/v2",
-        "procedure_digest": state.snapshot().digest().as_str(),
-        "session_id": state.trace().session_id(),
-        "session_state": "prepared",
-        "revision": 0,
-        "goal_tracking": state.snapshot().goal_tracking(),
-        "goal_defined": false,
-        "trace_length": 0,
-        "allowed_actions": ["session.begin", "session.reset", "session.start_replace"],
-        "suggestions": [
-            {"command":"session.begin","argv":["podway","begin"]},
-            {"command":"session.reset","argv":["podway","reset"]},
-            {"command":"session.start_replace","argv":["podway","start","--on-existing","delete"]},
-        ],
-    }));
-    if delegated_placement_count != 0 {
-        result.insert(
-            "delegated_placement_count".to_owned(),
-            json!(delegated_placement_count),
-        );
-    }
-    Ok(result)
-}
-
-fn prepared_mutation_templates(scope: &ReadScope<'_>, state: &GraphSessionStateV2) -> Vec<Value> {
-    let template = |command: &str, argv: Vec<&str>| {
-        json!({
-            "command": command,
-            "argv": argv,
-            "preconditions": {
-                "workspace_uuid": scope.identity().workspace_uuid(),
-                "session_id": state.trace().session_id(),
-                "session_revision": state.trace().revision(),
-            },
-            "authority": "optimistic_concurrency_only",
-            "idempotency_key_required": true,
-            "requires_explicit_authorization": false,
-        })
-    };
-    vec![
-        template("session.begin", vec!["podway", "begin"]),
-        template("session.reset", vec!["podway", "reset"]),
-        template(
-            "session.start_replace",
-            vec!["podway", "start", "--on-existing", "delete"],
-        ),
-    ]
-}
-
-fn terminal_mutation_templates(scope: &ReadScope<'_>, state: &GraphSessionStateV2) -> Vec<Value> {
-    let template = |command: &str, argv: Vec<&str>| {
-        json!({
-            "command": command,
-            "argv": argv,
-            "preconditions": {
-                "workspace_uuid": scope.identity().workspace_uuid(),
-                "session_id": state.trace().session_id(),
-                "session_revision": state.trace().revision(),
-            },
-            "authority": "optimistic_concurrency_only",
-            "idempotency_key_required": true,
-            "requires_explicit_authorization": false,
-        })
-    };
-    if scope.current_terminal_disposition() {
-        vec![
-            template("session.reset", vec!["podway", "reset"]),
-            template("session.start_replace", vec!["podway", "start"]),
-        ]
-    } else {
-        vec![template(
-            "session.terminal_disposition",
-            vec!["podway", "disposition"],
-        )]
-    }
-}
-
-/// One generation-2 lifecycle template (ADR-0039): the semantic argv first,
-/// then the fence tail with current values and the idempotency-key
-/// placeholder. The tail equals the R1 correlation exactly, and the revision
-/// token is the canonical JSON-number text of the preconditions value.
-fn lifecycle_template_v6(
-    scope: &ReadScope<'_>,
-    state: &GraphSessionStateV2,
-    command: &str,
-    argv: &[&str],
-    requires_explicit_authorization: bool,
-) -> Value {
-    let revision = state.trace().revision().get();
-    let revision_text = revision.to_string();
-    let mut fenced = argv.to_vec();
-    fenced.extend([
-        "--if-workspace-uuid",
-        scope.identity().workspace_uuid().as_str(),
-        "--if-session-id",
-        state.trace().session_id().as_str(),
-        "--if-session-revision",
-        revision_text.as_str(),
-        "--idempotency-key",
-        "<idempotency-key>",
-    ]);
-    json!({
-        "command": command,
-        "argv": fenced,
-        "preconditions": {
-            "workspace_uuid": scope.identity().workspace_uuid(),
-            "session_id": state.trace().session_id(),
-            "session_revision": revision,
-        },
-        "authority": "optimistic_concurrency_only",
-        "idempotency_key_required": true,
-        "requires_explicit_authorization": requires_explicit_authorization,
-    })
-}
-
-fn prepared_mutation_templates_v6(
-    scope: &ReadScope<'_>,
-    state: &GraphSessionStateV2,
-) -> Vec<Value> {
-    vec![
-        lifecycle_template_v6(scope, state, "session.begin", &["podway", "begin"], false),
-        lifecycle_template_v6(scope, state, "session.reset", &["podway", "reset"], true),
-        lifecycle_template_v6(
-            scope,
-            state,
-            "session.start_replace",
-            &[
-                "podway",
-                "start",
-                "--on-existing",
-                "delete",
-                "--preset",
-                "<preset>",
-                "--task",
-                "<task>",
-            ],
-            true,
-        ),
-        lifecycle_template_v6(
-            scope,
-            state,
-            "session.start_replace",
-            &[
-                "podway",
-                "start",
-                "--on-existing",
-                "delete",
-                "--procedure",
-                "<procedure-file>",
-                "--expect-procedure-digest",
-                "<procedure-digest>",
-                "--task",
-                "<task>",
-            ],
-            true,
-        ),
-    ]
-}
-
-fn terminal_mutation_templates_v6(
-    scope: &ReadScope<'_>,
-    state: &GraphSessionStateV2,
-) -> Vec<Value> {
-    if scope.current_terminal_disposition() {
-        vec![
-            lifecycle_template_v6(
-                scope,
-                state,
-                "session.archive",
-                &["podway", "archive"],
-                true,
-            ),
-            lifecycle_template_v6(scope, state, "session.reset", &["podway", "reset"], true),
-            lifecycle_template_v6(
-                scope,
-                state,
-                "session.start",
-                &[
-                    "podway", "start", "--preset", "<preset>", "--task", "<task>",
-                ],
-                true,
-            ),
-            lifecycle_template_v6(
-                scope,
-                state,
-                "session.start",
-                &[
-                    "podway",
-                    "start",
-                    "--procedure",
-                    "<procedure-file>",
-                    "--expect-procedure-digest",
-                    "<procedure-digest>",
-                    "--task",
-                    "<task>",
-                ],
-                true,
-            ),
-        ]
-    } else {
-        vec![
-            lifecycle_template_v6(
-                scope,
-                state,
-                "session.terminal_disposition",
-                &[
-                    "podway",
-                    "disposition",
-                    "handed-off",
-                    "--summary",
-                    "<summary>",
-                    "--reference",
-                    "<reference>",
-                ],
-                false,
-            ),
-            lifecycle_template_v6(
-                scope,
-                state,
-                "session.terminal_disposition",
-                &[
-                    "podway",
-                    "disposition",
-                    "not-required",
-                    "--reason",
-                    "<reason>",
-                ],
-                false,
-            ),
-        ]
     }
 }
 
@@ -2186,8 +1669,7 @@ impl<'a> CurrentProjection<'a> {
                     "value_truncated": value_truncated,
                 })
             };
-            let bytes = serde_json::to_vec(&candidate)
-                .map_or(STATUS_VALUES_BYTES_MAX, |json| json.len())
+            let bytes = serialized_json_len_v1(&candidate).unwrap_or(STATUS_VALUES_BYTES_MAX)
                 + usize::from(!values.is_empty());
             if used.saturating_add(bytes) > STATUS_VALUES_BYTES_MAX {
                 break;
@@ -2523,9 +2005,8 @@ impl<'a> CurrentProjection<'a> {
                 "reason": blocker.reason(),
                 "created_at": timestamp(blocker.created_at())?,
             });
-            let bytes = serde_json::to_vec(&value)
+            let bytes = serialized_json_len_v1(&value)
                 .map_err(|_| GraphViewErrorV2::InconsistentState("blocker view is not JSON"))?
-                .len()
                 + usize::from(!projected.is_empty());
             if used.saturating_add(bytes) > BLOCKER_WINDOW_BYTES_MAX {
                 break;
@@ -4815,7 +4296,15 @@ fn civil_date_from_unix_days(days: u64) -> (i128, i128, i128) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        observation::{
+            SuccessorObservationContextV1, admit_members_within_bytes_v1,
+            admit_templates_within_bytes_v1, admit_within_bytes_v1,
+            project_successor_observation_v1, serialized_bytes_v1, serialized_object_bytes_v1,
+        },
+        *,
+    };
+    use podway_core::MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2;
 
     #[test]
     fn v2gsc004_production_counter_encoder_matches_the_shared_maximum_charge() {
@@ -6129,5 +5618,2053 @@ mod tests {
                 assert_eq!(suppress_value, stripped, "{name} equality at {initial}");
             }
         }
+    }
+
+    fn agent004_bootstrap_store() -> (tempfile::TempDir, podway_store::direct_store::DirectStoreV1)
+    {
+        use std::time::{Duration, Instant};
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tempdir.path()).unwrap();
+        let digest = |c: char| {
+            podway_core::Sha256Digest::new(format!("sha256:{}", c.to_string().repeat(64))).unwrap()
+        };
+        let store = podway_store::direct_store::DirectStoreV1::new(
+            podway_store::direct_store::DirectWorkspaceLayoutV1::new(
+                podway_store::ValidatedWorkspaceRootV1::from_path(&root).unwrap(),
+            )
+            .unwrap(),
+            digest('c'),
+            digest('a'),
+            digest('b'),
+        );
+        let request = podway_store::direct_store::DirectMutationRequestV1::new(
+            podway_store::IdempotencyKeyV1::new("agent004-bootstrap").unwrap(),
+            digest('d'),
+            "workspace.init",
+            "00000000-0000-4000-8000-000000006000",
+            podway_store::direct_store::DirectOutcomeScopeV1::Workspace,
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let lease = podway_store::direct_store::ExclusiveMaintenanceLeaseV1::acquire(
+            store.layout(),
+            deadline,
+            true,
+        )
+        .unwrap();
+        store
+            .bootstrap(
+                &lease,
+                podway_core::WorkspaceId::new("00000000-0000-4000-8000-000000005001").unwrap(),
+                "agent004-generation",
+                &request,
+                deadline,
+                || UnixMillis::new(1_700_000_000_000),
+                |transaction| {
+                    transaction.now();
+                    Ok(podway_store::CanonicalExecutionJsonV1::new(
+                        serde_json::to_string(&json!({
+                            "command": "workspace.init",
+                            "generated_at": "2023-11-14T22:13:20.000Z",
+                            "request_id": "00000000-0000-4000-8000-000000006000",
+                            "result": {"initialized": true, "schema": "podway.workspace-init-result/v2"},
+                            "schema": "podway.output/v4",
+                            "warnings": []
+                        }))
+                        .unwrap(),
+                    )
+                    .unwrap())
+                },
+            )
+            .unwrap();
+        drop(lease);
+        (tempdir, store)
+    }
+
+    fn agent004_commit_mutation<F>(
+        store: &podway_store::direct_store::DirectStoreV1,
+        key: &str,
+        request_id: &str,
+        session_id: &podway_core::SessionId,
+        now: UnixMillis,
+        f: F,
+    ) -> podway_store::direct_store::DirectMutationResultV1
+    where
+        F: for<'a, 'b> FnOnce(
+            &mut podway_store::direct_store::DirectTransactionV1<'a, 'b, &dyn Fn() -> UnixMillis>,
+        ) -> podway_store::direct_store::DirectStoreResultV1<()>,
+    {
+        use std::time::{Duration, Instant};
+
+        let digest = podway_core::Sha256Digest::new(
+            "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        )
+        .unwrap();
+        let request = podway_store::direct_store::DirectMutationRequestV1::new(
+            podway_store::IdempotencyKeyV1::new(key).unwrap(),
+            digest,
+            "session.complete",
+            request_id,
+            podway_store::direct_store::DirectOutcomeScopeV1::Session(session_id.clone()),
+        )
+        .unwrap();
+        let clock = || now;
+        let clock_ref: &dyn Fn() -> UnixMillis = &clock;
+        store
+            .mutate(
+                &request,
+                Instant::now() + Duration::from_secs(5),
+                clock_ref,
+                |transaction| {
+                    transaction.now();
+                    let seq = transaction.next_workspace_sequence()?;
+                    f(transaction)?;
+                    Ok(podway_store::CanonicalExecutionJsonV1::new(
+                        serde_json::to_string(&json!({
+                            "command": "session.complete",
+                            "generated_at": "2023-11-14T22:13:20.000Z",
+                            "request_id": request_id,
+                            "result": {"ok": true},
+                            "schema": "podway.output/v4",
+                            "warnings": [],
+                            "workspace": {
+                                "latest_workspace_sequence": seq,
+                                "root": "/worktree",
+                                "uuid": "00000000-0000-4000-8000-000000005001"
+                            }
+                        }))
+                        .unwrap(),
+                    )
+                    .unwrap())
+                },
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn agent004_successor_context_matches_direct_observation_across_lifecycle_and_pre_write_transactions()
+     {
+        use std::time::{Duration, Instant};
+
+        let (_tempdir, store) = agent004_bootstrap_store();
+        let source = serde_json::to_vec(&json!({
+            "schema": "podway.procedure/v2",
+            "id": "agent004-lifecycle",
+            "version": "1",
+            "name": "AGENT-004 lifecycle observation test",
+            "purpose": "Verify in-transaction successor observation across lifecycle states.",
+            "goal_tracking": true,
+            "node_definitions": {
+                "draft": {
+                    "type": "action",
+                    "title": "Draft",
+                    "intent": "Record initial summary.",
+                    "items": [
+                        {"id": "summary", "type": "text", "prompt": "Summary.", "required": true}
+                    ]
+                },
+                "review": {
+                    "type": "decision",
+                    "title": "Review goal",
+                    "objective": "Assess goal and choose route.",
+                    "prompt": "Proceed or rework.",
+                    "assessment": {
+                        "target": "session_goal",
+                        "outcomes": {
+                            "proceed": "achieved",
+                            "rework": "not_achieved",
+                            "superseded": "superseded"
+                        }
+                    },
+                    "options": [
+                        {
+                            "id": "proceed",
+                            "label": "Proceed to finalize"
+                        },
+                        {
+                            "id": "rework",
+                            "label": "Rework draft"
+                        },
+                        {
+                            "id": "superseded",
+                            "label": "Rework after goal revision"
+                        }
+                    ],
+                    "reason": {"required": true}
+                },
+                "finalize": {
+                    "type": "action",
+                    "title": "Finalize",
+                    "intent": "Record final note.",
+                    "items": [
+                        {"id": "final-note", "type": "text", "prompt": "Final note.", "required": true}
+                    ]
+                }
+            },
+            "graph": {
+                "entry": "draft",
+                "nodes": [
+                    {"id": "draft", "use": "draft", "next": "review"},
+                    {
+                        "id": "review",
+                        "use": "review",
+                        "routes": {
+                            "proceed": {"to": "finalize", "effect": "advance"},
+                            "rework": {"to": "draft", "effect": "rework"},
+                            "superseded": {"to": "draft", "effect": "rework"}
+                        }
+                    },
+                    {"id": "finalize", "use": "finalize", "terminal": true}
+                ]
+            }
+        }))
+        .unwrap();
+
+        let snapshot = crate::execution::workspace_procedure_snapshot_from_bytes_v2(
+            "agent004-lifecycle.json",
+            &source,
+            podway_core::ProcedureSnapshotId::new("00000000-0000-4000-8000-000000006001").unwrap(),
+            UnixMillis::new(1_700_000_000_000),
+        )
+        .unwrap();
+        let session_id =
+            podway_core::SessionId::new("00000000-0000-4000-8000-000000006002").unwrap();
+        let prepared = GraphSessionStateV2::prepared(
+            podway_core::Revision::new(1),
+            "AGENT-004 lifecycle task",
+            snapshot.clone(),
+            session_id.clone(),
+            UnixMillis::new(1_700_000_000_000),
+        )
+        .unwrap();
+
+        // 1. Prepared state: verify nested store.read fails with ConnectionBusy inside the write
+        //    callback while transaction-based successor projection succeeds before & after write.
+        let mut prepared_obs = Map::new();
+        let mut prepared_seq = 0u64;
+        let m1 = agent004_commit_mutation(
+            &store,
+            "agent004-k1",
+            "00000000-0000-4000-8000-000000006011",
+            &session_id,
+            UnixMillis::new(1_700_000_000_010),
+            |tx| {
+                let nested_read = store
+                    .read(Instant::now() + Duration::from_millis(1), |snapshot| {
+                        snapshot.view(UnixMillis::new(1_700_000_000_010))
+                    });
+                assert!(
+                    matches!(
+                        nested_read,
+                        Err(podway_store::direct_store::DirectStoreErrorV1::ConnectionBusy)
+                    ),
+                    "nested store.read inside a write callback must return ConnectionBusy, got {nested_read:?}"
+                );
+
+                let ctx_before = SuccessorObservationContextV1::from_transaction(tx, &prepared)?;
+                let obs_before = project_successor_observation_v1(&ctx_before).unwrap();
+                let seq_before = ctx_before.workspace_sequence();
+                tx.create_graph(&prepared)?;
+                let ctx_after = SuccessorObservationContextV1::from_transaction(tx, &prepared)?;
+                let obs_after = project_successor_observation_v1(&ctx_after).unwrap();
+                assert_eq!(obs_before, obs_after);
+                assert_eq!(seq_before, 2);
+                assert_eq!(ctx_after.workspace_sequence(), 2);
+                assert_eq!(obs_before["schema"], json!("podway.observation-result/v6"));
+                assert_eq!(
+                    obs_before["guidance"]["schema"],
+                    json!("podway.prepared-next-result/v3")
+                );
+                prepared_obs = obs_before;
+                prepared_seq = seq_before;
+                Ok(())
+            },
+        );
+        assert_eq!(prepared_seq, m1.outcome().sequence());
+        let committed_prepared = store
+            .read(Instant::now() + Duration::from_secs(5), |snapshot| {
+                let view = snapshot.view(UnixMillis::new(1_700_000_000_015))?;
+                assert_eq!(view.sequence(), m1.outcome().sequence());
+                assert_eq!(view.sequence(), prepared_seq);
+                Ok(crate::direct_read_service::project_direct_observation_v1(
+                    &view,
+                    ContractGenerationV1::Generation2,
+                )
+                .unwrap())
+            })
+            .unwrap();
+        assert_eq!(prepared_obs, committed_prepared);
+
+        // 2. Running state: begin_v2 with initial goal, then mutate_active_items_v2.
+        let attempt_1 =
+            podway_core::AttemptId::new("00000000-0000-4000-8000-000000006003").unwrap();
+        let initial_goal = podway_core::GraphInitialGoalV2::new(
+            podway_core::GoalStatementV2::new("Complete lifecycle with coherent observation.")
+                .unwrap(),
+            podway_core::GoalDefinitionV2::new(vec![
+                podway_core::GoalCriterionV2::new(
+                    podway_core::CriterionId::new("c1").unwrap(),
+                    "Draft summary recorded.",
+                )
+                .unwrap(),
+                podway_core::GoalCriterionV2::new(
+                    podway_core::CriterionId::new("c2").unwrap(),
+                    "Review completed.",
+                )
+                .unwrap(),
+            ])
+            .unwrap(),
+            None,
+        );
+        let begun = prepared
+            .begin_v2(
+                podway_core::Revision::ZERO,
+                attempt_1.clone(),
+                Some(initial_goal),
+                UnixMillis::new(1_700_000_000_020),
+            )
+            .unwrap()
+            .into_state();
+        let mutated = begun
+            .mutate_active_items_v2(
+                &attempt_1,
+                &[podway_core::ActiveItemMutationRequestV2::new(
+                    podway_core::ItemId::new("summary").unwrap(),
+                    podway_core::Revision::ZERO,
+                    podway_core::ActiveItemMutationV2::Set {
+                        value: "Draft summary ready.".to_owned(),
+                    },
+                )],
+                UnixMillis::new(1_700_000_000_025),
+            )
+            .unwrap()
+            .into_state();
+
+        let mut begun_obs = Map::new();
+        let mut begun_seq = 0u64;
+        let m2a = agent004_commit_mutation(
+            &store,
+            "agent004-k2a",
+            "00000000-0000-4000-8000-000000006012",
+            &session_id,
+            UnixMillis::new(1_700_000_000_020),
+            |tx| {
+                // While the DB still holds `prepared`, projecting `begun` must reflect the running
+                // attempt and defined goal, never the stale prepared row.
+                let ctx_before = SuccessorObservationContextV1::from_transaction(tx, &begun)?;
+                let obs_before = project_successor_observation_v1(&ctx_before).unwrap();
+                tx.replace_graph(
+                    prepared.workspace_revision(),
+                    prepared.trace().revision(),
+                    &begun,
+                )?;
+                let ctx_after = SuccessorObservationContextV1::from_transaction(tx, &begun)?;
+                let obs_after = project_successor_observation_v1(&ctx_after).unwrap();
+                assert_eq!(obs_before, obs_after);
+                assert_eq!(
+                    obs_before["status"]["session"]["lifecycle"],
+                    json!("running")
+                );
+                assert_eq!(obs_before["status"]["goal_defined"], json!(true));
+                begun_obs = obs_before;
+                begun_seq = ctx_after.workspace_sequence();
+                Ok(())
+            },
+        );
+        assert_eq!(begun_seq, m2a.outcome().sequence());
+        let committed_begun = store
+            .read(Instant::now() + Duration::from_secs(5), |snapshot| {
+                let view = snapshot.view(UnixMillis::new(1_700_000_000_021))?;
+                assert_eq!(view.sequence(), m2a.outcome().sequence());
+                Ok(crate::direct_read_service::project_direct_observation_v1(
+                    &view,
+                    ContractGenerationV1::Generation2,
+                )
+                .unwrap())
+            })
+            .unwrap();
+        assert_eq!(begun_obs, committed_begun);
+
+        let mut running_obs = Map::new();
+        let mut running_seq = 0u64;
+        let m2b = agent004_commit_mutation(
+            &store,
+            "agent004-k2b",
+            "00000000-0000-4000-8000-000000006013",
+            &session_id,
+            UnixMillis::new(1_700_000_000_025),
+            |tx| {
+                let ctx_before = SuccessorObservationContextV1::from_transaction(tx, &mutated)?;
+                let obs_before = project_successor_observation_v1(&ctx_before).unwrap();
+                tx.replace_graph(
+                    begun.workspace_revision(),
+                    begun.trace().revision(),
+                    &mutated,
+                )?;
+                let ctx_after = SuccessorObservationContextV1::from_transaction(tx, &mutated)?;
+                let obs_after = project_successor_observation_v1(&ctx_after).unwrap();
+                assert_eq!(obs_before, obs_after);
+                assert_eq!(
+                    obs_before["status"]["session"]["lifecycle"],
+                    json!("running")
+                );
+                assert_eq!(
+                    obs_before["guidance"]["schema"],
+                    json!("podway.next-result/v5")
+                );
+                assert_eq!(
+                    obs_before["status"]["current"]["attempt"]["attempt_id"],
+                    json!(attempt_1)
+                );
+                assert_eq!(obs_before["status"]["goal_defined"], json!(true));
+                running_obs = obs_before;
+                running_seq = ctx_after.workspace_sequence();
+                Ok(())
+            },
+        );
+        assert_eq!(running_seq, m2b.outcome().sequence());
+        let committed_running = store
+            .read(Instant::now() + Duration::from_secs(5), |snapshot| {
+                let view = snapshot.view(UnixMillis::new(1_700_000_000_026))?;
+                assert_eq!(view.sequence(), m2b.outcome().sequence());
+                Ok(crate::direct_read_service::project_direct_observation_v1(
+                    &view,
+                    ContractGenerationV1::Generation2,
+                )
+                .unwrap())
+            })
+            .unwrap();
+        assert_eq!(running_obs, committed_running);
+
+        // 3. Changed-cursor & batch goal assessment: complete draft -> review, assess c1 & c2, decide proceed -> finalize.
+        let attempt_2 =
+            podway_core::AttemptId::new("00000000-0000-4000-8000-000000006004").unwrap();
+        let at_review = mutated
+            .complete_active_action_v2(
+                mutated.trace().revision(),
+                &attempt_1,
+                Some(attempt_2.clone()),
+                UnixMillis::new(1_700_000_000_030),
+            )
+            .unwrap()
+            .into_state();
+        let assessed = at_review
+            .assess_goal_criteria_v2(
+                at_review.trace().revision(),
+                &attempt_2,
+                podway_core::GoalRevisionNumberV2::FIRST,
+                vec![
+                    podway_core::CriterionAssessmentBatchEntryV2::new(
+                        podway_core::CriterionId::new("c1").unwrap(),
+                        "satisfied".to_owned(),
+                        "Summary verified.".to_owned(),
+                        Vec::new(),
+                    ),
+                    podway_core::CriterionAssessmentBatchEntryV2::new(
+                        podway_core::CriterionId::new("c2").unwrap(),
+                        "satisfied".to_owned(),
+                        "Review verified.".to_owned(),
+                        Vec::new(),
+                    ),
+                ],
+                None,
+                UnixMillis::new(1_700_000_000_035),
+            )
+            .unwrap()
+            .into_state();
+        let attempt_3 =
+            podway_core::AttemptId::new("00000000-0000-4000-8000-000000006005").unwrap();
+        let at_finalize = assessed
+            .decide_active_route_with_goal_revision_v2(
+                assessed.trace().revision(),
+                &attempt_2,
+                podway_core::OptionId::new("proceed").unwrap(),
+                attempt_3.clone(),
+                Some(podway_core::GoalRevisionNumberV2::FIRST),
+                Some(podway_core::ReasonV2::new("All criteria met.").unwrap()),
+                None,
+                UnixMillis::new(1_700_000_000_040),
+            )
+            .unwrap()
+            .into_state();
+
+        let mut review_obs = Map::new();
+        let mut review_seq = 0u64;
+        let m3a = agent004_commit_mutation(
+            &store,
+            "agent004-k3a",
+            "00000000-0000-4000-8000-000000006014",
+            &session_id,
+            UnixMillis::new(1_700_000_000_030),
+            |tx| {
+                let ctx_before = SuccessorObservationContextV1::from_transaction(tx, &at_review)?;
+                let obs_before = project_successor_observation_v1(&ctx_before).unwrap();
+                tx.replace_graph(
+                    mutated.workspace_revision(),
+                    mutated.trace().revision(),
+                    &at_review,
+                )?;
+                let ctx_after = SuccessorObservationContextV1::from_transaction(tx, &at_review)?;
+                let obs_after = project_successor_observation_v1(&ctx_after).unwrap();
+                assert_eq!(obs_before, obs_after);
+                assert_eq!(
+                    obs_before["status"]["current"]["node"]["graph_node_id"],
+                    json!("review")
+                );
+                review_obs = obs_before;
+                review_seq = ctx_after.workspace_sequence();
+                Ok(())
+            },
+        );
+        assert_eq!(review_seq, m3a.outcome().sequence());
+        let committed_review = store
+            .read(Instant::now() + Duration::from_secs(5), |snapshot| {
+                let view = snapshot.view(UnixMillis::new(1_700_000_000_031))?;
+                assert_eq!(view.sequence(), m3a.outcome().sequence());
+                Ok(crate::direct_read_service::project_direct_observation_v1(
+                    &view,
+                    ContractGenerationV1::Generation2,
+                )
+                .unwrap())
+            })
+            .unwrap();
+        assert_eq!(review_obs, committed_review);
+
+        let mut assessed_obs = Map::new();
+        let mut assessed_seq = 0u64;
+        let m3b = agent004_commit_mutation(
+            &store,
+            "agent004-k3b",
+            "00000000-0000-4000-8000-000000006015",
+            &session_id,
+            UnixMillis::new(1_700_000_000_035),
+            |tx| {
+                let ctx_before = SuccessorObservationContextV1::from_transaction(tx, &assessed)?;
+                let obs_before = project_successor_observation_v1(&ctx_before).unwrap();
+                tx.replace_graph(
+                    at_review.workspace_revision(),
+                    at_review.trace().revision(),
+                    &assessed,
+                )?;
+                let ctx_after = SuccessorObservationContextV1::from_transaction(tx, &assessed)?;
+                let obs_after = project_successor_observation_v1(&ctx_after).unwrap();
+                assert_eq!(obs_before, obs_after);
+                assert_eq!(
+                    obs_before["guidance"]["readiness"]["goal_ready"],
+                    json!(true)
+                );
+                assessed_obs = obs_before;
+                assessed_seq = ctx_after.workspace_sequence();
+                Ok(())
+            },
+        );
+        assert_eq!(assessed_seq, m3b.outcome().sequence());
+        let committed_assessed = store
+            .read(Instant::now() + Duration::from_secs(5), |snapshot| {
+                let view = snapshot.view(UnixMillis::new(1_700_000_000_036))?;
+                assert_eq!(view.sequence(), m3b.outcome().sequence());
+                Ok(crate::direct_read_service::project_direct_observation_v1(
+                    &view,
+                    ContractGenerationV1::Generation2,
+                )
+                .unwrap())
+            })
+            .unwrap();
+        assert_eq!(assessed_obs, committed_assessed);
+
+        let mut finalize_obs = Map::new();
+        let mut finalize_seq = 0u64;
+        let m3c = agent004_commit_mutation(
+            &store,
+            "agent004-k3c",
+            "00000000-0000-4000-8000-000000006016",
+            &session_id,
+            UnixMillis::new(1_700_000_000_040),
+            |tx| {
+                let ctx_before = SuccessorObservationContextV1::from_transaction(tx, &at_finalize)?;
+                let obs_before = project_successor_observation_v1(&ctx_before).unwrap();
+                tx.replace_graph(
+                    assessed.workspace_revision(),
+                    assessed.trace().revision(),
+                    &at_finalize,
+                )?;
+                let ctx_after = SuccessorObservationContextV1::from_transaction(tx, &at_finalize)?;
+                let obs_after = project_successor_observation_v1(&ctx_after).unwrap();
+                assert_eq!(obs_before, obs_after);
+                assert_eq!(
+                    obs_before["status"]["current"]["node"]["graph_node_id"],
+                    json!("finalize")
+                );
+                assert_eq!(
+                    obs_before["status"]["current"]["attempt"]["attempt_id"],
+                    json!(attempt_3)
+                );
+                finalize_obs = obs_before;
+                finalize_seq = ctx_after.workspace_sequence();
+                Ok(())
+            },
+        );
+        assert_eq!(finalize_seq, m3c.outcome().sequence());
+        let committed_finalize = store
+            .read(Instant::now() + Duration::from_secs(5), |snapshot| {
+                let view = snapshot.view(UnixMillis::new(1_700_000_000_041))?;
+                assert_eq!(view.sequence(), m3c.outcome().sequence());
+                Ok(crate::direct_read_service::project_direct_observation_v1(
+                    &view,
+                    ContractGenerationV1::Generation2,
+                )
+                .unwrap())
+            })
+            .unwrap();
+        assert_eq!(finalize_obs, committed_finalize);
+
+        // 4. Terminal state: set final-note, then complete finalize -> Completed, guidance is null, undisposed templates.
+        let finalize_ready = at_finalize
+            .mutate_active_item_v2(
+                &attempt_3,
+                &podway_core::ItemId::new("final-note").unwrap(),
+                podway_core::Revision::ZERO,
+                podway_core::ActiveItemMutationV2::Set {
+                    value: "Done.".to_owned(),
+                },
+                UnixMillis::new(1_700_000_000_045),
+            )
+            .unwrap()
+            .into_state();
+        let completed = finalize_ready
+            .complete_active_action_v2(
+                finalize_ready.trace().revision(),
+                &attempt_3,
+                None,
+                UnixMillis::new(1_700_000_000_050),
+            )
+            .unwrap()
+            .into_state();
+
+        let mut finalize_ready_seq = 0u64;
+        let m4a = agent004_commit_mutation(
+            &store,
+            "agent004-k4a",
+            "00000000-0000-4000-8000-000000006017",
+            &session_id,
+            UnixMillis::new(1_700_000_000_045),
+            |tx| {
+                let ctx_before =
+                    SuccessorObservationContextV1::from_transaction(tx, &finalize_ready)?;
+                let obs_before = project_successor_observation_v1(&ctx_before).unwrap();
+                tx.replace_graph(
+                    at_finalize.workspace_revision(),
+                    at_finalize.trace().revision(),
+                    &finalize_ready,
+                )?;
+                let ctx_after =
+                    SuccessorObservationContextV1::from_transaction(tx, &finalize_ready)?;
+                assert_eq!(
+                    obs_before,
+                    project_successor_observation_v1(&ctx_after).unwrap()
+                );
+                finalize_ready_seq = ctx_after.workspace_sequence();
+                Ok(())
+            },
+        );
+        assert_eq!(finalize_ready_seq, m4a.outcome().sequence());
+
+        let mut completed_obs = Map::new();
+        let mut completed_seq = 0u64;
+        let m4b = agent004_commit_mutation(
+            &store,
+            "agent004-k4b",
+            "00000000-0000-4000-8000-000000006018",
+            &session_id,
+            UnixMillis::new(1_700_000_000_050),
+            |tx| {
+                let ctx_before = SuccessorObservationContextV1::from_transaction(tx, &completed)?;
+                let obs_before = project_successor_observation_v1(&ctx_before).unwrap();
+                tx.replace_graph(
+                    finalize_ready.workspace_revision(),
+                    finalize_ready.trace().revision(),
+                    &completed,
+                )?;
+                let ctx_after = SuccessorObservationContextV1::from_transaction(tx, &completed)?;
+                let obs_after = project_successor_observation_v1(&ctx_after).unwrap();
+                assert_eq!(obs_before, obs_after);
+                assert_eq!(
+                    obs_before["status"]["session"]["lifecycle"],
+                    json!("completed")
+                );
+                assert_eq!(obs_before["guidance"], Value::Null);
+                let commands: Vec<&str> = obs_before["mutation_templates"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|entry| entry["command"].as_str().unwrap())
+                    .collect();
+                assert_eq!(
+                    commands,
+                    vec![
+                        "session.terminal_disposition",
+                        "session.terminal_disposition"
+                    ]
+                );
+                completed_obs = obs_before;
+                completed_seq = ctx_after.workspace_sequence();
+                Ok(())
+            },
+        );
+        assert_eq!(completed_seq, m4b.outcome().sequence());
+        let committed_completed = store
+            .read(Instant::now() + Duration::from_secs(5), |snapshot| {
+                let view = snapshot.view(UnixMillis::new(1_700_000_000_051))?;
+                assert_eq!(view.sequence(), m4b.outcome().sequence());
+                Ok(crate::direct_read_service::project_direct_observation_v1(
+                    &view,
+                    ContractGenerationV1::Generation2,
+                )
+                .unwrap())
+            })
+            .unwrap();
+        assert_eq!(completed_obs, committed_completed);
+
+        // 5. Replacing an existing session via archive_graph + create_graph within one transaction.
+        let snapshot_2 = crate::execution::workspace_procedure_snapshot_from_bytes_v2(
+            "agent004-lifecycle.json",
+            &source,
+            podway_core::ProcedureSnapshotId::new("00000000-0000-4000-8000-000000006020").unwrap(),
+            UnixMillis::new(1_700_000_000_060),
+        )
+        .unwrap();
+        let session_2 =
+            podway_core::SessionId::new("00000000-0000-4000-8000-000000006006").unwrap();
+        let prepared_2 = GraphSessionStateV2::prepared(
+            completed.workspace_revision().checked_next().unwrap(),
+            "Replacement prepared session",
+            snapshot_2,
+            session_2.clone(),
+            UnixMillis::new(1_700_000_000_060),
+        )
+        .unwrap();
+        let mut replacement_obs = Map::new();
+        let mut replacement_seq = 0u64;
+        let m5 = agent004_commit_mutation(
+            &store,
+            "agent004-k5",
+            "00000000-0000-4000-8000-000000006019",
+            &session_2,
+            UnixMillis::new(1_700_000_000_060),
+            |tx| {
+                let ctx_before = SuccessorObservationContextV1::from_transaction(tx, &prepared_2)?;
+                assert!(!ctx_before.read_scope().current_terminal_disposition());
+                let obs_before = project_successor_observation_v1(&ctx_before).unwrap();
+                let disposition = podway_core::TerminalDispositionV2::not_required(
+                    completed.trace().session_id().clone(),
+                    completed.trace().revision(),
+                    "Completed in test.",
+                    None,
+                    UnixMillis::new(1_700_000_000_060),
+                )
+                .unwrap();
+                tx.record_disposition(&disposition)?;
+                assert_eq!(tx.terminal_dispositions()?.len(), 1);
+                let ctx_fresh_undisposed =
+                    SuccessorObservationContextV1::from_transaction(tx, &prepared_2)?;
+                assert!(
+                    !ctx_fresh_undisposed
+                        .read_scope()
+                        .current_terminal_disposition()
+                );
+
+                tx.archive_graph(completed.workspace_revision(), completed.trace().revision())?;
+                tx.create_graph(&prepared_2)?;
+                assert!(tx.terminal_dispositions()?.is_empty());
+                let ctx_after = SuccessorObservationContextV1::from_transaction(tx, &prepared_2)?;
+                let obs_after = project_successor_observation_v1(&ctx_after).unwrap();
+                assert_eq!(obs_before, obs_after);
+                replacement_obs = obs_before;
+                replacement_seq = ctx_after.workspace_sequence();
+                Ok(())
+            },
+        );
+        assert_eq!(replacement_seq, m5.outcome().sequence());
+        let committed_replacement = store
+            .read(Instant::now() + Duration::from_secs(5), |snapshot| {
+                let view = snapshot.view(UnixMillis::new(1_700_000_000_061))?;
+                assert_eq!(view.sequence(), m5.outcome().sequence());
+                assert!(view.terminal_dispositions().is_empty());
+                Ok(crate::direct_read_service::project_direct_observation_v1(
+                    &view,
+                    ContractGenerationV1::Generation2,
+                )
+                .unwrap())
+            })
+            .unwrap();
+        assert_eq!(replacement_obs, committed_replacement);
+    }
+
+    #[test]
+    fn agent004_successor_context_reflects_delegation_readiness_for_in_memory_successor() {
+        use std::time::{Duration, Instant};
+
+        let (_tempdir, store) = agent004_bootstrap_store();
+        let role_digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+        let source = serde_json::to_vec(&json!({
+            "schema": "podway.procedure/v2",
+            "id": "agent004-delegation",
+            "version": "1",
+            "name": "AGENT-004 delegation readiness test",
+            "purpose": "Verify delegation_receipts_for_graph against in-memory successor states.",
+            "node_definitions": {
+                "delegate-step": {
+                    "type": "action",
+                    "title": "Delegated step",
+                    "intent": "Run delegated work.",
+                    "items": [
+                        {"id": "note", "type": "text", "prompt": "Delegated note.", "required": true}
+                    ]
+                },
+                "direct-step": {
+                    "type": "action",
+                    "title": "Direct step",
+                    "intent": "Finish directly."
+                }
+            },
+            "graph": {
+                "entry": "delegate-step",
+                "nodes": [
+                    {
+                        "id": "delegate-step",
+                        "use": "delegate-step",
+                        "next": "direct-step",
+                        "delegation": {
+                            "binding_ref": "worker-1",
+                            "role_ref": "reviewer",
+                            "role_snapshot_digest": role_digest,
+                            "max_rounds": 2,
+                            "after_accept": "retain"
+                        }
+                    },
+                    {"id": "direct-step", "use": "direct-step", "terminal": true}
+                ]
+            }
+        }))
+        .unwrap();
+
+        let snapshot = crate::execution::workspace_procedure_snapshot_from_bytes_v2(
+            "agent004-delegation.json",
+            &source,
+            podway_core::ProcedureSnapshotId::new("00000000-0000-4000-8000-000000006101").unwrap(),
+            UnixMillis::new(1_700_000_000_000),
+        )
+        .unwrap();
+        let session_id =
+            podway_core::SessionId::new("00000000-0000-4000-8000-000000006102").unwrap();
+        let attempt_1 =
+            podway_core::AttemptId::new("00000000-0000-4000-8000-000000006103").unwrap();
+        let prepared = GraphSessionStateV2::prepared(
+            podway_core::Revision::new(1),
+            "AGENT-004 delegation task",
+            snapshot.clone(),
+            session_id.clone(),
+            UnixMillis::new(1_700_000_000_000),
+        )
+        .unwrap();
+        let begun = prepared
+            .begin_v2(
+                podway_core::Revision::ZERO,
+                attempt_1.clone(),
+                None,
+                UnixMillis::new(1_700_000_000_010),
+            )
+            .unwrap()
+            .into_state();
+        let with_note = begun
+            .mutate_active_items_v2(
+                &attempt_1,
+                &[podway_core::ActiveItemMutationRequestV2::new(
+                    podway_core::ItemId::new("note").unwrap(),
+                    podway_core::Revision::ZERO,
+                    podway_core::ActiveItemMutationV2::Set {
+                        value: "Initial accepted note.".to_owned(),
+                    },
+                )],
+                UnixMillis::new(1_700_000_000_020),
+            )
+            .unwrap()
+            .into_state();
+
+        // Persist `prepared`, `begun`, then `with_note` (1 revision step at a time) and verify ReceiptMissing.
+        let mut prep_del_seq = 0u64;
+        let m_prep = agent004_commit_mutation(
+            &store,
+            "agent004-del-k0a",
+            "00000000-0000-4000-8000-000000006109",
+            &session_id,
+            UnixMillis::new(1_700_000_000_005),
+            |tx| {
+                tx.create_graph(&prepared)?;
+                let ctx = SuccessorObservationContextV1::from_transaction(tx, &prepared)?;
+                prep_del_seq = ctx.workspace_sequence();
+                Ok(())
+            },
+        );
+        assert_eq!(prep_del_seq, m_prep.outcome().sequence());
+
+        let mut begun_seq = 0u64;
+        let m_begun = agent004_commit_mutation(
+            &store,
+            "agent004-del-k0b",
+            "00000000-0000-4000-8000-000000006110",
+            &session_id,
+            UnixMillis::new(1_700_000_000_010),
+            |tx| {
+                tx.replace_graph(
+                    prepared.workspace_revision(),
+                    prepared.trace().revision(),
+                    &begun,
+                )?;
+                let ctx = SuccessorObservationContextV1::from_transaction(tx, &begun)?;
+                begun_seq = ctx.workspace_sequence();
+                Ok(())
+            },
+        );
+        assert_eq!(begun_seq, m_begun.outcome().sequence());
+
+        let mut with_note_seq = 0u64;
+        let m_note = agent004_commit_mutation(
+            &store,
+            "agent004-del-k1",
+            "00000000-0000-4000-8000-000000006111",
+            &session_id,
+            UnixMillis::new(1_700_000_000_020),
+            |tx| {
+                let ctx_before = SuccessorObservationContextV1::from_transaction(tx, &with_note)?;
+                let obs_before = project_successor_observation_v1(&ctx_before).unwrap();
+                assert_eq!(
+                    obs_before["status"]["delegation"]["state"],
+                    json!("awaiting_acceptance")
+                );
+                assert_eq!(
+                    obs_before["status"]["delegation"]["reason"],
+                    json!("receipt_required")
+                );
+                tx.replace_graph(
+                    begun.workspace_revision(),
+                    begun.trace().revision(),
+                    &with_note,
+                )?;
+                let ctx_after = SuccessorObservationContextV1::from_transaction(tx, &with_note)?;
+                assert_eq!(
+                    obs_before,
+                    project_successor_observation_v1(&ctx_after).unwrap()
+                );
+                with_note_seq = ctx_after.workspace_sequence();
+                Ok(())
+            },
+        );
+        assert_eq!(with_note_seq, m_note.outcome().sequence());
+
+        // Accept delegation receipt and verify ReceiptCurrent.
+        let view = GraphWorkspaceViewV2::new(
+            views004_identity(),
+            Some(with_note.clone()),
+            with_note_seq,
+            UnixMillis::new(1_700_000_000_025),
+        );
+        let package = delegation_work_package_from_view_v1(&view).unwrap();
+        let accepted_state = with_note
+            .accept_delegation_successor_v1(&attempt_1)
+            .unwrap();
+        let items_digest =
+            podway_store::v2_delegation::accepted_items_digest_v1(&with_note).unwrap();
+        let cfg_digest = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+        let task_digest = "sha256:4444444444444444444444444444444444444444444444444444444444444444";
+        let receipt = DelegationReceiptV1::new(json!({
+            "schema": "podway.delegation-receipt/v1",
+            "receipt_id": "00000000-0000-4000-8000-000000006104",
+            "workspace_uuid": "00000000-0000-4000-8000-000000005001",
+            "procedure_digest": with_note.snapshot().digest(),
+            "session_id": session_id,
+            "placement_id": "delegate-step",
+            "attempt_id": attempt_1,
+            "delegation": package.package()["delegation"],
+            "package_digest": package.digest(),
+            "execution": {
+                "binding_ref": "worker-1",
+                "adapter_id": "herdr",
+                "adapter_version": "1.0.0",
+                "primary_host": "managed",
+                "scope_kind": "task",
+                "scope_ref": "scope-1",
+                "supervisor_ref": "sup-1",
+                "worker_ref": "w-1",
+                "task_ref": "task-1",
+                "role_ref": "reviewer",
+                "role_snapshot_digest": role_digest,
+                "agent_configuration_digest": cfg_digest,
+                "accepted_task_digest": task_digest
+            },
+            "rounds_used": 1,
+            "result_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "summary": "Accepted delegated step.",
+            "worker_disposition": "idle",
+            "accepted": true,
+            "accepted_items_digest": items_digest,
+            "accepted_at": "2023-11-14T22:13:20.030Z"
+        }))
+        .unwrap();
+
+        let mut accepted_obs = Map::new();
+        let mut accepted_seq = 0u64;
+        let m_accept = agent004_commit_mutation(
+            &store,
+            "agent004-del-k2",
+            "00000000-0000-4000-8000-000000006112",
+            &session_id,
+            UnixMillis::new(1_700_000_000_030),
+            |tx| {
+                tx.accept_delegation(
+                    with_note.workspace_revision(),
+                    with_note.trace().revision(),
+                    &accepted_state,
+                    package.digest(),
+                    &receipt,
+                )?;
+                let ctx_accepted =
+                    SuccessorObservationContextV1::from_transaction(tx, &accepted_state)?;
+                let obs = project_successor_observation_v1(&ctx_accepted).unwrap();
+                assert_eq!(obs["status"]["delegation"]["state"], json!("accepted"));
+                assert_eq!(
+                    obs["status"]["delegation"]["reason"],
+                    json!("current_receipt")
+                );
+                assert_eq!(ctx_accepted.read_scope().receipts().total(), 1);
+                assert_eq!(
+                    ctx_accepted.read_scope().receipts().summaries(),
+                    vec![receipt.summary()]
+                );
+                accepted_obs = obs;
+                accepted_seq = ctx_accepted.workspace_sequence();
+                Ok(())
+            },
+        );
+        assert_eq!(accepted_seq, m_accept.outcome().sequence());
+        let committed_accepted = store
+            .read(Instant::now() + Duration::from_secs(5), |snapshot| {
+                let view = snapshot.view(UnixMillis::new(1_700_000_000_031))?;
+                assert_eq!(view.sequence(), m_accept.outcome().sequence());
+                Ok(crate::direct_read_service::project_direct_observation_v1(
+                    &view,
+                    ContractGenerationV1::Generation2,
+                )
+                .unwrap())
+            })
+            .unwrap();
+        assert_eq!(accepted_obs, committed_accepted);
+
+        // (b.1) Successful no-op record-many on delegated attempt: item/session revisions remain
+        //       unchanged (`!noop_outcome.changed()`), workspace sequence increases, and
+        //       `ReceiptCurrent` (`accepted` / `current_receipt`) is preserved.
+        let noop_outcome = accepted_state
+            .mutate_active_items_v2(
+                &attempt_1,
+                &[podway_core::ActiveItemMutationRequestV2::new(
+                    podway_core::ItemId::new("note").unwrap(),
+                    podway_core::Revision::new(1),
+                    podway_core::ActiveItemMutationV2::Set {
+                        value: "Initial accepted note.".to_owned(),
+                    },
+                )],
+                UnixMillis::new(1_700_000_000_035),
+            )
+            .unwrap();
+        assert!(!noop_outcome.changed());
+        let noop_state = noop_outcome.into_state();
+        assert_eq!(
+            noop_state.trace().revision(),
+            accepted_state.trace().revision()
+        );
+        assert_eq!(
+            noop_state.workflow_memory().attempts()[0].item_slots()[0].revision(),
+            podway_core::Revision::new(1)
+        );
+        let mut noop_obs = Map::new();
+        let mut noop_seq = 0u64;
+        let m_noop = agent004_commit_mutation(
+            &store,
+            "agent004-del-noop",
+            "00000000-0000-4000-8000-000000006113",
+            &session_id,
+            UnixMillis::new(1_700_000_000_035),
+            |tx| {
+                let ctx_noop = SuccessorObservationContextV1::from_transaction(tx, &noop_state)?;
+                let obs = project_successor_observation_v1(&ctx_noop).unwrap();
+                assert_eq!(
+                    ctx_noop.read_scope().receipts().readiness(),
+                    DelegationReadinessV1::ReceiptCurrent
+                );
+                assert_eq!(obs["status"]["delegation"]["state"], json!("accepted"));
+                assert_eq!(
+                    obs["status"]["delegation"]["reason"],
+                    json!("current_receipt")
+                );
+                assert_eq!(
+                    obs["status"]["session"]["revision"],
+                    json!(accepted_state.trace().revision().get())
+                );
+                assert_eq!(obs["status"]["items"][0]["revision"], json!(1));
+                noop_obs = obs;
+                noop_seq = ctx_noop.workspace_sequence();
+                Ok(())
+            },
+        );
+        assert!(noop_seq > accepted_seq);
+        assert_eq!(noop_seq, m_noop.outcome().sequence());
+        let committed_noop = store
+            .read(Instant::now() + Duration::from_secs(5), |snapshot| {
+                let view = snapshot.view(UnixMillis::new(1_700_000_000_036))?;
+                assert_eq!(view.sequence(), m_noop.outcome().sequence());
+                assert_eq!(view.sequence(), noop_seq);
+                Ok(crate::direct_read_service::project_direct_observation_v1(
+                    &view,
+                    ContractGenerationV1::Generation2,
+                )
+                .unwrap())
+            })
+            .unwrap();
+        assert_eq!(noop_obs, committed_noop);
+
+        // (b.2) Changed record-many on delegated attempt (`edited_after_accept`) vs cursor
+        //       transition (`advanced_to_direct`): verify pre-write evaluation of both against
+        //       persisted `accepted_state`, then persist `advanced_to_direct` and `completed_delegated`
+        //       to verify same-session receipt summary/total retention and fresh-session exclusion.
+        let changed_outcome = accepted_state
+            .mutate_active_items_v2(
+                &attempt_1,
+                &[podway_core::ActiveItemMutationRequestV2::new(
+                    podway_core::ItemId::new("note").unwrap(),
+                    podway_core::Revision::new(1),
+                    podway_core::ActiveItemMutationV2::Set {
+                        value: "Edited after acceptance.".to_owned(),
+                    },
+                )],
+                UnixMillis::new(1_700_000_000_040),
+            )
+            .unwrap();
+        assert!(changed_outcome.changed());
+        let edited_after_accept = changed_outcome.into_state();
+        assert_eq!(
+            edited_after_accept.trace().revision(),
+            accepted_state.trace().revision().checked_next().unwrap()
+        );
+        assert_eq!(
+            edited_after_accept.workflow_memory().attempts()[0].item_slots()[0].revision(),
+            podway_core::Revision::new(2)
+        );
+        let attempt_2 =
+            podway_core::AttemptId::new("00000000-0000-4000-8000-000000006105").unwrap();
+        let advanced_to_direct = accepted_state
+            .complete_active_action_v2(
+                accepted_state.trace().revision(),
+                &attempt_1,
+                Some(attempt_2.clone()),
+                UnixMillis::new(1_700_000_000_040),
+            )
+            .unwrap()
+            .into_state();
+
+        let mut direct_obs = Map::new();
+        let mut direct_seq = 0u64;
+        let m_direct = agent004_commit_mutation(
+            &store,
+            "agent004-del-k3",
+            "00000000-0000-4000-8000-000000006114",
+            &session_id,
+            UnixMillis::new(1_700_000_000_040),
+            |tx| {
+                // The persisted graph in SQLite is still `accepted_state` (`ReceiptCurrent`).
+                assert_eq!(
+                    tx.delegation_receipts()?.readiness(),
+                    DelegationReadinessV1::ReceiptCurrent
+                );
+                // Evaluating against `edited_after_accept` before `replace_graph` reports
+                // `ItemsChanged` (`stale_acceptance` / `items_changed`) while retaining the
+                // same-session receipt summary and total.
+                let ctx_edited =
+                    SuccessorObservationContextV1::from_transaction(tx, &edited_after_accept)?;
+                assert_eq!(
+                    ctx_edited.read_scope().receipts().readiness(),
+                    DelegationReadinessV1::ItemsChanged
+                );
+                assert_eq!(ctx_edited.read_scope().receipts().total(), 1);
+                assert_eq!(
+                    ctx_edited.read_scope().receipts().summaries(),
+                    vec![receipt.summary()]
+                );
+                let obs_edited = project_successor_observation_v1(&ctx_edited).unwrap();
+                assert_eq!(
+                    obs_edited["status"]["delegation"]["state"],
+                    json!("stale_acceptance")
+                );
+                assert_eq!(
+                    obs_edited["status"]["delegation"]["reason"],
+                    json!("items_changed")
+                );
+
+                // Evaluating against `advanced_to_direct` before and after `replace_graph`
+                // reports `Direct` (`not_applicable` / `direct_placement`) while retaining the
+                // same-session receipt summary and total (`receipt_summaries_total == 1`).
+                let ctx_direct_before =
+                    SuccessorObservationContextV1::from_transaction(tx, &advanced_to_direct)?;
+                let obs_direct_before =
+                    project_successor_observation_v1(&ctx_direct_before).unwrap();
+                assert_eq!(
+                    obs_direct_before["status"]["delegation"]["state"],
+                    json!("not_applicable")
+                );
+                assert_eq!(
+                    obs_direct_before["status"]["delegation"]["reason"],
+                    json!("direct_placement")
+                );
+                assert_eq!(ctx_direct_before.read_scope().receipts().total(), 1);
+                assert_eq!(
+                    ctx_direct_before.read_scope().receipts().summaries(),
+                    vec![receipt.summary()]
+                );
+                let standard_direct = project_graph_status_in(
+                    &ctx_direct_before.read_scope(),
+                    GraphStatusTierV2::Standard,
+                    None,
+                )
+                .unwrap();
+                assert_eq!(standard_direct["receipt_summaries_total"], json!(1));
+                assert_eq!(
+                    standard_direct["receipt_summaries"],
+                    json!([receipt.summary()])
+                );
+
+                tx.replace_graph(
+                    accepted_state.workspace_revision(),
+                    accepted_state.trace().revision(),
+                    &advanced_to_direct,
+                )?;
+                let ctx_direct_after =
+                    SuccessorObservationContextV1::from_transaction(tx, &advanced_to_direct)?;
+                let obs_direct_after = project_successor_observation_v1(&ctx_direct_after).unwrap();
+                assert_eq!(obs_direct_before, obs_direct_after);
+                direct_obs = obs_direct_before;
+                direct_seq = ctx_direct_after.workspace_sequence();
+                Ok(())
+            },
+        );
+        assert_eq!(direct_seq, m_direct.outcome().sequence());
+        let committed_direct = store
+            .read(Instant::now() + Duration::from_secs(5), |snapshot| {
+                let view = snapshot.view(UnixMillis::new(1_700_000_000_041))?;
+                assert_eq!(view.sequence(), m_direct.outcome().sequence());
+                Ok(crate::direct_read_service::project_direct_observation_v1(
+                    &view,
+                    ContractGenerationV1::Generation2,
+                )
+                .unwrap())
+            })
+            .unwrap();
+        assert_eq!(direct_obs, committed_direct);
+
+        // (c.1) Terminal transition in the same delegated session: receipt summary & total are
+        //       retained (`receipts().total() == 1`, `receipt_summaries_total == 1`).
+        let completed_delegated = advanced_to_direct
+            .complete_active_action_v2(
+                advanced_to_direct.trace().revision(),
+                &attempt_2,
+                None,
+                UnixMillis::new(1_700_000_000_050),
+            )
+            .unwrap()
+            .into_state();
+        let mut completed_del_obs = Map::new();
+        let mut completed_del_seq = 0u64;
+        let m_term = agent004_commit_mutation(
+            &store,
+            "agent004-del-k4",
+            "00000000-0000-4000-8000-000000006115",
+            &session_id,
+            UnixMillis::new(1_700_000_000_050),
+            |tx| {
+                let ctx_term =
+                    SuccessorObservationContextV1::from_transaction(tx, &completed_delegated)?;
+                assert_eq!(ctx_term.read_scope().receipts().total(), 1);
+                assert_eq!(
+                    ctx_term.read_scope().receipts().summaries(),
+                    vec![receipt.summary()]
+                );
+                let standard_term = project_graph_status_in(
+                    &ctx_term.read_scope(),
+                    GraphStatusTierV2::Standard,
+                    None,
+                )
+                .unwrap();
+                assert_eq!(standard_term["receipt_summaries_total"], json!(1));
+                assert_eq!(
+                    standard_term["receipt_summaries"],
+                    json!([receipt.summary()])
+                );
+                let obs_before = project_successor_observation_v1(&ctx_term).unwrap();
+                assert_eq!(
+                    obs_before["status"]["delegation"]["state"],
+                    json!("inactive")
+                );
+                assert_eq!(
+                    obs_before["status"]["delegation"]["reason"],
+                    json!("historical_attempt")
+                );
+                tx.replace_graph(
+                    advanced_to_direct.workspace_revision(),
+                    advanced_to_direct.trace().revision(),
+                    &completed_delegated,
+                )?;
+                let ctx_after =
+                    SuccessorObservationContextV1::from_transaction(tx, &completed_delegated)?;
+                assert_eq!(
+                    obs_before,
+                    project_successor_observation_v1(&ctx_after).unwrap()
+                );
+                completed_del_obs = obs_before;
+                completed_del_seq = ctx_after.workspace_sequence();
+                Ok(())
+            },
+        );
+        assert_eq!(completed_del_seq, m_term.outcome().sequence());
+        let committed_term = store
+            .read(Instant::now() + Duration::from_secs(5), |snapshot| {
+                let view = snapshot.view(UnixMillis::new(1_700_000_000_051))?;
+                assert_eq!(view.sequence(), m_term.outcome().sequence());
+                Ok(crate::direct_read_service::project_direct_observation_v1(
+                    &view,
+                    ContractGenerationV1::Generation2,
+                )
+                .unwrap())
+            })
+            .unwrap();
+        assert_eq!(completed_del_obs, committed_term);
+
+        // (c.2) Fresh replacement session over the same delegated procedure: predecessor receipt
+        //       and predecessor terminal disposition are excluded both before and after
+        //       `archive_graph` + `create_graph`.
+        let snapshot_2 = crate::execution::workspace_procedure_snapshot_from_bytes_v2(
+            "agent004-delegation.json",
+            &source,
+            podway_core::ProcedureSnapshotId::new("00000000-0000-4000-8000-000000006120").unwrap(),
+            UnixMillis::new(1_700_000_000_060),
+        )
+        .unwrap();
+        let session_2 =
+            podway_core::SessionId::new("00000000-0000-4000-8000-000000006106").unwrap();
+        let prepared_2 = GraphSessionStateV2::prepared(
+            completed_delegated
+                .workspace_revision()
+                .checked_next()
+                .unwrap(),
+            "Fresh delegated session",
+            snapshot_2,
+            session_2.clone(),
+            UnixMillis::new(1_700_000_000_060),
+        )
+        .unwrap();
+        let attempt_fresh =
+            podway_core::AttemptId::new("00000000-0000-4000-8000-000000006107").unwrap();
+        let begun_2 = prepared_2
+            .begin_v2(
+                podway_core::Revision::ZERO,
+                attempt_fresh.clone(),
+                None,
+                UnixMillis::new(1_700_000_000_060),
+            )
+            .unwrap()
+            .into_state();
+        let cancelled_2 = begun_2
+            .cancel_active_session_v2(
+                begun_2.trace().revision(),
+                &attempt_fresh,
+                podway_core::ReasonV2::new("Cancelled fresh session in memory.").unwrap(),
+                UnixMillis::new(1_700_000_000_061),
+            )
+            .unwrap()
+            .into_state();
+        let mut fresh_obs = Map::new();
+        let mut fresh_seq = 0u64;
+        let m_fresh = agent004_commit_mutation(
+            &store,
+            "agent004-del-k5",
+            "00000000-0000-4000-8000-000000006116",
+            &session_2,
+            UnixMillis::new(1_700_000_000_060),
+            |tx| {
+                let disposition = podway_core::TerminalDispositionV2::not_required(
+                    completed_delegated.trace().session_id().clone(),
+                    completed_delegated.trace().revision(),
+                    "Completed delegated session.",
+                    None,
+                    UnixMillis::new(1_700_000_000_060),
+                )
+                .unwrap();
+                tx.record_disposition(&disposition)?;
+                assert_eq!(tx.terminal_dispositions()?.len(), 1);
+
+                // Even while `completed_delegated` and its receipt + disposition are still current
+                // in SQLite, `prepared_2` and `cancelled_2` (bound to `session_2`) exclude the
+                // predecessor session's receipt and terminal disposition.
+                let ctx_fresh_before =
+                    SuccessorObservationContextV1::from_transaction(tx, &prepared_2)?;
+                assert_eq!(ctx_fresh_before.read_scope().receipts().total(), 0);
+                assert!(
+                    ctx_fresh_before
+                        .read_scope()
+                        .receipts()
+                        .summaries()
+                        .is_empty()
+                );
+                let standard_fresh = project_graph_status_in(
+                    &ctx_fresh_before.read_scope(),
+                    GraphStatusTierV2::Standard,
+                    None,
+                )
+                .unwrap();
+                assert_eq!(standard_fresh["receipt_summaries_total"], json!(0));
+                assert_eq!(standard_fresh["receipt_summaries"], json!([]));
+
+                let ctx_cancelled_2 =
+                    SuccessorObservationContextV1::from_transaction(tx, &cancelled_2)?;
+                assert!(!ctx_cancelled_2.read_scope().current_terminal_disposition());
+                let obs_cancelled_2 = project_successor_observation_v1(&ctx_cancelled_2).unwrap();
+                assert_eq!(
+                    obs_cancelled_2["mutation_templates"]
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    2
+                );
+
+                let obs_before = project_successor_observation_v1(&ctx_fresh_before).unwrap();
+                tx.archive_graph(
+                    completed_delegated.workspace_revision(),
+                    completed_delegated.trace().revision(),
+                )?;
+                tx.create_graph(&prepared_2)?;
+                assert!(tx.terminal_dispositions()?.is_empty());
+                let ctx_fresh_after =
+                    SuccessorObservationContextV1::from_transaction(tx, &prepared_2)?;
+                let obs_after = project_successor_observation_v1(&ctx_fresh_after).unwrap();
+                assert_eq!(obs_before, obs_after);
+                fresh_obs = obs_before;
+                fresh_seq = ctx_fresh_after.workspace_sequence();
+                Ok(())
+            },
+        );
+        assert_eq!(fresh_seq, m_fresh.outcome().sequence());
+        let committed_fresh = store
+            .read(Instant::now() + Duration::from_secs(5), |snapshot| {
+                let view = snapshot.view(UnixMillis::new(1_700_000_000_061))?;
+                assert_eq!(view.sequence(), m_fresh.outcome().sequence());
+                assert!(view.terminal_dispositions().is_empty());
+                assert_eq!(view.delegation_receipts().total(), 0);
+                assert!(view.delegation_receipts().summaries().is_empty());
+                Ok(crate::direct_read_service::project_direct_observation_v1(
+                    &view,
+                    ContractGenerationV1::Generation2,
+                )
+                .unwrap())
+            })
+            .unwrap();
+        assert_eq!(fresh_obs, committed_fresh);
+
+        // (b.3) Commit a changed delegated `record-many` successor (`edited_after_accept_2`) on
+        //       `session_2`, verify persisted `ReceiptCurrent` while projecting the changed
+        //       in-memory successor (`ItemsChanged`, `stale_acceptance` / `items_changed`),
+        //       persist it, and compare outcome sequence, view sequence, and full v6 observation.
+        let with_note_2 = begun_2
+            .mutate_active_items_v2(
+                &attempt_fresh,
+                &[podway_core::ActiveItemMutationRequestV2::new(
+                    podway_core::ItemId::new("note").unwrap(),
+                    podway_core::Revision::ZERO,
+                    podway_core::ActiveItemMutationV2::Set {
+                        value: "Initial accepted note 2.".to_owned(),
+                    },
+                )],
+                UnixMillis::new(1_700_000_000_063),
+            )
+            .unwrap()
+            .into_state();
+        let m_fresh_begun = agent004_commit_mutation(
+            &store,
+            "agent004-del-k6",
+            "00000000-0000-4000-8000-000000006117",
+            &session_2,
+            UnixMillis::new(1_700_000_000_062),
+            |tx| {
+                tx.replace_graph(
+                    prepared_2.workspace_revision(),
+                    prepared_2.trace().revision(),
+                    &begun_2,
+                )
+            },
+        );
+        let m_fresh_note = agent004_commit_mutation(
+            &store,
+            "agent004-del-k7",
+            "00000000-0000-4000-8000-000000006118",
+            &session_2,
+            UnixMillis::new(1_700_000_000_063),
+            |tx| {
+                tx.replace_graph(
+                    begun_2.workspace_revision(),
+                    begun_2.trace().revision(),
+                    &with_note_2,
+                )
+            },
+        );
+        assert!(m_fresh_note.outcome().sequence() > m_fresh_begun.outcome().sequence());
+        let view_2 = GraphWorkspaceViewV2::new(
+            views004_identity(),
+            Some(with_note_2.clone()),
+            m_fresh_note.outcome().sequence(),
+            UnixMillis::new(1_700_000_000_064),
+        );
+        let package_2 = delegation_work_package_from_view_v1(&view_2).unwrap();
+        let accepted_2 = with_note_2
+            .accept_delegation_successor_v1(&attempt_fresh)
+            .unwrap();
+        let items_digest_2 =
+            podway_store::v2_delegation::accepted_items_digest_v1(&with_note_2).unwrap();
+        let receipt_2 = DelegationReceiptV1::new(json!({
+            "schema": "podway.delegation-receipt/v1",
+            "receipt_id": "00000000-0000-4000-8000-000000006121",
+            "workspace_uuid": "00000000-0000-4000-8000-000000005001",
+            "procedure_digest": with_note_2.snapshot().digest(),
+            "session_id": session_2,
+            "placement_id": "delegate-step",
+            "attempt_id": attempt_fresh,
+            "delegation": package_2.package()["delegation"],
+            "package_digest": package_2.digest(),
+            "execution": {
+                "binding_ref": "worker-1",
+                "adapter_id": "herdr",
+                "adapter_version": "1.0.0",
+                "primary_host": "managed",
+                "scope_kind": "task",
+                "scope_ref": "scope-1",
+                "supervisor_ref": "sup-1",
+                "worker_ref": "w-1",
+                "task_ref": "task-2",
+                "role_ref": "reviewer",
+                "role_snapshot_digest": role_digest,
+                "agent_configuration_digest": cfg_digest,
+                "accepted_task_digest": task_digest
+            },
+            "rounds_used": 1,
+            "result_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "summary": "Accepted delegated step in session 2.",
+            "worker_disposition": "idle",
+            "accepted": true,
+            "accepted_items_digest": items_digest_2,
+            "accepted_at": "2023-11-14T22:13:20.065Z"
+        }))
+        .unwrap();
+        let m_fresh_accept = agent004_commit_mutation(
+            &store,
+            "agent004-del-k8",
+            "00000000-0000-4000-8000-000000006119",
+            &session_2,
+            UnixMillis::new(1_700_000_000_065),
+            |tx| {
+                tx.accept_delegation(
+                    with_note_2.workspace_revision(),
+                    with_note_2.trace().revision(),
+                    &accepted_2,
+                    package_2.digest(),
+                    &receipt_2,
+                )
+            },
+        );
+        let changed_outcome_2 = accepted_2
+            .mutate_active_items_v2(
+                &attempt_fresh,
+                &[podway_core::ActiveItemMutationRequestV2::new(
+                    podway_core::ItemId::new("note").unwrap(),
+                    podway_core::Revision::new(1),
+                    podway_core::ActiveItemMutationV2::Set {
+                        value: "Committed edit after acceptance.".to_owned(),
+                    },
+                )],
+                UnixMillis::new(1_700_000_000_070),
+            )
+            .unwrap();
+        assert!(changed_outcome_2.changed());
+        let edited_after_accept_2 = changed_outcome_2.into_state();
+        let mut edited_obs = Map::new();
+        let mut edited_seq = 0u64;
+        let m_edited = agent004_commit_mutation(
+            &store,
+            "agent004-del-k9",
+            "00000000-0000-4000-8000-000000006122",
+            &session_2,
+            UnixMillis::new(1_700_000_000_070),
+            |tx| {
+                assert_eq!(
+                    tx.delegation_receipts()?.readiness(),
+                    DelegationReadinessV1::ReceiptCurrent
+                );
+                let ctx_edited_before =
+                    SuccessorObservationContextV1::from_transaction(tx, &edited_after_accept_2)?;
+                assert_eq!(
+                    ctx_edited_before.read_scope().receipts().readiness(),
+                    DelegationReadinessV1::ItemsChanged
+                );
+                assert_eq!(ctx_edited_before.read_scope().receipts().total(), 1);
+                assert_eq!(
+                    ctx_edited_before.read_scope().receipts().summaries(),
+                    vec![receipt_2.summary()]
+                );
+                edited_seq = ctx_edited_before.workspace_sequence();
+                let obs_edited_before =
+                    project_successor_observation_v1(&ctx_edited_before).unwrap();
+                assert_eq!(
+                    obs_edited_before["status"]["delegation"]["state"],
+                    json!("stale_acceptance")
+                );
+                assert_eq!(
+                    obs_edited_before["status"]["delegation"]["reason"],
+                    json!("items_changed")
+                );
+                assert_eq!(
+                    obs_edited_before["status"]["current"]["readiness"]["can_advance"],
+                    json!(false)
+                );
+                assert_eq!(
+                    obs_edited_before["status"]["session"]["revision"],
+                    json!(edited_after_accept_2.trace().revision().get())
+                );
+                assert_eq!(
+                    obs_edited_before["status"]["items"][0]["revision"],
+                    json!(2)
+                );
+                tx.replace_graph(
+                    accepted_2.workspace_revision(),
+                    accepted_2.trace().revision(),
+                    &edited_after_accept_2,
+                )?;
+                let ctx_edited_after =
+                    SuccessorObservationContextV1::from_transaction(tx, &edited_after_accept_2)?;
+                assert_eq!(
+                    obs_edited_before,
+                    project_successor_observation_v1(&ctx_edited_after).unwrap()
+                );
+                assert_eq!(ctx_edited_after.workspace_sequence(), edited_seq);
+                edited_obs = obs_edited_before;
+                Ok(())
+            },
+        );
+        assert!(edited_seq > m_fresh_accept.outcome().sequence());
+        assert_eq!(edited_seq, m_edited.outcome().sequence());
+        let committed_edited = store
+            .read(Instant::now() + Duration::from_secs(5), |snapshot| {
+                let view = snapshot.view(UnixMillis::new(1_700_000_000_071))?;
+                assert_eq!(view.sequence(), m_edited.outcome().sequence());
+                assert_eq!(view.sequence(), edited_seq);
+                Ok(crate::direct_read_service::project_direct_observation_v1(
+                    &view,
+                    ContractGenerationV1::Generation2,
+                )
+                .unwrap())
+            })
+            .unwrap();
+        assert_eq!(edited_obs, committed_edited);
+    }
+
+    #[test]
+    fn agent004_serialized_json_len_substitutions_preserve_exact_bytes_windows_and_fallbacks() {
+        // 1. serialized_bytes_v1 & serialized_object_bytes_v1 exact parity with serde_json::to_vec.
+        let samples = [
+            json!({}),
+            json!({"ascii": "plain text", "n": 42}),
+            json!({"utf8": "é 雪 😀", "escaped": "quote\" slash\\ tab\t ctrl\u{0001}"}),
+            json!({"nested": [{"a": [true, false, null]}, {"b": u64::MAX}]}),
+        ];
+        for sample in samples {
+            let expected = serde_json::to_vec(&sample)
+                .unwrap()
+                .len()
+                .saturating_add(EVIDENCE_ENTRY_OVERHEAD_BYTES);
+            assert_eq!(serialized_bytes_v1(&sample), expected);
+            if let Value::Object(map) = &sample {
+                assert_eq!(serialized_object_bytes_v1(map), expected);
+            }
+        }
+
+        // 2. CurrentProjection::item_values and CurrentProjection::blocker_window exact boundary,
+        //    one-byte-over refusal, and comma-separator accounting across ASCII, multibyte UTF-8,
+        //    and JSON-escaped text using reachable domain inputs.
+        let item_defs: Vec<Value> = (0..40)
+            .map(|idx| {
+                json!({
+                    "id": format!("i{idx:02}"),
+                    "type": "text",
+                    "prompt": "Item.",
+                    "required": false,
+                    "max_length": 2050
+                })
+            })
+            .collect();
+        let source = serde_json::to_vec(&json!({
+            "schema": "podway.procedure/v2",
+            "id": "agent004-windows",
+            "version": "1",
+            "name": "AGENT-004 window byte accounting",
+            "purpose": "Verify item_values and blocker_window byte boundaries.",
+            "node_definitions": {
+                "work": {
+                    "type": "action",
+                    "title": "Work",
+                    "intent": "Exercise status windows.",
+                    "items": item_defs
+                }
+            },
+            "graph": {
+                "entry": "work",
+                "nodes": [
+                    {"id": "work", "use": "work", "terminal": true}
+                ]
+            }
+        }))
+        .unwrap();
+        let snapshot = crate::execution::workspace_procedure_snapshot_from_bytes_v2(
+            "agent004-windows.json",
+            &source,
+            podway_core::ProcedureSnapshotId::new("00000000-0000-4000-8000-000000006201").unwrap(),
+            UnixMillis::new(1_700_000_000_000),
+        )
+        .unwrap();
+        let session_id =
+            podway_core::SessionId::new("00000000-0000-4000-8000-000000006202").unwrap();
+        let attempt_id =
+            podway_core::AttemptId::new("00000000-0000-4000-8000-000000006203").unwrap();
+        let prepared = GraphSessionStateV2::prepared(
+            podway_core::Revision::new(1),
+            "AGENT-004 window task",
+            snapshot,
+            session_id,
+            UnixMillis::new(1_700_000_000_000),
+        )
+        .unwrap();
+        let running = prepared
+            .begin_v2(
+                podway_core::Revision::ZERO,
+                attempt_id.clone(),
+                None,
+                UnixMillis::new(1_700_000_000_000),
+            )
+            .unwrap()
+            .into_state();
+
+        // Populate `item_values` with reachable domain inputs covering:
+        // - i00: ASCII, 2-byte escapes (\" \\ \t), and 2/3/4-byte UTF-8 (é 雪 😀)
+        // - i01: 2050-scalar text truncated to ITEM_DISPLAY_CHARS_MAX (2048) with value_truncated: true
+        // - i02..: wide 4-byte UTF-8 ("😀".repeat(2048)) and ASCII ("a".repeat(1500)) items until
+        //          the remaining budget to STATUS_VALUES_BYTES_MAX (262,144) fits in a single
+        //          final untruncated ASCII item (`exact_last_item_len <= 2000`).
+        let empty_item_entry = json!({
+            "item_id": "i99",
+            "value": "",
+            "value_truncated": false,
+        });
+        let item_base_bytes = serde_json::to_vec(&empty_item_entry).unwrap().len();
+        let mut item_state = running;
+        let mut item_used = 2usize;
+        let mut item_count = 0usize;
+
+        let i00_val = "quote\" slash\\ tab\t é 雪 😀".repeat(80);
+        item_state = item_state
+            .mutate_active_item_v2(
+                &attempt_id,
+                &podway_core::ItemId::new("i00").unwrap(),
+                podway_core::Revision::ZERO,
+                podway_core::ActiveItemMutationV2::Set {
+                    value: i00_val.clone(),
+                },
+                UnixMillis::new(1_700_000_000_000),
+            )
+            .unwrap()
+            .into_state();
+        let i00_candidate = json!({
+            "item_id": "i00",
+            "value": i00_val,
+            "value_truncated": false,
+        });
+        item_used += serde_json::to_vec(&i00_candidate).unwrap().len();
+        item_count += 1;
+
+        let i01_val = "x".repeat(2050);
+        item_state = item_state
+            .mutate_active_item_v2(
+                &attempt_id,
+                &podway_core::ItemId::new("i01").unwrap(),
+                podway_core::Revision::ZERO,
+                podway_core::ActiveItemMutationV2::Set { value: i01_val },
+                UnixMillis::new(1_700_000_000_000),
+            )
+            .unwrap()
+            .into_state();
+        let i01_candidate = json!({
+            "item_id": "i01",
+            "value": "x".repeat(ITEM_DISPLAY_CHARS_MAX),
+            "value_truncated": true,
+        });
+        item_used += 1 + serde_json::to_vec(&i01_candidate).unwrap().len();
+        item_count += 1;
+
+        while STATUS_VALUES_BYTES_MAX - (item_used + 1 + item_base_bytes) > 2000 {
+            let rem = STATUS_VALUES_BYTES_MAX - (item_used + 1 + item_base_bytes);
+            let val = if rem > 8500 {
+                "😀".repeat(2048)
+            } else {
+                "a".repeat(1500)
+            };
+            let id_str = format!("i{item_count:02}");
+            let candidate = json!({
+                "item_id": id_str,
+                "value": val,
+                "value_truncated": false,
+            });
+            item_state = item_state
+                .mutate_active_item_v2(
+                    &attempt_id,
+                    &podway_core::ItemId::new(id_str).unwrap(),
+                    podway_core::Revision::ZERO,
+                    podway_core::ActiveItemMutationV2::Set { value: val },
+                    UnixMillis::new(1_700_000_000_000),
+                )
+                .unwrap()
+                .into_state();
+            item_used += 1 + serde_json::to_vec(&candidate).unwrap().len();
+            item_count += 1;
+        }
+        let exact_last_item_len = STATUS_VALUES_BYTES_MAX - (item_used + 1 + item_base_bytes);
+        assert!((1..=2000).contains(&exact_last_item_len));
+        let last_item_id = podway_core::ItemId::new(format!("i{item_count:02}")).unwrap();
+        let exact_items_state = item_state
+            .mutate_active_item_v2(
+                &attempt_id,
+                &last_item_id,
+                podway_core::Revision::ZERO,
+                podway_core::ActiveItemMutationV2::Set {
+                    value: "a".repeat(exact_last_item_len),
+                },
+                UnixMillis::new(1_700_000_000_000),
+            )
+            .unwrap()
+            .into_state();
+        let over_items_state = item_state
+            .mutate_active_item_v2(
+                &attempt_id,
+                &last_item_id,
+                podway_core::Revision::ZERO,
+                podway_core::ActiveItemMutationV2::Set {
+                    value: "a".repeat(exact_last_item_len + 1),
+                },
+                UnixMillis::new(1_700_000_000_000),
+            )
+            .unwrap()
+            .into_state();
+
+        // Measure blocker_window exact fit (49,152 bytes) vs 1-byte overflow (49,153 bytes)
+        // across ASCII, 2-byte escapes (\" \\ \t \n), 6-byte control escapes (\u{0001}), and
+        // 2/3/4-byte UTF-8 (é 雪 😀) using independently measured serde_json::to_vec sizes.
+        let sample_blocker_id =
+            podway_core::BlockerId::new("00000000-0000-4000-8000-000000006299").unwrap();
+        let empty_reason_entry = json!({
+            "blocker_id": sample_blocker_id.as_str(),
+            "reason": "",
+            "created_at": "2023-11-14T22:13:20.000Z",
+        });
+        let base_entry_bytes = serde_json::to_vec(&empty_reason_entry).unwrap().len();
+        let mut blocked = exact_items_state;
+        let mut used = 2usize;
+        let mut count = 0usize;
+
+        let b0_id = podway_core::BlockerId::new("00000000-0000-4000-8000-000000007000").unwrap();
+        let b0_reason = "quote\" slash\\ tab\t nl\n ctrl\u{0001} é 雪 😀".repeat(25);
+        let b0_entry = json!({
+            "blocker_id": b0_id.as_str(),
+            "reason": b0_reason,
+            "created_at": "2023-11-14T22:13:20.000Z",
+        });
+        blocked = blocked
+            .block_active_attempt_v2(
+                blocked.trace().revision(),
+                &attempt_id,
+                b0_id,
+                b0_reason,
+                UnixMillis::new(1_700_000_000_000),
+            )
+            .unwrap()
+            .into_state();
+        used += serde_json::to_vec(&b0_entry).unwrap().len();
+        count += 1;
+
+        while BLOCKER_WINDOW_BYTES_MAX - (used + 1 + base_entry_bytes) > 900 {
+            let rem = BLOCKER_WINDOW_BYTES_MAX - (used + 1 + base_entry_bytes);
+            let reason = if rem > 2700 {
+                "é雪😀\"\\\t\u{0001}".repeat(120)
+            } else {
+                "b".repeat(800)
+            };
+            let bid = podway_core::BlockerId::new(format!(
+                "00000000-0000-4000-8000-{:012}",
+                7000 + count
+            ))
+            .unwrap();
+            let entry = json!({
+                "blocker_id": bid.as_str(),
+                "reason": reason,
+                "created_at": "2023-11-14T22:13:20.000Z",
+            });
+            blocked = blocked
+                .block_active_attempt_v2(
+                    blocked.trace().revision(),
+                    &attempt_id,
+                    bid,
+                    reason,
+                    UnixMillis::new(1_700_000_000_000),
+                )
+                .unwrap()
+                .into_state();
+            used += 1 + serde_json::to_vec(&entry).unwrap().len();
+            count += 1;
+        }
+        let exact_last_reason_bytes = BLOCKER_WINDOW_BYTES_MAX - (used + 1 + base_entry_bytes);
+        let last_prefix = "é雪😀\"\\\t\u{0001}";
+        let prefix_json_bytes = serde_json::to_vec(&Value::String(last_prefix.to_owned()))
+            .unwrap()
+            .len()
+            - 2;
+        assert!((prefix_json_bytes + 1..=900).contains(&exact_last_reason_bytes));
+        let exact_last_reason = format!(
+            "{last_prefix}{}",
+            "b".repeat(exact_last_reason_bytes - prefix_json_bytes)
+        );
+        let over_last_reason = format!(
+            "{last_prefix}{}",
+            "b".repeat(exact_last_reason_bytes - prefix_json_bytes + 1)
+        );
+        let last_bid =
+            podway_core::BlockerId::new(format!("00000000-0000-4000-8000-{:012}", 7000 + count))
+                .unwrap();
+        let exact_blocked = blocked
+            .block_active_attempt_v2(
+                blocked.trace().revision(),
+                &attempt_id,
+                last_bid.clone(),
+                exact_last_reason,
+                UnixMillis::new(1_700_000_000_000),
+            )
+            .unwrap()
+            .into_state();
+        let over_blocked = blocked
+            .block_active_attempt_v2(
+                blocked.trace().revision(),
+                &attempt_id,
+                last_bid,
+                over_last_reason,
+                UnixMillis::new(1_700_000_000_000),
+            )
+            .unwrap()
+            .into_state();
+
+        let ParsedProcedure::V2(procedure) =
+            parse_procedure_document(&source, ProcedureDocumentFormat::Json).unwrap();
+        let exact_view = GraphWorkspaceViewV2::new(
+            views004_identity(),
+            Some(exact_blocked),
+            1,
+            UnixMillis::new(1_700_000_000_100),
+        );
+        let exact_scope = ReadScope::from_graph(&exact_view);
+        let exact_proj =
+            CurrentProjection::derive(&exact_scope, exact_view.graph_state().unwrap(), &procedure)
+                .unwrap()
+                .unwrap();
+        let (window, truncated) = exact_proj.blocker_window().unwrap();
+        assert_eq!(window.len(), count + 1);
+        assert!(
+            !truncated,
+            "exact BLOCKER_WINDOW_BYTES_MAX fit must not truncate"
+        );
+        assert!(window.iter().all(|entry| {
+            entry["reason"].as_str().is_some_and(|reason| {
+                reason.contains('é')
+                    && reason.contains('雪')
+                    && reason.contains('😀')
+                    && reason.contains('\u{0001}')
+            })
+        }));
+        assert_eq!(
+            serde_json::to_vec(&Value::Array(window)).unwrap().len(),
+            BLOCKER_WINDOW_BYTES_MAX
+        );
+        let (item_vals, item_total, item_trunc) = exact_proj.item_values();
+        assert_eq!(item_total, item_count + 1);
+        assert!(
+            !item_trunc,
+            "exact STATUS_VALUES_BYTES_MAX fit must not truncate"
+        );
+        assert_eq!(item_vals.len(), item_count + 1);
+        assert_eq!(
+            serde_json::to_vec(&Value::Array(item_vals.clone()))
+                .unwrap()
+                .len(),
+            STATUS_VALUES_BYTES_MAX
+        );
+        assert_eq!(item_vals[0]["value_truncated"], json!(false));
+        assert_eq!(item_vals[1]["value_truncated"], json!(true));
+
+        let over_items_view = GraphWorkspaceViewV2::new(
+            views004_identity(),
+            Some(over_items_state),
+            1,
+            UnixMillis::new(1_700_000_000_100),
+        );
+        let over_items_scope = ReadScope::from_graph(&over_items_view);
+        let over_items_proj = CurrentProjection::derive(
+            &over_items_scope,
+            over_items_view.graph_state().unwrap(),
+            &procedure,
+        )
+        .unwrap()
+        .unwrap();
+        let (over_item_vals, over_item_total, over_item_trunc) = over_items_proj.item_values();
+        assert_eq!(over_item_total, item_count + 1);
+        assert!(
+            over_item_trunc,
+            "one byte over STATUS_VALUES_BYTES_MAX must truncate"
+        );
+        assert_eq!(over_item_vals.len(), item_count);
+
+        let over_view = GraphWorkspaceViewV2::new(
+            views004_identity(),
+            Some(over_blocked),
+            1,
+            UnixMillis::new(1_700_000_000_100),
+        );
+        let over_scope = ReadScope::from_graph(&over_view);
+        let over_proj =
+            CurrentProjection::derive(&over_scope, over_view.graph_state().unwrap(), &procedure)
+                .unwrap()
+                .unwrap();
+        let (over_window, over_truncated) = over_proj.blocker_window().unwrap();
+        assert_eq!(over_window.len(), count);
+        assert!(
+            over_truncated,
+            "one byte over BLOCKER_WINDOW_BYTES_MAX must truncate"
+        );
     }
 }

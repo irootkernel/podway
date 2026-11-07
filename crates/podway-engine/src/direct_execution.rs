@@ -758,11 +758,11 @@ pub fn envelope_equivalent_status_bytes_v1(
     workspace_sequence: u64,
 ) -> usize {
     let string_bytes =
-        |value: &str| serde_json::to_vec(value).map_or(usize::MAX, |bytes| bytes.len());
+        |value: &str| podway_protocol::serialized_json_len_v1(value).unwrap_or(usize::MAX);
     // Serializing a string or a `Map<String, Value>` cannot fail; the fallback
     // only keeps this total function fail-closed.
-    serde_json::to_vec(result).map_or(usize::MAX, |bytes| {
-        bytes.len()
+    podway_protocol::serialized_json_len_v1(result).map_or(usize::MAX, |bytes_len| {
+        bytes_len
             + string_bytes(root)
             + string_bytes(request_id)
             + string_bytes(workspace_uuid)

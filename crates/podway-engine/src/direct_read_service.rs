@@ -12,9 +12,10 @@ use serde_json::{Map, Value};
 
 use crate::v2_read_service::{
     EvidenceReadErrorV2, GraphStatusTierV2, GraphViewErrorV2, ReadScope,
-    delegation_work_package_in, project_delegation_package_result_in,
-    project_delegation_receipt_read_in, project_evidence_read_in, project_graph_archive_show_in,
-    project_graph_next_in, project_graph_observation_in, project_graph_status_in,
+    delegation_work_package_in, finalize_direct_observation_in,
+    project_delegation_package_result_in, project_delegation_receipt_read_in,
+    project_evidence_read_in, project_graph_archive_show_in, project_graph_next_in,
+    project_graph_status_in,
 };
 
 pub(crate) fn archive_summary(summary: &podway_store::SessionArchiveSummaryV2) -> Value {
@@ -91,7 +92,7 @@ pub fn project_direct_receipt_v1(
     )
 }
 
-fn validate_projection(
+pub(crate) fn validate_projection(
     schema: &str,
     result: Map<String, Value>,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
@@ -133,15 +134,18 @@ fn direct_status(
     validate_projection(schema, result)
 }
 
-fn direct_next_schema(view: &DirectWorkspaceViewV1) -> &'static str {
-    if view
-        .graph()
-        .is_some_and(|graph| graph.trace().lifecycle() == SessionLifecycle::Prepared)
-    {
+pub(crate) fn direct_next_schema_for_lifecycle(
+    lifecycle: Option<SessionLifecycle>,
+) -> &'static str {
+    if lifecycle == Some(SessionLifecycle::Prepared) {
         "podway.prepared-next-result/v3"
     } else {
         "podway.next-result/v5"
     }
+}
+
+fn direct_next_schema(view: &DirectWorkspaceViewV1) -> &'static str {
+    direct_next_schema_for_lifecycle(view.graph().map(|graph| graph.trace().lifecycle()))
 }
 
 pub fn project_direct_next_v1(
@@ -157,25 +161,7 @@ pub fn project_direct_observation_v1(
     view: &DirectWorkspaceViewV1,
     generation: ContractGenerationV1,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
-    let schema = match generation {
-        ContractGenerationV1::Generation1 => "podway.observation-result/v5",
-        ContractGenerationV1::Generation2 => "podway.observation-result/v6",
-    };
-    let mut result = project_graph_observation_in(&ReadScope::from_direct(view), generation)?;
-    result.insert("schema".into(), Value::String(schema.into()));
-    result
-        .get("status")
-        .and_then(Value::as_object)
-        .ok_or(GraphViewErrorV2::InconsistentState(
-            "observation has no structured status",
-        ))?;
-    if let Some(guidance) = result.get_mut("guidance").and_then(Value::as_object_mut) {
-        guidance.insert(
-            "schema".into(),
-            Value::String(direct_next_schema(view).into()),
-        );
-    }
-    validate_projection(schema, result)
+    finalize_direct_observation_in(&ReadScope::from_direct(view), generation)
 }
 
 pub fn project_direct_evidence_v1(

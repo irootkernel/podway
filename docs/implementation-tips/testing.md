@@ -1208,4 +1208,15 @@ preflight exclusion in `podway-cli`. `AGENT-003` activates
 `goal_state_v2::tests`, `podway-store` `int_v2_goal_state` and
 `int_v2dfc006_execution_boundary`, `podway-engine` `int_v2dfc006_goal_ports`,
 and `podway-cli` `e2e_v2dfc007_local_cli`, `e2e_v2dfc007_direct_cli`, and
-`e2e_v2dfc007_runtime_cli`.
+`e2e_v2dfc007_runtime_cli`. `AGENT-004` extracts the private
+`v2_read_service/observation.rs` submodule, unifies Direct observation
+post-processing (`finalize_direct_observation_in`), adds the in-transaction
+successor observation context (`SuccessorObservationContextV1` over
+`DirectTransactionV1::delegation_receipts_for_graph`), and replaces temporary
+size-measurement buffers with `serialized_json_len_v1`, verified by
+`podway-engine` `v2_read_service::tests::agent004_*`,
+`direct_execution::reads004_stage5_tests`,
+`int_guide006_generation1_baselines`, `int_guide009_generation2_observation`,
+`int_v2rel002_maximum_next`, `int_v2run002_views`, and `int_v2dfc006_errors`,
+`podway-store` `int_v2sdg004_receipt` and `int_v2sdg005_semantics`, and
+`podway-protocol` `json_len::tests`.

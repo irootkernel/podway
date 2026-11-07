@@ -184,6 +184,13 @@ impl<Clock: FnOnce() -> UnixMillis> DirectTransactionV1<'_, '_, Clock> {
         let Some(graph) = self.current_graph()? else {
             return Ok(v2_delegation::DelegationReceiptSnapshotV1::empty());
         };
+        self.delegation_receipts_for_graph(graph)
+    }
+
+    pub fn delegation_receipts_for_graph(
+        &self,
+        graph: &GraphSessionStateV2,
+    ) -> DirectStoreResultV1<v2_delegation::DelegationReceiptSnapshotV1> {
         Ok(v2_delegation::receipt_snapshot_connection_v1(
             self.transaction,
             graph,

@@ -527,10 +527,21 @@ The scope covers seven Direct entries: `project_direct_status_v1`;
 `project_direct_evidence_v1` on branches that need Procedure declarations;
 `project_direct_receipt_v1`; and `project_direct_delegation_package_v1` for
 work-package construction and package-result projection. Archive-show and
-prepared or running nested projections share that one scope. The observation
-projection takes the invocation's contract generation and selects the v5 or v6
-result family (ADR-0039); the selection is presentation-only and changes no
-stored identity.
+prepared or running nested projections share that one scope. The private child
+module `v2_read_service/observation.rs` owns observation assembly, lifecycle
+templates and observation byte-window helpers, plus the shared Direct
+observation finisher (`finalize_direct_observation_in`) and in-transaction
+successor observation context (`SuccessorObservationContextV1` and
+`project_successor_observation_v1`). The observation projection takes the
+invocation's contract generation and selects the v5 or v6 result family
+(ADR-0039); the selection is presentation-only and changes no stored identity.
+For in-transaction successor projection, `SuccessorObservationContextV1` binds
+the transaction's worktree identity, the caller-supplied post-transition
+`GraphSessionStateV2`, point-query delegation receipt readiness evaluated
+against that successor (`DirectTransactionV1::delegation_receipts_for_graph`),
+and the transaction's next workspace sequence, with
+`current_terminal_disposition: false`, without opening a second database
+connection or reading stale pre-replace rows.
 
 Reuse follows the current request's snapshot, session, Procedure snapshot
 identifier, and stored digest. Core keeps the immutable `SnapshotMemoryModelV2`
@@ -565,14 +576,19 @@ binding; only the payload/map construction and the final infallible encode
 are bound to publication.
 
 Serialized length accounting is exact and incremental. A Protocol-owned
-counting helper returns checked serde JSON lengths without retaining output
-buffers; observation lists and history windows admit each candidate once from
-its own measured length, folding separators, wrapper fields and trial trace
-bounds without reserializing the admitted prefix. A full history window only
-asks whether another filtered source entry exists; that lookahead entry is
-never rendered, so a failing render there remains a truncation fact rather
-than a surfaced error. The indivisible-value evidence charge is a separate
-conservative worst-case policy, distinct from the exact serde length owner.
+counting helper (`serialized_json_len_v1`) returns checked serde JSON lengths
+without retaining output buffers; observation member/window/template budgets
+(`serialized_bytes_v1`, `serialized_object_bytes_v1`), status item-value and
+blocker windows (`CurrentProjection::item_values`,
+`CurrentProjection::blocker_window`), preflight envelope-equivalent byte
+accounting (`envelope_equivalent_status_bytes_v1`), and observation lists and
+history windows all measure candidates through that helper without allocating
+temporary byte vectors, preserving each site's entry overhead, separator rules
+and failure fallback. A full history window only asks whether another filtered
+source entry exists; that lookahead entry is never rendered, so a failing render
+there remains a truncation fact rather than a surfaced error. The
+indivisible-value evidence charge is a separate conservative worst-case policy,
+distinct from the exact serde length owner.
 
 Display construction is bounded by admission. Status values format each value
 only at its display-consideration point and stop at the first rejected

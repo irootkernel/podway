@@ -32,10 +32,11 @@ in [testing guidance](implementation-tips/testing.md).
 AGENT-001 and AGENT-002 are Completed for the accepted contract foundation
 and shared stdin-owned fence classification; AGENT-003 is Completed for
 atomic batch criterion assessment (`podway goal assess-criteria --stdin`);
-and AGENT-004 through AGENT-006 remain Planned. No target release is assigned.
+AGENT-004 is Completed for coherent observation composition and budget reuse;
+AGENT-005 and AGENT-006 remain Planned. No target release is assigned.
 [ADR-0043](architecture-decision-records/0043-atomic-assessment-and-commit-bound-observations.md)
 records the interaction design; `podway.mutation-observation-result/v1` and
-`--with-observation` remain reserved until AGENT-004/005.
+`--with-observation` remain reserved until AGENT-005.
 The [INTEG readiness epic](roadmap/README.md#integ-dolgorae-integration-readiness)
 is completed and owner-accepted. It delivered default-disabled user/worktree
 integration permission, an explicit Git/config-only query and repository-only

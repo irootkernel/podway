@@ -175,6 +175,13 @@ Private CLI modules separate grammar, authoring, file access, start, rendering
 and fence preflight without adding a crate or changing dependency direction.
 The Engine read context still retains Config's validated Procedure independently
 of Store's cached memory model; accepted OPTIM sharing and draft behavior remain.
+Inside `podway-engine`, the private `v2_read_service/observation.rs` child
+module owns observation assembly, lifecycle templates, observation byte-window
+helpers, the shared Direct observation finisher, and the in-transaction
+successor observation context (`SuccessorObservationContextV1` over
+`DirectTransactionV1::delegation_receipts_for_graph`), while `v2_read_service.rs`
+retains `ReadScope`, `CurrentProjection`, and status, next, archive, delegation,
+and evidence projections.
 READS acquires slots, blockers, evidence references, goal criteria and citations
 through session-scoped lazy family cursors while preserving reconstruction and
 validation order. Prepared reloads retain header-only unchanged-value reuse and
