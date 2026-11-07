@@ -11,8 +11,10 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Changed
 
-- Re-pin canonical integer contract identity; previous-writer Stores refuse reads, writes and replay with
-  `WORKSPACE_CONTRACT_MISMATCH`; no predecessor or migration is declared.
+- Re-pin the contract manifest for canonical integers and agent interaction; previous-writer Stores refuse
+  reads, writes and replay with `WORKSPACE_CONTRACT_MISMATCH`; no predecessor or migration is declared.
+- Finish or abandon sessions with their original writer before upgrading, re-pin consumer contracts,
+  and explicitly confirm an unfenced reset-all to discard runtime history and create fresh state.
 
 ### Fixed
 
