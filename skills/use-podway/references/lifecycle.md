@@ -66,10 +66,20 @@ JSON, quiet and non-TTY starts never prompt:
   when its disposition matches the current revision. The next-session request
   permits this retention transition; it never permits evicting inactive history.
 
-Require `podway.session-start-result/v4`: the new session is prepared at revision
-0, with no attempt or goal. Re-observe, then use its fenced `session.begin`
-template. Provide an initial goal only with explicit intent; a goal-tracking
-Procedure permits `goal define` once later when begin omitted it.
+Require `podway.session-start-result/v4` (or `result.mutation_result` of that
+schema under `podway.mutation-observation-result/v1` when `--with-observation`
+is passed on a plain non-dry-run `start`, including plain start on a disposed
+terminal session): the new session is prepared at revision 0, with no attempt or
+goal. When plain `start --with-observation` succeeds on a known first submission,
+the caller may use `result.observation`'s fenced `session.begin` template
+directly (without an intermediate `observe`) and pass `--with-observation` on
+`begin` to receive `podway.session-begin-result/v2` plus the initial active
+node's `result.observation`. `start --dry-run`, replacement starts (`--on-existing
+preserve|delete`), `disposition`, `archive`, `archive purge`, `cancel`, `reset`,
+`doctor` and `workspace remove` do not accept `--with-observation`
+(`REQUEST_INVALID`, exit `2`); re-observe after those commands. Provide an
+initial goal only with explicit intent; a goal-tracking Procedure permits
+`goal define` once later when begin omitted it.
 
 ## Choose the lifecycle boundary
 

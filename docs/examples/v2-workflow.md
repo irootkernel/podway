@@ -42,6 +42,7 @@ podway --contract-generation 2 --json begin \
   --goal "Prevent duplicate sessions without regressing login." \
   --criterion reproduced="The original defect is recorded." \
   --criterion verified="Fresh verification supports the correction." \
+  --criterion reviewed="Independent review approves the fix with zero unresolved valid findings." \
   --actor developer
 ```
 
@@ -442,7 +443,25 @@ podway --contract-generation 2 --json decide \
 
 The success result exposes `result.effect`, `result.target_graph_node_id`,
 `result.target_attempt_id`, and `result.revision`. Do not infer later state from
-these fields alone; instead, re-run `podway --contract-generation 2 --json observe`.
+these fields alone; instead, either re-run `podway --contract-generation 2 --json
+observe` or pass `--with-observation` on the six supported direct mutations
+(plain `start` without `--dry-run` or `--on-existing`, `begin`, `record --stdin`,
+`complete`, `decide`, and `goal assess-criteria --stdin`) to receive
+`podway.mutation-observation-result/v1` (`result.mutation_result` plus the
+as-of-commit successor `result.observation` of schema
+`podway.observation-result/v6` computed in the same transaction without a second
+database read). Consume `result.observation` directly for the next mutation only
+on a known first submission with exit code `0` and complete observation facts;
+after any replay, `outcome lookup`, lost stdout, retry, uncertain submission
+history, or contention/conflict, run a fresh `observe` before deriving a new
+mutation. On action nodes without a `check_result` target (where
+`mutation_templates` omits `item.record_many`), construct
+`podway.item-record-many-input/v1` from outer `workspace.uuid` plus embedded
+`status.session.{id,revision}`, `status.current.attempt.attempt_id`, and
+`active_items[].revision` so recording and completing a satisfied action node
+take two normal CLI calls (`record --stdin --with-observation` followed by
+`complete --with-observation`) instead of four (`observe`, `record`, `observe`,
+`complete`).
 
 ## Rework and revise the goal
 
@@ -476,6 +495,7 @@ podway --contract-generation 2 --json goal revise \
   --goal "Prevent duplicate and leaked login sessions." \
   --criterion reproduced="The original defect is recorded." \
   --criterion verified="Fresh verification covers duplication and cleanup." \
+  --criterion reviewed="Independent review approves the fix with zero unresolved valid findings." \
   --rework-to implement \
   --reason "Cancellation cleanup is now in scope." \
   --actor owner \
@@ -495,8 +515,12 @@ sources of the current decision attempt, or items recorded in that decision
 attempt. `not_applicable` carries no citations. Omitting citations or actor stays
 valid where existing admission permits it.
 
-At `assess-goal`, record one assessment per criterion. Evidence and item
-citations identify recorded Podway state; they do not validate an external test:
+At `assess-goal`, record each unassessed criterion either one at a time with
+`goal assess-criterion` or together in a single batch with
+`goal assess-criteria --stdin` (because re-assessing an already assessed
+criterion on the same `assess-goal` attempt fails with `REQUEST_INVALID`, exit
+`2`). Evidence and item citations identify recorded Podway state; they do not
+validate an external test. For single-criterion assessment:
 
 ```bash
 podway --contract-generation 2 --json goal assess-criterion verified \
@@ -514,9 +538,81 @@ podway --contract-generation 2 --json goal assess-criterion verified \
 
 The criterion result reports `result.goal_revision`, `result.result.status`,
 `result.complete`, and, once every criterion is assessed,
-`result.determined_outcome`. Select the matching goal-assessment decision option,
-record the outcome and closeout items, and continue using `status --json` and
-`next --json` until the terminal action completes.
+`result.determined_outcome`.
+
+As an alternative before any single `goal assess-criterion` is run on that
+`assess-goal` attempt, assess multiple prepared or ready criteria in one atomic
+batch with `goal assess-criteria --stdin --with-observation` so three criterion
+assessments plus `decide` take two normal CLI invocations (`goal assess-criteria
+--stdin --with-observation` followed by `decide --with-observation`) instead of
+eight (`3 × (observe + goal assess-criterion)` plus `observe + decide`). These
+`4 -> 2` action and `8 -> 2` goal-checkpoint counts are structural normal-path
+CLI invocation counts excluding setup, external work, contention, recovery, and
+independent verifier observations; they claim no measured latency/speedup or
+guaranteed LLM-turn savings, introduce no fused one-call `record-and-complete`
+or `assess-and-decide` operation, and imply no user-global skill installation.
+Observation `mutation_templates` emits `goal.assess_criterion` and does not emit
+a batch `goal.assess_criteria` template; construct the closed
+`podway.criterion-assessment-many-input/v1` document from the current
+observation's `goal.assess_criterion` template `preconditions` (`workspace_uuid`,
+`session_id`, `session_revision`, `attempt_id`, and the current `goal_revision`,
+such as `2` after the `goal revise` above) and `guidance.goal` (`criteria`),
+citing only sources listed in `assess-goal`'s `evidence_from` (`reproduce`,
+`verify`, `evaluate-review`, and `review`, not `evaluate-verification`) and
+recorded decision-local items (at most four unique citations combined across
+`evidence` and `items` per entry, and none for `not_applicable`). The numeric
+revisions below are illustrative: replace them and the identity placeholders
+with the exact current observed preconditions. Do not assume goal revision `2`
+when the current goal has not been revised:
+
+```bash
+podway --contract-generation 2 --json goal assess-criteria --stdin --with-observation <<'EOF'
+{
+  "schema": "podway.criterion-assessment-many-input/v1",
+  "workspace_uuid": "<workspace-uuid>",
+  "session_id": "<session-id>",
+  "session_revision": 20,
+  "attempt_id": "<attempt-id>",
+  "goal_revision": 2,
+  "idempotency_key": "bug-42-assess-all",
+  "actor": "verifier",
+  "assessments": [
+    {
+      "criterion_id": "reproduced",
+      "status": "satisfied",
+      "reason": "The original duplicate-session regression was reproduced.",
+      "evidence": ["reproduce"],
+      "items": []
+    },
+    {
+      "criterion_id": "verified",
+      "status": "satisfied",
+      "reason": "The fresh regression and cleanup checks passed.",
+      "evidence": ["verify"],
+      "items": []
+    },
+    {
+      "criterion_id": "reviewed",
+      "status": "satisfied",
+      "reason": "Independent review approved the fix with zero unresolved findings.",
+      "evidence": ["review", "evaluate-review"],
+      "items": []
+    }
+  ]
+}
+EOF
+```
+
+`result.mutation_result` (`podway.criterion-assessment-many-result/v1`) reports
+`results` normalized to criterion declaration order, `complete: true`,
+`determined_outcome: "achieved"`, `goal_revision`, and `revision` (with no
+`changed` or `assessed_count` fields and no batch no-op mode; re-assessing an
+already assessed criterion under a new key fails with `REQUEST_INVALID`, exit `2`).
+On a known first submission, use `result.observation.mutation_templates`'s
+`session.decide` template to select the decision option mapped by the Procedure to
+`determined_outcome` (`--option achieved` for `achieved`, or `--option
+not-achieved` for `not_achieved` in `bug-fix-v2`), record the closeout items, and
+continue until the terminal action completes.
 
 ## Record terminal ownership and reset
 

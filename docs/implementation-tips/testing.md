@@ -982,8 +982,10 @@ remains independently documented. The separately adopted
 [CALLS epic](../roadmap/README.md#calls-agent-workflow-guidance) retains its acceptance
 record. Its [integrated qualification requirements](#integrated-cli-guidance-qualification)
 and [historical feedback](#guidance-source-feedback-and-revisit-conditions)
-remain separate from completed structural-program evidence. Combined operations
-and returned observations remain unadopted.
+remain separate from completed structural-program evidence. Batch criterion
+assessment (`goal assess-criteria --stdin`) and commit-bound `--with-observation`
+mutation responses are owned by `AGENT-001` through `AGENT-006` below; combined
+record-and-complete or assess-and-decide single-command verbs remain unadopted.
 
 CALLS observation/recording regression ownership is recorded in
 [Testing and Conformance](../specs/quality/testing-and-conformance.md#observation-and-recorded-check-guidance).
@@ -1229,4 +1231,32 @@ size-measurement buffers with `serialized_json_len_v1`, verified by
 `int_guide006_generation1_baselines`, `int_guide009_generation2_observation`,
 `int_v2rel002_maximum_next`, `int_v2run002_views`, and `int_v2dfc006_errors`,
 `podway-store` `int_v2sdg004_receipt` and `int_v2sdg005_semantics`, and
-`podway-protocol` `json_len::tests`.
+`podway-protocol` `json_len::tests`. `AGENT-005` activates `--with-observation`
+(`podway.mutation-observation-result/v1` with embedded `podway.observation-result/v6`)
+across plain non-dry-run `session.start`, `session.begin`, `item.record_many`,
+`session.complete`, `session.decide`, and `goal.assess_criteria`, verified by
+`podway-protocol` `int_v2_result_contract`, `int_v2dfc006_direct_envelopes`, and
+`int_v2dfc008_current_contract`, `podway-engine` `direct_mutation::tests::agent005_*`
+and `int_guide009_generation2_observation`, and `podway-cli`
+`command::tests::agent005_*` and
+`e2e_guide009_generation2_lifecycle::agent005_with_observation_lifecycle_replay_lookup_and_conflicts`.
+`AGENT-006` updates the runtime skill (`skills/use-podway/SKILL.md` and
+`skills/use-podway/references/*.md`), workflow example, and caller/testing
+specifications, and verifies the integrated `--with-observation` and
+`goal assess-criteria --stdin` caller workflows across unchanged `small-change-v2`
+and `bug-fix-v2` presets through a local raw CLI call collector in
+`e2e_guide009_generation2_lifecycle::agent006_small_change_v2_integrated_caller_workflow_and_call_counts`,
+`agent006_bug_fix_v2_integrated_caller_workflow_and_batch_goal_assessment`, and
+`agent006_integrated_caller_recovery_contention_and_fallback_paths` (proving
+two-call action `record --stdin` + `complete` segments, two-call three-criterion
+`goal assess-criteria --stdin` + `decide` segments with single
+revision/workspace-sequence increment and stable goal revision, observed
+`check_result` operation-contract binding with hashed bounded fixture check
+facts, generation-1 `--with-observation` embedded `v6` consumption on known
+first submission, partitioned normal versus excluded call traces without hidden
+`observe` helpers, and mandatory fresh `observe`
+recovery after replay, `outcome lookup`, lost stdout, `WORKSPACE_BUSY` SQLite
+write-lock contention, competing-advancement stale-fence refusal, or
+unwrapped or unsupported-route responses, while relying on the `AGENT-003` and
+`AGENT-005` owners above for batch negative/citation/outcome and
+route/mode-conflict matrices).

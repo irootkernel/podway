@@ -90,6 +90,29 @@ CALLS-004 uses registered `podway-cli` E2E owners:
   `guide010_generation2_citation_details_list_citable_sources`, runtime lifecycle
   owners and `e2e_guide009_generation2_lifecycle::generation2_lifecycle_conformance`
   retain actor, stale-fence, optional grammar, generation and template coverage.
+- `e2e_guide009_generation2_lifecycle::agent006_small_change_v2_integrated_caller_workflow_and_call_counts`,
+  `agent006_bug_fix_v2_integrated_caller_workflow_and_batch_goal_assessment`, and
+  `agent006_integrated_caller_recovery_contention_and_fallback_paths` qualify the
+  integrated `--with-observation` and `goal assess-criteria --stdin` caller
+  workflows across unchanged `small-change-v2` and `bug-fix-v2` presets, proving
+  two-call action recording+completion (`record --stdin --with-observation` +
+  `complete --with-observation`), two-call three-criterion batch assessment+decision
+  (`goal assess-criteria --stdin --with-observation` + `decide --with-observation`)
+  with single session-revision/workspace-sequence advancement and stable goal
+  definition revision, observed `check_result` operation-contract binding with
+  hashed bounded fixture check facts, generation-1 `--with-observation` embedded
+  `podway.observation-result/v6` consumption on known first submission,
+  partitioned normal versus excluded call traces, and mandatory
+  fresh `observe` recovery after replay, `outcome lookup`, lost stdout,
+  `WORKSPACE_BUSY` SQLite write-lock contention, competing-advancement
+  stale-fence refusal, or unwrapped/unsupported responses (`AGENT-003`
+  owners in `goal_state_v2::tests`, `int_v2_goal_state`,
+  `int_v2dfc006_goal_ports`, `e2e_v2dfc007_direct_cli`, and
+  `e2e_v2dfc007_runtime_cli` cover `not_achieved`/`not_applicable` outcome and
+  zero-citation rules, combined four-citation bounds, and duplicate/already-assessed
+  `REQUEST_INVALID` batch rejections; `AGENT-005`
+  `agent005_with_observation_lifecycle_replay_lookup_and_conflicts` covers the
+  six-route `--with-observation` admission and mode-conflict matrices).
 
 No result above makes Podway an external effect executor or attestor. Lookup is
 bounded by retention; exact replay uses the original canonical request and key.
@@ -277,10 +300,13 @@ contracts, Rust suites, the feature-gated offline contract verifier, serial
 actual-binary E2E, and preset tooling checks. Current E2E covers direct lifecycle,
 item and delegation stdin, exact replay/lookup, stale fences, legacy refusal,
 writer mismatch, bounded SQLite contention, maintenance recovery, artifact
-paging, native worktree identity, early retired-command classification, and
+paging, native worktree identity, early retired-command classification,
 generation selection with the executable observation-v6 lifecycle templates
 (`e2e_guide009_generation2_lifecycle::generation2_lifecycle_conformance`, also
-a registered packaged conformance scenario).
+a registered packaged conformance scenario), and commit-bound `--with-observation`
+plus `goal assess-criteria --stdin` caller journeys and recovery
+(`e2e_guide009_generation2_lifecycle::agent005_with_observation_lifecycle_replay_lookup_and_conflicts`
+and `agent006_*`).
 
 The release-hook case
 `e2e_v2_native_qualification::release_binary_ignores_every_debug_maintenance_hook`

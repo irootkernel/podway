@@ -15,10 +15,13 @@ session admits the exact current embedded source, version, and digest. Updating 
 preset changes only later starts: an already admitted session continues from its
 immutable snapshot and is never migrated or reinterpreted in place.
 
-During a task, read `podway observe`, perform the actual work
-outside Podway, then record only supported evidence on the active attempt. Use typed
-item commands and `complete` to follow an action's declared edge. Use `decide` on a
-decision node and the goal commands for goal-tracked sessions.
+During a task, read `podway observe` (or the commit-bound `result.observation`
+returned by `--with-observation` on a known first submission of a supported
+mutation), perform the actual work outside Podway, then record only supported
+evidence on the active attempt. Use typed item commands or atomic `record
+--stdin` and `complete` to follow an action's declared edge. Use `decide` on a
+decision node and `goal assess-criteria --stdin` or `goal assess-criterion` for
+goal-tracked sessions.
 
 Record Procedure definitions, prompts, goal statements and criteria, narrative
 evidence, check-result descriptors and summaries, and transition reasons in
@@ -42,15 +45,50 @@ target. Podway creates a fresh attempt and applies the procedure's evidence
 invalidation rules. Blockers prevent advancement until explicitly resolved.
 
 Automation uses `--json`, carries the latest workspace/session/attempt/item/goal
-preconditions, and assigns a stable idempotency key to every mutation. Each command
-runs synchronously. On response loss or `MUTATION_OUTCOME_UNKNOWN`, use
+preconditions, and assigns a stable idempotency key to every mutation. Stdin-fenced
+mutations (`record --stdin`, `goal assess-criteria --stdin`, and `delegation accept
+--stdin`) carry all fences and `idempotency_key` inside their closed JSON stdin
+document, reject CLI `--if-*` and `--idempotency-key` flags, and never run implicit
+status preflight. Six direct mutations (plain `start` without `--dry-run` or `--on-existing`,
+`begin`, `record --stdin`, `complete`, `decide`, and `goal assess-criteria
+--stdin`) accept `--with-observation` and return
+`podway.mutation-observation-result/v1`, pairing `result.mutation_result` with
+an as-of-commit successor `result.observation` computed in the same transaction
+without a second database read (`podway.observation-result/v6`, with
+`workspace_uuid` read from outer `workspace.uuid` or concrete template
+preconditions and goal state under `guidance.goal`). On action nodes without a
+`check_result` target, where `mutation_templates` omits `item.record_many`,
+callers construct `podway.item-record-many-input/v1` from those observed fences
+so recording and completing a satisfied action node take two normal CLI calls
+(`record --stdin --with-observation` followed by `complete --with-observation`)
+instead of four (`observe`, `record`, `observe`, `complete`); at a
+goal-assessment decision node, callers construct
+`podway.criterion-assessment-many-input/v1` from the observed
+`goal.assess_criterion` template's `preconditions` and `guidance.goal` (no batch
+template is emitted) and map `determined_outcome` to the Procedure's declared
+decision option so three prepared/ready criterion assessments plus `decide` take
+two normal CLI calls (`goal assess-criteria --stdin --with-observation` followed
+by `decide --with-observation`) instead of eight (`3 × (observe + goal
+assess-criterion)` plus `observe + decide`). These `4 -> 2` and `8 -> 2` counts
+are structural normal-path CLI invocation counts excluding setup, external work,
+contention, recovery, and independent verifier observations; they claim no
+measured latency/speedup or guaranteed LLM-turn savings, introduce no fused
+one-call `record-and-complete` or `assess-and-decide` operation, and imply no
+user-global skill installation.
+
+Each command runs synchronously. Callers may derive the next mutation directly
+from `result.observation` only on a known first submission (no hidden retries)
+that exits `0` with complete observation facts; a new key alone does not prove
+submission history. On response loss or `MUTATION_OUTCOME_UNKNOWN`, use
 `outcome lookup --idempotency-key <original-key>` and preserve the exact canonical
-request. A retained success replays its original response; a rejected request
-retains no outcome. Not-found after response loss alone does not prove rollback:
-reconcile any still-running original writer before an identical-request retry.
-There is no detached execution, job status, or queue barrier. Reads return one
-committed snapshot; a later writer may change it, so re-observe before deriving
-new mutations. See the [transaction contract](../storage/transactions-concurrency-and-idempotency.md).
+request. A retained success replays its original historical response; a rejected
+request retains no outcome. Not-found after response loss alone does not prove
+rollback: reconcile any still-running original writer before an identical-request
+retry. There is no detached execution, job status, or queue barrier. Reads return
+one committed snapshot; after any replay, `outcome lookup`, lost stdout, retry,
+uncertain submission history, contention/conflict, or unsupported/unwrapped/incomplete
+response, obtain a fresh `observe` before deriving any new mutation. See the
+[transaction contract](../storage/transactions-concurrency-and-idempotency.md).
 
 Actors may hand off within a worktree by reading one recorded v2 observation
 result; chat history is not authority. Parallel tasks belong in separate Git

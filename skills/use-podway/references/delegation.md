@@ -33,11 +33,15 @@ managed Primaries use their respective authorized integration paths;
    ```
 
    Input supplies all mutation identities; do not also pass identity, revision or
-   key flags. Keep it within 32 KiB and use unsigned integer JSON literals for
-   revisions and round counts.
-6. Require `podway.delegation-accept-result/v2`, then re-observe. Acceptance creates
-   one immutable receipt per attempt but does not move the cursor. Complete only
-   when current acceptance and ordinary readiness permit it, with fresh completion
+   key flags (`REQUEST_INVALID`, exit `2`), and stdin-fenced mutations never run
+   implicit status preflight. Keep it within 32 KiB and use unsigned integer JSON
+   literals for revisions and round counts.
+6. Require `podway.delegation-accept-result/v2`, then re-observe (`delegation
+   accept --stdin` and `delegation block`/`unblock` do not accept
+   `--with-observation`, whereas `record --stdin` before acceptance and `complete`
+   after acceptance do accept `--with-observation`). Acceptance creates one
+   immutable receipt per attempt but does not move the cursor. Complete only when
+   current acceptance and ordinary readiness permit it, with fresh completion
    fences and a new key.
 
 Keep the established owning worktree on every workspace command.
@@ -47,7 +51,7 @@ Keep the established owning worktree on every workspace command.
 | Fields | Authority |
 | --- | --- |
 | `schema` | `podway.delegation-accept-input/v1` |
-| `workspace_uuid` | Observation `workspace.uuid` |
+| `workspace_uuid` | Outer `podway.output/v4` envelope `workspace.uuid` (or concrete template `preconditions.workspace_uuid`) |
 | `session_id`, `session_revision` | `result.status.session.id`, `.revision` |
 | `attempt_id` | `result.status.current.attempt.attempt_id` |
 | `idempotency_key` | Caller-generated unique key retained with this request |

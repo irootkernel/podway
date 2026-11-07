@@ -33,14 +33,18 @@ with an older original writer uses that release's own guidance and grammar.
    authoritative task state and maintenance locks live under `.podway/runtime/`
    and are never tracked.
 2. Run `podway --contract-generation 2 --worktree <absolute-root> --json observe`.
-   Require `podway.output/v4` and `podway.observation-result/v6`; the deprecated
-   generation-1 default still
+   Require `podway.output/v4` (exit code `0`; `podway.output/v4` has no `ok` field)
+   and `podway.observation-result/v6`; the deprecated generation-1 default still
    serves `podway.observation-result/v5` to consumers that have not adopted
    generation 2. Error output uses `podway.error/v2`; `SESSION_NOT_FOUND` means
    no current session; `WORKSPACE_NOT_INITIALIZED` means this worktree has no
    workspace, so report it and initialize only with explicit intent.
-3. Read identities and lifecycle from `status`, current work from `guidance`,
-   declarations from `active_items`, and fenced requests from `mutation_templates`.
+3. Read identities and lifecycle from `status`, current work from `guidance`
+   (including `guidance.goal` when goal tracking is enabled), declarations from
+   `active_items`, and fenced requests from `mutation_templates`. Note that
+   `podway.observation-result/v6` has no `workspace.uuid` field; read
+   `workspace_uuid` from the outer `podway.output/v4` envelope (`workspace.uuid`)
+   or from concrete `mutation_templates[].preconditions.workspace_uuid`.
    Apply [command execution](#command-execution) when using a template.
    Prepared state has no active attempt; null guidance denotes terminal state.
    An undisposed terminal revision needs disposition before archive or replacement.
@@ -60,18 +64,37 @@ Pass `--contract-generation 2` on every command with this compatible CLI. Use
 `--json` for machine output and `--worktree <absolute-root>` on every workspace
 command. Local commands (`help`, `version`, `completions`, `preset`, `procedure`)
 accept the generation selector but reject worktree request options: `--worktree`,
-`--timeout`, `--idempotency-key`, all `--if-*` fences and `--yes`.
+`--timeout`, `--idempotency-key`, all `--if-*` fences, `--with-observation` and
+`--yes`.
 
-Templates and recovery recipes never embed `--contract-generation`. Add the
-caller options above only where absent. Replace declared placeholders with
-supported facts; preserve supplied options, fences and concrete idempotency keys.
-Observation mutation templates and preview start suggestions may append optional
-or repeatable semantic arguments admitted by command help, including additional
-`--criterion`, citations (`--evidence` / `--item`) and applicable `--actor`, within
-the authorized work. Recovery recipes keep their semantic argv unchanged: add
-only caller options and fill declared placeholders. A bare preview start
-suggestion also needs a caller-owned key and current start preconditions when
-applicable. Inputs that own identities on stdin keep those identities there.
+Six direct mutations (plain `start` without `--dry-run` or `--on-existing`,
+`begin`, `record --stdin`, `complete`, `decide` and
+`goal assess-criteria --stdin`) accept `--with-observation`. When passed, the
+response result schema is `podway.mutation-observation-result/v1` (with
+`result.mutation_result` holding the command's normal result,
+`result.observation` holding an as-of-commit successor
+`podway.observation-result/v6` computed in the same transaction without a second
+database read, and `result.workspace_sequence`; both generation 1 and generation
+2 embed `podway.observation-result/v6`, while omitting `--with-observation`
+preserves the default unwrapped result schemas and request identities).
+`--with-observation` is a boolean flag and takes no `=true` or `=false` value;
+all other commands reject `--with-observation` with `REQUEST_INVALID` (exit `2`).
+
+Templates and recovery recipes never embed `--contract-generation` or
+`--with-observation`. Add the caller options above only where absent. Replace
+declared placeholders with supported facts; preserve supplied options, fences and
+concrete idempotency keys. Observation mutation templates and preview start
+suggestions may append optional or repeatable semantic arguments admitted by
+command help, including additional `--criterion`, citations (`--evidence` /
+`--item`), `--with-observation` on the six supported mutations, and applicable
+`--actor`, within the authorized work. Recovery recipes keep their semantic argv
+unchanged: add only caller options and fill declared placeholders. A bare preview
+start suggestion also needs a caller-owned key and current start preconditions
+when applicable. Stdin-fenced mutations (`record --stdin`,
+`goal assess-criteria --stdin`, `delegation accept --stdin`) own their workspace,
+session, attempt, item or goal fences and `idempotency_key` inside the JSON stdin
+body, never run implicit status preflight, and reject CLI `--if-*` and
+`--idempotency-key` flags (`REQUEST_INVALID`, exit `2`).
 
 `--timeout <duration>` defaults to `5s`; unsigned `ms`, `s` or `m` values
 may be at most `60m`. It supplies one admission-wait budget across maintenance
@@ -114,22 +137,46 @@ and admitted work may finish later. It is not an execution timer.
    disposition, `decide`, `rework` and goal operations. Keep distinct actors distinct.
    Required local artifacts are checked again at completion; `ARTIFACT_CHANGED`
    requires fresh attachment of the verified file.
-4. When one observation supports several item updates, prefer atomic
-   `podway record --stdin`. Its closed stdin document requires `schema` set to
-   the constant `podway.item-record-many-input/v1` and draws every identity
-   from the same observation: `workspace_uuid` from `workspace.uuid`,
-   `session_id` and `session_revision` from `result.status.session.id` and `.revision`,
-   `attempt_id` from `result.status.current.attempt.attempt_id`, and a new
-   caller-owned `idempotency_key`. Its 1..128 unique operations each carry
-   `item_id`, an `expected_item_revision` taken from that item's
-   `active_items[].revision` (record templates show it as
-   `preconditions.item_revision`), and exactly one typed `record` or
-   `clear: true`. Do not also pass identity, revision or key flags. Require
-   `podway.item-record-many-result/v2`; any rejected operation changes none of
-   them. The mutation result's `revision` is the session revision, not an item
-   revision; re-observe for current `active_items[].revision` before another write.
-5. Re-observe after every mutation. Never derive multiple mutations from a stale
-   observation. Historical success does not establish current readiness.
+4. When one observation supports several item updates, or when reducing a
+   satisfied action node's normal progression from four CLI calls (`observe`,
+   `record`, `observe`, `complete`) to two (`record --stdin --with-observation`
+   followed by `complete --with-observation`), prefer atomic `podway record
+   --stdin`. Observation `mutation_templates` emits `item.record_many`
+   (`stdin_template`) only when the active node has a `check_result` target item.
+   On action nodes without a `check_result` target, construct the closed
+   `podway.item-record-many-input/v1` document directly from the same
+   observation: `workspace_uuid` from the outer `podway.output/v4` envelope's
+   `workspace.uuid` (or a concrete template's `preconditions.workspace_uuid`),
+   `session_id` and `session_revision` from `status.session.id` and `.revision`,
+   `attempt_id` from `status.current.attempt.attempt_id`, and a new caller-owned
+   `idempotency_key`. Its 1..128 unique operations each carry `item_id`, an
+   `expected_item_revision` taken from that item's `active_items[].revision`
+   (record templates show it as `preconditions.item_revision`), and exactly one
+   typed `record` or `clear: true`. Do not also pass identity, revision or key
+   flags on argv. Require `podway.item-record-many-result/v2` (or
+   `result.mutation_result` of that schema when `--with-observation` is used);
+   any rejected operation changes none of them. The mutation result's `revision`
+   is the session revision, not an item revision; read current
+   `active_items[].revision` from the returned `result.observation` (under the
+   first-submission rule below) or from a fresh `observe` before another write.
+5. Advance using either a fresh `observe` or a verified first-submission
+   `result.observation`:
+   - **Conditional first-submission rule**: When one of the six supported
+     mutations is submitted with `--with-observation`, consume its embedded
+     `result.observation` directly to derive the next mutation **only** when the
+     caller knows the request was its first submission (no hidden retries), the
+     command exited `0`, and `result.observation` is present and complete.
+     Generating a new idempotency key alone does not prove submission history.
+   - **Mandatory `observe` fallback**: After any idempotent replay,
+     `outcome lookup`, lost stdout, retry, unresolved submission history, or
+     contention/conflict requiring refresh (`WORKSPACE_BUSY`,
+     `SESSION_REVISION_CONFLICT`, `ITEM_REVISION_CONFLICT`,
+     `GOAL_REVISION_STALE`, `ATTEMPT_NOT_CURRENT`), or when running an
+     unsupported command, receiving a compatible unwrapped response, or lacking
+     complete observation facts, obtain a fresh `podway --contract-generation 2
+     --worktree <absolute-root> --json observe` before deriving any new mutation.
+     Never derive multiple mutations from a single unrefreshed observation, and
+     never treat historical success as current readiness.
 6. Use `complete`, `skip`, `retry`, `decide`, `rework`, `block` or `unblock` only
    when current evidence and `allowed_actions` permit it. Block only for a real
    external dependency that prevents progress.
@@ -151,9 +198,22 @@ terminal session, not deletion of current work or inactive history.
   attempt's item values; required items and open blockers do not gate it. Terminal
   skip still requires the applicable goal and fresh-assessment readiness.
 - Define or revise a goal only with explicit intent in a goal-tracking Procedure.
-  Assess its criteria only at the active goal-assessment decision after the work.
-  Read [goals](references/goal.md) before choosing, defining, assessing or revising
-  a goal, including cooperation with a Codex goal.
+  Assess its criteria only at the active goal-assessment decision after the work,
+  using `goal assess-criteria --stdin` (optionally with `--with-observation` so
+  three prepared/ready criterion assessments plus `decide` take two normal CLI
+  calls instead of eight `observe`+mutation calls) or single-criterion
+  `goal assess-criterion`. These `4 -> 2` action and `8 -> 2` goal-checkpoint
+  counts are structural normal-path CLI invocation counts excluding setup,
+  external work, contention, recovery and independent verifier observations; they
+  claim no measured speedup or LLM-turn reduction, introduce no fused one-call
+  `record-and-complete` or `assess-and-decide` operation, and imply no
+  user-global installation. No batch `goal.assess_criteria` template is emitted
+  in `mutation_templates`; construct the batch stdin document from the observed
+  `goal.assess_criterion` template's `preconditions` and `guidance.goal`, then
+  choose the `decide` option via the Procedure's declared outcome mapping
+  (`not_achieved` maps to `--option not-achieved` in `bug-fix-v2`). Read
+  [goals](references/goal.md) before choosing, defining, assessing or revising a
+  goal, including cooperation with a Codex goal.
 - Check reference/readback states together with `items_satisfied`, `unblocked`,
   `goal_ready` and `can_advance`. Required evidence must resolve and be fresh;
   an unresolved optional reference does not block progression.

@@ -32,25 +32,34 @@ the intended effect, do not repeat it. Otherwise derive a new request from curre
 state with all applicable fences. A changed canonical request needs a new key;
 an identical recovery replay keeps its original key and fences.
 
-`EVIDENCE_REFERENCE_STALE` and `GOAL_REVISION_STALE` are retryable exit-4 conflicts.
-`DIGEST_CONFIRMATION_REQUIRED` is a non-retryable exit-2 error. Do not remove a
-precondition to bypass any conflict.
+`EVIDENCE_REFERENCE_STALE`, `GOAL_REVISION_STALE`, `SESSION_REVISION_CONFLICT`,
+`ITEM_REVISION_CONFLICT` and `ATTEMPT_NOT_CURRENT` are retryable exit-4
+conflicts. `DIGEST_CONFIRMATION_REQUIRED` is a non-retryable exit-2 error. Do
+not remove a precondition to bypass any conflict. After any conflict or
+contention (`WORKSPACE_BUSY`), reconcile the original request/writer as
+applicable and obtain a **fresh `observe`** before deriving any new mutation;
+never derive a retry from a historical or pre-conflict observation.
 
 ## Unknown mutation outcome
 
 `MUTATION_OUTCOME_UNKNOWN` means COMMIT I/O prevented a definite commit verdict.
-Termination may also leave a caller without a response; it does not establish
-continued execution.
+Termination or lost stdout may also leave a caller without a response; it does
+not establish continued execution.
 
-1. Retain the original key, canonical request with resolved fences, exact worktree
-   and known UUID. Arguments that previously autofilled fences may reconstruct a
-   different request on a later invocation.
+1. Retain the original key, canonical request with resolved fences (and exact
+   stdin bytes/entry order plus `--with-observation` mode when applicable),
+   exact worktree and known UUID. Arguments that previously autofilled fences may
+   reconstruct a different request on a later invocation.
 2. Run `podway --contract-generation 2 --worktree <absolute-root> --json outcome
    lookup --idempotency-key <original-key>` and require
    `podway.outcome-lookup-result/v1`.
 3. If `found`, compare the retained successful outcome with the request and intended
    effect. It proves historical success, not current readiness. Exact replay returns
-   the complete original envelope and request ID.
+   the complete original envelope, request ID and any historical `result.observation`
+   recorded at commit time without allocating another `workspace_sequence`.
+   **Never** consume a replayed or looked-up `result.observation` to derive a new
+   mutation; always run a fresh `observe` after `outcome lookup` or replay before
+   constructing the next mutation.
 4. If not found, reconcile current state before considering replay. Workspace
    outcomes retain at most 100 entries or 30 days. Session outcomes survive archive
    and archive purge; session reset, reset-all and workspace removal end retention.
@@ -58,9 +67,13 @@ continued execution.
 5. Replay only the identical reconstructible request/key within existing authority.
    If that cannot be established, report the recovery gap before another mutation.
    Re-observe before deriving any new request; never replace fences on an exact replay.
+   When a command does not support `--with-observation`, returns a compatible
+   unwrapped result, or leaves observation facts incomplete, fall back to a fresh
+   `observe`.
 
 Only validated successful effects retain outcomes atomically. Rejections retain
-none. `IDEMPOTENCY_KEY_REUSED` means another canonical request owns the key;
+none. `IDEMPOTENCY_KEY_REUSED` (exit `2`) means another canonical request—including
+a different `--with-observation` mode or reordered stdin entries—owns the key;
 inspect that outcome rather than overwriting its identity.
 
 ## Workspace and maintenance
