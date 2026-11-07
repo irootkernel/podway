@@ -17,8 +17,8 @@ ID and establishes no implementation commitment. The original research baseline
 is not a claim that later feedback was inspected at that revision.
 
 The owner adopted atomic criterion batches and opt-in commit-bound observations
-under [AGENT](TODO-podway-agent-interaction-simplification.md) on 2026-11-06.
-Their future interfaces are fixed by
+under [AGENT](../roadmap/README.md#agent-agent-interaction-simplification) on 2026-11-06.
+Their implemented interfaces are defined by
 [ADR-0043](../architecture-decision-records/0043-atomic-assessment-and-commit-bound-observations.md).
 This continuing candidate now covers unselected combined operations only;
 it does not own AGENT implementation or acceptance.
@@ -30,8 +30,8 @@ questions. The completed
 [structural simplification program](../roadmap/README.md#structural-simplification-program)
 preserved current CLI behavior; it did not authorize fewer observations,
 combined mutation commands or changes to external consumers. CALLS adopted only
-existing-interface guidance. AGENT separately adopts the selected interaction
-plan; the remaining combined-operation directions are unadopted.
+existing-interface guidance. AGENT delivered the selected interaction semantics;
+the remaining combined-operation directions are unadopted.
 
 Existing `observe` may satisfy a caller that otherwise obtains status and next
 separately, but it is not a substitute when complete Standard status or history

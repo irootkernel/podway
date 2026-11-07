@@ -49,7 +49,7 @@ executor compatibility and qualification.
   artifact-read coverage into the relevant adopted changes.
 
 DF-014 was promoted to AGENT-002 on 2026-11-06. Its full original details now
-belong to the [AGENT dossier](TODO-podway-agent-interaction-simplification.md#selected-feedback-df-014).
+belong to the [durable AGENT feedback owner](../implementation-tips/testing.md#agent-source-feedback-and-revisit-conditions).
 Promotion closes the deferral only, not implementation or acceptance.
 
 ### Source feedback

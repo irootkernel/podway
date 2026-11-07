@@ -5,7 +5,7 @@
 - Acceptance date: 2026-11-06
 - Acceptance owner: the owner, through approval of the documentation registration plan
 - Delivery owner: [AGENT](../roadmap/README.md#agent-agent-interaction-simplification)
-- Design: [AGENT dossier](../todo/TODO-podway-agent-interaction-simplification.md)
+- Design: [Interaction contracts](../specs/interfaces/json-contract.md)
 - Supersedes in part: [ADR-0039](0039-opt-in-contract-generations.md), decision 4's generation-only result selection, for the explicit semantic response choice below
 - Preserves: ADR-0039's presentation-only generation selector, default and retirement policy
 

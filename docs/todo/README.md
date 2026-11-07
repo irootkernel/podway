@@ -97,11 +97,9 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-- [AGENT: Agent interaction simplification](TODO-podway-agent-interaction-simplification.md)
-
-AGENT remains adopted, with implementation status owned by the roadmap and no
-assigned release. Actual adapter and live qualification remain in the continuing
-executor candidate below.
+None. Completed AGENT behavior and regression ownership are linked from the
+[roadmap](../roadmap/README.md#agent-agent-interaction-simplification). Actual
+adapter and live qualification remain in the continuing executor candidate below.
 
 ## Related candidates
 

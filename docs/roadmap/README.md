@@ -34,8 +34,12 @@ Target release: unassigned.
 
 ## AGENT — Agent Interaction Simplification
 
-Dependencies: existing Direct and goal-assessment foundations. Status: In Progress.
-Design: [adopted AGENT dossier](../todo/TODO-podway-agent-interaction-simplification.md).
+Dependencies: existing Direct and goal-assessment foundations. Status: Completed.
+Canonical outcomes: [interaction contracts](../specs/interfaces/json-contract.md),
+[transaction and replay rules](../specs/storage/transactions-concurrency-and-idempotency.md),
+[coherent observation ownership](../architecture/system.md#request-scoped-read-composition),
+[caller workflows](../specs/product/user-workflows.md) and
+[integrated regression owners](../implementation-tips/testing.md#agent-integrated-qualification).
 Architectural authority: [ADR-0043](../architecture-decision-records/0043-atomic-assessment-and-commit-bound-observations.md).
 Target release: unassigned.
 
@@ -48,19 +52,22 @@ technical dependencies are AGENT-002 on 001; 003 on 001/002; 004 on 001; 005 on
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `AGENT-001` | Establish interaction contracts | Completed | Implement the accepted closed contracts, response identity and budgets with coherent reservations and existing-generation compatibility. | [Requirements and acceptance](../todo/TODO-podway-agent-interaction-simplification.md#agent-001-establish-interaction-contracts) |
-| `AGENT-002` | Share stdin-owned fence classification | Completed | Transfer DF-014 into one local CLI classifier while preserving document fences, flag rejection and error precedence. | [Requirements and acceptance](../todo/TODO-podway-agent-interaction-simplification.md#agent-002-share-stdin-owned-fence-classification) |
-| `AGENT-003` | Implement atomic criterion assessment batches | Completed | Apply a bounded partial or full batch as one successor with atomic rollback, stable cursor/goal revision and exact replay. | [Requirements and acceptance](../todo/TODO-podway-agent-interaction-simplification.md#agent-003-implement-atomic-criterion-assessment-batches) |
-| `AGENT-004` | Extract coherent observation composition and budget reuse | Completed | Share only feature-required projection/budget logic while preserving observation v5/v6 and snapshot-owned readiness facts. | [Requirements and acceptance](../todo/TODO-podway-agent-interaction-simplification.md#agent-004-extract-coherent-observation-composition-and-budget-reuse) |
-| `AGENT-005` | Return commit-bound observations | Completed | Return opt-in observations for selected mutations with precommit admission, lookup headroom and historical replay. | [Requirements and acceptance](../todo/TODO-podway-agent-interaction-simplification.md#agent-005-return-commit-bound-observations) |
-| `AGENT-006` | Align guidance and qualify integrated workflows | Completed | Verify normal and recovery CLI flows, promote durable documentation and prepare independent review and owner-approved closeout. | [Requirements and acceptance](../todo/TODO-podway-agent-interaction-simplification.md#agent-006-align-skills-examples-and-integrated-workflows) |
+| `AGENT-001` | Establish interaction contracts | Completed | Implement the accepted closed contracts, response identity and budgets with coherent reservations and existing-generation compatibility. | [Interaction contracts](../specs/interfaces/json-contract.md) |
+| `AGENT-002` | Share stdin-owned fence classification | Completed | Transfer DF-014 into one local CLI classifier while preserving document fences, flag rejection and error precedence. | [CLI fences](../specs/interfaces/cli-specification.md#mutation-rules); [DF-014 context](../implementation-tips/testing.md#agent-source-feedback-and-revisit-conditions) |
+| `AGENT-003` | Implement atomic criterion assessment batches | Completed | Apply a bounded partial or full batch as one successor with atomic rollback, stable cursor/goal revision and exact replay. | [Batch contracts](../specs/interfaces/json-contract.md); [regression owners](../implementation-tips/testing.md#agent-integrated-qualification) |
+| `AGENT-004` | Extract coherent observation composition and budget reuse | Completed | Share only feature-required projection/budget logic while preserving observation v5/v6 and snapshot-owned readiness facts. | [Projection ownership](../architecture/system.md#request-scoped-read-composition); [regression owners](../implementation-tips/testing.md#agent-integrated-qualification) |
+| `AGENT-005` | Return commit-bound observations | Completed | Return opt-in observations for selected mutations with precommit admission, lookup headroom and historical replay. | [Observation contracts](../specs/interfaces/json-contract.md); [atomicity and replay](../specs/storage/transactions-concurrency-and-idempotency.md) |
+| `AGENT-006` | Align guidance and qualify integrated workflows | Completed | Verify normal and recovery CLI flows, promote durable documentation and prepare independent review and owner-approved closeout. | [Caller workflows](../specs/product/user-workflows.md); [native qualification](../implementation-tips/testing.md#agent-integrated-qualification) |
 
-CANON, AGENT-001 and AGENT-002 are complete; AGENT-003 is Completed.
-AGENT-004 is Completed; AGENT-005 is Completed; AGENT-006 is Completed.
-No release, installation, runtime activation or consumer change is authorized.
-Each future executable/contract candidate requires focused checks and `make test`.
-Whole-Epic review, explicit owner acceptance and dossier retirement are separate
-completion obligations. Neither epic is assigned to the open release cycle.
+AGENT-001 through AGENT-006 completed in the declared order with integrated
+development verification and independent whole-Epic review. Explicit owner
+acceptance authorizes this final closeout and retirement of the execution
+dossier. Lasting behavior, compatibility, source feedback and regression
+ownership are preserved in the canonical outcomes above; the roadmap alone owns
+completion status. Structural call counts exclude setup, external work,
+contention and recovery and establish no latency or LLM-turn savings.
+No release, installation, runtime activation or external-consumer acceptance is
+implied. Neither CANON nor AGENT is assigned to the open release cycle.
 
 ## INTEG — Dolgorae Integration Readiness
 

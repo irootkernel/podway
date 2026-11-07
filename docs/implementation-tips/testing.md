@@ -1204,6 +1204,8 @@ artifact changes. The same rule applies to selected-tool metadata observation,
 whose unsupported/incomplete outcome remains explicit and never qualifies live
 execution, models, accepted external results or activation.
 
+## AGENT integrated qualification
+
 `AGENT-001` registers the reserved `podway.criterion-assessment-many-input/v1`,
 `podway.criterion-assessment-many-result/v1`, and
 `podway.mutation-observation-result/v1` schemas, staged pre-fence batch input
@@ -1260,3 +1262,28 @@ write-lock contention, competing-advancement stale-fence refusal, or
 unwrapped or unsupported-route responses, while relying on the `AGENT-003` and
 `AGENT-005` owners above for batch negative/citation/outcome and
 route/mode-conflict matrices).
+
+### AGENT source feedback and revisit conditions
+
+AGENT selects DF-014 only. The original V2SDG validation maintainability review
+found duplicate identity-flag rejection and different preflight paths for
+`record --stdin` and `delegation accept`. Both routes already rejected conflicting
+flags and preserved document-owned identity; the deferral addressed future
+maintenance risk. Its original revisit condition was to share the CLI
+classification and flag-rejection logic before adding an identity flag or another
+stdin-fenced mutation, then verify that preflight never replaces document fences
+and conflicting flags remain rejected.
+
+AGENT-002 implements that local ownership through `StdinFencedRoute` in
+`podway-cli` grammar, direct dispatch and preflight; AGENT-003 adds the accepted
+batch route. The registered CLI conflict/preflight regressions above preserve
+the original rejection and fence guarantees. Promotion closed the deferral;
+implementation and acceptance remain recorded by the roadmap. DF-025, DF-028,
+DF-050 and the remaining TYPED candidate are outside this selected work.
+
+Development verification covers repository source and native fixture behavior.
+Ignored heavy qualification cases remain unexecuted unless explicitly selected;
+the caller fixtures execute bounded owned-file readback and hashing, not an
+external login suite. Structural counts apply only to the declared normal
+segments. Release, distribution, installation, global skill activation and
+external-consumer acceptance require their own scope and evidence.

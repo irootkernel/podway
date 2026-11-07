@@ -28,17 +28,19 @@ Current adopted work is tracked by the [active roadmap](roadmap/).
 its integer rules and compatibility boundaries are in the
 [JSON contract](specs/interfaces/json-contract.md), and its regression owners are
 in [testing guidance](implementation-tips/testing.md).
-[AGENT](todo/TODO-podway-agent-interaction-simplification.md) is In Progress:
-AGENT-001 and AGENT-002 are Completed for the accepted contract foundation
-and shared stdin-owned fence classification; AGENT-003 is Completed for
-atomic batch criterion assessment (`podway goal assess-criteria --stdin`);
-AGENT-004 is Completed for coherent observation composition and budget reuse;
-AGENT-005 is Completed; AGENT-006 is Completed. No target release is assigned.
-[ADR-0043](architecture-decision-records/0043-atomic-assessment-and-commit-bound-observations.md)
-records the interaction design; AGENT-005 enables
-`podway.mutation-observation-result/v1` through `--with-observation` on the
-supported mutations. AGENT-006 aligns repository caller guidance with the
-conditional observation path and native interaction-count and recovery regressions.
+[AGENT](roadmap/README.md#agent-agent-interaction-simplification) is completed
+and owner-accepted. It delivered atomic criterion assessment batches, shared
+stdin-owned fence classification, coherent commit-bound observations and native
+caller qualification through AGENT-001 to AGENT-006. The
+[interaction contracts](specs/interfaces/json-contract.md),
+[transaction rules](specs/storage/transactions-concurrency-and-idempotency.md),
+[caller workflows](specs/product/user-workflows.md) and
+[regression owners](implementation-tips/testing.md#agent-integrated-qualification)
+preserve the behavior, first-submission and recovery boundaries accepted in
+[ADR-0043](architecture-decision-records/0043-atomic-assessment-and-commit-bound-observations.md).
+Its execution dossier is retired; the roadmap alone owns status. No target
+release is assigned, and development completion implies no release, installation,
+runtime activation or external-consumer acceptance.
 The [INTEG readiness epic](roadmap/README.md#integ-dolgorae-integration-readiness)
 is completed and owner-accepted. It delivered default-disabled user/worktree
 integration permission, an explicit Git/config-only query and repository-only
@@ -100,8 +102,9 @@ Implemented guidance is owned by the [CLI specification](specs/interfaces/cli-sp
 The roadmap retains the qualification and final acceptance boundaries.
 Optional combined operations remain in the
 [interaction candidate](todo/TODO-podway-agent-workflow-simplification.md).
-Selected atomic criterion batches and returned observations are planned under
-[AGENT](todo/TODO-podway-agent-interaction-simplification.md), not implemented by CALLS.
+Selected atomic criterion batches and returned observations are delivered by
+[AGENT](roadmap/README.md#agent-agent-interaction-simplification); CALLS retains
+its separate existing-interface guidance scope.
 This program selects no release or external-consumer change.
 
 The preceding [internal-improvement sequence](roadmap/README.md#current-internal-improvements)
