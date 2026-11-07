@@ -90,8 +90,9 @@ best-effort 500 ms query; offline fresh-start preview versus stateful replacemen
 or reset preview; and the later interactive status read only after plain start
 returns `SESSION_START_DECISION_REQUIRED`. Plain start still executes first,
 retaining exact replay and the same key/deadline on an interview retry. Missing
-workspace UUID alone never triggers fence lookup; stdin-owned record/delegation
-identity remains independent. READS replaces only the first observation.
+workspace UUID alone never triggers fence lookup; stdin-owned record,
+criterion-assessment batch, and delegation identity remains independent. READS
+replaces only the first observation.
 
 ### Pure domain engine
 

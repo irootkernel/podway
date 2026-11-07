@@ -1646,3 +1646,1078 @@ fn bound003_goal_interpretation_and_deferred_memory_admission_remain_independent
     assert!(goal_invalid.validate_memory_declarations_v2().is_ok());
     assert!(super::GoalSnapshotModelV2::parse(&goal_invalid).is_err());
 }
+
+#[test]
+fn agent003_assess_goal_criteria_batch_orders_results_and_supports_partial_and_max_batches() {
+    use crate::{CriterionAssessmentBatchEntryV2, MAX_GOAL_ASSESSMENT_RESULTS};
+
+    let base = assessment_state(5, true, Vec::new());
+    // Submit in reverse declaration order: a-safety then z-proof.
+    let entries = vec![
+        CriterionAssessmentBatchEntryV2::new(
+            criterion("a-safety"),
+            "satisfied",
+            "Safety verified.",
+            vec![CriterionCitationV2::Item(item("assessment-note"))],
+        ),
+        CriterionAssessmentBatchEntryV2::new(
+            criterion("z-proof"),
+            "satisfied",
+            "Proof verified.",
+            vec![CriterionCitationV2::Evidence(node("clarify"))],
+        ),
+    ];
+    let outcome = base
+        .assess_goal_criteria_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            entries,
+            Some(ActorAttributionV2::new("batch-reviewer").unwrap()),
+            UnixMillis::new(45),
+        )
+        .unwrap();
+    assert_eq!(outcome.graph_node_id(), &node("assess"));
+    assert_eq!(outcome.attempt_id(), &attempt_id(2));
+    assert_eq!(outcome.goal_revision(), GoalRevisionNumberV2::FIRST);
+    assert!(outcome.complete());
+    assert_eq!(outcome.determined_outcome(), Some(GoalOutcome::Achieved));
+    assert_eq!(outcome.assessments().len(), 2);
+    // Returned in goal declaration order: z-proof then a-safety.
+    assert_eq!(
+        outcome.assessments()[0].result().criterion_id(),
+        &criterion("z-proof")
+    );
+    assert_eq!(
+        outcome.assessments()[1].result().criterion_id(),
+        &criterion("a-safety")
+    );
+    assert_eq!(outcome.state().workspace_revision(), Revision::new(6));
+    assert_eq!(outcome.state().trace().revision(), Revision::new(6));
+    let stored = &outcome.state().goal_state().attempt_assessments()[0];
+    assert_eq!(stored.results().len(), 2);
+    for state in stored.results() {
+        assert_eq!(
+            state.actor(),
+            Some(&ActorAttributionV2::new("batch-reviewer").unwrap())
+        );
+        assert_eq!(state.recorded_at(), UnixMillis::new(45));
+    }
+
+    // Partial batch (1 entry) followed by batch and single assess_goal_criterion_v2, preserving earlier Unsatisfied outcome.
+    let partial_first = base
+        .assess_goal_criteria_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            vec![CriterionAssessmentBatchEntryV2::new(
+                criterion("z-proof"),
+                "unsatisfied",
+                "Proof incomplete.",
+                Vec::new(),
+            )],
+            None,
+            UnixMillis::new(41),
+        )
+        .unwrap();
+    assert!(!partial_first.complete());
+    assert_eq!(partial_first.determined_outcome(), None);
+    assert_eq!(partial_first.assessments().len(), 1);
+
+    let completed_by_batch = partial_first
+        .state()
+        .assess_goal_criteria_v2(
+            Revision::new(6),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            vec![CriterionAssessmentBatchEntryV2::new(
+                criterion("a-safety"),
+                "satisfied",
+                "Safety holds.",
+                Vec::new(),
+            )],
+            Some(ActorAttributionV2::new("second-actor").unwrap()),
+            UnixMillis::new(42),
+        )
+        .unwrap();
+    assert!(completed_by_batch.complete());
+    assert_eq!(
+        completed_by_batch.determined_outcome(),
+        Some(GoalOutcome::NotAchieved)
+    );
+    assert_eq!(completed_by_batch.assessments().len(), 1);
+    assert_eq!(
+        completed_by_batch.assessments()[0].result().criterion_id(),
+        &criterion("a-safety")
+    );
+
+    let completed_by_single = partial_first
+        .state()
+        .assess_goal_criterion_v2(
+            Revision::new(6),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            CriterionAssessmentResultV2::new(
+                criterion("a-safety"),
+                CriterionStatusV2::Satisfied,
+                CriterionAssessmentReasonV2::new("Safety holds via single.").unwrap(),
+                Vec::new(),
+            )
+            .unwrap(),
+            Some(ActorAttributionV2::new("single-actor").unwrap()),
+            UnixMillis::new(42),
+        )
+        .unwrap();
+    assert!(completed_by_single.complete());
+    assert_eq!(
+        completed_by_single.determined_outcome(),
+        Some(GoalOutcome::NotAchieved)
+    );
+    assert_eq!(
+        completed_by_single.assessment().result().criterion_id(),
+        &criterion("a-safety")
+    );
+
+    // Single assess_goal_criterion_v2 followed by batch assess_goal_criteria_v2.
+    let single_first = base
+        .assess_goal_criterion_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            CriterionAssessmentResultV2::new(
+                criterion("a-safety"),
+                CriterionStatusV2::Satisfied,
+                CriterionAssessmentReasonV2::new("Single first.").unwrap(),
+                Vec::new(),
+            )
+            .unwrap(),
+            None,
+            UnixMillis::new(41),
+        )
+        .unwrap();
+    assert!(!single_first.complete());
+    let batch_second = single_first
+        .state()
+        .assess_goal_criteria_v2(
+            Revision::new(6),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            vec![CriterionAssessmentBatchEntryV2::new(
+                criterion("z-proof"),
+                "satisfied",
+                "Batch second.",
+                Vec::new(),
+            )],
+            None,
+            UnixMillis::new(42),
+        )
+        .unwrap();
+    assert!(batch_second.complete());
+    assert_eq!(
+        batch_second.determined_outcome(),
+        Some(GoalOutcome::Achieved)
+    );
+
+    // Applicability mode (Superseded outcome).
+    let applicability = base
+        .assess_goal_criteria_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            vec![
+                CriterionAssessmentBatchEntryV2::new(
+                    criterion("a-safety"),
+                    "not_applicable",
+                    "Goal superseded.",
+                    Vec::new(),
+                ),
+                CriterionAssessmentBatchEntryV2::new(
+                    criterion("z-proof"),
+                    "not_applicable",
+                    "Goal superseded.",
+                    Vec::new(),
+                ),
+            ],
+            None,
+            UnixMillis::new(46),
+        )
+        .unwrap();
+    assert!(applicability.complete());
+    assert_eq!(
+        applicability.determined_outcome(),
+        Some(GoalOutcome::Superseded)
+    );
+
+    // 16-criterion maximum batch in a single call.
+    let sixteen_criteria = GoalDefinitionV2::new(
+        (1..=MAX_GOAL_ASSESSMENT_RESULTS)
+            .map(|index| {
+                GoalCriterionV2::new(
+                    criterion(&format!("c-{index:02}")),
+                    format!("Criterion {index}."),
+                )
+                .unwrap()
+            })
+            .collect(),
+    )
+    .unwrap();
+    let sixteen_goal = GoalRevisionRecordV2::new(
+        GoalRevisionNumberV2::FIRST,
+        None,
+        GoalStatementV2::new("Assess sixteen criteria atomically.").unwrap(),
+        sixteen_criteria,
+        None,
+        None,
+        false,
+        None,
+        TraceSequenceV2::FIRST,
+        UnixMillis::new(20),
+    )
+    .unwrap();
+    let clarify = clarify_memory(1, true);
+    let assess = assess_memory(&clarify, true);
+    let sixteen_state = state(
+        5,
+        SessionLifecycle::Running,
+        vec![
+            attempt(
+                1,
+                "clarify",
+                1,
+                1,
+                AttemptLifecycle::Completed,
+                AttemptValidityV2::Valid,
+                Some(1),
+            ),
+            attempt(
+                2,
+                "assess",
+                1,
+                2,
+                AttemptLifecycle::Active,
+                AttemptValidityV2::Valid,
+                Some(1),
+            ),
+        ],
+        vec![
+            AttemptMetadataV2::new(
+                attempt_id(1),
+                UnixMillis::new(10),
+                Some(UnixMillis::new(30)),
+                None,
+            )
+            .unwrap(),
+            AttemptMetadataV2::new(attempt_id(2), UnixMillis::new(30), None, None).unwrap(),
+        ],
+        counters(1, 1, 0, 0),
+        WorkflowMemoryStateV2::new(vec![clarify, assess], Vec::new(), Vec::new()).unwrap(),
+        GoalStateV2::new(
+            Some(GoalRevisionNumberV2::FIRST),
+            vec![sixteen_goal],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap(),
+        None,
+    );
+    let sixteen_entries: Vec<_> = (1..=MAX_GOAL_ASSESSMENT_RESULTS)
+        .rev()
+        .map(|index| {
+            CriterionAssessmentBatchEntryV2::new(
+                criterion(&format!("c-{index:02}")),
+                "satisfied",
+                format!("Verified {index}."),
+                Vec::new(),
+            )
+        })
+        .collect();
+    let sixteen_outcome = sixteen_state
+        .assess_goal_criteria_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            sixteen_entries,
+            None,
+            UnixMillis::new(50),
+        )
+        .unwrap();
+    assert!(sixteen_outcome.complete());
+    assert_eq!(
+        sixteen_outcome.assessments().len(),
+        MAX_GOAL_ASSESSMENT_RESULTS
+    );
+    assert_eq!(
+        sixteen_outcome.assessments()[0].result().criterion_id(),
+        &criterion("c-01")
+    );
+    assert_eq!(
+        sixteen_outcome.assessments()[15].result().criterion_id(),
+        &criterion("c-16")
+    );
+}
+
+#[test]
+fn agent003_assess_goal_criteria_rejects_invalid_batches_and_enforces_successor_bounds() {
+    use crate::{
+        CriterionAssessmentBatchEntryV2, CriterionAssessmentModeV2, MAX_GOAL_ASSESSMENT_RESULTS,
+        ProcedureStateErrorV2,
+    };
+
+    let base = assessment_state(5, true, Vec::new());
+
+    // Empty batch rejected.
+    assert!(matches!(
+        base.assess_goal_criteria_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            Vec::new(),
+            None,
+            UnixMillis::new(45),
+        ),
+        Err(GraphMutationErrorV2::Domain(_))
+    ));
+
+    // 17 entries rejected.
+    let seventeen: Vec<_> = (1..=MAX_GOAL_ASSESSMENT_RESULTS + 1)
+        .map(|index| {
+            CriterionAssessmentBatchEntryV2::new(
+                criterion(&format!("c-{index}")),
+                "satisfied",
+                "ok",
+                Vec::new(),
+            )
+        })
+        .collect();
+    assert!(matches!(
+        base.assess_goal_criteria_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            seventeen,
+            None,
+            UnixMillis::new(45),
+        ),
+        Err(GraphMutationErrorV2::Domain(_))
+    ));
+
+    // Duplicate criterion_id rejected before entry loop.
+    let duplicate = vec![
+        CriterionAssessmentBatchEntryV2::new(
+            criterion("z-proof"),
+            "satisfied",
+            "first",
+            Vec::new(),
+        ),
+        CriterionAssessmentBatchEntryV2::new(
+            criterion("z-proof"),
+            "satisfied",
+            "second",
+            Vec::new(),
+        ),
+    ];
+    assert!(matches!(
+        base.assess_goal_criteria_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            duplicate,
+            None,
+            UnixMillis::new(45),
+        ),
+        Err(GraphMutationErrorV2::Domain(_))
+    ));
+
+    // First-batch mixed mode rejected at second entry in submitted order.
+    let mixed_first_batch = vec![
+        CriterionAssessmentBatchEntryV2::new(
+            criterion("z-proof"),
+            "satisfied",
+            "satisfied",
+            Vec::new(),
+        ),
+        CriterionAssessmentBatchEntryV2::new(
+            criterion("a-safety"),
+            "not_applicable",
+            "not applicable",
+            Vec::new(),
+        ),
+    ];
+    assert_eq!(
+        base.assess_goal_criteria_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            mixed_first_batch,
+            None,
+            UnixMillis::new(45),
+        ),
+        Err(GraphMutationErrorV2::CriterionModeMixed {
+            criterion_id: criterion("a-safety"),
+            expected_mode: CriterionAssessmentModeV2::Assessment,
+            actual_status: CriterionStatusV2::NotApplicable,
+        })
+    );
+
+    // Prior-result mixed mode rejected at first entry.
+    let with_prior = assessment_state(5, true, vec![partial_criterion_state()]);
+    assert_eq!(
+        with_prior.assess_goal_criteria_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            vec![CriterionAssessmentBatchEntryV2::new(
+                criterion("a-safety"),
+                "not_applicable",
+                "not applicable",
+                Vec::new(),
+            )],
+            None,
+            UnixMillis::new(45),
+        ),
+        Err(GraphMutationErrorV2::CriterionModeMixed {
+            criterion_id: criterion("a-safety"),
+            expected_mode: CriterionAssessmentModeV2::Assessment,
+            actual_status: CriterionStatusV2::NotApplicable,
+        })
+    );
+
+    // Ordered first-invalid-entry checks:
+    // Entry 0 is unknown criterion ("unknown"), Entry 1 is already recorded ("z-proof") -> fails on Entry 0 CriterionNotFound.
+    assert_eq!(
+        with_prior.assess_goal_criteria_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            vec![
+                CriterionAssessmentBatchEntryV2::new(
+                    criterion("unknown"),
+                    "satisfied",
+                    "unknown",
+                    Vec::new(),
+                ),
+                CriterionAssessmentBatchEntryV2::new(
+                    criterion("z-proof"),
+                    "satisfied",
+                    "already",
+                    Vec::new(),
+                ),
+            ],
+            None,
+            UnixMillis::new(45),
+        ),
+        Err(GraphMutationErrorV2::CriterionNotFound {
+            criterion_id: criterion("unknown"),
+        })
+    );
+
+    // Reversed: Entry 0 is already recorded ("z-proof"), Entry 1 is unknown ("unknown") -> fails on Entry 0 CriterionResultAlreadyRecorded.
+    assert_eq!(
+        with_prior.assess_goal_criteria_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            vec![
+                CriterionAssessmentBatchEntryV2::new(
+                    criterion("z-proof"),
+                    "satisfied",
+                    "already",
+                    Vec::new(),
+                ),
+                CriterionAssessmentBatchEntryV2::new(
+                    criterion("unknown"),
+                    "satisfied",
+                    "unknown",
+                    Vec::new(),
+                ),
+            ],
+            None,
+            UnixMillis::new(45),
+        ),
+        Err(GraphMutationErrorV2::CriterionResultAlreadyRecorded {
+            criterion_id: criterion("z-proof"),
+        })
+    );
+
+    // Citation validation: unrecorded item on assess_state(note_recorded = false).
+    let unrecorded_note = assessment_state(5, false, Vec::new());
+    assert_eq!(
+        unrecorded_note.assess_goal_criteria_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            vec![
+                CriterionAssessmentBatchEntryV2::new(
+                    criterion("z-proof"),
+                    "satisfied",
+                    "ok",
+                    Vec::new(),
+                ),
+                CriterionAssessmentBatchEntryV2::new(
+                    criterion("a-safety"),
+                    "satisfied",
+                    "cites unrecorded item",
+                    vec![CriterionCitationV2::Item(item("assessment-note"))],
+                ),
+            ],
+            None,
+            UnixMillis::new(45),
+        ),
+        Err(GraphMutationErrorV2::CriterionCitationInvalid {
+            criterion_id: criterion("a-safety"),
+            citation: CriterionCitationV2::Item(item("assessment-note")),
+            citable_evidence_source_nodes: vec![node("clarify")],
+            citable_item_ids: Vec::new(),
+        })
+    );
+
+    // Citation validation: invalid/undeclared evidence source on entry 0 beats entry 1's invalid status.
+    assert_eq!(
+        base.assess_goal_criteria_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            vec![
+                CriterionAssessmentBatchEntryV2::new(
+                    criterion("z-proof"),
+                    "satisfied",
+                    "cites undeclared evidence node",
+                    vec![CriterionCitationV2::Evidence(node("finish"))],
+                ),
+                CriterionAssessmentBatchEntryV2::new(
+                    criterion("a-safety"),
+                    "invalid-status",
+                    "ok",
+                    Vec::new(),
+                ),
+            ],
+            None,
+            UnixMillis::new(45),
+        ),
+        Err(GraphMutationErrorV2::CriterionCitationInvalid {
+            criterion_id: criterion("z-proof"),
+            citation: CriterionCitationV2::Evidence(node("finish")),
+            citable_evidence_source_nodes: vec![node("clarify")],
+            citable_item_ids: vec![item("assessment-note")],
+        })
+    );
+
+    // Citation validation: skipped and unresolved evidence references are rejected in batch assessment.
+    let mut optional_doc: serde_json::Value =
+        serde_json::from_str(snapshot().canonical_json().as_str()).unwrap();
+    optional_doc["graph"]["nodes"][0]["skip"] = json!({"allowed": true, "reason_required": false});
+    optional_doc["graph"]["nodes"][1]["evidence_from"] = json!([
+        {"node": "clarify", "required": false},
+        {"node": "finish", "required": false}
+    ]);
+    let optional_canonical = canonicalize_json_v1(&optional_doc).unwrap();
+    let optional_digest = Sha256Digest::new(format!(
+        "sha256:{:x}",
+        Sha256::digest(optional_canonical.as_bytes())
+    ))
+    .unwrap();
+    let optional_snapshot = snapshot_from_canonical(
+        ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000499").unwrap(),
+        CanonicalProcedureJsonV1::new(optional_canonical).unwrap(),
+        optional_digest,
+        ProcedureSourceLabelV1::file("optional-goal.yaml").unwrap(),
+        UnixMillis::new(5),
+    )
+    .unwrap();
+    let skipped_clarify = clarify_memory(1, false);
+    let skipped_and_unresolved_assess = AttemptWorkflowMemoryV2::new(
+        attempt_id(2),
+        vec![
+            ItemSlotStateV2::new(
+                attempt_id(2),
+                item("assessment-note"),
+                ItemTypeV1::Text,
+                Revision::new(1),
+                Some(RecordedItemValueV2::text("reviewed evidence").unwrap()),
+                UnixMillis::new(30),
+                UnixMillis::new(31),
+            )
+            .unwrap(),
+        ],
+        Vec::new(),
+        vec![
+            EvidenceResolutionStateV2::new(
+                0,
+                false,
+                Vec::new(),
+                ResolvedEvidenceReferenceV2::skipped(
+                    EvidenceReferenceSnapshotV2::new(
+                        node("clarify"),
+                        attempt_id(1),
+                        AttemptNumberV2::FIRST,
+                        skipped_clarify.recorded_items_digest().unwrap(),
+                        UnixMillis::new(30),
+                    )
+                    .unwrap(),
+                ),
+            )
+            .unwrap(),
+            EvidenceResolutionStateV2::new(
+                1,
+                false,
+                Vec::new(),
+                ResolvedEvidenceReferenceV2::unresolved(node("finish")),
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    let skipped_and_unresolved_state = GraphSessionStateV2::new_with_goal_state(
+        Revision::new(5),
+        "Persist goal state",
+        optional_snapshot,
+        SessionTraceV2::from_parts(
+            session_id(),
+            SessionLifecycle::Running,
+            Revision::new(5),
+            vec![
+                attempt(
+                    1,
+                    "clarify",
+                    1,
+                    1,
+                    AttemptLifecycle::Skipped,
+                    AttemptValidityV2::Valid,
+                    Some(1),
+                ),
+                attempt(
+                    2,
+                    "assess",
+                    1,
+                    2,
+                    AttemptLifecycle::Active,
+                    AttemptValidityV2::Valid,
+                    Some(1),
+                ),
+            ],
+        )
+        .unwrap(),
+        counters(1, 1, 0, 0),
+        vec![
+            AttemptMetadataV2::new(
+                attempt_id(1),
+                UnixMillis::new(10),
+                Some(UnixMillis::new(30)),
+                Some("Skipped clarify.".into()),
+            )
+            .unwrap(),
+            AttemptMetadataV2::new(attempt_id(2), UnixMillis::new(30), None, None).unwrap(),
+        ],
+        WorkflowMemoryStateV2::new(
+            vec![skipped_clarify, skipped_and_unresolved_assess],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap(),
+        GoalStateV2::new(
+            Some(GoalRevisionNumberV2::FIRST),
+            vec![goal_revision_one()],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap(),
+        UnixMillis::new(10),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    for bad_evidence_node in [node("clarify"), node("finish")] {
+        assert_eq!(
+            skipped_and_unresolved_state.assess_goal_criteria_v2(
+                Revision::new(5),
+                &attempt_id(2),
+                GoalRevisionNumberV2::FIRST,
+                vec![
+                    CriterionAssessmentBatchEntryV2::new(
+                        criterion("z-proof"),
+                        "satisfied",
+                        "cites non-resolved evidence",
+                        vec![CriterionCitationV2::Evidence(bad_evidence_node.clone())],
+                    ),
+                    CriterionAssessmentBatchEntryV2::new(
+                        criterion("a-safety"),
+                        "invalid-status",
+                        "later invalid status",
+                        Vec::new(),
+                    ),
+                ],
+                None,
+                UnixMillis::new(45),
+            ),
+            Err(GraphMutationErrorV2::CriterionCitationInvalid {
+                criterion_id: criterion("z-proof"),
+                citation: CriterionCitationV2::Evidence(bad_evidence_node),
+                citable_evidence_source_nodes: Vec::new(),
+                citable_item_ids: vec![item("assessment-note")],
+            })
+        );
+    }
+
+    // Successor validation positive: real 2-entry batch successor is admitted by validate_goal_state_successor_v2.
+    let valid_batch_outcome = base
+        .assess_goal_criteria_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            vec![
+                CriterionAssessmentBatchEntryV2::new(
+                    criterion("a-safety"),
+                    "satisfied",
+                    "Safety ok.",
+                    Vec::new(),
+                ),
+                CriterionAssessmentBatchEntryV2::new(
+                    criterion("z-proof"),
+                    "satisfied",
+                    "Proof ok.",
+                    Vec::new(),
+                ),
+            ],
+            Some(ActorAttributionV2::new("batch-reviewer").unwrap()),
+            UnixMillis::new(45),
+        )
+        .unwrap();
+    assert_eq!(
+        super::validate_goal_state_successor_v2(
+            base.trace(),
+            base.workflow_memory(),
+            base.goal_state(),
+            valid_batch_outcome.state().trace(),
+            valid_batch_outcome.state().workflow_memory(),
+            valid_batch_outcome.state().goal_state(),
+        ),
+        Ok(crate::workflow_v2::WorkflowGoalTransitionV2::None)
+    );
+
+    // Same-entry conversion priority: citation count (>4) beats invalid status and blank reason;
+    // invalid status beats duplicate citation and blank reason; duplicate citation beats blank reason.
+    let five_citations: Vec<_> = (1..=5)
+        .map(|index| CriterionCitationV2::Item(item(&format!("item-{index}"))))
+        .collect();
+    assert_eq!(
+        base.assess_goal_criteria_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            vec![CriterionAssessmentBatchEntryV2::new(
+                criterion("z-proof"),
+                "invalid-status",
+                "",
+                five_citations,
+            )],
+            None,
+            UnixMillis::new(45),
+        ),
+        Err(GraphMutationErrorV2::Domain(
+            crate::DomainError::InvalidState {
+                reason: "a criterion result carries at most four citations",
+            }
+        ))
+    );
+    assert_eq!(
+        base.assess_goal_criteria_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            vec![CriterionAssessmentBatchEntryV2::new(
+                criterion("z-proof"),
+                "invalid-status",
+                "",
+                vec![
+                    CriterionCitationV2::Evidence(node("clarify")),
+                    CriterionCitationV2::Evidence(node("clarify")),
+                ],
+            )],
+            None,
+            UnixMillis::new(45),
+        ),
+        Err(GraphMutationErrorV2::Domain(
+            crate::DomainError::InvalidState {
+                reason: "unknown criterion assessment status",
+            }
+        ))
+    );
+    assert_eq!(
+        base.assess_goal_criteria_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            vec![CriterionAssessmentBatchEntryV2::new(
+                criterion("z-proof"),
+                "satisfied",
+                "",
+                vec![
+                    CriterionCitationV2::Evidence(node("clarify")),
+                    CriterionCitationV2::Evidence(node("clarify")),
+                ],
+            )],
+            None,
+            UnixMillis::new(45),
+        ),
+        Err(GraphMutationErrorV2::Domain(
+            crate::DomainError::InvalidState {
+                reason: "criterion result citations must be unique",
+            }
+        ))
+    );
+
+    // Cross-entry non-eager conversion & mode precedence: earlier entry domain error (CriterionNotFound or
+    // CriterionResultAlreadyRecorded) beats later entry conversion failure or mode mismatch.
+    assert_eq!(
+        with_prior.assess_goal_criteria_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            vec![
+                CriterionAssessmentBatchEntryV2::new(
+                    criterion("unknown"),
+                    "satisfied",
+                    "ok",
+                    Vec::new(),
+                ),
+                CriterionAssessmentBatchEntryV2::new(
+                    criterion("a-safety"),
+                    "invalid-status",
+                    "",
+                    Vec::new(),
+                ),
+            ],
+            None,
+            UnixMillis::new(45),
+        ),
+        Err(GraphMutationErrorV2::CriterionNotFound {
+            criterion_id: criterion("unknown"),
+        })
+    );
+    assert_eq!(
+        with_prior.assess_goal_criteria_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            vec![
+                CriterionAssessmentBatchEntryV2::new(
+                    criterion("z-proof"),
+                    "satisfied",
+                    "already recorded",
+                    Vec::new(),
+                ),
+                CriterionAssessmentBatchEntryV2::new(
+                    criterion("a-safety"),
+                    "not_applicable",
+                    "mode mismatch on later entry",
+                    Vec::new(),
+                ),
+            ],
+            None,
+            UnixMillis::new(45),
+        ),
+        Err(GraphMutationErrorV2::CriterionResultAlreadyRecorded {
+            criterion_id: criterion("z-proof"),
+        })
+    );
+
+    // Successor validation negative: modifying a non-active attempt's criterion assessment state is rejected.
+    let forged_non_active_goal = GoalStateV2::new(
+        Some(GoalRevisionNumberV2::FIRST),
+        vec![goal_revision_one()],
+        vec![
+            AttemptCriterionAssessmentStateV2::new(
+                attempt_id(1),
+                GoalRevisionNumberV2::FIRST,
+                vec![criterion_result("z-proof", Vec::new())],
+            )
+            .unwrap(),
+        ],
+        Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        super::validate_goal_state_successor_v2(
+            base.trace(),
+            base.workflow_memory(),
+            base.goal_state(),
+            base.trace(),
+            base.workflow_memory(),
+            &forged_non_active_goal,
+        ),
+        Err(ProcedureStateErrorV2::new(
+            "Procedure v2 criterion result is not bound to the active attempt"
+        ))
+    );
+
+    // Successor validation negative: extending both active owner and an existing inactive owner in one step is rejected.
+    let forged_both_owners_goal = GoalStateV2::new(
+        Some(GoalRevisionNumberV2::FIRST),
+        vec![goal_revision_one()],
+        vec![
+            AttemptCriterionAssessmentStateV2::new(
+                attempt_id(1),
+                GoalRevisionNumberV2::FIRST,
+                vec![
+                    criterion_result("z-proof", Vec::new()),
+                    criterion_result("a-safety", Vec::new()),
+                ],
+            )
+            .unwrap(),
+            AttemptCriterionAssessmentStateV2::new(
+                attempt_id(2),
+                GoalRevisionNumberV2::FIRST,
+                vec![criterion_result("a-safety", Vec::new())],
+            )
+            .unwrap(),
+        ],
+        Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        super::validate_goal_state_successor_v2(
+            base.trace(),
+            base.workflow_memory(),
+            &forged_non_active_goal,
+            base.trace(),
+            base.workflow_memory(),
+            &forged_both_owners_goal,
+        ),
+        Err(ProcedureStateErrorV2::new(
+            "Procedure v2 criterion result is not bound to the active attempt"
+        ))
+    );
+
+    // Successor validation negative: rewriting an existing old row while appending a new row is rejected.
+    let forged_rewritten_old_row = assessment_state(
+        6,
+        true,
+        vec![
+            AttemptCriterionAssessmentStateV2::new(
+                attempt_id(2),
+                GoalRevisionNumberV2::FIRST,
+                vec![
+                    criterion_result_at("z-proof", CriterionStatusV2::Unsatisfied, Vec::new(), 40),
+                    criterion_result_at("a-safety", CriterionStatusV2::Satisfied, Vec::new(), 45),
+                ],
+            )
+            .unwrap(),
+        ],
+    );
+    assert_eq!(
+        super::validate_goal_state_successor_v2(
+            with_prior.trace(),
+            with_prior.workflow_memory(),
+            with_prior.goal_state(),
+            forged_rewritten_old_row.trace(),
+            forged_rewritten_old_row.workflow_memory(),
+            forged_rewritten_old_row.goal_state(),
+        ),
+        Err(ProcedureStateErrorV2::new(
+            "Procedure v2 criterion history is not append-only"
+        ))
+    );
+
+    // Successor validation negative: combining criterion append with a new goal assessment record is rejected.
+    let clarify_for_forged = clarify_memory(1, true);
+    let forged_combined_assessment_goal = GoalStateV2::new(
+        Some(GoalRevisionNumberV2::FIRST),
+        vec![goal_revision_one()],
+        vec![complete_criterion_state()],
+        vec![goal_assessment(&clarify_for_forged)],
+    )
+    .unwrap();
+    assert_eq!(
+        super::validate_goal_state_successor_v2(
+            base.trace(),
+            base.workflow_memory(),
+            base.goal_state(),
+            base.trace(),
+            base.workflow_memory(),
+            &forged_combined_assessment_goal,
+        ),
+        Err(ProcedureStateErrorV2::new(
+            "Procedure v2 criterion result mutation is not cursor-stable"
+        ))
+    );
+
+    // Successor validation negative: newly appended batch rows with mismatched timestamp or actor are rejected.
+    let forged_mismatched_new_rows = assessment_state(
+        6,
+        true,
+        vec![
+            AttemptCriterionAssessmentStateV2::new(
+                attempt_id(2),
+                GoalRevisionNumberV2::FIRST,
+                vec![
+                    criterion_result_at("z-proof", CriterionStatusV2::Satisfied, Vec::new(), 40),
+                    criterion_result_at("a-safety", CriterionStatusV2::Satisfied, Vec::new(), 41),
+                ],
+            )
+            .unwrap(),
+        ],
+    );
+    assert_eq!(
+        super::validate_goal_state_successor_v2(
+            base.trace(),
+            base.workflow_memory(),
+            base.goal_state(),
+            forged_mismatched_new_rows.trace(),
+            forged_mismatched_new_rows.workflow_memory(),
+            forged_mismatched_new_rows.goal_state(),
+        ),
+        Err(ProcedureStateErrorV2::new(
+            "Procedure v2 batch criterion results must share one actor and timestamp"
+        ))
+    );
+
+    let forged_mismatched_actors = assessment_state(
+        6,
+        true,
+        vec![
+            AttemptCriterionAssessmentStateV2::new(
+                attempt_id(2),
+                GoalRevisionNumberV2::FIRST,
+                vec![
+                    CriterionAssessmentStateV2::new(
+                        CriterionAssessmentResultV2::new(
+                            criterion("z-proof"),
+                            CriterionStatusV2::Satisfied,
+                            CriterionAssessmentReasonV2::new("ok").unwrap(),
+                            Vec::new(),
+                        )
+                        .unwrap(),
+                        Some(ActorAttributionV2::new("actor-a").unwrap()),
+                        UnixMillis::new(45),
+                    ),
+                    CriterionAssessmentStateV2::new(
+                        CriterionAssessmentResultV2::new(
+                            criterion("a-safety"),
+                            CriterionStatusV2::Satisfied,
+                            CriterionAssessmentReasonV2::new("ok").unwrap(),
+                            Vec::new(),
+                        )
+                        .unwrap(),
+                        Some(ActorAttributionV2::new("actor-b").unwrap()),
+                        UnixMillis::new(45),
+                    ),
+                ],
+            )
+            .unwrap(),
+        ],
+    );
+    assert_eq!(
+        super::validate_goal_state_successor_v2(
+            base.trace(),
+            base.workflow_memory(),
+            base.goal_state(),
+            forged_mismatched_actors.trace(),
+            forged_mismatched_actors.workflow_memory(),
+            forged_mismatched_actors.goal_state(),
+        ),
+        Err(ProcedureStateErrorV2::new(
+            "Procedure v2 batch criterion results must share one actor and timestamp"
+        ))
+    );
+}

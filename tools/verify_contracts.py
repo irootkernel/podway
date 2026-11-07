@@ -195,6 +195,7 @@ APPROVED_COMMANDS = frozenset(
         "delegation.package",
         "delegation.receipt",
         "evidence.read",
+        "goal.assess_criteria",
         "goal.assess_criterion",
         "goal.define",
         "goal.revise",

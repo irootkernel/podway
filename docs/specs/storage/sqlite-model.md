@@ -173,7 +173,12 @@ Before opening a writer, the mutation path verifies the current Store through a
 read-only snapshot. Its `BEGIN IMMEDIATE` repeats writer/schema/binding/inode
 validation, checks exact replay before callback or clock, and revalidates prepared
 inputs. Relational persistence writes changed state rather than rewriting the
-entire successor. Success retains the original response UUID for replay.
+entire successor: for `goal.assess_criteria`, all 1 to 16 newly recorded
+`v2_criterion_assessment_results` rows and their ordered `v2_criterion_citations` rows on
+the active `goal_assessment` attempt commit atomically in that single write
+transaction without a schema generation bump, and any validation or successor
+admission failure rolls back the complete batch. Success retains the original
+response UUID for replay.
 
 SQLite uses WAL and `synchronous=FULL`, enables foreign keys, disables trusted
 schema and verifies schema objects. Ordinary admission does not verify page

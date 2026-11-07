@@ -20,11 +20,11 @@ use podway_engine::{
 };
 use podway_git::NativeGitResolverV1;
 use podway_protocol::{
-    GoalAssessCriterionV2, GoalCriterionWireV2, GoalDefineV2, GoalReviseV2,
-    GoalRevisionPreconditionsWireV2, InitialGoalWireV2, ProcedureV2MutationCommandV1 as P,
-    SessionBeginV1, SessionCancelV1, SessionDecideV2, SessionDeletionModeV1,
-    SessionIdentityPreconditionsWireV1, SessionStartCommandV1, SessionStartReplaceV1,
-    SessionStartSourceV1, SessionStartV1,
+    CriterionAssessmentManyEntryWireV1, GoalAssessCriteriaV2, GoalAssessCriterionV2,
+    GoalCriterionWireV2, GoalDefineV2, GoalReviseV2, GoalRevisionPreconditionsWireV2,
+    InitialGoalWireV2, ProcedureV2MutationCommandV1 as P, SessionBeginV1, SessionCancelV1,
+    SessionDecideV2, SessionDeletionModeV1, SessionIdentityPreconditionsWireV1,
+    SessionStartCommandV1, SessionStartReplaceV1, SessionStartSourceV1, SessionStartV1,
 };
 use podway_store::IdempotencyKeyV1;
 use serde_json::{Value, json};
@@ -1002,6 +1002,17 @@ fn v2gol_epic_goal_mutations_without_opt_in_fail_atomically_and_replay_after_res
         "assess-disabled",
         "GOAL_TRACKING_NOT_ENABLED",
     );
+    let command = assess_many(
+        &engine,
+        vec![entry("correct", "satisfied", "ok", &[], &[])],
+        None,
+    );
+    error(
+        &mut engine,
+        command,
+        "assess-many-disabled",
+        "GOAL_TRACKING_NOT_ENABLED",
+    );
 }
 
 #[test]
@@ -1039,6 +1050,830 @@ fn v2gol_epic_running_reactivate_true_is_inert_and_cold_replayable() {
     assert_eq!(enabled.graph(), left);
     assert_eq!(enabled.output(enabled.execute(request, &NoClock)), original);
     assert_eq!(running_projection(&status(&enabled)), warm_projection);
+}
+
+fn assess_many(
+    engine: &Engine,
+    assessments: Vec<CriterionAssessmentManyEntryWireV1>,
+    actor: Option<&str>,
+) -> DirectCommandV1 {
+    DirectCommandV1::Procedure(P::GoalAssessCriteria(GoalAssessCriteriaV2 {
+        assessments,
+        actor: actor.map(str::to_owned),
+        preconditions: engine.fences(),
+        expected_goal_revision: engine
+            .graph()
+            .goal_state()
+            .current_revision()
+            .map_or(1, |revision| revision.get()),
+    }))
+}
+
+fn entry(
+    criterion: &str,
+    status: &str,
+    reason: &str,
+    evidence: &[&str],
+    items: &[&str],
+) -> CriterionAssessmentManyEntryWireV1 {
+    CriterionAssessmentManyEntryWireV1 {
+        criterion_id: CriterionId::new(criterion).unwrap(),
+        status: status.to_owned(),
+        reason: reason.to_owned(),
+        evidence: evidence
+            .iter()
+            .map(|node| GraphNodeId::new(*node).unwrap())
+            .collect(),
+        items: items.iter().map(|id| ItemId::new(*id).unwrap()).collect(),
+    }
+}
+
+#[test]
+fn agent003_goal_assess_criteria_enforces_pre_fence_bounds_fences_and_ordered_entry_errors() {
+    use podway_protocol::ContractGenerationV1;
+
+    let mut engine = at_decision(ASSESSMENT_PROCEDURE);
+    engine.set("assessment-note", "Recorded note on decision.", "set-note");
+
+    // 1. Pre-fence shape/resource bounds fail before clock or state mutation.
+    let empty_cmd = assess_many(&engine, Vec::new(), None);
+    let empty_req = engine.request(empty_cmd, "agent003-empty");
+    let DirectResponseV1::Failure(err) = engine.execute(empty_req, &NoClock) else {
+        panic!("expected empty assessments failure")
+    };
+    assert_eq!(err.into_value()["code"], "REQUEST_INVALID");
+
+    let seventeen_entries: Vec<_> = (1..=17)
+        .map(|i| entry(&format!("c-{i}"), "satisfied", "ok", &[], &[]))
+        .collect();
+    let seventeen_req = engine.request(
+        assess_many(&engine, seventeen_entries, None),
+        "agent003-seventeen",
+    );
+    let DirectResponseV1::Failure(err) = engine.execute(seventeen_req, &NoClock) else {
+        panic!("expected 17 assessments failure")
+    };
+    assert_eq!(err.into_value()["code"], "REQUEST_INVALID");
+
+    let mut dup_cmd = assess_many(
+        &engine,
+        vec![
+            entry("correct", "satisfied", "first", &[], &[]),
+            entry("correct", "satisfied", "second", &[], &[]),
+        ],
+        None,
+    );
+    if let DirectCommandV1::Procedure(P::GoalAssessCriteria(input)) = &mut dup_cmd {
+        input.preconditions.expected_session_revision = Revision::ZERO;
+    }
+    let dup_req = engine.request(dup_cmd, "agent003-dup");
+    let DirectResponseV1::Failure(err) = engine.execute(dup_req, &NoClock) else {
+        panic!("expected duplicate criterion failure")
+    };
+    assert_eq!(err.into_value()["code"], "REQUEST_INVALID");
+
+    let mut zero_goal_cmd = assess_many(
+        &engine,
+        vec![entry("correct", "satisfied", "ok", &[], &[])],
+        None,
+    );
+    if let DirectCommandV1::Procedure(P::GoalAssessCriteria(input)) = &mut zero_goal_cmd {
+        input.expected_goal_revision = 0;
+    }
+    error(
+        &mut engine,
+        zero_goal_cmd,
+        "agent003-zero-goal",
+        "REQUEST_INVALID",
+    );
+
+    let huge_reason = "x".repeat(1_048_576);
+    let huge_cmd = assess_many(
+        &engine,
+        vec![entry("correct", "satisfied", &huge_reason, &[], &[])],
+        None,
+    );
+    let huge_req = engine.request(huge_cmd, "agent003-too-large");
+    let DirectResponseV1::Failure(err) = engine.execute(huge_req, &NoClock) else {
+        panic!("expected REQUEST_TOO_LARGE")
+    };
+    assert_eq!(err.into_value()["code"], "REQUEST_TOO_LARGE");
+
+    for (key, mut pre_fence_cmd) in [
+        (
+            "agent003-blank-actor",
+            assess_many(
+                &engine,
+                vec![entry("correct", "satisfied", "ok", &[], &[])],
+                Some("   "),
+            ),
+        ),
+        (
+            "agent003-overlong-actor",
+            assess_many(
+                &engine,
+                vec![entry("correct", "satisfied", "ok", &[], &[])],
+                Some(&"a".repeat(257)),
+            ),
+        ),
+        (
+            "agent003-overlong-reason",
+            assess_many(
+                &engine,
+                vec![entry("correct", "satisfied", &"r".repeat(2001), &[], &[])],
+                None,
+            ),
+        ),
+        (
+            "agent003-five-evidence-list",
+            assess_many(
+                &engine,
+                vec![entry(
+                    "correct",
+                    "satisfied",
+                    "ok",
+                    &["perform", "decide", "finish", "perform", "decide"],
+                    &[],
+                )],
+                None,
+            ),
+        ),
+        (
+            "agent003-five-items-list",
+            assess_many(
+                &engine,
+                vec![entry(
+                    "correct",
+                    "satisfied",
+                    "ok",
+                    &[],
+                    &[
+                        "assessment-note",
+                        "result",
+                        "assessment-note",
+                        "result",
+                        "assessment-note",
+                    ],
+                )],
+                None,
+            ),
+        ),
+    ] {
+        if let DirectCommandV1::Procedure(P::GoalAssessCriteria(input)) = &mut pre_fence_cmd {
+            input.preconditions.expected_session_revision = Revision::ZERO;
+        }
+        let req = engine.request(pre_fence_cmd, key);
+        let DirectResponseV1::Failure(err) = engine.execute(req, &NoClock) else {
+            panic!("expected pre-fence REQUEST_INVALID for {key}")
+        };
+        assert_eq!(err.into_value()["code"], "REQUEST_INVALID", "{key}");
+    }
+
+    // 2. Fence and placement checks precede semantic entry evaluation.
+    let before_ws_mismatch = engine.graph();
+    let seq_before_ws_mismatch = engine.sequence();
+    let mut bad_ws_req = engine.request(
+        assess_many(
+            &engine,
+            vec![entry("correct", "invalid-status", "ok", &[], &[])],
+            None,
+        ),
+        "agent003-ws-uuid-before-entry",
+    );
+    bad_ws_req.expected_workspace_id =
+        Some(podway_core::WorkspaceId::new("00000000-0000-4000-8000-000000999999").unwrap());
+    let DirectResponseV1::Failure(ws_err) = engine.execute(bad_ws_req, &NoClock) else {
+        panic!("expected WORKSPACE_UUID_MISMATCH")
+    };
+    assert_eq!(ws_err.into_value()["code"], "WORKSPACE_UUID_MISMATCH");
+    assert_eq!(engine.graph(), before_ws_mismatch);
+    assert_eq!(engine.sequence(), seq_before_ws_mismatch);
+    assert!(
+        engine
+            .store
+            .read(deadline(), |snapshot| {
+                snapshot.outcome(&IdempotencyKeyV1::new("agent003-ws-uuid-before-entry").unwrap())
+            })
+            .unwrap()
+            .is_none()
+    );
+
+    let mut bad_session_id_and_status = assess_many(
+        &engine,
+        vec![entry("correct", "invalid-status", "ok", &[], &[])],
+        None,
+    );
+    if let DirectCommandV1::Procedure(P::GoalAssessCriteria(input)) = &mut bad_session_id_and_status
+    {
+        input.preconditions.expected_session_id =
+            podway_core::SessionId::new("00000000-0000-4000-8000-000000999999").unwrap();
+    }
+    error(
+        &mut engine,
+        bad_session_id_and_status,
+        "agent003-session-id-before-entry",
+        "SESSION_ID_MISMATCH",
+    );
+
+    let mut bad_attempt_id_and_status = assess_many(
+        &engine,
+        vec![entry("correct", "invalid-status", "ok", &[], &[])],
+        None,
+    );
+    if let DirectCommandV1::Procedure(P::GoalAssessCriteria(input)) = &mut bad_attempt_id_and_status
+    {
+        input.preconditions.expected_attempt_id =
+            AttemptId::new("00000000-0000-4000-8000-000000999999").unwrap();
+    }
+    error(
+        &mut engine,
+        bad_attempt_id_and_status,
+        "agent003-attempt-id-before-entry",
+        "ATTEMPT_NOT_CURRENT",
+    );
+
+    let mut bad_rev_and_status = assess_many(
+        &engine,
+        vec![entry("correct", "invalid-status", "ok", &[], &[])],
+        None,
+    );
+    if let DirectCommandV1::Procedure(P::GoalAssessCriteria(input)) = &mut bad_rev_and_status {
+        input.preconditions.expected_session_revision = Revision::new(999);
+    }
+    error(
+        &mut engine,
+        bad_rev_and_status,
+        "agent003-rev-before-entry",
+        "SESSION_REVISION_CONFLICT",
+    );
+
+    let mut bad_goal_rev_and_status = assess_many(
+        &engine,
+        vec![entry("correct", "invalid-status", "ok", &[], &[])],
+        None,
+    );
+    if let DirectCommandV1::Procedure(P::GoalAssessCriteria(input)) = &mut bad_goal_rev_and_status {
+        input.expected_goal_revision = 99;
+    }
+    error(
+        &mut engine,
+        bad_goal_rev_and_status,
+        "agent003-goal-rev-before-entry",
+        "GOAL_REVISION_STALE",
+    );
+
+    let mut action_engine = goal_engine(ASSESSMENT_PROCEDURE);
+    let on_action = assess_many(
+        &action_engine,
+        vec![entry("correct", "satisfied", "ok", &[], &[])],
+        None,
+    );
+    error(
+        &mut action_engine,
+        on_action,
+        "agent003-on-action",
+        "GRAPH_NODE_TYPE_MISMATCH",
+    );
+
+    let mut general_engine = goal_engine(GENERAL_DECISION_PROCEDURE);
+    let on_general_decision = assess_many(
+        &general_engine,
+        vec![entry("correct", "satisfied", "ok", &[], &[])],
+        None,
+    );
+    error(
+        &mut general_engine,
+        on_general_decision,
+        "agent003-on-general-decision",
+        "REQUEST_INVALID",
+    );
+
+    // 3. Ordered entry validation and generation 1 vs generation 2 citation error details.
+    let blank_reason = assess_many(
+        &engine,
+        vec![entry("correct", "satisfied", "   ", &[], &[])],
+        None,
+    );
+    error(
+        &mut engine,
+        blank_reason,
+        "agent003-blank-reason",
+        "REQUEST_INVALID",
+    );
+
+    let missing_criterion_cmd = assess_many(
+        &engine,
+        vec![
+            entry("missing", "satisfied", "ok", &[], &[]),
+            entry("tested", "not_applicable", "later mode mismatch", &[], &[]),
+        ],
+        None,
+    );
+    let missing_err = error(
+        &mut engine,
+        missing_criterion_cmd,
+        "agent003-criterion-not-found",
+        "CRITERION_NOT_FOUND",
+    );
+    assert_eq!(missing_err["details"]["criterion_id"], "missing");
+
+    let five_citations = assess_many(
+        &engine,
+        vec![entry(
+            "correct",
+            "satisfied",
+            "ok",
+            &["perform", "decide", "finish"],
+            &["assessment-note", "result"],
+        )],
+        None,
+    );
+    error(
+        &mut engine,
+        five_citations,
+        "agent003-five-citations",
+        "REQUEST_INVALID",
+    );
+
+    let dup_citation = assess_many(
+        &engine,
+        vec![entry(
+            "correct",
+            "satisfied",
+            "ok",
+            &["perform", "perform"],
+            &[],
+        )],
+        None,
+    );
+    error(
+        &mut engine,
+        dup_citation,
+        "agent003-dup-citation",
+        "REQUEST_INVALID",
+    );
+
+    let mixed_batch = assess_many(
+        &engine,
+        vec![
+            entry("correct", "satisfied", "ok", &[], &[]),
+            entry("tested", "not_applicable", "superseded", &[], &[]),
+        ],
+        None,
+    );
+    error(
+        &mut engine,
+        mixed_batch,
+        "agent003-mixed-batch",
+        "CRITERION_MODE_MIXED",
+    );
+
+    let invalid_citation_cmd = assess_many(
+        &engine,
+        vec![
+            entry(
+                "correct",
+                "satisfied",
+                "ok",
+                &["perform"],
+                &["assessment-note"],
+            ),
+            entry("tested", "satisfied", "bad item", &[], &["unrecorded-item"]),
+        ],
+        None,
+    );
+    let gen1_err = error(
+        &mut engine,
+        invalid_citation_cmd.clone(),
+        "agent003-cite-gen1",
+        "CRITERION_CITATION_INVALID",
+    );
+    assert_eq!(
+        gen1_err["details"]["schema"],
+        "podway.v2-runtime-error-details/v2"
+    );
+    assert_eq!(gen1_err["details"]["criterion_id"], "tested");
+    assert_eq!(
+        gen1_err["details"]["citation"],
+        json!({"local_item_id": "unrecorded-item"})
+    );
+
+    let mut gen2_req = engine.request(invalid_citation_cmd, "agent003-cite-gen2");
+    gen2_req.generation = ContractGenerationV1::Generation2;
+    let DirectResponseV1::Failure(gen2_failure) = engine.execute(gen2_req, &Clock) else {
+        panic!("expected gen2 citation failure")
+    };
+    let gen2_val = gen2_failure.into_value();
+    assert_eq!(gen2_val["code"], "CRITERION_CITATION_INVALID");
+    assert_eq!(
+        gen2_val["details"]["schema"],
+        "podway.criterion-citation-invalid-details/v1"
+    );
+    assert_eq!(
+        gen2_val["details"]["citable_evidence_source_nodes"],
+        json!(["perform"])
+    );
+    assert_eq!(
+        gen2_val["details"]["citable_item_ids"],
+        json!(["assessment-note"])
+    );
+
+    let invalid_evidence_cmd = assess_many(
+        &engine,
+        vec![
+            entry("correct", "satisfied", "bad evidence", &["finish"], &[]),
+            entry("tested", "invalid-status", "later bad status", &[], &[]),
+        ],
+        None,
+    );
+    let gen1_ev_err = error(
+        &mut engine,
+        invalid_evidence_cmd.clone(),
+        "agent003-cite-evidence-gen1",
+        "CRITERION_CITATION_INVALID",
+    );
+    assert_eq!(gen1_ev_err["details"]["criterion_id"], "correct");
+    assert_eq!(
+        gen1_ev_err["details"]["citation"],
+        json!({"reference_graph_node_id": "finish"})
+    );
+    let mut gen2_ev_req = engine.request(invalid_evidence_cmd, "agent003-cite-evidence-gen2");
+    gen2_ev_req.generation = ContractGenerationV1::Generation2;
+    let DirectResponseV1::Failure(gen2_ev_failure) = engine.execute(gen2_ev_req, &Clock) else {
+        panic!("expected gen2 evidence citation failure")
+    };
+    let gen2_ev_val = gen2_ev_failure.into_value();
+    assert_eq!(gen2_ev_val["code"], "CRITERION_CITATION_INVALID");
+    assert_eq!(
+        gen2_ev_val["details"]["citation"],
+        json!({"reference_graph_node_id": "finish"})
+    );
+    assert_eq!(
+        gen2_ev_val["details"]["citable_evidence_source_nodes"],
+        json!(["perform"])
+    );
+
+    // Skipped and unresolved evidence sources are also rejected in goal.assess_criteria.
+    let exclusion_source = r#"schema: podway.procedure/v2
+id: agent003-exclusions
+version: "2"
+name: Agent003 exclusions
+purpose: Exercise skipped and unresolved evidence citations in batch assessment.
+goal_tracking: true
+node_definitions:
+  work:
+    type: action
+    title: Produce evidence
+    intent: Record the resolved source.
+    items:
+      - id: result
+        type: text
+        prompt: Record the result.
+        required: true
+        max_length: 1000
+  side:
+    type: action
+    title: Optional side work
+    intent: Skipped before the consumer.
+  lone:
+    type: action
+    title: Unvisited branch
+    intent: Never attempted.
+  pick:
+    type: decision
+    title: Pick the branch
+    objective: Choose the main branch.
+    prompt: Which branch?
+    options:
+      - id: main
+        label: Main
+      - id: alt
+        label: Alt
+    reason:
+      required: true
+  assess:
+    type: decision
+    title: Assess the goal
+    objective: Select the outcome determined by the recorded criteria.
+    prompt: Which goal outcome applies?
+    items:
+      - id: keep
+        type: text
+        prompt: Kept.
+        required: false
+        max_length: 100
+    options:
+      - id: achieved
+        label: Achieved
+      - id: not-achieved
+        label: Not achieved
+      - id: superseded
+        label: Superseded
+    reason:
+      required: true
+    assessment:
+      target: session_goal
+      outcomes:
+        achieved: achieved
+        not-achieved: not_achieved
+        superseded: superseded
+  finish:
+    type: action
+    title: Finish
+    intent: Finish.
+graph:
+  entry: pick
+  nodes:
+    - id: pick
+      use: pick
+      routes:
+        main:
+          to: source-r
+          effect: advance
+        alt:
+          to: lone
+          effect: advance
+    - id: source-r
+      use: work
+      next: source-s
+    - id: source-s
+      use: side
+      next: decide
+      skip:
+        allowed: true
+        reason_required: false
+    - id: lone
+      use: lone
+      next: source-r
+    - id: decide
+      use: assess
+      evidence_from:
+        - node: source-r
+          required: true
+          items:
+            - result
+        - node: source-s
+          required: false
+        - node: lone
+          required: false
+      routes:
+        achieved:
+          to: finish
+          effect: advance
+        not-achieved:
+          to: finish
+          effect: advance
+        superseded:
+          to: finish
+          effect: advance
+    - id: finish
+      use: finish
+      terminal: true
+manual_rework:
+  allowed_targets:
+    - source-r
+"#;
+    let mut exclusion_engine = goal_engine(exclusion_source);
+    exclusion_engine.success(
+        DirectCommandV1::Procedure(P::SessionDecide(SessionDecideV2 {
+            option_id: OptionId::new("main").unwrap(),
+            reason: "Take main branch.".into(),
+            actor: None,
+            preconditions: exclusion_engine.fences(),
+            expected_goal_revision: None,
+        })),
+        "agent003-excl-pick",
+    );
+    exclusion_engine.set("result", "Resolved evidence.", "agent003-excl-result");
+    exclusion_engine.complete("agent003-excl-complete");
+    exclusion_engine.success(
+        exclusion_engine.skip(Some("Skip optional side work.".into())),
+        "agent003-excl-skip",
+    );
+    exclusion_engine.set("keep", "Kept local note.", "agent003-excl-keep");
+    for (bad_source, key_prefix) in [
+        ("source-s", "agent003-cite-skipped"),
+        ("lone", "agent003-cite-unresolved"),
+    ] {
+        let cmd = assess_many(
+            &exclusion_engine,
+            vec![
+                entry(
+                    "correct",
+                    "satisfied",
+                    "cites non-resolved",
+                    &[bad_source],
+                    &[],
+                ),
+                entry("tested", "invalid-status", "later bad status", &[], &[]),
+            ],
+            None,
+        );
+        let err_gen1 = error(
+            &mut exclusion_engine,
+            cmd.clone(),
+            &format!("{key_prefix}-gen1"),
+            "CRITERION_CITATION_INVALID",
+        );
+        assert_eq!(err_gen1["details"]["criterion_id"], "correct");
+        assert_eq!(
+            err_gen1["details"]["citation"],
+            json!({"reference_graph_node_id": bad_source})
+        );
+        let mut req_gen2 = exclusion_engine.request(cmd, &format!("{key_prefix}-gen2"));
+        req_gen2.generation = ContractGenerationV1::Generation2;
+        let DirectResponseV1::Failure(failure_gen2) = exclusion_engine.execute(req_gen2, &Clock)
+        else {
+            panic!("expected gen2 failure for {bad_source}")
+        };
+        let val_gen2 = failure_gen2.into_value();
+        assert_eq!(val_gen2["code"], "CRITERION_CITATION_INVALID");
+        assert_eq!(
+            val_gen2["details"]["citation"],
+            json!({"reference_graph_node_id": bad_source})
+        );
+        assert_eq!(
+            val_gen2["details"]["citable_evidence_source_nodes"],
+            json!(["source-r"])
+        );
+        assert_eq!(val_gen2["details"]["citable_item_ids"], json!(["keep"]));
+    }
+}
+
+#[test]
+fn agent003_goal_assess_criteria_commits_partial_and_full_batches_replays_and_rejects_reordered_key_reuse()
+ {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingClock {
+        reads: AtomicUsize,
+    }
+    impl podway_engine::execution::ExecutionClockV1 for CountingClock {
+        fn now(&self) -> UnixMillis {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            Clock.now()
+        }
+    }
+
+    let mut engine = at_decision(ASSESSMENT_PROCEDURE);
+    engine.set("assessment-note", "Local decision note.", "set-note");
+
+    let reverse_cmd = assess_many(
+        &engine,
+        vec![
+            entry(
+                "tested",
+                "satisfied",
+                "Tested thoroughly.",
+                &[],
+                &["assessment-note"],
+            ),
+            entry(
+                "correct",
+                "satisfied",
+                "Verified against perform.",
+                &["perform"],
+                &[],
+            ),
+        ],
+        Some("agent-to"),
+    );
+    let batch_req = engine.request(reverse_cmd.clone(), "agent003-batch-both");
+    let seq_before_batch = engine.sequence();
+    let rev_before_batch = engine.graph().trace().revision().get();
+    let clock = CountingClock {
+        reads: AtomicUsize::new(0),
+    };
+    let batch_out = engine.output(engine.execute(batch_req.clone(), &clock));
+    assert_eq!(clock.reads.load(Ordering::SeqCst), 1);
+    assert_eq!(engine.sequence(), seq_before_batch + 1);
+    assert_eq!(
+        engine.graph().trace().revision().get(),
+        rev_before_batch + 1
+    );
+    assert_eq!(batch_out["command"], "goal.assess_criteria");
+    assert_eq!(
+        batch_out["result"]["schema"],
+        "podway.criterion-assessment-many-result/v1"
+    );
+    assert_eq!(batch_out["result"]["mode"], "assessment");
+    assert_eq!(batch_out["result"]["complete"], true);
+    assert_eq!(batch_out["result"]["determined_outcome"], "achieved");
+    let results = batch_out["result"]["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0]["criterion_id"], "correct");
+    assert_eq!(
+        results[0]["citations"],
+        json!([{"reference_graph_node_id": "perform"}])
+    );
+    assert_eq!(results[1]["criterion_id"], "tested");
+    assert_eq!(
+        results[1]["citations"],
+        json!([{"local_item_id": "assessment-note"}])
+    );
+
+    let duplicate_after_commit = assess_many(
+        &engine,
+        vec![entry("correct", "satisfied", "Again.", &[], &[])],
+        None,
+    );
+    error(
+        &mut engine,
+        duplicate_after_commit,
+        "agent003-already-recorded",
+        "REQUEST_INVALID",
+    );
+
+    let DirectCommandV1::Procedure(P::GoalAssessCriteria(mut reordered_input)) = reverse_cmd else {
+        unreachable!()
+    };
+    reordered_input.assessments.reverse();
+    let reordered_req = engine.request(
+        DirectCommandV1::Procedure(P::GoalAssessCriteria(reordered_input)),
+        "agent003-batch-both",
+    );
+    let seq_before_reordered = engine.sequence();
+    let DirectResponseV1::Failure(reordered_err) = engine.execute(reordered_req, &NoClock) else {
+        panic!("expected IDEMPOTENCY_KEY_REUSED for changed assessment order")
+    };
+    assert_eq!(reordered_err.into_value()["code"], "IDEMPOTENCY_KEY_REUSED");
+    assert_eq!(engine.sequence(), seq_before_reordered);
+
+    engine.success(decide(&engine, "achieved"), "agent003-decide");
+    engine.cold();
+    let seq_before_replay = engine.sequence();
+    let graph_before_replay = engine.graph();
+    let replayed = engine.output(engine.execute(batch_req, &NoClock));
+    assert_eq!(replayed, batch_out);
+    assert_eq!(engine.sequence(), seq_before_replay);
+    assert_eq!(engine.graph(), graph_before_replay);
+    let looked_up = engine.success(
+        DirectCommandV1::OutcomeLookup {
+            key: IdempotencyKeyV1::new("agent003-batch-both").unwrap(),
+        },
+        "agent003-lookup",
+    );
+    assert_eq!(looked_up["result"]["found"], true);
+    assert_eq!(looked_up["result"]["outcome"]["response"], batch_out);
+
+    let mut partial_engine = at_decision(ASSESSMENT_PROCEDURE);
+    let first_partial = partial_engine.success(
+        assess_many(
+            &partial_engine,
+            vec![entry(
+                "correct",
+                "unsatisfied",
+                "Edge case fails.",
+                &["perform"],
+                &[],
+            )],
+            None,
+        ),
+        "agent003-partial-1",
+    );
+    assert_eq!(first_partial["result"]["complete"], false);
+    assert!(first_partial["result"].get("determined_outcome").is_none());
+    assert_eq!(
+        first_partial["result"]["results"].as_array().unwrap().len(),
+        1
+    );
+
+    let mixed_second = assess_many(
+        &partial_engine,
+        vec![entry("tested", "not_applicable", "Wrong mode.", &[], &[])],
+        None,
+    );
+    error(
+        &mut partial_engine,
+        mixed_second,
+        "agent003-prior-mixed",
+        "CRITERION_MODE_MIXED",
+    );
+
+    let second_partial = partial_engine.success(
+        assess_many(
+            &partial_engine,
+            vec![entry("tested", "satisfied", "Tests ran.", &[], &[])],
+            None,
+        ),
+        "agent003-partial-2",
+    );
+    assert_eq!(second_partial["result"]["complete"], true);
+    assert_eq!(
+        second_partial["result"]["determined_outcome"],
+        "not_achieved"
+    );
+    assert_eq!(
+        second_partial["result"]["results"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        second_partial["result"]["results"][0]["criterion_id"],
+        "tested"
+    );
 }
 
 const ASSESSMENT_PROCEDURE: &str = r#"schema: podway.procedure/v2

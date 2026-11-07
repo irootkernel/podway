@@ -761,6 +761,25 @@ commands:
   idempotency_scope: session
   result_schemas:
   - podway.criterion-assessment-result/v2
+- name: goal.assess_criteria
+  availability: executable
+  cli:
+  - goal
+  - assess-criteria
+  - --stdin
+  operation: mutate
+  workspace_required: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - workspace_uuid
+  - session_id
+  - session_revision
+  - attempt_id
+  - goal_revision
+  idempotency_scope: session
+  result_schemas:
+  - podway.criterion-assessment-many-result/v1
 - name: integration.show
   availability: executable
   cli:

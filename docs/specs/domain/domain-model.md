@@ -12,9 +12,10 @@ effects, goal revisions, criterion assessments, and terminal outcome.
 
 An action node owns instructions, typed recorded items, optional skip policy, and
 one advance edge. A decision node owns closed options and one declared route per
-option. A goal-assessment node records the session goal outcome and criterion
-results before following its declared route. Terminal placements have no outgoing
-edge.
+option. A goal-assessment node records criterion results (individually via
+`goal.assess_criterion` or atomically in batches of 1 to 16 unique criteria via
+`goal.assess_criteria`) and then records the session goal outcome before
+following its declared route. Terminal placements have no outgoing edge.
 
 Every mutation is evaluated against the immutable snapshot and explicit session,
 attempt, goal, and item revision fences. A successful mutation produces one new

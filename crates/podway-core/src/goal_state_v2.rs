@@ -5,8 +5,8 @@ use crate::workflow_v2::{WorkflowGoalTransitionV2, WorkflowMemoryStateV2};
 use crate::{
     ActorAttributionV2, AttemptId, AttemptLifecycle, AttemptValidityV2,
     CriterionAssessmentResultV2, CriterionCitationV2, GoalAssessmentRecordV2, GoalOutcome,
-    GoalRevisionNumberV2, GoalRevisionReasonV2, GoalRevisionRecordV2, GraphNodeId, OptionId,
-    SessionLifecycle, SessionTraceV2, UnixMillis,
+    GoalRevisionNumberV2, GoalRevisionReasonV2, GoalRevisionRecordV2, GraphNodeId,
+    MAX_GOAL_ASSESSMENT_RESULTS, OptionId, SessionLifecycle, SessionTraceV2, UnixMillis,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -758,7 +758,7 @@ pub fn validate_goal_state_successor_v2<'a>(
             .collect();
         if new.goal_revision() != old.goal_revision()
             || new.results().len() < old.results().len()
-            || new.results().len() > old.results().len() + 1
+            || new.results().len() > old.results().len() + MAX_GOAL_ASSESSMENT_RESULTS
             || old
                 .results()
                 .iter()
@@ -777,12 +777,12 @@ pub fn validate_goal_state_successor_v2<'a>(
             .iter()
             .map(|value| value.results().len())
             .sum::<usize>();
-    if result_delta > 1 {
+    if result_delta > MAX_GOAL_ASSESSMENT_RESULTS {
         return Err(invalid(
-            "Procedure v2 criterion successor appends at most one result",
+            "Procedure v2 criterion successor appends at most sixteen results",
         ));
     }
-    if result_delta == 1 {
+    if result_delta > 0 {
         let active = previous_trace
             .active_attempt()
             .ok_or_else(|| invalid("Procedure v2 criterion successor has no active attempt"))?;
@@ -804,13 +804,36 @@ pub fn validate_goal_state_successor_v2<'a>(
                 .iter()
                 .find(|old| old.attempt_id() == candidate.attempt_id())
                 .map_or(0, |old| old.results().len());
-            candidate.results().len() == old_len + 1
+            candidate.results().len() == old_len + result_delta
         });
-        if changed_owner.map(AttemptCriterionAssessmentStateV2::attempt_id)
-            != Some(active.attempt_id())
-        {
+        let Some(changed_owner) = changed_owner else {
             return Err(invalid(
                 "Procedure v2 criterion result is not bound to the active attempt",
+            ));
+        };
+        if changed_owner.attempt_id() != active.attempt_id() {
+            return Err(invalid(
+                "Procedure v2 criterion result is not bound to the active attempt",
+            ));
+        }
+        let old_owner = previous
+            .attempt_assessments()
+            .iter()
+            .find(|old| old.attempt_id() == active.attempt_id());
+        let mut appended = changed_owner.results().iter().filter(|state| {
+            old_owner.is_none_or(|old| {
+                !old.results()
+                    .iter()
+                    .any(|prior| prior.result().criterion_id() == state.result().criterion_id())
+            })
+        });
+        if let Some(first_new) = appended.next()
+            && appended.any(|state| {
+                state.actor() != first_new.actor() || state.recorded_at() != first_new.recorded_at()
+            })
+        {
+            return Err(invalid(
+                "Procedure v2 batch criterion results must share one actor and timestamp",
             ));
         }
     }

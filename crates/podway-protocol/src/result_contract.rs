@@ -308,7 +308,7 @@ pub const DAEMON_FREE_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
     result_schema_v2(
         "podway.criterion-assessment-many-result/v1",
         "schemas/criterion-assessment-many-result-v1.schema.json",
-        &[],
+        &["goal.assess_criteria"],
     ),
     result_schema_v2(
         "podway.criterion-assessment-result/v2",

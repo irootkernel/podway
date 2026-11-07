@@ -41,7 +41,11 @@ trace membership remain authoritative throughout the transition.
 Action completion is forbidden while required items are missing, blockers are
 open, referenced evidence is unresolved, or required goal conditions are
 unsatisfied. Skipping is allowed only when the action declares it and its reason
-policy is met. Decisions accept only declared options and route effects. Goal
+policy is met. Decisions accept only declared options and route effects. On an
+active `goal_assessment` node, `goal assess-criterion` (single) and
+`goal assess-criteria --stdin` (atomic batch of 1 to 16 unique criteria) record
+current-attempt criterion assessments without moving the cursor before final
+`goal assess` records the goal decision and follows its declared route. Goal
 revision follows its own revision fence and may reactivate a completed
 goal-tracked session only through the explicitly authorized command path.
 

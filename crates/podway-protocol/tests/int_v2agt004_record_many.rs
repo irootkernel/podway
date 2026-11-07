@@ -1156,6 +1156,19 @@ fn agent001_criterion_assessment_many_input_decoder_enforces_pre_fence_bounds_an
             .as_str(),
         "sha256:54beb045545d1b12e05408e91bf44c1e2eb04607e3919f87d4a1c90b74e26392"
     );
+    let batch_cmd = ProcedureV2MutationCommandV1::GoalAssessCriteria(batch.clone());
+    assert_eq!(batch_cmd.command_name(), "goal.assess_criteria");
+    assert_eq!(
+        canonical_procedure_v2_command_identity_v1(&batch_cmd, &workspace_id).unwrap(),
+        canonical_goal_assess_criteria_identity_v1(&batch, &workspace_id, false).unwrap()
+    );
+    let mut reversed_batch = batch.clone();
+    reversed_batch.assessments.reverse();
+    let reversed_cmd = ProcedureV2MutationCommandV1::GoalAssessCriteria(reversed_batch);
+    assert_ne!(
+        canonical_procedure_v2_command_identity_v1(&batch_cmd, &workspace_id).unwrap(),
+        canonical_procedure_v2_command_identity_v1(&reversed_cmd, &workspace_id).unwrap()
+    );
 
     let start_cmd = SliceCommandV1::SessionStart(SessionStartCommandV1 {
         start: SessionStartV1 {

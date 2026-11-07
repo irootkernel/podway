@@ -215,23 +215,31 @@ another caller from subsequently committing. Session reset and worktree reset
 end the applicable retention boundary.
 
 Under [ADR-0043](../../architecture-decision-records/0043-atomic-assessment-and-commit-bound-observations.md),
-`AGENT-001` reserves the opt-in `--with-observation` and `goal.assess_criteria`
-request identity, digest, and lookup-headroom contracts in `podway-protocol`
+`goal.assess_criteria` (`podway goal assess-criteria --stdin`) executes as one
+atomic SQLite write transaction on the active `goal_assessment` attempt: its
+canonical request identity (`canonical_goal_assess_criteria_identity_v1`)
+preserves submitted `assessments` array order, so retrying the same idempotency
+key with the exact submitted order returns the exact original stored
+`podway.criterion-assessment-many-result/v1` envelope without re-executing the
+mutation, whereas reusing that key with a reordered `assessments` array or
+different fence/actor/entry payload fails closed with `IDEMPOTENCY_KEY_REUSED`.
+Any validation failure rolls back all criterion result and citation rows with
+zero partial state or outcome row.
+`AGENT-001` also reserves the opt-in `--with-observation` request identity,
+digest, and lookup-headroom contracts in `podway-protocol`
 (`canonical_direct_slice_mutation_identity_with_observation_v1`,
 `canonical_direct_start_identity_with_observation_v1`,
-`canonical_procedure_v2_command_identity_with_observation_v1`,
-`canonical_goal_assess_criteria_identity_v1`, and
+`canonical_procedure_v2_command_identity_with_observation_v1`, and
 `validate_direct_outcome_lookup_headroom_v1`); runtime CLI, Engine, and Store
-execution remains inactive until `AGENT-003` and `AGENT-005`. Default mutations
-(`return_observation == false`) preserve their existing canonical request
-preimages and digests byte-for-byte. For reserved opt-in `--with-observation`
-mutations (`return_observation == true`) on the 6 supported routes, the
-canonical identity JSON object includes top-level `"return_observation": true`,
-so once `AGENT-003` and `AGENT-005` activate those routes, reusing the same
-idempotency key across default and `--with-observation` modes (or with a
-different `goal.assess_criteria` entry order) fails closed with
-`IDEMPOTENCY_KEY_REUSED`. When `AGENT-005` wires runtime execution, the
-post-mutation `podway.observation-result/v6` projection and
+execution for `--with-observation` remains inactive until `AGENT-005`. Default
+mutations (`return_observation == false`) preserve their existing canonical
+request preimages and digests byte-for-byte. For reserved opt-in
+`--with-observation` mutations (`return_observation == true`) on the 6 supported
+routes, the canonical identity JSON object includes top-level
+`"return_observation": true`, so once `AGENT-005` activates those routes,
+reusing the same idempotency key across default and `--with-observation` modes
+fails closed with `IDEMPOTENCY_KEY_REUSED`. When `AGENT-005` wires runtime
+execution, the post-mutation `podway.observation-result/v6` projection and
 `validate_direct_outcome_lookup_headroom_v1` check run inside the same write
 transaction before storing the complete `OutputEnvelopeV4`; any headroom or
 projection failure rolls back both the mutation and observation, and

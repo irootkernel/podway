@@ -27,7 +27,7 @@ fn digest(nibble: char) -> Sha256Digest {
     Sha256Digest::new(format!("sha256:{}", nibble.to_string().repeat(64))).unwrap()
 }
 
-fn identity() -> DurableWorktreeIdentityV1 {
+pub(super) fn identity() -> DurableWorktreeIdentityV1 {
     DurableWorktreeIdentityV1::new(
         digest('a'),
         WorkspaceId::new("00000000-0000-4000-8000-000000000401").unwrap(),
@@ -35,19 +35,19 @@ fn identity() -> DurableWorktreeIdentityV1 {
     )
 }
 
-fn node(value: &str) -> GraphNodeId {
+pub(super) fn node(value: &str) -> GraphNodeId {
     GraphNodeId::new(value).unwrap()
 }
 
-fn item(value: &str) -> ItemId {
+pub(super) fn item(value: &str) -> ItemId {
     ItemId::new(value).unwrap()
 }
 
-fn criterion(value: &str) -> CriterionId {
+pub(super) fn criterion(value: &str) -> CriterionId {
     CriterionId::new(value).unwrap()
 }
 
-fn attempt_id(number: u64) -> AttemptId {
+pub(super) fn attempt_id(number: u64) -> AttemptId {
     AttemptId::new(format!("00000000-0000-4000-8000-{number:012x}")).unwrap()
 }
 
@@ -477,7 +477,7 @@ fn defined_state(revision: u64, recorded: bool) -> GraphSessionStateV2 {
     )
 }
 
-fn assessment_state(
+pub(super) fn assessment_state(
     revision: u64,
     note_recorded: bool,
     results: Vec<AttemptCriterionAssessmentStateV2>,
@@ -907,4 +907,274 @@ fn goal_history_is_append_only_and_rewrite_failure_preserves_prior_state() {
         })
         .unwrap();
     direct.verify_integrity(deadline()).unwrap();
+}
+
+#[test]
+fn agent003_batch_criterion_results_commit_reopen_preserve_order_and_reject_forged_successors() {
+    use super::int_v2dfc005_direct_store::{deadline, request, store as cold_store, success};
+    use podway_core::CriterionAssessmentBatchEntryV2;
+
+    let (_temporary, direct) = fixture(&identity());
+    let root_path = direct.layout().root().to_path_buf();
+    let initial = assessment_state(5, true, Vec::new());
+    seed(&direct, &initial);
+
+    // Commit first partial batch (z-proof) through replace_graph.
+    let partial_outcome = initial
+        .assess_goal_criteria_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            vec![CriterionAssessmentBatchEntryV2::new(
+                criterion("z-proof"),
+                "satisfied",
+                "First batch entry.",
+                vec![
+                    CriterionCitationV2::Evidence(node("clarify")),
+                    CriterionCitationV2::Item(item("assessment-note")),
+                ],
+            )],
+            Some(ActorAttributionV2::new("first-batch-actor").unwrap()),
+            UnixMillis::new(40),
+        )
+        .unwrap();
+    let after_partial = partial_outcome.into_state();
+    let req_one = request("agent003-batch-1");
+    direct
+        .mutate(
+            &req_one,
+            deadline(),
+            || UnixMillis::new(40),
+            |transaction| {
+                transaction.now();
+                transaction.replace_graph(
+                    initial.workspace_revision(),
+                    initial.trace().revision(),
+                    &after_partial,
+                )?;
+                Ok(success(&req_one, json!({"step": 1}), transaction.now()))
+            },
+        )
+        .unwrap();
+
+    // Commit second batch (a-safety) and verify prior row immutability + declaration order across cold reopen.
+    let full_outcome = after_partial
+        .assess_goal_criteria_v2(
+            Revision::new(6),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            vec![CriterionAssessmentBatchEntryV2::new(
+                criterion("a-safety"),
+                "satisfied",
+                "Second batch entry.",
+                Vec::new(),
+            )],
+            Some(ActorAttributionV2::new("second-batch-actor").unwrap()),
+            UnixMillis::new(50),
+        )
+        .unwrap();
+    let after_full = full_outcome.into_state();
+    let req_two = request("agent003-batch-2");
+    direct
+        .mutate(
+            &req_two,
+            deadline(),
+            || UnixMillis::new(50),
+            |transaction| {
+                transaction.now();
+                transaction.replace_graph(
+                    after_partial.workspace_revision(),
+                    after_partial.trace().revision(),
+                    &after_full,
+                )?;
+                Ok(success(&req_two, json!({"step": 2}), transaction.now()))
+            },
+        )
+        .unwrap();
+
+    drop(direct);
+    let reopened = cold_store(root_path.as_path());
+    reopened
+        .read(deadline(), |snapshot| {
+            let loaded = snapshot.current_graph()?.expect("current graph present");
+            assert_eq!(loaded, after_full);
+            let results = loaded.goal_state().attempt_assessments()[0].results();
+            assert_eq!(results.len(), 2);
+            assert_eq!(results[0].result().criterion_id(), &criterion("z-proof"));
+            assert_eq!(results[0].recorded_at(), UnixMillis::new(40));
+            assert_eq!(
+                results[0].actor(),
+                Some(&ActorAttributionV2::new("first-batch-actor").unwrap())
+            );
+            assert_eq!(results[1].result().criterion_id(), &criterion("a-safety"));
+            assert_eq!(results[1].recorded_at(), UnixMillis::new(50));
+            assert_eq!(
+                results[1].actor(),
+                Some(&ActorAttributionV2::new("second-batch-actor").unwrap())
+            );
+            Ok(())
+        })
+        .unwrap();
+    reopened.verify_integrity(deadline()).unwrap();
+
+    // Now test atomic 2-entry batch submitted in reverse declaration order on a fresh fixture,
+    // plus forged successor rejection through replace_graph.
+    let (_temporary2, direct2) = fixture(&identity());
+    seed(&direct2, &initial);
+
+    // Forged successor appending 2 new rows with mismatched timestamps/actors in one transition must fail closed in replace_graph.
+    let forged_mismatched_batch = assessment_state(
+        6,
+        true,
+        vec![
+            AttemptCriterionAssessmentStateV2::new(
+                attempt_id(2),
+                GoalRevisionNumberV2::FIRST,
+                vec![
+                    criterion_result_at("z-proof", CriterionStatusV2::Satisfied, Vec::new(), 40),
+                    criterion_result_at("a-safety", CriterionStatusV2::Satisfied, Vec::new(), 41),
+                ],
+            )
+            .unwrap(),
+        ],
+    );
+    let seq_initial = direct2
+        .read(deadline(), |snapshot| snapshot.committed_sequence())
+        .unwrap();
+    let req_forged_mismatch = request("agent003-forged-new-row-mismatch");
+    let mismatch_err = direct2.mutate(
+        &req_forged_mismatch,
+        deadline(),
+        || UnixMillis::new(45),
+        |transaction| {
+            transaction.now();
+            transaction.replace_graph(
+                initial.workspace_revision(),
+                initial.trace().revision(),
+                &forged_mismatched_batch,
+            )?;
+            Ok(success(
+                &req_forged_mismatch,
+                json!({"forged_mismatch": true}),
+                transaction.now(),
+            ))
+        },
+    );
+    assert!(matches!(
+        mismatch_err,
+        Err(podway_store::direct_store::DirectStoreErrorV1::State(
+            podway_store::StoreErrorV1::InvalidStateV1(_)
+        ))
+    ));
+    direct2
+        .read(deadline(), |snapshot| {
+            assert_eq!(snapshot.current_graph()?, Some(initial.clone()));
+            assert_eq!(snapshot.committed_sequence()?, seq_initial);
+            assert!(snapshot.outcome(req_forged_mismatch.key())?.is_none());
+            Ok(())
+        })
+        .unwrap();
+
+    let atomic_two = initial
+        .assess_goal_criteria_v2(
+            Revision::new(5),
+            &attempt_id(2),
+            GoalRevisionNumberV2::FIRST,
+            vec![
+                CriterionAssessmentBatchEntryV2::new(
+                    criterion("a-safety"),
+                    "satisfied",
+                    "Reverse order first.",
+                    Vec::new(),
+                ),
+                CriterionAssessmentBatchEntryV2::new(
+                    criterion("z-proof"),
+                    "satisfied",
+                    "Reverse order second.",
+                    vec![
+                        CriterionCitationV2::Evidence(node("clarify")),
+                        CriterionCitationV2::Item(item("assessment-note")),
+                    ],
+                ),
+            ],
+            Some(ActorAttributionV2::new("atomic-reviewer").unwrap()),
+            UnixMillis::new(45),
+        )
+        .unwrap()
+        .into_state();
+    let req_atomic = request("agent003-atomic-both");
+    direct2
+        .mutate(
+            &req_atomic,
+            deadline(),
+            || UnixMillis::new(45),
+            |transaction| {
+                transaction.now();
+                transaction.replace_graph(
+                    initial.workspace_revision(),
+                    initial.trace().revision(),
+                    &atomic_two,
+                )?;
+                Ok(success(
+                    &req_atomic,
+                    json!({"atomic": true}),
+                    transaction.now(),
+                ))
+            },
+        )
+        .unwrap();
+
+    // Forged successor that rewrites an already-recorded criterion result must fail closed in replace_graph.
+    let forged = assessment_state(
+        7,
+        true,
+        vec![
+            AttemptCriterionAssessmentStateV2::new(
+                attempt_id(2),
+                GoalRevisionNumberV2::FIRST,
+                vec![
+                    criterion_result_at("z-proof", CriterionStatusV2::Unsatisfied, Vec::new(), 99),
+                    criterion_result_at("a-safety", CriterionStatusV2::Satisfied, Vec::new(), 45),
+                ],
+            )
+            .unwrap(),
+        ],
+    );
+    let seq_before = direct2
+        .read(deadline(), |snapshot| snapshot.committed_sequence())
+        .unwrap();
+    let req_forged = request("agent003-forged-rewrite");
+    let forged_err = direct2.mutate(
+        &req_forged,
+        deadline(),
+        || UnixMillis::new(99),
+        |transaction| {
+            transaction.now();
+            transaction.replace_graph(
+                atomic_two.workspace_revision(),
+                atomic_two.trace().revision(),
+                &forged,
+            )?;
+            Ok(success(
+                &req_forged,
+                json!({"forged": true}),
+                transaction.now(),
+            ))
+        },
+    );
+    assert!(matches!(
+        forged_err,
+        Err(podway_store::direct_store::DirectStoreErrorV1::State(
+            podway_store::StoreErrorV1::InvalidStateV1(_)
+        ))
+    ));
+    direct2
+        .read(deadline(), |snapshot| {
+            assert_eq!(snapshot.current_graph()?, Some(atomic_two));
+            assert_eq!(snapshot.committed_sequence()?, seq_before);
+            assert!(snapshot.outcome(req_forged.key())?.is_none());
+            Ok(())
+        })
+        .unwrap();
+    direct2.verify_integrity(deadline()).unwrap();
 }

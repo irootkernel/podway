@@ -6,8 +6,8 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Added
 
-- Register reserved `podway.criterion-assessment-many-input/v1`, `podway.criterion-assessment-many-result/v1` and `podway.mutation-observation-result/v1` protocol schemas, staged batch assessment input decoding,
-  opt-in `--with-observation` canonical request digests and `outcome.lookup` envelope headroom checks.
+- Add `podway goal assess-criteria --stdin` to record 1 to 16 current-attempt criterion assessments atomically with document-owned fences and exact replay.
+- Reserve `podway.mutation-observation-result/v1` and opt-in `--with-observation` canonical identities with `outcome.lookup` envelope headroom checks.
 
 ### Changed
 

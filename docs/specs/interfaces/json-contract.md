@@ -53,6 +53,17 @@ Removing a present invalid Store reports `already_absent=false`,
 not be validated. An already-absent Store requires `workspace_uuid=null`;
 `already_absent=false` requires an actual directory removal.
 
+`goal.assess_criteria` (`podway goal assess-criteria --stdin`) consumes closed
+[`criterion-assessment-many-input-v1.schema.json`](../../../assets/schemas/criterion-assessment-many-input-v1.schema.json)
+(`1..=16` unique criterion assessment entries in `assessments`, at most 1,048,576
+bytes and JSON depth 64) and emits closed
+[`criterion-assessment-many-result-v1.schema.json`](../../../assets/schemas/criterion-assessment-many-result-v1.schema.json)
+in both contract generations. Response `results` contain only the newly
+submitted criterion assessment results from this call, ordered by the current
+goal revision's criterion declaration order, whereas the canonical request
+digest preserves submitted `assessments` array order. `podway.mutation-observation-result/v1`
+remains registered as a reserved schema until `AGENT-005`.
+
 ## Integration settings result
 
 The accepted [integration-settings contract](../operations/integration-settings.md)
@@ -510,14 +521,17 @@ Every derived collection was audited against the declaration it projects. A coll
 
 `missing_required_item_count` remains exact while `missing_required_items` returns at most 64 entries plus a truncation flag. Suggestions remain capped at 128, expose exact total and truncation fields, and order currently actionable session-level suggestions before item suggestions in item declaration order.
 
-## Reserved batch criterion assessment and commit-bound observation contracts (`AGENT-001`)
+## Batch criterion assessment and reserved commit-bound observation contracts (`AGENT-001`, `AGENT-003`)
 
 [ADR-0043](../../architecture-decision-records/0043-atomic-assessment-and-commit-bound-observations.md)
 owns the atomic multi-criterion assessment and commit-bound post-mutation
-observation design. `AGENT-001` registers the closed public JSON schemas and
-protocol validation helpers in `podway-protocol` while keeping
-`DAEMON_FREE_DOCUMENT_SCHEMAS_V1` `commands: &[]`, `output-v4.schema.json`, and
-the 58 active command routes unchanged until `AGENT-003` and `AGENT-005` wire
+observation design. `AGENT-001` registered the closed public JSON schemas and
+protocol validation helpers in `podway-protocol`, and `AGENT-003` activated
+`goal.assess_criteria` (`podway goal assess-criteria --stdin`) across the 59
+active command routes, binding `podway.criterion-assessment-many-result/v1` in
+`DAEMON_FREE_DOCUMENT_SCHEMAS_V1` (`commands: &["goal.assess_criteria"]`) and
+`output-v4.schema.json`, while keeping `podway.mutation-observation-result/v1`
+reserved (`commands: &[]`) until `AGENT-005` wires `--with-observation`
 runtime execution:
 
 - `podway.criterion-assessment-many-input/v1` (`schemas/criterion-assessment-many-input-v1.schema.json`):

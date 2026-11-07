@@ -50,7 +50,7 @@ remain below with their retired clauses identified.
 | `AUT-DIRECT-014` | Reset/removal MUST preserve bounded marker recovery, workspace generation fencing, explicit destructive authorization, and original-key exact retry. Reset-all preserves Procedure sources and configuration unrelated to retired legacy mode; it intentionally retires legacy-mode configuration/markers. Removal deletes only `.podway` and preserves Git/user files. A recipe grants no authority. |
 | `AUT-DIRECT-015` | Manifest v2 MUST bind product/version and complete canonical contract/schema/catalog/fixture assets without IPC. Release provenance MUST separately bind the source lockfile bytes. The single CLI's complete output-v4/version-result-v2 identity MUST be validated by the authoritative offline Rust verifier against manifest, native target, source commit, and recomputed build identity. |
 | `AUT-DIRECT-016` | Current JSON MUST use output v4/error v2 and each canonical current closed result/detail discriminator. Success/error envelopes MUST contain no job/admission metadata. Exit classes are 0, 1, 2, 4, 5, and 6; class 3 is retired. |
-| `AUT-DIRECT-017` | Both stdin and typed `item.record_many` input MUST fit 1,048,576 bytes for the complete canonical input, including identities, key, and 1..128 unique operations. Per-item bounds MUST NOT substitute for this aggregate. Oversize MUST fail before preparation, canonicalization, or mutation with `REQUEST_TOO_LARGE`. |
+| `AUT-DIRECT-017` | Both stdin and typed `item.record_many` and `goal.assess_criteria` inputs MUST fit 1,048,576 bytes (and JSON depth 64) for the complete canonical input, including identities, key, and 1..128 unique item operations or 1..16 unique criterion assessments. Per-item or per-criterion bounds MUST NOT substitute for this aggregate. Oversize MUST fail before preparation, canonicalization, or mutation with `REQUEST_TOO_LARGE`. |
 | `AUT-DIRECT-018` | Successful start MUST atomically commit its validated canonical immutable Procedure snapshot with state and outcome. Running commands MUST use that snapshot instead of rereading Procedure source; exact replay MUST not depend on changed Procedure/artifact sources. Workspace configuration validation still applies on resolution. |
 | `AUT-DIRECT-019` | RecoveryRecipe v2 MUST be closed, bounded, and code/boundary-specific. Ordinary recovery MUST remain read-only; legacy reset and exact initialization/reset/removal continuation MUST explicitly require authorization. No recipe may weaken a fence, fabricate a new replay key, or authorize external work. |
 | `AUT-DIRECT-020` | Native qualification MUST bind one packaged release-profile CLI, immutable candidate bytes, independent extraction, exact manifest/catalog/lock/source identity, disabled debug hooks, and bounded process/fixture cleanup. A dirty-source development dry run MUST remain explicitly nonpublishable `development-qualification` with gate `development`; it MUST NOT imply clean distribution or a full/patch release gate. |
@@ -108,14 +108,21 @@ release, installation, or external consumer adoption.
 | `AUT-ID-005` | Item mutations MUST enforce workspace UUID, session ID, attempt ID, and item revision for automation requests. |
 | `AUT-ID-006` | Replacement and reset MUST enforce the currently observed workspace, session, and applicable session revision before mutation. |
 | `AUT-ID-007` | Identity mismatches MUST return stable typed errors with closed details containing expected and actual identities and no mutation. |
-| `AUT-ID-008` | `item.record_many` MUST enforce workspace UUID, session ID, session revision, active attempt, and every selected item revision before atomically changing any selected item. |
+| `AUT-ID-008` | `item.record_many` MUST enforce workspace UUID, session ID, session revision, active attempt, and every selected item revision before atomically changing any selected item; `goal.assess_criteria` MUST enforce workspace UUID, session ID, session revision, active attempt, and current goal revision before atomically recording any criterion assessment. |
 | `AUT-ID-009` | `begin`, terminal disposition, eligible or force replacement, and eligible or force reset MUST enforce the exact observed workspace UUID, session ID, and session revision; begin and disposition MUST NOT accept an attempt fence. |
 
 `record --stdin` uses closed `podway.item-record-many-input/v1`; each operation
 contains a typed complete record or `clear: true`. Operations and outcomes are
 canonicalized by item ID. It returns `podway.item-record-many-result/v2` and
-never advances the cursor. Identity and idempotency flags cannot duplicate the
-stdin identities. The typed boundary shares the complete-input bound.
+never advances the cursor. `goal assess-criteria --stdin` uses closed
+`podway.criterion-assessment-many-input/v1` (`1..=16` unique criterion
+assessments in `assessments`); its canonical request identity preserves
+submitted `assessments` order, while `podway.criterion-assessment-many-result/v1`
+returns only the newly submitted `results` in the current goal revision's
+criterion declaration order and never advances the cursor. For both stdin-fenced
+routes, identity and idempotency flags cannot duplicate or override the stdin
+identities, and the typed boundary shares the 1,048,576-byte (and JSON depth 64)
+complete-input bound.
 
 A matching numeric revision does not identify a session. Goal revision and
 criterion assessment additionally bind the exact positive current goal revision;

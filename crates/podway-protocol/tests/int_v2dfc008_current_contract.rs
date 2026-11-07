@@ -609,10 +609,13 @@ fn generic_direct_error_uses_the_same_exact_aggregate_byte_bound() {
 #[test]
 fn agent001_reserved_schemas_validate_without_expanding_active_command_routes() {
     let answers = known_answers();
-    for schema in [
-        "podway.criterion-assessment-many-input/v1",
-        "podway.criterion-assessment-many-result/v1",
-        "podway.mutation-observation-result/v1",
+    for (schema, expected_commands) in [
+        ("podway.criterion-assessment-many-input/v1", &[][..]),
+        (
+            "podway.criterion-assessment-many-result/v1",
+            &["goal.assess_criteria"][..],
+        ),
+        ("podway.mutation-observation-result/v1", &[][..]),
     ] {
         let fixture = &answers["fixtures"][schema];
         assert!(
@@ -623,6 +626,6 @@ fn agent001_reserved_schemas_validate_without_expanding_active_command_routes() 
             .iter()
             .find(|contract| contract.schema == schema)
             .unwrap();
-        assert!(entry.commands.is_empty());
+        assert_eq!(entry.commands, expected_commands, "{schema}");
     }
 }

@@ -142,6 +142,9 @@
       "$ref": "#/$defs/criterionAssessment"
     },
     {
+      "$ref": "#/$defs/criterionAssessmentMany"
+    },
+    {
       "$ref": "#/$defs/outcomeLookup"
     },
     {
@@ -715,6 +718,19 @@
         }
       }
     },
+    "criterionAssessmentMany": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "goal.assess_criteria"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:criterion-assessment-many-result:v1"
+        }
+      }
+    },
     "outcomeLookup": {
       "required": [
         "workspace"
@@ -759,6 +775,7 @@
                 "goal.define",
                 "goal.revise",
                 "goal.assess_criterion",
+                "goal.assess_criteria",
                 "item.check",
                 "item.uncheck",
                 "item.set",

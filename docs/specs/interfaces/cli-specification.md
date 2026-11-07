@@ -47,7 +47,8 @@ that Store nor grants compatibility to another route.
   `delegation package|receipt`, `archive list|show`, and `outcome lookup`.
 - Session mutations: `start`, `begin`, `complete`, `skip`, `retry`, `block`,
   `unblock`, `cancel`, `disposition handed-off|not-required`, `reset`, `archive`,
-  `archive purge`, `decide`, `rework`, `goal define|revise|assess-criterion`,
+  `archive purge`, `decide`, `rework`,
+  `goal define|revise|assess-criterion|assess-criteria --stdin`,
   `delegation accept --stdin`, `check|uncheck|set|add|remove|attach|clear`, and
   `record --stdin`.
 
@@ -89,7 +90,7 @@ route while retired syntax keeps `COMMAND_RETIRED` precedence.
 | `--if-session-revision <N>` | Session transition/record-many/archive-purge revision; not a single-item fence |
 | `--if-attempt <UUID>` | Current action/decision/evidence identity; not start/begin/disposition/reset |
 | `--if-item-revision <N>` | Single-item mutation revision; not another route's fence |
-| `--if-goal-revision <N>` | Positive goal revision on decide, goal revise, or assess-criterion |
+| `--if-goal-revision <N>` | Positive goal revision on decide, goal revise, or assess-criterion; rejected on stdin-fenced `goal assess-criteria --stdin` |
 | `--yes` | Explicit destructive confirmation; rejected on ordinary non-destructive commands |
 
 | Route grammar | Command-specific constraints |
@@ -121,6 +122,7 @@ route while retired syntax keeps `COMMAND_RETIRED` precedence.
 | `goal define --goal <TEXT> --criterion <ID=STATEMENT>... [--actor <TEXT>]` | One or more criteria |
 | `goal revise --goal <TEXT> --criterion <ID=STATEMENT>... --rework-to <NODE> --reason <TEXT> [--actor <TEXT>] [--reactivate]` | Current goal fence and explicit reactivation when required |
 | `goal assess-criterion <ID> --status <satisfied\|unsatisfied\|not_applicable> --reason <TEXT> [--evidence <NODE>...] [--item <ITEM>...] [--actor <TEXT>]` | Typed applicability/assessment rules |
+| `goal assess-criteria --stdin` | Complete closed atomic batch of 1 to 16 criterion assessments; document supplies its own fences and idempotency key |
 | `disposition handed-off --summary <TEXT> --reference <TEXT> [--actor <TEXT>]` | Current terminal revision |
 | `disposition not-required --reason <TEXT> [--actor <TEXT>]` | Current terminal revision |
 | `reset [--dry-run]` or `reset --yes --progress-summary <TEXT>` | Session eligibility or confirmed force path; dry-run rejects progress summary |
@@ -137,7 +139,7 @@ route while retired syntax keeps `COMMAND_RETIRED` precedence.
 | `outcome lookup --idempotency-key <KEY>` | Read-only retained successful outcome |
 
 The canonical command name in JSON uses dotted routes (for example
-`session.observe`, `goal.assess_criterion`, `item.record_many`) even when CLI words
+`session.observe`, `goal.assess_criterion`, `goal.assess_criteria`, `item.record_many`) even when CLI words
 use spaces or hyphens. State-aware `start` resolves to `session.start_replace`.
 The hidden `__complete [KIND]` route supports completion scripts; it is a bounded
 best-effort query and emits no candidates on failure.
@@ -154,7 +156,8 @@ Route help appends applicable global options to its usage lines. Local routes
 show rendering controls and contract generation without worktree request options.
 Workspace mutations explain that automation supplies a caller-owned idempotency
 key; interactive key generation remains available. `start` and `reset` dry runs
-are read-only and reject keys. Atomic `record --stdin` (`item.record_many`) and
+are read-only and reject keys. Atomic `record --stdin` (`item.record_many`),
+`goal assess-criteria --stdin` (`goal.assess_criteria`), and
 `delegation accept --stdin` (`delegation.accept`) share one stdin-fenced
 mutation classification: their stdin JSON documents own the idempotency key and
 fences, automatic CLI preflight never runs, and passing `--idempotency-key` or
@@ -345,10 +348,10 @@ Automation must retain an explicit idempotency key and the complete resolved
 request, including original identity and revision fences. The CLI may fill omitted
 fences from a fresh direct observation; automation should supply observed fences
 to prevent that preflight from changing the intended target. Stdin-fenced JSON
-mutations (`record --stdin` and `delegation accept --stdin`) never run automatic
-CLI preflight or replace document-owned fences, whereas `set <ITEM> --stdin`
-reads only item text from stdin and retains ordinary argv fence validation and
-CLI preflight. Interactive human
+mutations (`record --stdin`, `goal assess-criteria --stdin`, and
+`delegation accept --stdin`) never run automatic CLI preflight or replace
+document-owned fences, whereas `set <ITEM> --stdin` reads only item text from
+stdin and retains ordinary argv fence validation and CLI preflight. Interactive human
 mutations may generate a key and print it to stderr; automation mutations require
 a caller-owned key. The same closed transition evaluator serves both paths.
 

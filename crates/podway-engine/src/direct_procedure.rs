@@ -1,15 +1,16 @@
 //! Procedure, goal and disposition mutations use the same direct transaction boundary.
 
-use std::time::Instant;
+use std::{collections::BTreeSet, io, time::Instant};
 
 use podway_core::{
-    ActorAttributionV2, CriterionAssessmentReasonV2, CriterionAssessmentResultV2,
-    CriterionCitationV2, CriterionStatusV2, DomainError, GoalRevisionNumberV2,
-    GoalRevisionReasonV2, GoalStatementV2, ReasonV2, SessionLifecycle, Sha256Digest,
-    TerminalDispositionV2, WorkspaceId,
+    ActorAttributionV2, CriterionAssessmentBatchEntryV2, CriterionAssessmentReasonV2,
+    CriterionAssessmentResultV2, CriterionCitationV2, CriterionStatusV2, DomainError,
+    GoalRevisionNumberV2, GoalRevisionReasonV2, GoalStatementV2, ReasonV2, SessionLifecycle,
+    Sha256Digest, TerminalDispositionV2, WorkspaceId,
 };
 use podway_git::{GitResolverContractV1, WorktreeSelectorV1};
 use podway_protocol::{
+    CRITERION_ASSESSMENT_MANY_INPUT_SCHEMA_V1, GoalAssessCriteriaV2, MAX_DIRECT_INPUT_BYTES_V1,
     OutputEnvelopeV4, ProcedureV2MutationCommandV1 as C, RequestIdV1, Rfc3339MillisV1,
     TerminalDispositionInputV1, canonical_procedure_v2_command_identity_v1,
 };
@@ -17,6 +18,7 @@ use podway_store::{
     GraphMutationErrorV2, GraphSessionStateV2, IdempotencyKeyV1,
     direct_store::{DirectMutationRequestV1, DirectOutcomeScopeV1, DirectStoreErrorV1},
 };
+use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
@@ -76,6 +78,13 @@ pub(crate) fn execute_procedure_with_context_v1<R: GitResolverContractV1>(
         request.deadline,
     )?;
     let command = &request.command;
+    if let C::GoalAssessCriteria(input) = command {
+        validate_goal_assess_criteria_input_v1(
+            resolved.store_identity().workspace_uuid(),
+            &request.key,
+            input,
+        )?;
+    }
     let canonical = canonical_procedure_v2_command_identity_v1(
         command,
         resolved.store_identity().workspace_uuid(),
@@ -117,6 +126,12 @@ pub(crate) fn execute_procedure_with_context_v1<R: GitResolverContractV1>(
             input.expected_goal_revision,
         ),
         C::GoalAssessCriterion(input) => (
+            &input.preconditions.expected_session_id,
+            input.preconditions.expected_session_revision,
+            Some(&input.preconditions.expected_attempt_id),
+            Some(input.expected_goal_revision),
+        ),
+        C::GoalAssessCriteria(input) => (
             &input.preconditions.expected_session_id,
             input.preconditions.expected_session_revision,
             Some(&input.preconditions.expected_attempt_id),
@@ -192,6 +207,30 @@ pub(crate) fn execute_procedure_with_context_v1<R: GitResolverContractV1>(
     } else {
         None
     };
+    let batch_assessments = if let C::GoalAssessCriteria(input) = command {
+        Some(
+            input
+                .assessments
+                .iter()
+                .map(|entry| {
+                    CriterionAssessmentBatchEntryV2::new(
+                        entry.criterion_id.clone(),
+                        entry.status.clone(),
+                        entry.reason.clone(),
+                        entry
+                            .evidence
+                            .iter()
+                            .cloned()
+                            .map(CriterionCitationV2::Evidence)
+                            .chain(entry.items.iter().cloned().map(CriterionCitationV2::Item))
+                            .collect(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        None
+    };
     let result = store.mutate_typed(&mutation, request.deadline, || clock.now(), |transaction| -> Result<_, DirectExecutionErrorV1> {
         let current = transaction.use_prepared_graph(prepared.as_ref())?;
         let current = current.as_ref().ok_or_else(|| GraphMutationErrorV2::Domain(DomainError::SessionIdentityMismatch {
@@ -210,8 +249,10 @@ pub(crate) fn execute_procedure_with_context_v1<R: GitResolverContractV1>(
             && attempt.is_none() && prior.trace().active_attempt().is_some() {
             return Err(DirectStoreErrorV1::InvalidInput { reason: "running rework requires an attempt fence" }.into());
         }
-        if matches!(command, C::GoalRevise(_) | C::GoalAssessCriterion(_))
-            && !prior.snapshot().goal_tracking() {
+        if matches!(
+            command,
+            C::GoalRevise(_) | C::GoalAssessCriterion(_) | C::GoalAssessCriteria(_)
+        ) && !prior.snapshot().goal_tracking() {
             return Err(GraphMutationErrorV2::GoalTrackingNotEnabled.into());
         }
         if matches!(command, C::SessionDecide(_)) && goal_revision.is_none()
@@ -270,6 +311,37 @@ pub(crate) fn execute_procedure_with_context_v1<R: GitResolverContractV1>(
                             CriterionCitationV2::Item(item) => json!({"local_item_id":item}),
                         }).collect::<Vec<_>>()}, "complete":outcome.complete()});
                 if let Some(determined) = outcome.determined_outcome() { body["determined_outcome"] = json!(determined.as_str()); }
+                (outcome.into_state(), body, None)
+            }
+            C::GoalAssessCriteria(input) => {
+                let entries = batch_assessments.expect("criterion assessment batch is prepared outside the writer");
+                let actor = actor(&input.actor)?;
+                let outcome = prior.assess_goal_criteria_v2(revision, &input.preconditions.expected_attempt_id,
+                    GoalRevisionNumberV2::new(input.expected_goal_revision), entries, actor, transaction.now())?;
+                let results = outcome.assessments().iter().map(|state| {
+                    let result = state.result();
+                    json!({
+                        "criterion_id": result.criterion_id(),
+                        "status": result.status().as_str(),
+                        "reason": result.reason().as_str(),
+                        "citations": result.citations().iter().map(|citation| match citation {
+                            CriterionCitationV2::Evidence(node) => json!({"reference_graph_node_id": node}),
+                            CriterionCitationV2::Item(item) => json!({"local_item_id": item}),
+                        }).collect::<Vec<_>>(),
+                    })
+                }).collect::<Vec<_>>();
+                let mut body = json!({
+                    "schema": "podway.criterion-assessment-many-result/v1",
+                    "graph_node_id": outcome.graph_node_id(),
+                    "attempt_id": outcome.attempt_id(),
+                    "goal_revision": outcome.goal_revision().get(),
+                    "mode": outcome.mode().as_str(),
+                    "results": results,
+                    "complete": outcome.complete(),
+                });
+                if let Some(determined) = outcome.determined_outcome() {
+                    body["determined_outcome"] = json!(determined.as_str());
+                }
                 (outcome.into_state(), body, None)
             }
             C::SessionRework(input) => {
@@ -393,4 +465,127 @@ fn make_disposition(
         ),
     };
     Ok(disposition.map_err(GraphMutationErrorV2::Domain)?)
+}
+
+fn validate_goal_assess_criteria_input_v1(
+    workspace_id: &WorkspaceId,
+    key: &IdempotencyKeyV1,
+    input: &GoalAssessCriteriaV2,
+) -> Result<(), DirectExecutionErrorV1> {
+    #[derive(Serialize)]
+    struct Input<'a> {
+        schema: &'static str,
+        workspace_uuid: &'a WorkspaceId,
+        session_id: &'a podway_core::SessionId,
+        session_revision: podway_core::Revision,
+        attempt_id: &'a podway_core::AttemptId,
+        goal_revision: u64,
+        idempotency_key: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: &'a Option<String>,
+        assessments: &'a [podway_protocol::CriterionAssessmentManyEntryWireV1],
+    }
+
+    struct Budget {
+        written: usize,
+        exceeded: bool,
+    }
+
+    impl io::Write for Budget {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.written = self.written.saturating_add(buf.len());
+            if self.written > MAX_DIRECT_INPUT_BYTES_V1 {
+                self.exceeded = true;
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "input budget exceeded",
+                ));
+            }
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut budget = Budget {
+        written: 0,
+        exceeded: false,
+    };
+    let document = Input {
+        schema: CRITERION_ASSESSMENT_MANY_INPUT_SCHEMA_V1,
+        workspace_uuid: workspace_id,
+        session_id: &input.preconditions.expected_session_id,
+        session_revision: input.preconditions.expected_session_revision,
+        attempt_id: &input.preconditions.expected_attempt_id,
+        goal_revision: input.expected_goal_revision,
+        idempotency_key: key.as_str(),
+        actor: &input.actor,
+        assessments: &input.assessments,
+    };
+    match serde_json::to_writer(&mut budget, &document) {
+        Ok(()) => {}
+        Err(_) if budget.exceeded => return Err(DirectExecutionErrorV1::InputTooLarge),
+        Err(_) => {
+            return Err(DirectStoreErrorV1::InvalidInput {
+                reason: "invalid goal assessment batch input",
+            }
+            .into());
+        }
+    }
+    if input.expected_goal_revision == 0 {
+        return Err(DirectStoreErrorV1::InvalidInput {
+            reason: "invalid goal_revision",
+        }
+        .into());
+    }
+    if let Some(actor) = &input.actor {
+        if actor.trim().is_empty() {
+            return Err(DirectStoreErrorV1::InvalidInput {
+                reason: "actor must not be empty",
+            }
+            .into());
+        }
+        if actor.chars().count() > podway_protocol::MAX_SLICE_ACTOR_SCALARS_V1 {
+            return Err(DirectStoreErrorV1::InvalidInput {
+                reason: "actor exceeds its maximum length",
+            }
+            .into());
+        }
+    }
+    if !(podway_core::MIN_GOAL_ASSESSMENT_RESULTS..=podway_core::MAX_GOAL_ASSESSMENT_RESULTS)
+        .contains(&input.assessments.len())
+    {
+        return Err(DirectStoreErrorV1::InvalidInput {
+            reason: "criterion assessment batch requires between one and sixteen entries",
+        }
+        .into());
+    }
+    let mut seen_criteria = BTreeSet::new();
+    for entry in &input.assessments {
+        if entry.reason.chars().count()
+            > podway_protocol::MAX_CRITERION_ASSESSMENT_REASON_SCALARS_V1
+        {
+            return Err(DirectStoreErrorV1::InvalidInput {
+                reason: "criterion assessment reason exceeds its maximum length",
+            }
+            .into());
+        }
+        if entry.evidence.len() > podway_core::MAX_CRITERION_CITATIONS_V2
+            || entry.items.len() > podway_core::MAX_CRITERION_CITATIONS_V2
+        {
+            return Err(DirectStoreErrorV1::InvalidInput {
+                reason: "criterion assessment citation list exceeds its maximum length",
+            }
+            .into());
+        }
+        if !seen_criteria.insert(&entry.criterion_id) {
+            return Err(DirectStoreErrorV1::InvalidInput {
+                reason: "criterion assessment batch contains duplicate criterion_id",
+            }
+            .into());
+        }
+    }
+    Ok(())
 }

@@ -921,6 +921,20 @@ pub(super) fn typed_command(
                 expected_goal_revision: required(fences.goal_revision, "--if-goal-revision")?.get(),
             },
         )),
+        Command::Goal {
+            command: GoalCommand::AssessCriteria(args),
+        } => {
+            let input = required(args.input.as_ref(), "--stdin")?;
+            Direct::Procedure(protocol::ProcedureV2MutationCommandV1::GoalAssessCriteria(
+                protocol::GoalAssessCriteriaV2 {
+                    assessments: input.assessments.clone(),
+                    actor: input.actor.clone(),
+                    preconditions: mutation(fences)?,
+                    expected_goal_revision: required(fences.goal_revision, "--if-goal-revision")?
+                        .get(),
+                },
+            ))
+        }
         Command::Integration {
             command: IntegrationCommand::Show { .. },
         } => Direct::IntegrationShow,

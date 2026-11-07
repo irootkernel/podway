@@ -35,7 +35,7 @@ use podway_presets::PresetError;
 use podway_protocol::CommandNameV1;
 use podway_protocol::{
     MAX_DIRECT_INPUT_BYTES_V1, MAX_SLICE_ITEM_TEXT_SCALARS_V1, RequestIdV1, Rfc3339MillisV1,
-    build_identity_v1, decode_item_record_many_input_v1,
+    build_identity_v1, decode_criterion_assessment_many_input_v1, decode_item_record_many_input_v1,
     ensure_procedure_independent_result_schema_v1, validate_command_result_v2,
     validate_procedure_independent_result_v1,
 };
@@ -758,7 +758,9 @@ fn validate_direct_flags(cli: &Cli) -> Result<(), LocalFailure> {
             command,
             Command::Decide(_)
                 | Command::Goal {
-                    command: GoalCommand::Revise(_) | GoalCommand::AssessCriterion(_)
+                    command: GoalCommand::Revise(_)
+                        | GoalCommand::AssessCriterion(_)
+                        | GoalCommand::AssessCriteria(_)
                 }
         )
     {
@@ -1272,6 +1274,28 @@ fn prepare_stdin_payload(command: &mut Command) -> Result<(), LocalFailure> {
             }
             args.input = Some(input);
         }
+        Command::Goal {
+            command: GoalCommand::AssessCriteria(args),
+        } if args.stdin => {
+            let mut bytes = Vec::with_capacity(MAX_DIRECT_INPUT_BYTES_V1.min(8 * 1024));
+            io::stdin()
+                .take((MAX_DIRECT_INPUT_BYTES_V1 + 1) as u64)
+                .read_to_end(&mut bytes)
+                .map_err(|_| LocalFailure::request_invalid("cannot read goal assessment stdin"))?;
+            args.input = Some(decode_criterion_assessment_many_input_v1(&bytes).map_err(
+                |error| {
+                    if bytes.len() > MAX_DIRECT_INPUT_BYTES_V1 {
+                        LocalFailure::catalog(
+                            "REQUEST_TOO_LARGE",
+                            "goal assessment stdin exceeds the maximum size",
+                            "cli",
+                        )
+                    } else {
+                        LocalFailure::request_invalid(error.to_string())
+                    }
+                },
+            )?);
+        }
         _ => {}
     }
     Ok(())
@@ -1291,6 +1315,13 @@ fn apply_record_input(cli: &mut Cli) -> Result<(), LocalFailure> {
         }
         Command::Record(args) if args.input.is_none() => {
             return Err(LocalFailure::request_invalid("record requires --stdin"));
+        }
+        Command::Goal {
+            command: GoalCommand::AssessCriteria(args),
+        } if args.input.is_none() => {
+            return Err(LocalFailure::request_invalid(
+                "goal assess-criteria requires --stdin",
+            ));
         }
         _ => {}
     }
@@ -1317,6 +1348,21 @@ fn apply_record_input(cli: &mut Cli) -> Result<(), LocalFailure> {
         cli.if_session_id = Some(field("session_id")?);
         cli.if_session_revision = input.get("session_revision").and_then(Value::as_u64);
         cli.if_attempt = Some(field("attempt_id")?);
+        return Ok(());
+    }
+    if let Command::Goal {
+        command: GoalCommand::AssessCriteria(args),
+    } = &cli.command
+    {
+        let input = args.input.as_ref().ok_or_else(|| {
+            LocalFailure::request_invalid("goal assess-criteria requires --stdin")
+        })?;
+        cli.idempotency_key = Some(input.idempotency_key.as_str().to_owned());
+        cli.if_workspace_uuid = Some(input.workspace_uuid.as_str().to_owned());
+        cli.if_session_id = Some(input.session_id.as_str().to_owned());
+        cli.if_session_revision = Some(input.session_revision.get());
+        cli.if_attempt = Some(input.attempt_id.as_str().to_owned());
+        cli.if_goal_revision = Some(input.goal_revision);
         return Ok(());
     }
     let input = match &cli.command {

@@ -391,14 +391,23 @@ cycles remain invalid. Registered compatibility findings
 
 ## Bounded input and evidence failures
 
-Both `record --stdin` and typed `RecordMany` share the 1,048,576-byte complete-input
-ceiling, including fences/key/operations. Delegation acceptance has a separate
+Both `record --stdin` (`item.record_many`) and `goal assess-criteria --stdin`
+(`goal.assess_criteria`), along with their typed Direct representations, share
+the 1,048,576-byte complete-input ceiling and JSON nesting depth ceiling of 64,
+including fences, idempotency key, and operations (`1..=128` item operations or
+`1..=16` criterion assessments). Delegation acceptance has a separate
 complete 32 KiB stdin ceiling. Item limits remain independent: 65,536 text scalars;
 1,000 list entries, 8,192 per entry, 1,000,000 total list scalars; 16,777,216
 text/list scalars per attempt; 128 items. Only the attempt aggregate maps to
-`ATTEMPT_CONTENT_LIMIT_EXCEEDED`. Parsed bound failures name `field`, `actual`,
-`maximum`, and `unit`. `REQUEST_TOO_LARGE` is the exception for bounded acceptance
-or encoding before a parsed field path is available.
+`ATTEMPT_CONTENT_LIMIT_EXCEEDED`. Parsed item bound failures (`item.record_many`
+and single-item mutations) map to `ITEM_CONSTRAINT_FAILED` (exit `1`) and name
+`field`, `actual`, `maximum`, and `unit`. By contrast, `goal.assess_criteria`
+(`podway goal assess-criteria --stdin`) pre-fence and post-fence resource and
+shape bound failures map to `REQUEST_INVALID` (exit `2`) without those item
+bound detail fields. `REQUEST_TOO_LARGE` (exit `2`) is the exception for
+bounded acceptance or encoding before a parsed field path is available,
+including exceeding the 1,048,576-byte complete-input ceiling on `record --stdin`
+or `goal assess-criteria --stdin`.
 
 Malformed/oversized/cross-session/wrong-binding tokens fail `REQUEST_INVALID`
 before state comparison. Undeclared/unresolved/skipped references, unselected

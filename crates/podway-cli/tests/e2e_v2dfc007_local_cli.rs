@@ -300,6 +300,7 @@ fn calls002_help_usage_distinguishes_global_options_and_key_owners() {
         "session.observe",
         "item.record_many",
         "delegation.accept",
+        "goal.assess_criteria",
         "outcome.lookup",
     ] {
         let output = fixture.run(&["--json", "help", topic].map(str::to_owned));
@@ -372,7 +373,10 @@ fn calls002_help_usage_distinguishes_global_options_and_key_owners() {
             assert!(text.contains("dry-run"));
             assert!(text.contains("interactive"));
         }
-        if matches!(topic, "item.record_many" | "delegation.accept") {
+        if matches!(
+            topic,
+            "item.record_many" | "delegation.accept" | "goal.assess_criteria"
+        ) {
             assert!(!usage.contains("--idempotency-key"));
             assert!(text.contains("stdin owns the key and fences"));
         }
@@ -1035,6 +1039,7 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
         "goal.define",
         "goal.revise",
         "goal.assess_criterion",
+        "goal.assess_criteria",
         "outcome.lookup",
     ] {
         let fixture = Fixture::new();
@@ -1109,6 +1114,7 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
             "rework",
             "goal",
             "assess-criterion",
+            "assess-criteria",
             "if-goal-revision",
             "analysis-v2",
             "small-change-v2",
@@ -1237,6 +1243,7 @@ fn guide003_help_topics_resolve_command_words_and_groups() {
         (&["goal", "define"], "goal.define"),
         (&["goal", "revise"], "goal.revise"),
         (&["goal", "assess-criterion"], "goal.assess_criterion"),
+        (&["goal", "assess-criteria"], "goal.assess_criteria"),
         (&["skip"], "session.skip"),
         (&["retry"], "session.retry"),
         (&["block"], "session.block"),
@@ -1290,6 +1297,7 @@ fn guide003_help_topics_resolve_command_words_and_groups() {
                 ("goal define", "goal.define"),
                 ("goal revise", "goal.revise"),
                 ("goal assess-criterion", "goal.assess_criterion"),
+                ("goal assess-criteria", "goal.assess_criteria"),
             ],
         ),
         (

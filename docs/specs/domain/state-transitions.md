@@ -24,7 +24,7 @@ owns lookup-first validation and retention.
 
 Supported lifecycle transitions are start, start-replace, begin, complete, skip,
 retry, block, unblock, cancel, terminal disposition, reset, decide, rework, goal
-define/revise/assess, and typed item mutations. Graph movement is always derived
+define/revise/assess-criterion/assess-criteria/assess, and typed item mutations. Graph movement is always derived
 from the admitted Procedure v2 snapshot; callers cannot supply an undeclared edge
 or arbitrary destination.
 
@@ -58,3 +58,15 @@ complete set against one input state, and returns either one successor or no
 successor. Changed item revisions advance independently, while the workspace and
 session revisions advance exactly once when at least one item changes. A semantic
 all-item no-op advances no revision. Item mutations never move the graph cursor.
+
+An atomic criterion-assessment batch (`goal.assess_criteria`) contains 1 to 16
+unique criterion assessments for the current goal revision on the active
+`goal_assessment` attempt. All entries are validated against one pre-batch
+snapshot for uniqueness, declared criterion membership, unassessed state on the
+active attempt, status-family compatibility (`Satisfied`/`Unsatisfied` versus
+`NotApplicable`, including any prior criterion results on the active attempt),
+and citable evidence/item references. On success, all new criterion results and
+citations are appended in goal declaration order with one shared timestamp and
+actor attribution, the workspace and session revisions advance once, the graph
+cursor remains on the active `goal_assessment` attempt, and any rejection leaves
+zero rows written.

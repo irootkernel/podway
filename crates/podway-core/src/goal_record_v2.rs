@@ -21,8 +21,8 @@ use crate::record_v2::{ActorAttributionV2, ResolvedEvidenceSetV2};
 use crate::session_v2::{GoalRevisionNumberV2, TraceSequenceV2};
 use crate::{AttemptId, CriterionId, DomainError, GraphNodeId, ItemId, UnixMillis};
 
-const MIN_GOAL_ASSESSMENT_RESULTS: usize = 1;
-const MAX_GOAL_ASSESSMENT_RESULTS: usize = 16;
+pub const MIN_GOAL_ASSESSMENT_RESULTS: usize = 1;
+pub const MAX_GOAL_ASSESSMENT_RESULTS: usize = 16;
 /// Maximum citations retained by one typed criterion assessment.
 pub const MAX_CRITERION_CITATIONS_V2: usize = 4;
 
@@ -285,6 +285,61 @@ impl CriterionAssessmentResultV2 {
 
     pub const fn mode(&self) -> CriterionAssessmentModeV2 {
         CriterionAssessmentModeV2::from_status(self.status)
+    }
+}
+
+/// Raw post-fence batch entry for `assess_goal_criteria_v2` (`goal.assess_criteria`).
+/// Defers semantic status, reason, combined citation count, duplicate citation, and
+/// `not_applicable` citation validation until live session/attempt/goal/node fences pass.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CriterionAssessmentBatchEntryV2 {
+    criterion_id: CriterionId,
+    status: String,
+    reason: String,
+    citations: Vec<CriterionCitationV2>,
+}
+
+impl CriterionAssessmentBatchEntryV2 {
+    pub fn new(
+        criterion_id: CriterionId,
+        status: impl Into<String>,
+        reason: impl Into<String>,
+        citations: Vec<CriterionCitationV2>,
+    ) -> Self {
+        Self {
+            criterion_id,
+            status: status.into(),
+            reason: reason.into(),
+            citations,
+        }
+    }
+
+    pub fn criterion_id(&self) -> &CriterionId {
+        &self.criterion_id
+    }
+
+    pub fn status(&self) -> &str {
+        &self.status
+    }
+
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+
+    pub fn citations(&self) -> &[CriterionCitationV2] {
+        &self.citations
+    }
+
+    pub fn into_result(self) -> Result<CriterionAssessmentResultV2, DomainError> {
+        if self.citations.len() > MAX_CRITERION_CITATIONS_V2 {
+            return Err(invalid("a criterion result carries at most four citations"));
+        }
+        let status = self.status.parse::<CriterionStatusV2>()?;
+        if self.citations.iter().collect::<BTreeSet<_>>().len() != self.citations.len() {
+            return Err(invalid("criterion result citations must be unique"));
+        }
+        let reason = CriterionAssessmentReasonV2::new(self.reason)?;
+        CriterionAssessmentResultV2::new(self.criterion_id, status, reason, self.citations)
     }
 }
 

@@ -7,7 +7,7 @@ use std::{
 
 use clap::{ArgAction, ArgMatches, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use podway_config::ScaffoldTemplate;
-use podway_protocol::ItemRecordManyInputV1;
+use podway_protocol::{CriterionAssessmentManyInputV1, ItemRecordManyInputV1};
 use serde_json::Value;
 
 use super::completion::Shell;
@@ -97,6 +97,7 @@ pub(super) struct Cli {
 pub(super) enum StdinFencedRoute {
     RecordMany,
     DelegationAccept,
+    GoalAssessCriteria,
 }
 
 impl StdinFencedRoute {
@@ -104,6 +105,7 @@ impl StdinFencedRoute {
         match route {
             "item.record_many" => Some(Self::RecordMany),
             "delegation.accept" => Some(Self::DelegationAccept),
+            "goal.assess_criteria" => Some(Self::GoalAssessCriteria),
             _ => None,
         }
     }
@@ -115,6 +117,9 @@ impl StdinFencedRoute {
             }
             Self::DelegationAccept => {
                 "delegation acceptance identity and idempotency must come only from stdin"
+            }
+            Self::GoalAssessCriteria => {
+                "goal assessment batch identity, revision, and idempotency fences must come only from stdin"
             }
         }
     }
@@ -459,6 +464,7 @@ pub(super) enum GoalCommand {
     Define(GoalDefineArgs),
     Revise(GoalReviseArgs),
     AssessCriterion(GoalAssessCriterionArgs),
+    AssessCriteria(GoalAssessCriteriaArgs),
 }
 
 #[derive(Debug, Args)]
@@ -501,6 +507,14 @@ pub(super) struct GoalAssessCriterionArgs {
     pub(super) item: Vec<String>,
     #[arg(long, value_name = "TEXT")]
     pub(super) actor: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(super) struct GoalAssessCriteriaArgs {
+    #[arg(long, required = true, action = ArgAction::SetTrue)]
+    pub(super) stdin: bool,
+    #[arg(skip)]
+    pub(super) input: Option<CriterionAssessmentManyInputV1>,
 }
 
 #[derive(Debug, Args)]
@@ -727,6 +741,9 @@ impl Command {
             Self::Goal {
                 command: GoalCommand::AssessCriterion(_),
             } => Some("goal.assess_criterion"),
+            Self::Goal {
+                command: GoalCommand::AssessCriteria(_),
+            } => Some("goal.assess_criteria"),
             Self::Skip { .. } => Some("session.skip"),
             Self::Retry { .. } => Some("session.retry"),
             Self::Block { .. } => Some("session.block"),
@@ -1136,6 +1153,7 @@ fn parse_failure_command_context_from_matches(
                     ("define", "goal.define"),
                     ("revise", "goal.revise"),
                     ("assess-criterion", "goal.assess_criterion"),
+                    ("assess-criteria", "goal.assess_criteria"),
                 ],
             )?
             .route;
@@ -1586,7 +1604,7 @@ fn route_help(topic: &str) -> Option<String> {
         "session.begin" => &[LIFECYCLE_FENCE_GUIDANCE],
         "session.terminal_disposition" => &[LIFECYCLE_FENCE_GUIDANCE, DISPOSITION_GUIDANCE],
         "session.start" | "session.start_replace" => &[REPLACEMENT_GUIDANCE],
-        "goal.assess_criterion" => &[CITATION_GUIDANCE],
+        "goal.assess_criterion" | "goal.assess_criteria" => &[CITATION_GUIDANCE],
         "outcome.lookup" => &[OUTCOME_RECOVERY_GUIDANCE],
         "item.record_many" => &[RECORD_CHECK_GUIDANCE, REVISION_GUIDANCE],
         "item.set"
@@ -1719,6 +1737,9 @@ fn route_topic(topic: &str) -> Option<&'static str> {
         }
         "goal.assess_criterion" => {
             "Usage:\n  podway goal assess-criterion <criterion-id> --status <satisfied|unsatisfied|not_applicable> --reason <text> [--evidence <graph-node-id>]... [--item <item-id>]... [--actor <text>] --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> --if-attempt <uuid> --if-goal-revision <n>\n\nExample:\n  podway goal assess-criterion tested --status satisfied --reason 'The test passed.' --evidence test --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --if-attempt <uuid> --if-goal-revision 1"
+        }
+        "goal.assess_criteria" => {
+            "Usage:\n  podway goal assess-criteria --stdin [--worktree <path>] [--json]\n\nOne atomic batch: either every assessment entry commits with one session revision\nbump, or nothing changes. The closed stdin document is\npodway.criterion-assessment-many-input/v1; each field's observation source:\n  schema                  the constant podway.criterion-assessment-many-input/v1\n  workspace_uuid          workspace.uuid\n  session_id              result.status.session (id)\n  session_revision        result.status.session (revision)\n  attempt_id              result.status.current.attempt.attempt_id\n  goal_revision           result.status.goal_revision\n  idempotency_key         a new caller-owned key\n  actor                   optional batch-wide attribution (1..256 Unicode scalars)\nEach of the 1..16 unique assessments carries criterion_id, status (satisfied,\nunsatisfied, or not_applicable), reason, and optional evidence and items arrays.\n\nExample stdin document (one line):\n  {\"schema\":\"podway.criterion-assessment-many-input/v1\",\"workspace_uuid\":\"00000000-0000-4000-8000-000000000001\",\"session_id\":\"00000000-0000-4000-8000-000000000002\",\"session_revision\":7,\"attempt_id\":\"00000000-0000-4000-8000-000000000003\",\"goal_revision\":1,\"idempotency_key\":\"assess-example\",\"assessments\":[{\"criterion_id\":\"tested\",\"status\":\"satisfied\",\"reason\":\"The test passed.\",\"evidence\":[\"test\"]}]}\n\nExample:\n  podway goal assess-criteria --stdin < assessments.json"
         }
         "session.start_replace" => {
             "The session.start_replace wire route remains available for compatible automation, but the CLI has no replace command or replace flags. Use `podway start --on-existing preserve|delete`; see `podway help session.start`."
@@ -1915,6 +1936,7 @@ mod tests {
         (&["goal", "define"], "goal.define"),
         (&["goal", "revise"], "goal.revise"),
         (&["goal", "assess-criterion"], "goal.assess_criterion"),
+        (&["goal", "assess-criteria"], "goal.assess_criteria"),
         (&["skip"], "session.skip"),
         (&["retry"], "session.retry"),
         (&["block"], "session.block"),
@@ -2055,7 +2077,7 @@ mod tests {
         let goal = help_text(&["goal".to_owned()]).unwrap();
         assert_eq!(
             goal,
-            "goal command group:\n  goal define -> goal.define\n  goal revise -> goal.revise\n  goal assess-criterion -> goal.assess_criterion"
+            "goal command group:\n  goal define -> goal.define\n  goal revise -> goal.revise\n  goal assess-criterion -> goal.assess_criterion\n  goal assess-criteria -> goal.assess_criteria"
         );
         for group in GROUP_WORDS {
             let listing = help_text(&[group.to_string()]).unwrap();
@@ -2294,5 +2316,57 @@ mod tests {
         ] {
             assert!(text.contains(phrase), "missing: {phrase}");
         }
+    }
+
+    #[test]
+    fn agent003_goal_assess_criteria_help_example_decodes_and_names_status_goal_revision() {
+        let text = help_text(&owned(&["goal", "assess-criteria"])).unwrap();
+        assert_eq!(
+            text,
+            help_text(&["goal.assess_criteria".to_owned()]).unwrap()
+        );
+        assert!(text.contains("result.status.goal_revision"));
+        assert!(!text.contains("result.status.current.goal_revision"));
+        let example = text
+            .lines()
+            .find(|line| line.trim_start().starts_with("{\"schema\":"))
+            .expect("example stdin document line present")
+            .trim();
+        let decoded =
+            podway_protocol::decode_criterion_assessment_many_input_v1(example.as_bytes())
+                .expect("the example document decodes through the real stdin decoder");
+        let value = serde_json::to_value(&decoded).unwrap();
+        assert_eq!(
+            value["schema"],
+            serde_json::json!("podway.criterion-assessment-many-input/v1")
+        );
+        assert_eq!(
+            value["workspace_uuid"],
+            serde_json::json!("00000000-0000-4000-8000-000000000001")
+        );
+        assert_eq!(
+            value["session_id"],
+            serde_json::json!("00000000-0000-4000-8000-000000000002")
+        );
+        assert_eq!(value["session_revision"], serde_json::json!(7));
+        assert_eq!(
+            value["attempt_id"],
+            serde_json::json!("00000000-0000-4000-8000-000000000003")
+        );
+        assert_eq!(value["goal_revision"], serde_json::json!(1));
+        assert_eq!(
+            value["idempotency_key"],
+            serde_json::json!("assess-example")
+        );
+        assert_eq!(
+            value["assessments"],
+            serde_json::json!([{
+                "criterion_id": "tested",
+                "status": "satisfied",
+                "reason": "The test passed.",
+                "evidence": ["test"],
+                "items": [],
+            }])
+        );
     }
 }

@@ -3,7 +3,7 @@
     {
       "kind": "catalog",
       "path": "contracts/command-routes.json",
-      "sha256": "sha256:71f3ce78635212ed5f89f6c61b1d5c6af06a52f0db98427153c8a23e23dde17c"
+      "sha256": "sha256:95235b206fbed6bbc9409c835006c2db91b773818426e985f3e70558e19346df"
     },
     {
       "kind": "preset",
@@ -28,7 +28,7 @@
     {
       "kind": "catalog",
       "path": "release/dolgorae-adapter-contract-v3.json",
-      "sha256": "sha256:6a7e1d8782c77e1e0b678360be1756f4208766e8a280c9872e71429e8fdc9449"
+      "sha256": "sha256:0b0acc1ae4d714f754bea508468dfb64ee4c345fdcbcb32b05a3c5631e24095a"
     },
     {
       "kind": "schema",
@@ -218,7 +218,7 @@
     {
       "kind": "schema",
       "path": "schemas/output-v4.schema.json",
-      "sha256": "sha256:5bf30aa139eb3bcd84f38f940a08346c04ac0dc9b07acb54f467257a973f052e"
+      "sha256": "sha256:b4e0dc6a9285a022a6e56387b1f6be460a71e04a2568d13cbcc683f72a46af4f"
     },
     {
       "kind": "schema",
@@ -513,7 +513,7 @@
     {
       "kind": "catalog",
       "path": "spec/command-catalog.yaml",
-      "sha256": "sha256:6aebbc4c48c2328cf9a6d581ccd87cd5af19ac4e21ac846c87c30f51bfef8ba5"
+      "sha256": "sha256:adede409413abe94afd1bb564df8af234f1048d5173e453c29d1a2bec6d5765d"
     },
     {
       "kind": "catalog",
@@ -538,7 +538,7 @@
     {
       "kind": "transition_matrix",
       "path": "spec/state-transition-matrix.csv",
-      "sha256": "sha256:60162dc96f234a5b944ca549641ad675a823159a998646b0fda7abc58ad68920"
+      "sha256": "sha256:478b63a8ca5b0110d4fae46d4b16a90fa2002935fdd6296c1f5571ece0766000"
     },
     {
       "kind": "known_answer_fixture",
@@ -651,7 +651,7 @@
       "sha256": "sha256:7de5f4f024eb795ae7fb73594d4847b833016bea6be9f2737c567b524ae5466e"
     }
   ],
-  "digest": "sha256:779396c8904d3bc69b050c8ac2a40fc9c81d2f416a8481ec4dbf241c129d42f8",
+  "digest": "sha256:0f7b0a973177d3011801b7fc8735fc7708b31d20c2116654f7df5ab9f2d3275f",
   "product": "podway",
   "product_version": "0.2.16",
   "schema_version": "podway.contract-manifest/v2"

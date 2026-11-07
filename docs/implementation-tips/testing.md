@@ -1201,3 +1201,11 @@ decoding, opt-in canonical request identity/digest helpers, and non-recursive
 (`int_v2_result_contract`, `int_v2agt004_record_many`,
 `int_v2dfc006_direct_envelopes`, `int_v2dfc008_current_contract`,
 `int_guide007_contract_generations`, and `int_release_contract_verifier`).
+`AGENT-002` unifies stdin-owned fence classification (`StdinFencedRoute`) and
+preflight exclusion in `podway-cli`. `AGENT-003` activates
+`podway goal assess-criteria --stdin` (`goal.assess_criteria`) with default
+`podway.criterion-assessment-many-result/v1`, verified by `podway-core`
+`goal_state_v2::tests`, `podway-store` `int_v2_goal_state` and
+`int_v2dfc006_execution_boundary`, `podway-engine` `int_v2dfc006_goal_ports`,
+and `podway-cli` `e2e_v2dfc007_local_cli`, `e2e_v2dfc007_direct_cli`, and
+`e2e_v2dfc007_runtime_cli`.

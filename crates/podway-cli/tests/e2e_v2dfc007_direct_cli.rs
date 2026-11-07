@@ -5334,3 +5334,403 @@ fn agent002_stdin_fenced_mutations_share_conflict_rejection_and_preserve_set_std
         "IDEMPOTENCY_KEY_REUSED"
     );
 }
+
+#[test]
+fn agent003_goal_assess_criteria_stdin_fences_conflicts_and_preflight_free_execution() {
+    use super::cli_fixture::{assert_read004_counters, output_with_stdin_counted};
+    use serde_json::json;
+
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    fs::write(
+        fixture.0.join("goal-batch.yaml"),
+        include_str!("../../../tests/fixtures/v2/procedures/goal-outcomes.yaml"),
+    )
+    .unwrap();
+    let preview = fixture.run(&["procedure", "preview", "goal-batch.yaml"]);
+    fixture.run(&[
+        "start",
+        "--procedure",
+        "goal-batch.yaml",
+        "--expect-procedure-digest",
+        preview["result"]["procedure_digest"].as_str().unwrap(),
+        "--task",
+        "Batch goal assessment CLI",
+        "--idempotency-key",
+        "start-batch",
+    ]);
+    fixture.run(&[
+        "begin",
+        "--goal",
+        "Verify batch criterion assessment.",
+        "--criterion",
+        "z-proof=Proof is complete.",
+        "--criterion",
+        "a-safety=Safety is verified.",
+        "--idempotency-key",
+        "begin-batch",
+    ]);
+    fixture.run(&[
+        "set",
+        "result",
+        "Evidence recorded.",
+        "--idempotency-key",
+        "set-result",
+    ]);
+    fixture.run(&["complete", "--idempotency-key", "complete-perform"]);
+    let before = fixture.run(&["status"]);
+    let workspace_uuid = before["workspace"]["uuid"].as_str().unwrap().to_owned();
+    let session_id = before["result"]["session"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let session_revision = before["result"]["session"]["revision"].as_u64().unwrap();
+    let attempt_id = before["result"]["current"]["attempt"]["attempt_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let valid_doc = json!({
+        "schema": "podway.criterion-assessment-many-input/v1",
+        "workspace_uuid": workspace_uuid,
+        "session_id": session_id,
+        "session_revision": session_revision,
+        "attempt_id": attempt_id,
+        "goal_revision": 1,
+        "idempotency_key": "agent003-valid-batch",
+        "actor": "agent-to",
+        "assessments": [
+            {
+                "criterion_id": "a-safety",
+                "status": "satisfied",
+                "reason": "Safety verified.",
+                "evidence": ["perform"]
+            },
+            {
+                "criterion_id": "z-proof",
+                "status": "satisfied",
+                "reason": "Proof verified.",
+                "evidence": ["perform"]
+            }
+        ]
+    });
+    let valid_bytes = serde_json::to_vec(&valid_doc).unwrap();
+    let snapshot = fixture.podway_snapshot();
+
+    let missing_stdin = fixture.output(&["goal", "assess-criteria"]);
+    assert_eq!(missing_stdin.status.code(), Some(2), "{missing_stdin:?}");
+    let missing_err = serde_json::from_slice::<ErrorEnvelopeV2>(&missing_stdin.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(missing_err["code"], "REQUEST_INVALID");
+    assert_eq!(missing_err["command"], "goal.assess_criteria");
+    assert!(
+        missing_err["message"].as_str().unwrap().contains("--stdin"),
+        "{missing_err:?}"
+    );
+    fixture.assert_podway_snapshot(&snapshot);
+
+    for conflict in [
+        &["--idempotency-key", "cli-key"][..],
+        &["--if-workspace-uuid", &workspace_uuid][..],
+        &["--if-session-id", &session_id][..],
+        &["--if-session-revision", "1"][..],
+        &["--if-attempt", &attempt_id][..],
+        &["--if-item-revision", "0"][..],
+        &["--if-goal-revision", "1"][..],
+        &["--yes"][..],
+    ] {
+        let mut args = vec!["goal", "assess-criteria", "--stdin"];
+        args.extend_from_slice(conflict);
+        let output = output_with_stdin_counted(&fixture, &args, &valid_bytes);
+        assert_eq!(output.status.code(), Some(2), "{conflict:?}: {output:?}");
+        assert_read004_counters(&output, (0, 0));
+        let err = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
+            .unwrap()
+            .into_value();
+        assert_eq!(err["code"], "REQUEST_INVALID", "{conflict:?}");
+        assert_eq!(err["command"], "goal.assess_criteria", "{conflict:?}");
+        fixture.assert_podway_snapshot(&snapshot);
+    }
+
+    let malformed = output_with_stdin_counted(
+        &fixture,
+        &["goal", "assess-criteria", "--stdin"],
+        b"{\"schema\":\"podway.criterion-assessment-many-input/v1\"}",
+    );
+    assert_eq!(malformed.status.code(), Some(2));
+    assert_read004_counters(&malformed, (0, 0));
+    assert_eq!(
+        serde_json::from_slice::<ErrorEnvelopeV2>(&malformed.stdout)
+            .unwrap()
+            .as_value()["code"],
+        "REQUEST_INVALID"
+    );
+    fixture.assert_podway_snapshot(&snapshot);
+
+    let oversized = vec![b' '; 1_048_577];
+    let too_large = output_with_stdin_counted(
+        &fixture,
+        &["goal", "assess-criteria", "--stdin"],
+        &oversized,
+    );
+    assert_eq!(too_large.status.code(), Some(2));
+    assert_read004_counters(&too_large, (0, 0));
+    assert_eq!(
+        serde_json::from_slice::<ErrorEnvelopeV2>(&too_large.stdout)
+            .unwrap()
+            .as_value()["code"],
+        "REQUEST_TOO_LARGE"
+    );
+    fixture.assert_podway_snapshot(&snapshot);
+
+    let mut bad_gen_cmd = Command::new(podway_binary());
+    bad_gen_cmd
+        .arg("--json")
+        .arg("--contract-generation")
+        .arg("3")
+        .arg("--worktree")
+        .arg(&fixture.0)
+        .arg("goal")
+        .arg("assess-criteria")
+        .arg("--stdin")
+        .current_dir(&fixture.0)
+        .env_remove("HOME")
+        .env_remove("XDG_CONFIG_HOME")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut bad_gen_guard = GuardedChild::new(bad_gen_cmd.spawn().unwrap());
+    // Keep the producer open without sending bytes: consuming stdin would block.
+    let bad_gen_producer = bad_gen_guard.0.as_mut().unwrap().stdin.take().unwrap();
+    let bad_gen_deadline = Instant::now() + Duration::from_secs(10);
+    while bad_gen_guard
+        .0
+        .as_mut()
+        .unwrap()
+        .try_wait()
+        .unwrap()
+        .is_none()
+    {
+        assert!(
+            Instant::now() < bad_gen_deadline,
+            "generation validation blocked on stdin"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    let bad_gen = bad_gen_guard.0.take().unwrap().wait_with_output().unwrap();
+    drop(bad_gen_producer);
+    assert_eq!(bad_gen.status.code(), Some(2), "{bad_gen:?}");
+    assert!(bad_gen.stderr.is_empty(), "{bad_gen:?}");
+    let bad_gen_err = serde_json::from_slice::<ErrorEnvelopeV2>(&bad_gen.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(bad_gen_err["code"], "REQUEST_INVALID");
+    assert_eq!(bad_gen_err["command"], "goal.assess_criteria");
+    assert_eq!(bad_gen_err["exit_code"], 2);
+    assert_eq!(
+        bad_gen_err["message"],
+        "--contract-generation accepts 1 or 2"
+    );
+    fixture.assert_podway_snapshot(&snapshot);
+
+    let deep_json = format!("{}0{}", "[".repeat(65), "]".repeat(65)).into_bytes();
+    let mut seventeen_doc = valid_doc.clone();
+    seventeen_doc["assessments"] = serde_json::Value::Array(
+        (1..=17)
+            .map(|i| {
+                json!({
+                    "criterion_id": format!("c-{i}"),
+                    "status": "satisfied",
+                    "reason": "ok"
+                })
+            })
+            .collect(),
+    );
+    let mut dup_criterion_doc = valid_doc.clone();
+    dup_criterion_doc["assessments"] = json!([
+        {
+            "criterion_id": "a-safety",
+            "status": "satisfied",
+            "reason": "first"
+        },
+        {
+            "criterion_id": "a-safety",
+            "status": "satisfied",
+            "reason": "second"
+        }
+    ]);
+    let mut blank_actor_doc = valid_doc.clone();
+    blank_actor_doc["actor"] = json!("   ");
+    let mut overlong_actor_doc = valid_doc.clone();
+    overlong_actor_doc["actor"] = json!("a".repeat(257));
+    let mut blank_reason_doc = valid_doc.clone();
+    blank_reason_doc["assessments"][0]["reason"] = json!("   ");
+    let mut overlong_reason_doc = valid_doc.clone();
+    overlong_reason_doc["assessments"][0]["reason"] = json!("r".repeat(2001));
+    let mut five_evidence_doc = valid_doc.clone();
+    five_evidence_doc["assessments"][0]["evidence"] = json!(["n1", "n2", "n3", "n4", "n5"]);
+    let mut five_items_doc = valid_doc.clone();
+    five_items_doc["assessments"][0]["items"] = json!(["i1", "i2", "i3", "i4", "i5"]);
+
+    for (label, payload) in [
+        ("depth-65", deep_json),
+        ("17-entries", serde_json::to_vec(&seventeen_doc).unwrap()),
+        (
+            "duplicate-criterion",
+            serde_json::to_vec(&dup_criterion_doc).unwrap(),
+        ),
+        ("blank-actor", serde_json::to_vec(&blank_actor_doc).unwrap()),
+        (
+            "overlong-actor",
+            serde_json::to_vec(&overlong_actor_doc).unwrap(),
+        ),
+        (
+            "overlong-reason",
+            serde_json::to_vec(&overlong_reason_doc).unwrap(),
+        ),
+        (
+            "five-evidence",
+            serde_json::to_vec(&five_evidence_doc).unwrap(),
+        ),
+        ("five-items", serde_json::to_vec(&five_items_doc).unwrap()),
+    ] {
+        let rejected =
+            output_with_stdin_counted(&fixture, &["goal", "assess-criteria", "--stdin"], &payload);
+        assert_eq!(rejected.status.code(), Some(2), "{label}: {rejected:?}");
+        assert_read004_counters(&rejected, (0, 0));
+        let err = serde_json::from_slice::<ErrorEnvelopeV2>(&rejected.stdout)
+            .unwrap()
+            .into_value();
+        assert_eq!(err["code"], "REQUEST_INVALID", "{label}");
+        assert_eq!(err["command"], "goal.assess_criteria", "{label}");
+        assert_eq!(err["exit_code"], 2, "{label}");
+        fixture.assert_podway_snapshot(&snapshot);
+    }
+
+    // Whitespace-only reason passes pre-fence wire decoding and is rejected post-fence inside the
+    // rolled-back transaction without changing database/WAL bytes or session state.
+    let blank_reason_bytes = serde_json::to_vec(&blank_reason_doc).unwrap();
+    let blank_reason_first = output_with_stdin_counted(
+        &fixture,
+        &["goal", "assess-criteria", "--stdin"],
+        &blank_reason_bytes,
+    );
+    assert_eq!(
+        blank_reason_first.status.code(),
+        Some(2),
+        "{blank_reason_first:?}"
+    );
+    assert_read004_counters(&blank_reason_first, (0, 0));
+    let blank_reason_err = serde_json::from_slice::<ErrorEnvelopeV2>(&blank_reason_first.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(blank_reason_err["code"], "REQUEST_INVALID");
+    assert_eq!(blank_reason_err["command"], "goal.assess_criteria");
+    assert_eq!(blank_reason_err["exit_code"], 2);
+    let post_rollback_snapshot = fixture.podway_snapshot();
+    assert_eq!(
+        post_rollback_snapshot
+            .iter()
+            .map(|entry| &entry.0)
+            .collect::<Vec<_>>(),
+        snapshot.iter().map(|entry| &entry.0).collect::<Vec<_>>()
+    );
+    for (actual, expected) in post_rollback_snapshot.iter().zip(&snapshot) {
+        assert_eq!(actual.0, expected.0);
+        if actual.0 != std::path::Path::new("runtime/state.sqlite3-shm") {
+            assert_eq!(
+                actual.1,
+                expected.1,
+                "bytes changed: {}",
+                actual.0.display()
+            );
+        }
+        assert_eq!((actual.2, actual.3), (expected.2, expected.3));
+    }
+    let blank_reason_second = output_with_stdin_counted(
+        &fixture,
+        &["goal", "assess-criteria", "--stdin"],
+        &blank_reason_bytes,
+    );
+    assert_eq!(blank_reason_second.status.code(), Some(2));
+    assert_read004_counters(&blank_reason_second, (0, 0));
+    let blank_reason_second_err =
+        serde_json::from_slice::<ErrorEnvelopeV2>(&blank_reason_second.stdout)
+            .unwrap()
+            .into_value();
+    assert_eq!(blank_reason_second_err["code"], "REQUEST_INVALID");
+    assert_eq!(blank_reason_second_err["command"], "goal.assess_criteria");
+    assert_eq!(blank_reason_second_err["exit_code"], 2);
+    fixture.assert_podway_snapshot(&post_rollback_snapshot);
+
+    // Execute valid batch with zero preflight reads, then replay across contract generations.
+    let ok_out = output_with_stdin_counted(
+        &fixture,
+        &[
+            "--contract-generation",
+            "1",
+            "goal",
+            "assess-criteria",
+            "--stdin",
+        ],
+        &valid_bytes,
+    );
+    assert_eq!(ok_out.status.code(), Some(0), "{ok_out:?}");
+    assert_read004_counters(&ok_out, (0, 0));
+    let ok_envelope = serde_json::from_slice::<OutputEnvelopeV4>(&ok_out.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(ok_envelope["command"], "goal.assess_criteria");
+    assert_eq!(ok_envelope["result"]["complete"], true);
+    assert_eq!(ok_envelope["result"]["determined_outcome"], "achieved");
+    assert_eq!(
+        ok_envelope["result"]["results"][0]["criterion_id"],
+        "z-proof"
+    );
+    assert_eq!(
+        ok_envelope["result"]["results"][1]["criterion_id"],
+        "a-safety"
+    );
+
+    let replay_out = output_with_stdin_counted(
+        &fixture,
+        &[
+            "--contract-generation",
+            "2",
+            "goal",
+            "assess-criteria",
+            "--stdin",
+        ],
+        &valid_bytes,
+    );
+    assert_eq!(replay_out.status.code(), Some(0), "{replay_out:?}");
+    assert_read004_counters(&replay_out, (0, 0));
+    assert_eq!(
+        serde_json::from_slice::<OutputEnvelopeV4>(&replay_out.stdout)
+            .unwrap()
+            .into_value(),
+        ok_envelope
+    );
+
+    let committed_snapshot = fixture.podway_snapshot();
+    let mut reordered_doc = valid_doc.clone();
+    reordered_doc["assessments"]
+        .as_array_mut()
+        .unwrap()
+        .reverse();
+    let reordered_out = output_with_stdin_counted(
+        &fixture,
+        &["goal", "assess-criteria", "--stdin"],
+        &serde_json::to_vec(&reordered_doc).unwrap(),
+    );
+    assert_eq!(reordered_out.status.code(), Some(2), "{reordered_out:?}");
+    assert_read004_counters(&reordered_out, (0, 0));
+    let reordered_err = serde_json::from_slice::<ErrorEnvelopeV2>(&reordered_out.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(reordered_err["code"], "IDEMPOTENCY_KEY_REUSED");
+    assert_eq!(reordered_err["command"], "goal.assess_criteria");
+    assert_eq!(reordered_err["exit_code"], 2);
+    fixture.assert_podway_snapshot(&committed_snapshot);
+}

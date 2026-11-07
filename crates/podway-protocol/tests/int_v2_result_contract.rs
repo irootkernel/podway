@@ -3536,29 +3536,29 @@ fn agent001_reserved_batch_assessment_and_mutation_observation_contracts_validat
         validate_daemon_free_document_v1, validate_mutation_observation_command_result_v1,
     };
 
-    for (schema, path) in [
+    for (schema, path, expected_commands) in [
         (
             "podway.criterion-assessment-many-input/v1",
             "schemas/criterion-assessment-many-input-v1.schema.json",
+            &[][..],
         ),
         (
             "podway.criterion-assessment-many-result/v1",
             "schemas/criterion-assessment-many-result-v1.schema.json",
+            &["goal.assess_criteria"][..],
         ),
         (
             "podway.mutation-observation-result/v1",
             "schemas/mutation-observation-result-v1.schema.json",
+            &[][..],
         ),
     ] {
         let entry = DAEMON_FREE_DOCUMENT_SCHEMAS_V1
             .iter()
             .find(|contract| contract.schema == schema)
-            .expect("reserved AGENT-001 schema registered");
+            .expect("AGENT-001 schema registered");
         assert_eq!(entry.schema_path, path);
-        assert!(
-            entry.commands.is_empty(),
-            "{schema} must remain commands: &[] in AGENT-001"
-        );
+        assert_eq!(entry.commands, expected_commands, "{schema}");
     }
 
     assert_eq!(

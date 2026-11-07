@@ -34,12 +34,13 @@ pub use v2_memory::{
 pub use v2_state::{
     AttemptMetadataV2, GraphActionCompletionOutcomeV2, GraphActionSkipOutcomeV2,
     GraphBeginOutcomeV2, GraphBlockOutcomeV2, GraphCancelOutcomeV2,
-    GraphCriterionAssessmentOutcomeV2, GraphGoalDefinitionOutcomeV2, GraphGoalRevisionOutcomeV2,
-    GraphInitialGoalV2, GraphItemMutationEntryV2, GraphItemMutationOutcomeV2,
-    GraphItemsMutationOutcomeV2, GraphNodeCounterV2, GraphNodeSnapshotV2, GraphRetryOutcomeV2,
-    GraphSessionStateV2, GraphUnblockOutcomeV2, GraphWorkspaceViewV2,
-    MAX_ARCHIVED_SESSION_LIST_WINDOW_V2, ProcedureSnapshotV2, SessionArchiveListPageV2,
-    SessionArchiveSummaryV2, admit_procedure_snapshot_v2,
+    GraphCriterionAssessmentOutcomeV2, GraphCriterionAssessmentsOutcomeV2,
+    GraphGoalDefinitionOutcomeV2, GraphGoalRevisionOutcomeV2, GraphInitialGoalV2,
+    GraphItemMutationEntryV2, GraphItemMutationOutcomeV2, GraphItemsMutationOutcomeV2,
+    GraphNodeCounterV2, GraphNodeSnapshotV2, GraphRetryOutcomeV2, GraphSessionStateV2,
+    GraphUnblockOutcomeV2, GraphWorkspaceViewV2, MAX_ARCHIVED_SESSION_LIST_WINDOW_V2,
+    ProcedureSnapshotV2, SessionArchiveListPageV2, SessionArchiveSummaryV2,
+    admit_procedure_snapshot_v2,
 };
 
 pub const MAX_IDEMPOTENCY_KEY_BYTES_V1: usize = 256;

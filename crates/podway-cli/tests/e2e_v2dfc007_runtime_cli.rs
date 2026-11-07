@@ -1806,3 +1806,242 @@ fn guide008_cli_fenced_start_from_a_terminal_never_interviews() {
     assert!(!rendered.contains("Choose ["), "{rendered}");
     assert_eq!(fixture.run(&["status"])["result"], before["result"]);
 }
+
+#[test]
+fn agent003_goal_assess_criteria_partial_full_decide_and_if_goal_revision_flag_gate() {
+    use serde_json::json;
+
+    let fixture = running_fixture(include_str!(
+        "../../../tests/fixtures/v2/procedures/goal-outcomes.yaml"
+    ));
+    let defined = fixture.run(&[
+        "goal",
+        "define",
+        "--goal",
+        "Verify batch criterion assessment and flag gate.",
+        "--criterion",
+        "z-reproduced=The failure was reproduced.",
+        "--criterion",
+        "a-verified=The regression test passes.",
+        "--actor",
+        "agent-to",
+        "--idempotency-key",
+        "define-goal",
+    ]);
+    assert_eq!(defined["result"]["goal_revision"], 1);
+
+    let bad_complete_out = fixture.output(&[
+        "complete",
+        "--if-goal-revision",
+        "1",
+        "--idempotency-key",
+        "bad-complete",
+    ]);
+    assert_eq!(
+        bad_complete_out.status.code(),
+        Some(2),
+        "{bad_complete_out:?}"
+    );
+    let bad_complete = serde_json::from_slice::<ErrorEnvelopeV2>(&bad_complete_out.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(bad_complete["code"], "REQUEST_INVALID");
+
+    fixture.run(&[
+        "set",
+        "result",
+        "Recorded required evidence for perform.",
+        "--idempotency-key",
+        "set-perform",
+    ]);
+    fixture.run(&["complete", "--idempotency-key", "complete-perform"]);
+
+    let revised = fixture.run(&[
+        "goal",
+        "revise",
+        "--goal",
+        "Repair the defect and verify both criteria.",
+        "--criterion",
+        "z-reproduced=The defect was reproduced.",
+        "--criterion",
+        "a-verified=The fix was verified.",
+        "--rework-to",
+        "perform",
+        "--reason",
+        "Refine criterion IDs to exercise declaration order.",
+        "--if-goal-revision",
+        "1",
+        "--idempotency-key",
+        "revise-goal-1",
+    ]);
+    assert_eq!(revised["result"]["goal_revision"], 2);
+
+    fixture.run(&[
+        "set",
+        "result",
+        "Updated evidence after goal revision.",
+        "--idempotency-key",
+        "set-perform-2",
+    ]);
+    fixture.run(&["complete", "--idempotency-key", "complete-perform-2"]);
+
+    let at_assess = fixture.run(&["status"]);
+    let workspace_uuid = at_assess["workspace"]["uuid"].as_str().unwrap().to_owned();
+    let session_id = at_assess["result"]["session"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let assess_attempt = at_assess["result"]["current"]["attempt"]["attempt_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let assess_rev = at_assess["result"]["session"]["revision"].as_u64().unwrap();
+
+    let stale_goal_doc = json!({
+        "schema": "podway.criterion-assessment-many-input/v1",
+        "workspace_uuid": workspace_uuid,
+        "session_id": session_id,
+        "session_revision": assess_rev,
+        "attempt_id": assess_attempt,
+        "goal_revision": 1,
+        "idempotency_key": "batch-stale-goal",
+        "assessments": [
+            {
+                "criterion_id": "a-verified",
+                "status": "satisfied",
+                "reason": "Verified."
+            }
+        ]
+    });
+    let stale_raw = fixture.output_with_stdin(
+        &["goal", "assess-criteria", "--stdin"],
+        serde_json::to_string(&stale_goal_doc).unwrap().as_bytes(),
+    );
+    assert_eq!(stale_raw.status.code(), Some(4), "{stale_raw:?}");
+    let stale_out = serde_json::from_slice::<ErrorEnvelopeV2>(&stale_raw.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(stale_out["code"], "GOAL_REVISION_STALE");
+
+    let partial_doc = json!({
+        "schema": "podway.criterion-assessment-many-input/v1",
+        "workspace_uuid": workspace_uuid,
+        "session_id": session_id,
+        "session_revision": assess_rev,
+        "attempt_id": assess_attempt,
+        "goal_revision": 2,
+        "idempotency_key": "batch-partial-1",
+        "actor": "agent-to",
+        "assessments": [
+            {
+                "criterion_id": "a-verified",
+                "status": "satisfied",
+                "reason": "Verified by regression test.",
+                "evidence": ["perform"]
+            }
+        ]
+    });
+    let partial_raw = fixture.output_with_stdin(
+        &["goal", "assess-criteria", "--stdin"],
+        serde_json::to_string(&partial_doc).unwrap().as_bytes(),
+    );
+    assert_eq!(partial_raw.status.code(), Some(0), "{partial_raw:?}");
+    let partial_res = serde_json::from_slice::<OutputEnvelopeV4>(&partial_raw.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(partial_res["command"], "goal.assess_criteria");
+    assert_eq!(
+        partial_res["result"]["schema"],
+        "podway.criterion-assessment-many-result/v1"
+    );
+    assert_eq!(partial_res["result"]["complete"], false);
+    assert!(partial_res["result"].get("determined_outcome").is_none());
+    assert_eq!(
+        partial_res["result"]["results"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(
+        partial_res["result"]["results"][0]["criterion_id"],
+        "a-verified"
+    );
+
+    let decide_early_raw = fixture.output(&[
+        "decide",
+        "--option",
+        "achieved",
+        "--reason",
+        "Try deciding before second criterion.",
+        "--if-goal-revision",
+        "2",
+        "--idempotency-key",
+        "decide-early",
+    ]);
+    assert_eq!(
+        decide_early_raw.status.code(),
+        Some(1),
+        "{decide_early_raw:?}"
+    );
+    let decide_early = serde_json::from_slice::<ErrorEnvelopeV2>(&decide_early_raw.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(decide_early["code"], "CRITERION_RESULT_MISSING");
+
+    let second_rev = partial_res["result"]["revision"].as_u64().unwrap();
+    let second_doc = json!({
+        "schema": "podway.criterion-assessment-many-input/v1",
+        "workspace_uuid": workspace_uuid,
+        "session_id": session_id,
+        "session_revision": second_rev,
+        "attempt_id": assess_attempt,
+        "goal_revision": 2,
+        "idempotency_key": "batch-partial-2",
+        "assessments": [
+            {
+                "criterion_id": "z-reproduced",
+                "status": "satisfied",
+                "reason": "Reproduced cleanly.",
+                "evidence": ["perform"]
+            }
+        ]
+    });
+    let second_raw = fixture.output_with_stdin(
+        &["goal", "assess-criteria", "--stdin"],
+        serde_json::to_string(&second_doc).unwrap().as_bytes(),
+    );
+    assert_eq!(second_raw.status.code(), Some(0), "{second_raw:?}");
+    let second_res = serde_json::from_slice::<OutputEnvelopeV4>(&second_raw.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(second_res["result"]["complete"], true);
+    assert_eq!(second_res["result"]["determined_outcome"], "achieved");
+
+    let decided = fixture.run(&[
+        "decide",
+        "--option",
+        "achieved",
+        "--reason",
+        "All criteria satisfied.",
+        "--if-goal-revision",
+        "2",
+        "--idempotency-key",
+        "decide-final",
+    ]);
+    assert_eq!(decided["command"], "session.decide");
+
+    let first_replay_raw = fixture.output_with_stdin(
+        &["goal", "assess-criteria", "--stdin"],
+        serde_json::to_string(&partial_doc).unwrap().as_bytes(),
+    );
+    assert_eq!(
+        first_replay_raw.status.code(),
+        Some(0),
+        "{first_replay_raw:?}"
+    );
+    let first_replay = serde_json::from_slice::<OutputEnvelopeV4>(&first_replay_raw.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(first_replay, partial_res);
+    let lookup = fixture.run(&["outcome", "lookup", "--idempotency-key", "batch-partial-1"]);
+    assert_eq!(lookup["result"]["found"], true);
+    assert_eq!(lookup["result"]["outcome"]["response"], partial_res);
+}

@@ -400,9 +400,12 @@ original budget without renewing it; admitted work may finish after the deadline
 `MUTATION_OUTCOME_UNKNOWN` is limited to an I/O failure during COMMIT. Daemon, job,
 mode, detach and wait controls are retired; they fail with `COMMAND_RETIRED`.
 `podway record --stdin` accepts one closed, at-most-1-MiB JSON document to
-record or clear 1..128 uniquely identified active-attempt items atomically. The
-document carries every workspace, session, attempt, item-revision, and
-idempotency fence; see the [Procedure v2 walkthrough](docs/examples/v2-workflow.md).
+record or clear 1..128 uniquely identified active-attempt items atomically, and
+`podway goal assess-criteria --stdin` records 1..16 uniquely identified active-attempt
+criterion assessments atomically. Both documents carry every workspace, session,
+attempt, and idempotency fence, with per-operation `expected_item_revision` required
+for `record --stdin` and document-level `goal_revision` required for
+`goal assess-criteria --stdin`; see the [Procedure v2 walkthrough](docs/examples/v2-workflow.md).
 Common stale-state, uncertain-outcome and workspace failures include a closed
 `details.recovery` recipe. Validate RecoveryRecipe v2 and its command/argv pair;
 read-only recovery and explicitly authorized destructive recovery are distinct.

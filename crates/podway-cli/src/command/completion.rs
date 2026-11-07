@@ -801,6 +801,12 @@ const ROUTES: &[Route] = &[
         dynamic: Some("goal-assessment"),
     },
     Route {
+        words: "goal assess-criteria",
+        flags: RECORD_FLAGS,
+        values: "",
+        dynamic: None,
+    },
+    Route {
         words: "skip",
         flags: &[
             &JSON,
@@ -1776,6 +1782,36 @@ mod tests {
             assert!(
                 script.contains(accumulation),
                 "missing route accumulation in {shell:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn agent003_goal_assess_criteria_completes_record_flags_only() {
+        assert!(children("goal").contains(&"assess-criteria"));
+        let route = ROUTES
+            .iter()
+            .find(|route| route.words == "goal assess-criteria")
+            .expect("goal assess-criteria route registered");
+        assert_eq!(
+            route.flags.iter().map(|flag| flag.long).collect::<Vec<_>>(),
+            [
+                "json",
+                "worktree",
+                "timeout",
+                "no-color",
+                "quiet",
+                "contract-generation",
+                "stdin"
+            ]
+        );
+        assert_eq!(route.values, "");
+        assert!(route.dynamic.is_none());
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let script = shell.script();
+            assert!(
+                script.contains("goal assess-criteria"),
+                "missing goal assess-criteria in {shell:?}"
             );
         }
     }

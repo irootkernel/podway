@@ -596,6 +596,7 @@ pub enum ProcedureV2MutationCommandV1 {
     GoalDefine(GoalDefineV2),
     GoalRevise(GoalReviseV2),
     GoalAssessCriterion(GoalAssessCriterionV2),
+    GoalAssessCriteria(GoalAssessCriteriaV2),
 }
 impl ItemRecordValueV1 {
     pub fn artifact_source(&self) -> Option<Result<ItemAttachSourceV1, SliceErrorV1>> {
@@ -628,6 +629,7 @@ impl ProcedureV2MutationCommandV1 {
             Self::GoalDefine(_) => "goal.define",
             Self::GoalRevise(_) => "goal.revise",
             Self::GoalAssessCriterion(_) => "goal.assess_criterion",
+            Self::GoalAssessCriteria(_) => "goal.assess_criteria",
         }
     }
 }
@@ -1223,6 +1225,13 @@ pub fn canonical_procedure_v2_command_identity_v1(
                     "actor": &command.actor,
                 }),
             )
+        }
+        ProcedureV2MutationCommandV1::GoalAssessCriteria(command) => {
+            return canonical_goal_assess_criteria_identity_v1(
+                command,
+                resolved_workspace_id,
+                false,
+            );
         }
     };
     canonicalize_json_v1(&json!({

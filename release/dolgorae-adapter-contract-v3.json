@@ -401,6 +401,7 @@
       "goal.define",
       "goal.revise",
       "goal.assess_criterion",
+      "goal.assess_criteria",
       "integration.show",
       "outcome.lookup"
     ],
@@ -1241,7 +1242,7 @@
       {
         "id": "urn:podway:schema:output:v4",
         "path": "schemas/output-v4.schema.json",
-        "sha256": "sha256:5bf30aa139eb3bcd84f38f940a08346c04ac0dc9b07acb54f467257a973f052e"
+        "sha256": "sha256:b4e0dc6a9285a022a6e56387b1f6be460a71e04a2568d13cbcc683f72a46af4f"
       },
       {
         "id": "urn:podway:schema:prepared-next-result:v3",
@@ -1542,7 +1543,7 @@
   },
   "current_surface_counts": {
     "authoring_diagnostics": 59,
-    "routes": 58,
+    "routes": 59,
     "runtime_errors": 98,
     "schemas": 94
   },
