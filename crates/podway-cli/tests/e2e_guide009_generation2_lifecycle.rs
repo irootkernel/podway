@@ -733,3 +733,602 @@ fn generation2_lifecycle_conformance() {
         );
     }
 }
+
+const AGENT005_CLI_PROCEDURE: &[u8] = br#"schema: podway.procedure/v2
+id: agent005-cli-observation
+version: "1"
+name: AGENT-005 CLI observation lifecycle
+purpose: Exercise all six CLI --with-observation routes end to end.
+description: AGENT-005 CLI test procedure.
+goal_tracking: true
+node_definitions:
+  work:
+    type: action
+    title: Work
+    intent: Record items before completing into the decision node.
+    instructions:
+      - Record items.
+    items:
+      - id: confirm
+        type: confirm
+        prompt: Confirm work.
+        required: true
+      - id: note
+        type: text
+        prompt: Record note.
+        required: false
+        min_length: 1
+        max_length: 200
+        multiline: false
+  gate:
+    type: decision
+    title: Gate
+    objective: Determine the goal outcome.
+    prompt: Which outcome applies?
+    options:
+      - id: ship
+        label: Ship
+      - id: hold
+        label: Hold
+      - id: drop
+        label: Drop
+    reason:
+      required: true
+      prompt: Explain the assessment.
+    assessment:
+      target: session_goal
+      outcomes:
+        ship: achieved
+        hold: not_achieved
+        drop: superseded
+  finish:
+    type: action
+    title: Finish
+    intent: Complete the terminal node.
+    instructions:
+      - Complete finish.
+    items:
+      - id: done
+        type: confirm
+        prompt: Confirm finish.
+        required: false
+graph:
+  entry: work
+  nodes:
+    - id: work
+      use: work
+      next: gate
+    - id: gate
+      use: gate
+      evidence_from:
+        - node: work
+          required: true
+          items:
+            - confirm
+      routes:
+        ship:
+          to: finish
+          effect: advance
+        hold:
+          to: finish
+          effect: advance
+        drop:
+          to: finish
+          effect: advance
+    - id: finish
+      use: finish
+      terminal: true
+manual_rework:
+  allowed_targets:
+    - work
+"#;
+
+fn run_stdin_json(fixture: &Fixture, args: &[&str], stdin_bytes: &[u8]) -> (Option<i32>, Value) {
+    use std::io::Write;
+    let mut command = Command::new(podway_binary());
+    command
+        .arg("--json")
+        .arg("--worktree")
+        .arg(&fixture.0)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    child.stdin.take().unwrap().write_all(stdin_bytes).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.stderr.is_empty(),
+        "unexpected stderr for {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    (output.status.code(), value)
+}
+
+#[test]
+fn agent005_with_observation_lifecycle_replay_lookup_and_conflicts() {
+    use podway_protocol::validate_daemon_free_document_v1;
+    use serde_json::json;
+
+    let fixture = Fixture::new();
+    let init = fixture.run(&["init", "--idempotency-key", "agent005-init"]);
+    let workspace_uuid = init["workspace"]["uuid"].as_str().unwrap().to_owned();
+    fs::write(fixture.0.join("agent005.yaml"), AGENT005_CLI_PROCEDURE).unwrap();
+    let digest =
+        fixture.run(&["procedure", "preview", "agent005.yaml"])["result"]["procedure_digest"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+    // 1. Excluded routes and local commands reject --with-observation with exit 2 and zero state change.
+    let snapshot_before_rejections = fixture.podway_snapshot();
+    for (rejected_args, expected_cmd) in [
+        (
+            &[
+                "start",
+                "--procedure",
+                "agent005.yaml",
+                "--task",
+                "dry",
+                "--dry-run",
+                "--with-observation",
+            ][..],
+            "session.start",
+        ),
+        (
+            &[
+                "start",
+                "--procedure",
+                "agent005.yaml",
+                "--task",
+                "replace",
+                "--on-existing",
+                "preserve",
+                "--supersede-reason",
+                "reason",
+                "--with-observation",
+                "--idempotency-key",
+                "k-rej-1",
+            ][..],
+            "session.start_replace",
+        ),
+        (&["observe", "--with-observation"][..], "session.observe"),
+        (&["status", "--with-observation"][..], "session.status"),
+        (
+            &["skip", "--with-observation", "--idempotency-key", "k-rej-2"][..],
+            "session.skip",
+        ),
+        (
+            &[
+                "goal",
+                "assess-criterion",
+                "c1",
+                "--status",
+                "satisfied",
+                "--reason",
+                "r",
+                "--with-observation",
+                "--idempotency-key",
+                "k-rej-3",
+            ][..],
+            "goal.assess_criterion",
+        ),
+        (
+            &[
+                "check",
+                "confirm",
+                "--with-observation",
+                "--idempotency-key",
+                "k-rej-4",
+            ][..],
+            "item.check",
+        ),
+        (&["help", "--with-observation"][..], "help"),
+        (&["version", "--with-observation"][..], "version"),
+        (&["preset", "list", "--with-observation"][..], "preset.list"),
+    ] {
+        let mut argv = vec!["--json"];
+        argv.extend_from_slice(rejected_args);
+        let output = fixture.raw_output(&argv);
+        assert_eq!(output.status.code(), Some(2), "{argv:?}: {output:?}");
+        let err: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(err.as_value()["code"], "REQUEST_INVALID", "{argv:?}");
+        assert_eq!(err.as_value()["command"], expected_cmd, "{argv:?}");
+    }
+    assert_eq!(fixture.podway_snapshot(), snapshot_before_rejections);
+
+    let assert_wrapped = |envelope: &Value, expected_inner: &str, expected_seq: u64| {
+        assert!(validate_daemon_free_document_v1(
+            "podway.output/v4",
+            envelope
+        ));
+        assert!(validate_daemon_free_document_v1(
+            "podway.mutation-observation-result/v1",
+            &envelope["result"]
+        ));
+        assert_eq!(
+            envelope["workspace"]["latest_workspace_sequence"],
+            expected_seq
+        );
+        assert_eq!(envelope["result"]["workspace_sequence"], expected_seq);
+        assert_eq!(
+            envelope["result"]["mutation_result"]["schema"],
+            expected_inner
+        );
+        assert_eq!(
+            envelope["result"]["observation"]["schema"],
+            "podway.observation-result/v6"
+        );
+        let fresh = observe(&fixture, "2");
+        assert_eq!(envelope["result"]["observation"], fresh["result"]);
+    };
+
+    // 2. Plain start --with-observation under default generation 1 embeds v6 observation.
+    let start_out = fixture.run(&[
+        "start",
+        "--procedure",
+        "agent005.yaml",
+        "--expect-procedure-digest",
+        &digest,
+        "--task",
+        "AGENT-005 CLI lifecycle",
+        "--with-observation",
+        "--idempotency-key",
+        "cli-start-1",
+    ]);
+    assert_wrapped(&start_out, "podway.session-start-result/v4", 2);
+    // Default generation-1 observe remains v5 while --with-observation embedded v6.
+    assert_eq!(
+        observe(&fixture, "1")["result"]["schema"],
+        "podway.observation-result/v5"
+    );
+    let session_id = start_out["session"]["id"].as_str().unwrap().to_owned();
+
+    // True -> false conflict on start even after deleting agent005.yaml!
+    fs::remove_file(fixture.0.join("agent005.yaml")).unwrap();
+    let start_conflict = fixture.raw_output(&[
+        "--json",
+        "start",
+        "--procedure",
+        "agent005.yaml",
+        "--expect-procedure-digest",
+        &digest,
+        "--task",
+        "AGENT-005 CLI lifecycle",
+        "--idempotency-key",
+        "cli-start-1",
+    ]);
+    assert_eq!(start_conflict.status.code(), Some(2));
+    let err: ErrorEnvelopeV2 = serde_json::from_slice(&start_conflict.stdout).unwrap();
+    assert_eq!(err.as_value()["code"], "IDEMPOTENCY_KEY_REUSED");
+
+    // 3. begin --with-observation.
+    let begin_out = fixture.run(&[
+        "begin",
+        "--goal",
+        "Complete AGENT-005 CLI test.",
+        "--criterion",
+        "c1=Work confirmed.",
+        "--actor",
+        "cli-tester",
+        "--with-observation",
+        "--idempotency-key",
+        "cli-begin-1",
+    ]);
+    assert_wrapped(&begin_out, "podway.session-begin-result/v2", 3);
+    let work_attempt = begin_out["result"]["mutation_result"]["attempt"]["attempt_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // True -> false conflict on begin.
+    let begin_conflict = fixture.raw_output(&[
+        "--json",
+        "begin",
+        "--goal",
+        "Complete AGENT-005 CLI test.",
+        "--criterion",
+        "c1=Work confirmed.",
+        "--actor",
+        "cli-tester",
+        "--if-workspace-uuid",
+        &workspace_uuid,
+        "--if-session-id",
+        &session_id,
+        "--if-session-revision",
+        "0",
+        "--idempotency-key",
+        "cli-begin-1",
+    ]);
+    assert_eq!(begin_conflict.status.code(), Some(2));
+    let err: ErrorEnvelopeV2 = serde_json::from_slice(&begin_conflict.stdout).unwrap();
+    assert_eq!(err.as_value()["code"], "IDEMPOTENCY_KEY_REUSED");
+
+    // 4. record --stdin --with-observation.
+    let record_stdin = serde_json::to_vec(&json!({
+        "schema": "podway.item-record-many-input/v1",
+        "workspace_uuid": workspace_uuid,
+        "session_id": session_id,
+        "session_revision": 1,
+        "attempt_id": work_attempt,
+        "idempotency_key": "cli-record-1",
+        "operations": [
+            {
+                "item_id": "confirm",
+                "expected_item_revision": 0,
+                "record": {"type": "confirm", "value": true}
+            },
+            {
+                "item_id": "note",
+                "expected_item_revision": 0,
+                "record": {"type": "text", "value": "Recorded via CLI."}
+            }
+        ]
+    }))
+    .unwrap();
+    let (code, record_out) = run_stdin_json(
+        &fixture,
+        &["record", "--stdin", "--with-observation"],
+        &record_stdin,
+    );
+    assert_eq!(code, Some(0));
+    assert_wrapped(&record_out, "podway.item-record-many-result/v2", 4);
+
+    // True -> false conflict on record --stdin.
+    let (code, record_conflict) = run_stdin_json(&fixture, &["record", "--stdin"], &record_stdin);
+    assert_eq!(code, Some(2));
+    assert_eq!(record_conflict["code"], "IDEMPOTENCY_KEY_REUSED");
+
+    // 5. complete --with-observation (work -> gate).
+    let complete_work_out = fixture.run(&[
+        "complete",
+        "--with-observation",
+        "--if-workspace-uuid",
+        &workspace_uuid,
+        "--if-session-id",
+        &session_id,
+        "--if-session-revision",
+        "2",
+        "--if-attempt",
+        &work_attempt,
+        "--idempotency-key",
+        "cli-complete-1",
+    ]);
+    assert_wrapped(&complete_work_out, "podway.stage-transition-result/v3", 5);
+    let gate_attempt = complete_work_out["result"]["mutation_result"]["to_attempt_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // True -> false conflict on complete.
+    let complete_conflict = fixture.raw_output(&[
+        "--json",
+        "complete",
+        "--if-workspace-uuid",
+        &workspace_uuid,
+        "--if-session-id",
+        &session_id,
+        "--if-session-revision",
+        "2",
+        "--if-attempt",
+        &work_attempt,
+        "--idempotency-key",
+        "cli-complete-1",
+    ]);
+    assert_eq!(complete_conflict.status.code(), Some(2));
+    let err: ErrorEnvelopeV2 = serde_json::from_slice(&complete_conflict.stdout).unwrap();
+    assert_eq!(err.as_value()["code"], "IDEMPOTENCY_KEY_REUSED");
+
+    // 6. goal assess-criteria --stdin --with-observation.
+    let assess_stdin = serde_json::to_vec(&json!({
+        "schema": "podway.criterion-assessment-many-input/v1",
+        "workspace_uuid": workspace_uuid,
+        "session_id": session_id,
+        "session_revision": 3,
+        "attempt_id": gate_attempt,
+        "goal_revision": 1,
+        "idempotency_key": "cli-assess-1",
+        "actor": "cli-tester",
+        "assessments": [
+            {
+                "criterion_id": "c1",
+                "status": "satisfied",
+                "reason": "Confirmed in work.",
+                "evidence": ["work"],
+                "items": []
+            }
+        ]
+    }))
+    .unwrap();
+    let (code, assess_out) = run_stdin_json(
+        &fixture,
+        &["goal", "assess-criteria", "--stdin", "--with-observation"],
+        &assess_stdin,
+    );
+    assert_eq!(code, Some(0));
+    assert_wrapped(&assess_out, "podway.criterion-assessment-many-result/v1", 6);
+
+    // True -> false conflict on goal assess-criteria --stdin.
+    let (code, assess_conflict) = run_stdin_json(
+        &fixture,
+        &["goal", "assess-criteria", "--stdin"],
+        &assess_stdin,
+    );
+    assert_eq!(code, Some(2));
+    assert_eq!(assess_conflict["code"], "IDEMPOTENCY_KEY_REUSED");
+
+    // 7. decide --with-observation (gate -> finish).
+    let decide_out = fixture.run(&[
+        "decide",
+        "--option",
+        "ship",
+        "--reason",
+        "Criterion c1 is satisfied.",
+        "--actor",
+        "cli-tester",
+        "--with-observation",
+        "--if-workspace-uuid",
+        &workspace_uuid,
+        "--if-session-id",
+        &session_id,
+        "--if-session-revision",
+        "4",
+        "--if-attempt",
+        &gate_attempt,
+        "--if-goal-revision",
+        "1",
+        "--idempotency-key",
+        "cli-decide-1",
+    ]);
+    assert_wrapped(&decide_out, "podway.decision-result/v2", 7);
+    let finish_attempt = decide_out["result"]["mutation_result"]["target_attempt_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // True -> false conflict on decide.
+    let decide_conflict = fixture.raw_output(&[
+        "--json",
+        "decide",
+        "--option",
+        "ship",
+        "--reason",
+        "Criterion c1 is satisfied.",
+        "--actor",
+        "cli-tester",
+        "--if-workspace-uuid",
+        &workspace_uuid,
+        "--if-session-id",
+        &session_id,
+        "--if-session-revision",
+        "4",
+        "--if-attempt",
+        &gate_attempt,
+        "--if-goal-revision",
+        "1",
+        "--idempotency-key",
+        "cli-decide-1",
+    ]);
+    assert_eq!(decide_conflict.status.code(), Some(2));
+    let err: ErrorEnvelopeV2 = serde_json::from_slice(&decide_conflict.stdout).unwrap();
+    assert_eq!(err.as_value()["code"], "IDEMPOTENCY_KEY_REUSED");
+
+    // 8. Terminal complete --with-observation (finish -> completed) in human mode first, then replay in JSON!
+    let human_complete = fixture.raw_output(&[
+        "complete",
+        "--with-observation",
+        "--if-workspace-uuid",
+        &workspace_uuid,
+        "--if-session-id",
+        &session_id,
+        "--if-session-revision",
+        "5",
+        "--if-attempt",
+        &finish_attempt,
+        "--idempotency-key",
+        "cli-complete-finish",
+    ]);
+    assert_eq!(human_complete.status.code(), Some(0));
+    assert!(!human_complete.stdout.is_empty());
+
+    let complete_finish_replay = fixture.run(&[
+        "complete",
+        "--with-observation",
+        "--if-workspace-uuid",
+        &workspace_uuid,
+        "--if-session-id",
+        &session_id,
+        "--if-session-revision",
+        "5",
+        "--if-attempt",
+        &finish_attempt,
+        "--idempotency-key",
+        "cli-complete-finish",
+    ]);
+    assert_wrapped(
+        &complete_finish_replay,
+        "podway.stage-transition-result/v3",
+        8,
+    );
+
+    // 9. Outcome lookup and historical replay across all committed keys.
+    for (key, expected) in [
+        ("cli-start-1", &start_out),
+        ("cli-begin-1", &begin_out),
+        ("cli-record-1", &record_out),
+        ("cli-complete-1", &complete_work_out),
+        ("cli-assess-1", &assess_out),
+        ("cli-decide-1", &decide_out),
+    ] {
+        let looked = lookup(&fixture, "2", key);
+        assert_eq!(looked["result"]["found"], true);
+        assert_eq!(looked["result"]["outcome"]["response"], *expected);
+    }
+
+    // Historical replay of cli-start-1 after agent005.yaml was deleted still returns the original start wrapper!
+    let start_replay = fixture.run(&[
+        "start",
+        "--procedure",
+        "agent005.yaml",
+        "--expect-procedure-digest",
+        &digest,
+        "--task",
+        "AGENT-005 CLI lifecycle",
+        "--with-observation",
+        "--idempotency-key",
+        "cli-start-1",
+    ]);
+    assert_eq!(start_replay, start_out);
+
+    // 10. Dispose terminal session and run plain disposed-terminal start (false -> true conflict check too).
+    fixture.run(&[
+        "disposition",
+        "not-required",
+        "--reason",
+        "Completed AGENT-005 CLI test.",
+        "--idempotency-key",
+        "cli-disposition-1",
+    ]);
+    fs::write(fixture.0.join("agent005.yaml"), AGENT005_CLI_PROCEDURE).unwrap();
+    let plain_disposed_start = fixture.run(&[
+        "start",
+        "--procedure",
+        "agent005.yaml",
+        "--expect-procedure-digest",
+        &digest,
+        "--task",
+        "AGENT-005 false->true start check",
+        "--if-session-id",
+        &session_id,
+        "--if-session-revision",
+        "6",
+        "--idempotency-key",
+        "cli-start-false-to-true",
+    ]);
+    assert_eq!(
+        plain_disposed_start["result"]["schema"],
+        "podway.session-start-result/v4"
+    );
+    fs::remove_file(fixture.0.join("agent005.yaml")).unwrap();
+    let start_ft_conflict = fixture.raw_output(&[
+        "--json",
+        "start",
+        "--procedure",
+        "agent005.yaml",
+        "--expect-procedure-digest",
+        &digest,
+        "--task",
+        "AGENT-005 false->true start check",
+        "--if-session-id",
+        &session_id,
+        "--if-session-revision",
+        "6",
+        "--with-observation",
+        "--idempotency-key",
+        "cli-start-false-to-true",
+    ]);
+    assert_eq!(start_ft_conflict.status.code(), Some(2));
+    let err: ErrorEnvelopeV2 = serde_json::from_slice(&start_ft_conflict.stdout).unwrap();
+    assert_eq!(err.as_value()["code"], "IDEMPOTENCY_KEY_REUSED");
+}

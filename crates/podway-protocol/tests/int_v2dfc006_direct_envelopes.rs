@@ -270,56 +270,8 @@ fn agent001_mutation_observation_output_envelope_and_lookup_headroom_boundaries(
     // Envelope-level lookup headroom rejection: valid mutation_result, valid observation v6
     // (schema + correlations), valid command wrapper, and envelope <= MAX_DIRECT_OUTPUT_BYTES_V1,
     // failing specifically on outcome.lookup wrapper headroom.
-    let mut large_valid_envelope = valid_envelope;
-    let legal_arg = "\u{001f}".repeat(4000);
-    let mut begin_argv = vec![json!("podway"), json!("begin")];
-    for _ in 0..43 {
-        begin_argv.push(json!(legal_arg));
-    }
-    begin_argv.extend([
-        json!("--if-workspace-uuid"),
-        json!("00000000-0000-4000-8000-000000000001"),
-        json!("--if-session-id"),
-        json!("00000000-0000-4000-8000-000000000001"),
-        json!("--if-session-revision"),
-        json!("0"),
-        json!("--idempotency-key"),
-        json!("<idempotency-key>"),
-    ]);
-    large_valid_envelope["result"]["observation"]["mutation_templates"][0]["argv"] =
-        Value::Array(begin_argv);
+    assert!(OutputEnvelopeV4::from_value(valid_envelope.clone()).is_ok());
 
-    assert!(validate_daemon_free_document_v1(
-        "podway.item-record-many-result/v2",
-        &large_valid_envelope["result"]["mutation_result"]
-    ));
-    assert!(validate_daemon_free_document_v1(
-        "podway.observation-result/v6",
-        &large_valid_envelope["result"]["observation"]
-    ));
-    assert!(validate_daemon_free_document_v1(
-        "podway.mutation-observation-result/v1",
-        &large_valid_envelope["result"]
-    ));
-    assert!(
-        validate_mutation_observation_command_result_v1(
-            "item.record_many",
-            &large_valid_envelope["result"]
-        )
-        .is_ok()
-    );
-    let large_envelope_bytes = serialized_json_len_v1(&large_valid_envelope).unwrap();
-    assert!(large_envelope_bytes <= MAX_DIRECT_OUTPUT_BYTES_V1);
-    assert!(matches!(
-        validate_mutation_observation_output_envelope_v1(&large_valid_envelope),
-        Err(ProtocolError::ValueTooLong {
-            field: "outcome.lookup response",
-            maximum: MAX_DIRECT_OUTPUT_BYTES_V1,
-            actual,
-        }) if actual > MAX_DIRECT_OUTPUT_BYTES_V1
-    ));
-
-    // Exact outcome.lookup headroom boundary: 1,048,576 wrapper bytes accepted, 1,048,577 rejected.
     let empty_stored = json!({"pad": ""});
     let max_root = format!("/{}", "\u{001f}".repeat(4095));
     let max_key = "\u{001f}".repeat(256);
@@ -347,6 +299,130 @@ fn agent001_mutation_observation_output_envelope_and_lookup_headroom_boundaries(
         "warnings": [],
     });
     let base_wrapper_bytes = serialized_json_len_v1(&base_wrapper).unwrap();
+    let empty_stored_bytes = serialized_json_len_v1(&empty_stored).unwrap();
+    let lookup_overhead_bytes = base_wrapper_bytes - empty_stored_bytes;
+    let max_stored_for_lookup = MAX_DIRECT_OUTPUT_BYTES_V1 - lookup_overhead_bytes;
+
+    // Build a complete, schema- and correlation-legal OutputEnvelopeV4 mutation-observation
+    // wrapper with exact target serialized UTF-8 byte length using Unicode control escaping
+    // (\u001f -> 6 JSON bytes per scalar) and 1-byte ASCII adjustment.
+    let build_legal_envelope_of_bytes = |target_bytes: usize| -> Value {
+        let mut candidate = valid_envelope.clone();
+        let full_block = "\u{001f}".repeat(4000);
+        let mut probe_argv = vec![json!("podway"), json!("begin")];
+        for _ in 0..41 {
+            probe_argv.push(json!(full_block));
+        }
+        probe_argv.push(json!("a"));
+        probe_argv.extend([
+            json!("--if-workspace-uuid"),
+            json!("00000000-0000-4000-8000-000000000001"),
+            json!("--if-session-id"),
+            json!("00000000-0000-4000-8000-000000000001"),
+            json!("--if-session-revision"),
+            json!("0"),
+            json!("--idempotency-key"),
+            json!("<idempotency-key>"),
+        ]);
+        candidate["result"]["observation"]["mutation_templates"][0]["argv"] =
+            Value::Array(probe_argv);
+        while serialized_json_len_v1(&candidate).unwrap() + 24_003 <= target_bytes {
+            candidate["result"]["observation"]["mutation_templates"][0]["argv"]
+                .as_array_mut()
+                .unwrap()
+                .insert(2, json!(full_block));
+        }
+        let base_len = serialized_json_len_v1(&candidate).unwrap();
+        let extra = target_bytes
+            .checked_sub(base_len)
+            .expect("target_bytes must exceed 41-block base");
+        // Final variable arg currently has content length 1 ("a"); target content length is 1 + extra.
+        let content_bytes = 1 + extra;
+        let control_count = content_bytes.saturating_sub(6) / 6;
+        let ascii_count = content_bytes - control_count * 6;
+        assert!(control_count + ascii_count <= 4096);
+        let variable_arg = format!(
+            "{}{}",
+            "\u{001f}".repeat(control_count),
+            "a".repeat(ascii_count)
+        );
+        let argv_mut = candidate["result"]["observation"]["mutation_templates"][0]["argv"]
+            .as_array_mut()
+            .unwrap();
+        let var_idx = argv_mut.len() - 9;
+        argv_mut[var_idx] = Value::String(variable_arg);
+        assert_eq!(serialized_json_len_v1(&candidate).unwrap(), target_bytes);
+        candidate
+    };
+
+    // Complete legal OutputEnvelopeV4 accepted at exact worst-case lookup boundary (lookup == 1,048,576).
+    let exact_lookup_envelope = build_legal_envelope_of_bytes(max_stored_for_lookup);
+    assert!(validate_daemon_free_document_v1(
+        "podway.item-record-many-result/v2",
+        &exact_lookup_envelope["result"]["mutation_result"]
+    ));
+    assert!(validate_daemon_free_document_v1(
+        "podway.observation-result/v6",
+        &exact_lookup_envelope["result"]["observation"]
+    ));
+    assert!(validate_daemon_free_document_v1(
+        "podway.mutation-observation-result/v1",
+        &exact_lookup_envelope["result"]
+    ));
+    assert!(
+        validate_mutation_observation_command_result_v1(
+            "item.record_many",
+            &exact_lookup_envelope["result"]
+        )
+        .is_ok()
+    );
+    assert!(OutputEnvelopeV4::from_value(exact_lookup_envelope.clone()).is_ok());
+    assert!(validate_mutation_observation_output_envelope_v1(&exact_lookup_envelope).is_ok());
+
+    // 1-byte overhead proof: stored envelope + 1 byte (lookup == 1,048,577 while stored < 1,048,576) fails closed.
+    let over_lookup_envelope = build_legal_envelope_of_bytes(max_stored_for_lookup + 1);
+    assert!(serialized_json_len_v1(&over_lookup_envelope).unwrap() < MAX_DIRECT_OUTPUT_BYTES_V1);
+    assert!(OutputEnvelopeV4::from_value(over_lookup_envelope.clone()).is_ok());
+    assert_eq!(
+        validate_mutation_observation_output_envelope_v1(&over_lookup_envelope),
+        Err(ProtocolError::ValueTooLong {
+            field: "outcome.lookup response",
+            maximum: MAX_DIRECT_OUTPUT_BYTES_V1,
+            actual: MAX_DIRECT_OUTPUT_BYTES_V1 + 1,
+        })
+    );
+
+    // Stored envelope at 1,048,576 bytes passes standalone OutputEnvelopeV4 bound but fails combined lookup admission.
+    let exact_stored_max_envelope = build_legal_envelope_of_bytes(MAX_DIRECT_OUTPUT_BYTES_V1);
+    assert_eq!(
+        serialized_json_len_v1(&exact_stored_max_envelope).unwrap(),
+        MAX_DIRECT_OUTPUT_BYTES_V1
+    );
+    assert!(OutputEnvelopeV4::from_value(exact_stored_max_envelope.clone()).is_ok());
+    assert_eq!(
+        validate_mutation_observation_output_envelope_v1(&exact_stored_max_envelope),
+        Err(ProtocolError::ValueTooLong {
+            field: "outcome.lookup response",
+            maximum: MAX_DIRECT_OUTPUT_BYTES_V1,
+            actual: MAX_DIRECT_OUTPUT_BYTES_V1 + lookup_overhead_bytes,
+        })
+    );
+
+    // Stored envelope over its own 1,048,576 limit (1,048,577 bytes) fails the stored limit check before lookup headroom.
+    let over_stored_max_envelope = build_legal_envelope_of_bytes(MAX_DIRECT_OUTPUT_BYTES_V1 + 1);
+    assert_eq!(
+        serialized_json_len_v1(&over_stored_max_envelope).unwrap(),
+        MAX_DIRECT_OUTPUT_BYTES_V1 + 1
+    );
+    assert!(OutputEnvelopeV4::from_value(over_stored_max_envelope.clone()).is_err());
+    assert_eq!(
+        validate_mutation_observation_output_envelope_v1(&over_stored_max_envelope),
+        Err(ProtocolError::InvalidCommandResult {
+            command: "item.record_many".to_owned(),
+        })
+    );
+
+    // Exact outcome.lookup headroom boundary on synthetic object: 1,048,576 wrapper bytes accepted, 1,048,577 rejected.
     let pad_for_exact_max = MAX_DIRECT_OUTPUT_BYTES_V1 - base_wrapper_bytes;
     let exact_stored = json!({"pad": "x".repeat(pad_for_exact_max)});
     assert!(validate_direct_outcome_lookup_headroom_v1(&exact_stored).is_ok());
@@ -372,6 +448,12 @@ fn agent001_mutation_observation_output_envelope_and_lookup_headroom_boundaries(
     assert!(validate_direct_outcome_lookup_headroom_v1(&make_depth(61)).is_ok());
     assert_eq!(
         validate_direct_outcome_lookup_headroom_v1(&make_depth(62)),
+        Err(ProtocolError::JsonDepthExceeded { maximum: 64 })
+    );
+    let mut over_depth_envelope = valid_envelope;
+    over_depth_envelope["result"]["extra_depth"] = make_depth(63);
+    assert_eq!(
+        validate_mutation_observation_output_envelope_v1(&over_depth_envelope),
         Err(ProtocolError::JsonDepthExceeded { maximum: 64 })
     );
 }

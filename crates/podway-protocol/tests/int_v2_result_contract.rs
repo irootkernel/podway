@@ -2771,18 +2771,100 @@ fn current_results_round_trip_every_registered_direct_command_and_reject_discrim
     for contract in contracts {
         let result = &fixtures[contract.schema];
         for command in contract.commands {
-            let mut input = authoring_input(command, result);
+            let route_result = if contract.schema == "podway.mutation-observation-result/v1" {
+                let inner = match *command {
+                    "session.start" => {
+                        let mut value = fixtures["podway.session-start-result/v4"].clone();
+                        value["dry_run"] = json!(false);
+                        value
+                    }
+                    "session.begin" => fixtures["podway.session-begin-result/v2"].clone(),
+                    "item.record_many" => fixtures["podway.item-record-many-result/v2"].clone(),
+                    "session.complete" => {
+                        let mut value = fixtures["podway.stage-transition-result/v3"].clone();
+                        value["transition"] = json!("complete");
+                        value
+                    }
+                    "session.decide" => fixtures["podway.decision-result/v2"].clone(),
+                    "goal.assess_criteria" => {
+                        fixtures["podway.criterion-assessment-many-result/v1"].clone()
+                    }
+                    other => panic!("unexpected mutation-observation command: {other}"),
+                };
+                let mut wrapper = result.clone();
+                wrapper["mutation_result"] = inner;
+                wrapper
+            } else {
+                result.clone()
+            };
+            let mut input = authoring_input(command, &route_result);
             if !command.starts_with("procedure.")
                 && !matches!(
                     *command,
                     "version" | "workspace.remove" | "integration.show"
                 )
             {
+                let latest_workspace_sequence =
+                    if contract.schema == "podway.mutation-observation-result/v1" {
+                        route_result["workspace_sequence"].as_u64().unwrap()
+                    } else {
+                        1
+                    };
                 input.workspace = Some(
                     serde_json::from_value::<podway_protocol::WorkspaceOutputV1>(json!({
-                        "uuid":UUID, "root":"/tmp/podway-example", "latest_workspace_sequence":1
+                        "uuid":UUID,
+                        "root":"/tmp/podway-example",
+                        "latest_workspace_sequence":latest_workspace_sequence
                     }))
                     .unwrap(),
+                );
+            }
+            if contract.schema == "podway.mutation-observation-result/v1" {
+                input.session = Some(podway_protocol::DirectSessionOutputV1 {
+                    id: podway_core::SessionId::new("00000000-0000-4000-8000-000000000002")
+                        .unwrap(),
+                    title: "Ship AGENT-001".to_owned(),
+                    lifecycle: podway_core::SessionLifecycle::Running,
+                    revision_before: podway_core::Revision::new(1),
+                    revision_after: podway_core::Revision::new(2),
+                });
+
+                let mut missing_session = input.clone();
+                missing_session.session = None;
+                assert!(
+                    OutputEnvelopeV4::new(missing_session).is_err(),
+                    "{command}: missing session must fail"
+                );
+
+                let mut mismatched_sequence = input.clone();
+                mismatched_sequence.workspace = Some(
+                    serde_json::from_value::<podway_protocol::WorkspaceOutputV1>(json!({
+                        "uuid":UUID,
+                        "root":"/tmp/podway-example",
+                        "latest_workspace_sequence":route_result["workspace_sequence"].as_u64().unwrap() + 1
+                    }))
+                    .unwrap(),
+                );
+                assert!(
+                    OutputEnvelopeV4::new(mismatched_sequence).is_err(),
+                    "{command}: mismatched workspace_sequence must fail"
+                );
+
+                let mut mismatched_inner = route_result.clone();
+                mismatched_inner["mutation_result"] = if *command == "item.record_many" {
+                    fixtures["podway.session-begin-result/v2"].clone()
+                } else {
+                    fixtures["podway.item-record-many-result/v2"].clone()
+                };
+                assert!(
+                    validate_command_result_v2(command, &mismatched_inner).is_err(),
+                    "{command}: mismatched inner mutation_result must fail validate_command_result_v2"
+                );
+                let mut mismatched_inner_input = input.clone();
+                mismatched_inner_input.result = result_map(&mismatched_inner);
+                assert!(
+                    OutputEnvelopeV4::new(mismatched_inner_input).is_err(),
+                    "{command}: mismatched inner mutation_result must fail OutputEnvelopeV4::new"
                 );
             }
             let output = OutputEnvelopeV4::new(input).unwrap();
@@ -3550,7 +3632,14 @@ fn agent001_reserved_batch_assessment_and_mutation_observation_contracts_validat
         (
             "podway.mutation-observation-result/v1",
             "schemas/mutation-observation-result-v1.schema.json",
-            &[][..],
+            &[
+                "session.start",
+                "session.begin",
+                "item.record_many",
+                "session.complete",
+                "session.decide",
+                "goal.assess_criteria",
+            ][..],
         ),
     ] {
         let entry = DAEMON_FREE_DOCUMENT_SCHEMAS_V1

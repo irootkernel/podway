@@ -145,6 +145,9 @@
       "$ref": "#/$defs/criterionAssessmentMany"
     },
     {
+      "$ref": "#/$defs/mutationObservation"
+    },
+    {
       "$ref": "#/$defs/outcomeLookup"
     },
     {
@@ -728,6 +731,27 @@
         },
         "result": {
           "$ref": "urn:podway:schema:criterion-assessment-many-result:v1"
+        }
+      }
+    },
+    "mutationObservation": {
+      "required": [
+        "workspace",
+        "session"
+      ],
+      "properties": {
+        "command": {
+          "enum": [
+            "session.start",
+            "session.begin",
+            "item.record_many",
+            "session.complete",
+            "session.decide",
+            "goal.assess_criteria"
+          ]
+        },
+        "result": {
+          "$ref": "urn:podway:schema:mutation-observation-result:v1"
         }
       }
     },

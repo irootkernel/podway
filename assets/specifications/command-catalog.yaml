@@ -143,6 +143,7 @@ commands:
   maintenance_barrier: false
   result_schemas:
   - podway.session-start-result/v4
+  - podway.mutation-observation-result/v1
 - name: session.start_replace
   availability: executable
   cli:
@@ -176,6 +177,7 @@ commands:
   idempotency_scope: session
   result_schemas:
   - podway.session-begin-result/v2
+  - podway.mutation-observation-result/v1
 - name: session.status
   availability: executable
   cli:
@@ -285,6 +287,7 @@ commands:
   idempotency_scope: session
   result_schemas:
   - podway.stage-transition-result/v3
+  - podway.mutation-observation-result/v1
 - name: session.skip
   availability: executable
   cli:
@@ -594,6 +597,7 @@ commands:
   idempotency_scope: session
   result_schemas:
   - podway.item-record-many-result/v2
+  - podway.mutation-observation-result/v1
 - name: procedure.format
   availability: executable
   cli:
@@ -693,6 +697,7 @@ commands:
   idempotency_scope: session
   result_schemas:
   - podway.decision-result/v2
+  - podway.mutation-observation-result/v1
 - name: session.rework
   availability: executable
   cli:
@@ -780,6 +785,7 @@ commands:
   idempotency_scope: session
   result_schemas:
   - podway.criterion-assessment-many-result/v1
+  - podway.mutation-observation-result/v1
 - name: integration.show
   availability: executable
   cli:

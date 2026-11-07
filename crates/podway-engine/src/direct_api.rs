@@ -27,7 +27,7 @@ use crate::{
     },
     direct_items::{
         DirectItemCommandV1, DirectItemRequestV1, DirectRecordManyRequestV1,
-        execute_item_with_context_v1, record_many_v1,
+        execute_item_with_context_v1, record_many_with_observation_v1,
     },
     direct_maintenance::{DirectMaintenanceRequestV1, remove_workspace_v1, reset_all_v1},
     direct_procedure::{DirectProcedureRequestV1, execute_procedure_with_context_v1},
@@ -159,6 +159,22 @@ pub struct DirectRequestV1 {
     /// Presentation-only contract generation (ADR-0039); never part of
     /// request identity, idempotency or stored outcomes.
     pub generation: ContractGenerationV1,
+    /// Opt-in commit-bound observation wrapper for the six selected mutation routes (ADR-0043).
+    pub return_observation: bool,
+}
+
+fn supports_return_observation_v1(command: &DirectCommandV1) -> bool {
+    match command {
+        DirectCommandV1::Start(DirectStartCommandV1::Start(command)) => !command.start.dry_run,
+        DirectCommandV1::Cursor(DirectCursorCommandV1::Complete(_))
+        | DirectCommandV1::RecordMany(_)
+        | DirectCommandV1::Procedure(
+            ProcedureV2MutationCommandV1::SessionBegin(_)
+            | ProcedureV2MutationCommandV1::SessionDecide(_)
+            | ProcedureV2MutationCommandV1::GoalAssessCriteria(_),
+        ) => true,
+        _ => false,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -289,15 +305,17 @@ fn execute_direct_in_context_v1<R: GitResolverContractV1>(
         }
     };
     // Classify without validating inputs or moving any command work earlier.
-    let consumes = match &request.command {
-        DirectCommandV1::Cursor(_) | DirectCommandV1::Item(_) | DirectCommandV1::Procedure(_) => {
-            true
-        }
-        DirectCommandV1::Start(command) => !command.input().dry_run,
-        DirectCommandV1::Session(DirectSessionCommandV1::Reset(input)) => !input.dry_run,
-        DirectCommandV1::Session(DirectSessionCommandV1::Archive(_)) => true,
-        _ => false,
-    };
+    let consumes = (!request.return_observation
+        || supports_return_observation_v1(&request.command))
+        && match &request.command {
+            DirectCommandV1::Cursor(_)
+            | DirectCommandV1::Item(_)
+            | DirectCommandV1::Procedure(_) => true,
+            DirectCommandV1::Start(command) => !command.input().dry_run,
+            DirectCommandV1::Session(DirectSessionCommandV1::Reset(input)) => !input.dry_run,
+            DirectCommandV1::Session(DirectSessionCommandV1::Archive(_)) => true,
+            _ => false,
+        };
     let result = execute_direct_inner_v1(
         resolver,
         request,
@@ -664,6 +682,13 @@ fn dispatch<R: GitResolverContractV1>(
     maintenance_observer: Option<MaintenanceObserver>,
     invocation: Option<&mut DirectInvocationContextV1>,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
+    if request.return_observation && !supports_return_observation_v1(&request.command) {
+        return Err(DirectExecutionErrorV1::Store(
+            DirectStoreErrorV1::InvalidInput {
+                reason: "return_observation is not supported for this command",
+            },
+        ));
+    }
     let key = || {
         request.idempotency_key.clone().ok_or_else(|| {
             DirectExecutionErrorV1::Store(DirectStoreErrorV1::InvalidInput {
@@ -722,6 +747,7 @@ fn dispatch<R: GitResolverContractV1>(
             clock,
             ids,
             invocation,
+            request.return_observation,
         ),
         DirectCommandV1::Cursor(command) => execute_cursor_with_context_v1(
             resolver,
@@ -736,6 +762,7 @@ fn dispatch<R: GitResolverContractV1>(
             clock,
             ids,
             invocation,
+            request.return_observation,
         ),
         DirectCommandV1::Item(command) => execute_item_with_context_v1(
             resolver,
@@ -750,7 +777,7 @@ fn dispatch<R: GitResolverContractV1>(
             clock,
             invocation,
         ),
-        DirectCommandV1::RecordMany(input) => record_many_v1(
+        DirectCommandV1::RecordMany(input) => record_many_with_observation_v1(
             resolver,
             DirectRecordManyRequestV1 {
                 key: key()?,
@@ -761,6 +788,7 @@ fn dispatch<R: GitResolverContractV1>(
                 deadline: request.deadline,
             },
             clock,
+            request.return_observation,
         ),
         DirectCommandV1::Procedure(command) => execute_procedure_with_context_v1(
             resolver,
@@ -775,6 +803,7 @@ fn dispatch<R: GitResolverContractV1>(
             clock,
             ids,
             invocation,
+            request.return_observation,
         ),
         DirectCommandV1::Session(command) => execute_session_with_context_v1(
             resolver,

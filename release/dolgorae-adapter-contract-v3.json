@@ -1212,7 +1212,7 @@
       {
         "id": "urn:podway:schema:mutation-observation-result:v1",
         "path": "schemas/mutation-observation-result-v1.schema.json",
-        "sha256": "sha256:8441a63713b385d77b5b2d18392754fa48a48da7abd1e139c274ce4b3a50693e"
+        "sha256": "sha256:58bf3e88f78727043449baa6bd342b8b6860418a50bc136bac050e5a1715dc7d"
       },
       {
         "id": "urn:podway:schema:mutation-outcome-unknown-details:v3",
@@ -1242,7 +1242,7 @@
       {
         "id": "urn:podway:schema:output:v4",
         "path": "schemas/output-v4.schema.json",
-        "sha256": "sha256:b4e0dc6a9285a022a6e56387b1f6be460a71e04a2568d13cbcc683f72a46af4f"
+        "sha256": "sha256:71da513c4ce54dcd64d6a138d37f109348d22ee987565b6acbf9d62adfcda7a3"
       },
       {
         "id": "urn:podway:schema:prepared-next-result:v3",

@@ -6,13 +6,14 @@ use podway_core::{
     ActorAttributionV2, CriterionAssessmentBatchEntryV2, CriterionAssessmentReasonV2,
     CriterionAssessmentResultV2, CriterionCitationV2, CriterionStatusV2, DomainError,
     GoalRevisionNumberV2, GoalRevisionReasonV2, GoalStatementV2, ReasonV2, SessionLifecycle,
-    Sha256Digest, TerminalDispositionV2, WorkspaceId,
+    TerminalDispositionV2, WorkspaceId,
 };
 use podway_git::{GitResolverContractV1, WorktreeSelectorV1};
 use podway_protocol::{
     CRITERION_ASSESSMENT_MANY_INPUT_SCHEMA_V1, GoalAssessCriteriaV2, MAX_DIRECT_INPUT_BYTES_V1,
     OutputEnvelopeV4, ProcedureV2MutationCommandV1 as C, RequestIdV1, Rfc3339MillisV1,
-    TerminalDispositionInputV1, canonical_procedure_v2_command_identity_v1,
+    TerminalDispositionInputV1, canonical_goal_assess_criteria_digest_v1,
+    canonical_procedure_v2_command_digest_with_observation_v1,
 };
 use podway_store::{
     GraphMutationErrorV2, GraphSessionStateV2, IdempotencyKeyV1,
@@ -20,11 +21,10 @@ use podway_store::{
 };
 use serde::Serialize;
 use serde_json::{Value, json};
-use sha2::{Digest as _, Sha256};
 
 use crate::{
     direct_execution::{DirectBeginRequestV1, DirectExecutionErrorV1, DirectIdSourceV1},
-    direct_mutation::{check_attempt_fence, check_session_fences, graph_success},
+    direct_mutation::{check_attempt_fence, check_session_fences, graph_success_with_observation},
     execution::{ExecutionClockV1, goal_definition_from_wire_v2},
     v2_read_service::decision_readback_projection,
     workspace::DirectWorkspaceResolverV1,
@@ -46,7 +46,7 @@ pub fn execute_procedure_v1<R: GitResolverContractV1>(
     clock: &impl ExecutionClockV1,
     ids: &impl DirectIdSourceV1,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
-    execute_procedure_with_context_v1(resolver, request, clock, ids, None)
+    execute_procedure_with_context_v1(resolver, request, clock, ids, None, false)
 }
 
 pub(crate) fn execute_procedure_with_context_v1<R: GitResolverContractV1>(
@@ -55,6 +55,7 @@ pub(crate) fn execute_procedure_with_context_v1<R: GitResolverContractV1>(
     clock: &impl ExecutionClockV1,
     ids: &impl DirectIdSourceV1,
     context: Option<&mut crate::direct_api::DirectInvocationContextV1>,
+    return_observation: bool,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
     if let C::SessionBegin(input) = request.command {
         return crate::direct_execution::begin_session_with_context_v1(
@@ -70,7 +71,19 @@ pub(crate) fn execute_procedure_with_context_v1<R: GitResolverContractV1>(
             clock,
             ids,
             context,
+            return_observation,
         );
+    }
+    if return_observation
+        && !matches!(
+            request.command,
+            C::SessionDecide(_) | C::GoalAssessCriteria(_)
+        )
+    {
+        return Err(DirectStoreErrorV1::InvalidInput {
+            reason: "observation return is not supported for this procedure command",
+        }
+        .into());
     }
     let (resolved, store, binding) = resolver.resolve_existing_with_binding(
         request.selector,
@@ -78,22 +91,31 @@ pub(crate) fn execute_procedure_with_context_v1<R: GitResolverContractV1>(
         request.deadline,
     )?;
     let command = &request.command;
-    if let C::GoalAssessCriteria(input) = command {
-        validate_goal_assess_criteria_input_v1(
+    let digest = match command {
+        C::GoalAssessCriteria(input) => {
+            validate_goal_assess_criteria_input_v1(
+                resolved.store_identity().workspace_uuid(),
+                &request.key,
+                input,
+            )?;
+            canonical_goal_assess_criteria_digest_v1(
+                input,
+                resolved.store_identity().workspace_uuid(),
+                return_observation,
+            )
+            .map_err(|_| DirectStoreErrorV1::InvalidInput {
+                reason: "invalid goal assessment batch semantic identity",
+            })?
+        }
+        _ => canonical_procedure_v2_command_digest_with_observation_v1(
+            command,
             resolved.store_identity().workspace_uuid(),
-            &request.key,
-            input,
-        )?;
-    }
-    let canonical = canonical_procedure_v2_command_identity_v1(
-        command,
-        resolved.store_identity().workspace_uuid(),
-    )
-    .map_err(|_| DirectStoreErrorV1::InvalidInput {
-        reason: "invalid procedure semantic identity",
-    })?;
-    let digest = Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())))
-        .expect("SHA-256 produces a canonical digest");
+            return_observation,
+        )
+        .map_err(|_| DirectStoreErrorV1::InvalidInput {
+            reason: "invalid procedure semantic identity",
+        })?,
+    };
     let (session, revision, attempt, goal_revision) = match command {
         C::SessionTerminalDisposition(input) => (
             &input.preconditions.expected_session_id,
@@ -396,7 +418,16 @@ pub(crate) fn execute_procedure_with_context_v1<R: GitResolverContractV1>(
         };
         let mut body = body.as_object().expect("procedure result is an object").clone();
         if disposition.is_none() { body.insert("revision".into(), json!(next.trace().revision())); }
-        let response = graph_success(transaction, &resolved, request.request_id, command.command_name(), prior, &next, body)?;
+        let response = graph_success_with_observation(
+            transaction,
+            &resolved,
+            request.request_id,
+            command.command_name(),
+            Some(prior),
+            &next,
+            body,
+            return_observation,
+        )?;
         if let Some(disposition) = disposition { transaction.record_disposition(&disposition)?; }
         else { transaction.replace_graph(prior.workspace_revision(), prior.trace().revision(), &next)?; }
         Ok(response)

@@ -243,6 +243,7 @@ fn typed_direct_api_returns_validated_success_and_rejection_without_effects() {
         observed_at: Rfc3339MillisV1::from_unix_millis(NOW).unwrap(),
         timeout_ms: 5000,
         generation: podway_protocol::ContractGenerationV1::Generation1,
+        return_observation: false,
     };
     let success = |response| match response {
         DirectResponseV1::Success(output) => output,
@@ -512,6 +513,7 @@ fn marked_reads_return_the_original_maintenance_key_without_resuming_or_writing(
             timeout_ms: 5000,
             deadline: deadline(),
             generation: podway_protocol::ContractGenerationV1::Generation1,
+            return_observation: false,
         };
         let DirectResponseV1::Failure(error) =
             execute_direct_v1(&resolver, request, &NoClock, &NativeDirectIdSourceV1).unwrap()
@@ -1784,6 +1786,7 @@ fn record_many_enforces_aggregate_encoded_input_bound_without_effects_and_preser
                         observed_at,
                         timeout_ms: 5000,
                         generation: podway_protocol::ContractGenerationV1::Generation1,
+                        return_observation: false,
                     },
                     &clock,
                     &NativeDirectIdSourceV1,

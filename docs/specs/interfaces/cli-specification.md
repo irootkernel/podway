@@ -68,7 +68,7 @@ accepted only by applicable routes. Non-applicable or duplicate stdin identity
 fields return `REQUEST_INVALID`. The worktree request options — `--worktree`,
 `--timeout`, `--idempotency-key`, `--if-workspace-uuid`, `--if-session-id`,
 `--if-session-revision`, `--if-attempt`, `--if-item-revision`,
-`--if-goal-revision` and `--yes` — apply to workspace routes only: the local
+`--if-goal-revision`, `--with-observation` and `--yes` — apply to workspace routes only: the local
 families `help`, `version`, `completions`, `preset` and `procedure` run
 in-process, open no workspace, and reject every one of them with exit-2
 `REQUEST_INVALID` naming each supplied option. Local commands also accept
@@ -91,6 +91,7 @@ route while retired syntax keeps `COMMAND_RETIRED` precedence.
 | `--if-attempt <UUID>` | Current action/decision/evidence identity; not start/begin/disposition/reset |
 | `--if-item-revision <N>` | Single-item mutation revision; not another route's fence |
 | `--if-goal-revision <N>` | Positive goal revision on decide, goal revise, or assess-criterion; rejected on stdin-fenced `goal assess-criteria --stdin` |
+| `--with-observation` | Return commit-bound `podway.mutation-observation-result/v1` with embedded `podway.observation-result/v6` on plain `start`, `begin`, `record --stdin`, `complete`, `decide`, and `goal assess-criteria --stdin`; rejected on `--dry-run`, `--on-existing`, and all other routes |
 | `--yes` | Explicit destructive confirmation; rejected on ordinary non-destructive commands |
 
 | Route grammar | Command-specific constraints |
@@ -499,8 +500,9 @@ recorded or structurally bound external check result and never describes it as
 verified, trusted, attested, or secure evidence.
 
 [ADR-0043](../../architecture-decision-records/0043-atomic-assessment-and-commit-bound-observations.md)
-reserves `goal assess-criteria --stdin` (`goal.assess_criteria`) and `--with-observation`
-without activating new executable routes in `AGENT-001`. `decode_criterion_assessment_many_input_v1`
+defines `goal assess-criteria --stdin` (`goal.assess_criteria`, activated in
+`AGENT-003`) and `--with-observation` (activated in `AGENT-005`).
+`decode_criterion_assessment_many_input_v1`
 enforces the 1,048,576-byte direct input ceiling, 64-level JSON nesting depth,
 canonical JSON integers, closed fields, non-null defaults (`evidence: []`,
 `items: []`), `1..=16` entries, per-entry resource bounds (`reason <= 2000`
@@ -508,9 +510,13 @@ scalars, `evidence <= 4`, `items <= 4`), and whole-request duplicate
 `criterion_id` rejection before workspace or Store access while preserving raw
 entry order and semantic fields (`status`, `reason`, homogeneous `mode`,
 combined citation limits, and citable source resolution) for post-fence
-evaluation in `AGENT-003`. The reserved `--with-observation` flag applies only to
-non-dry-run `session.start`, `session.begin`, `item.record_many`,
-`session.complete`, `session.decide`, and `goal.assess_criteria` (`AGENT-005`).
+evaluation in `AGENT-003`. Opt-in `--with-observation` applies only to
+non-dry-run plain `session.start` (including disposed-terminal auto-archive
+start), `session.begin`, `item.record_many` (`record --stdin`),
+`session.complete` (`complete`), `session.decide` (`decide`), and
+`goal.assess_criteria` (`goal assess-criteria --stdin`), returning
+`podway.mutation-observation-result/v1` with an embedded
+`podway.observation-result/v6` in both contract generations (`AGENT-005`).
 
 ## Output and exits
 

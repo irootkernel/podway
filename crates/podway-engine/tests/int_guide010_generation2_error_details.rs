@@ -337,6 +337,7 @@ impl Guide010Engine {
             observed_at: Rfc3339MillisV1::new(GUIDE010_OBSERVED_AT).unwrap(),
             timeout_ms: 5000,
             generation: ContractGenerationV1::Generation1,
+            return_observation: false,
         };
         adjust(&mut request);
         request

@@ -73,7 +73,9 @@ use sha2::{Digest as _, Sha256};
 
 mod observation;
 
-pub(crate) use self::observation::finalize_direct_observation_in;
+pub(crate) use self::observation::{
+    SuccessorObservationContextV1, finalize_direct_observation_in, project_successor_observation_v1,
+};
 use self::observation::{
     project_graph_observation_in, project_prepared_next_v1, serialized_bytes_v1,
     serialized_object_bytes_v1,

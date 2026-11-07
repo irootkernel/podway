@@ -225,27 +225,35 @@ mutation, whereas reusing that key with a reordered `assessments` array or
 different fence/actor/entry payload fails closed with `IDEMPOTENCY_KEY_REUSED`.
 Any validation failure rolls back all criterion result and citation rows with
 zero partial state or outcome row.
-`AGENT-001` also reserves the opt-in `--with-observation` request identity,
+`AGENT-001` registered the opt-in `--with-observation` request identity,
 digest, and lookup-headroom contracts in `podway-protocol`
 (`canonical_direct_slice_mutation_identity_with_observation_v1`,
 `canonical_direct_start_identity_with_observation_v1`,
 `canonical_procedure_v2_command_identity_with_observation_v1`, and
-`validate_direct_outcome_lookup_headroom_v1`); runtime CLI, Engine, and Store
-execution for `--with-observation` remains inactive until `AGENT-005`. Default
+`validate_direct_outcome_lookup_headroom_v1`), and `AGENT-005` activates
+runtime CLI, Engine, and Store execution for `--with-observation` across the 6
+supported routes (non-dry-run plain `session.start`, `session.begin`,
+`item.record_many`, `session.complete`, `session.decide`, and
+`goal.assess_criteria`). Default
 mutations (`return_observation == false`) preserve their existing canonical
-request preimages and digests byte-for-byte. For reserved opt-in
+request preimages and digests byte-for-byte. For opt-in
 `--with-observation` mutations (`return_observation == true`) on the 6 supported
 routes, the canonical identity JSON object includes top-level
-`"return_observation": true`, so once `AGENT-005` activates those routes,
-reusing the same idempotency key across default and `--with-observation` modes
-fails closed with `IDEMPOTENCY_KEY_REUSED`. When `AGENT-005` wires runtime
-execution, the post-mutation `podway.observation-result/v6` projection and
+`"return_observation": true`, so reusing the same idempotency key across
+default and `--with-observation` modes fails closed with
+`IDEMPOTENCY_KEY_REUSED` in both directions (on `session.start`, filesystem
+Procedure source preparation runs before entering the writer and retains its
+`Result`, while authoritative replay and mode-conflict resolution extract the
+original digest from the stored outcome before consuming or propagating a
+retained preparation error). During runtime execution, the post-mutation
+`podway.observation-result/v6` projection and
 `validate_direct_outcome_lookup_headroom_v1` check run inside the same write
-transaction before storing the complete `OutputEnvelopeV4`; any headroom or
+transaction before archiving a disposed terminal predecessor, creating or
+replacing the session graph, or storing the complete `OutputEnvelopeV4`; any headroom or
 projection failure rolls back both the mutation and observation, and
-`outcome.lookup` returns the exact stored envelope. Under that active runtime
-contract, stored outcomes and exact idempotent replays preserve the observation
-from that mutation's commit point rather than recomputing live workspace state,
+`outcome.lookup` returns the exact stored envelope. Stored outcomes and exact
+idempotent replays preserve the observation from that mutation's commit point
+rather than recomputing live workspace state,
 and only a successful, known first submission without hidden retries may
 replace the next observe on the normal path. After retry, `outcome.lookup`,
 lost output, contention requiring refresh, or uncertain submission history,

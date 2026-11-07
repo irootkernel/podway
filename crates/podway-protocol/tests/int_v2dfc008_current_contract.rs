@@ -615,7 +615,17 @@ fn agent001_reserved_schemas_validate_without_expanding_active_command_routes() 
             "podway.criterion-assessment-many-result/v1",
             &["goal.assess_criteria"][..],
         ),
-        ("podway.mutation-observation-result/v1", &[][..]),
+        (
+            "podway.mutation-observation-result/v1",
+            &[
+                "session.start",
+                "session.begin",
+                "item.record_many",
+                "session.complete",
+                "session.decide",
+                "goal.assess_criteria",
+            ][..],
+        ),
     ] {
         let fixture = &answers["fixtures"][schema];
         assert!(

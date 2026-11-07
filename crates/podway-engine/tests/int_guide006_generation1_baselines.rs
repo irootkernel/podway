@@ -401,6 +401,7 @@ impl Guide006Engine {
             observed_at: Rfc3339MillisV1::new(GUIDE006_OBSERVED_AT).unwrap(),
             timeout_ms: 5000,
             generation: podway_protocol::ContractGenerationV1::Generation1,
+            return_observation: false,
         };
         adjust(&mut request);
         request

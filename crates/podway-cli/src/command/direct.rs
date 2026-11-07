@@ -74,6 +74,7 @@ impl Invocation {
         command: Direct,
         workspace: Option<WorkspaceId>,
         key: Option<protocol_boundary::IdempotencyKeyV1>,
+        return_observation: bool,
     ) -> Result<protocol_boundary::DirectResponseV1, LocalFailure> {
         let request = protocol_boundary::DirectRequestV1 {
             request_id: RequestIdV1::new(Uuid::new_v4().to_string()).map_err(invalid_v2_value)?,
@@ -85,6 +86,7 @@ impl Invocation {
             observed_at: self.observed_at.clone(),
             timeout_ms: self.timeout_ms,
             generation: self.generation,
+            return_observation,
         };
         #[cfg(test)]
         self.request_ids.push(request.request_id.clone());
@@ -228,6 +230,7 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             },
             None,
             None,
+            false,
         ) {
             Ok(protocol_boundary::DirectResponseV1::Success(output)) => {
                 let result = output.as_value()["result"]
@@ -328,6 +331,7 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
                 })),
                 fences.workspace_id.clone(),
                 None,
+                false,
             )?;
             let output = match response {
                 protocol_boundary::DirectResponseV1::Success(output) => output,
@@ -371,7 +375,12 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     } else {
         None
     };
-    let response = invocation.execute(command, fences.workspace_id.clone(), key.clone())?;
+    let response = invocation.execute(
+        command,
+        fences.workspace_id.clone(),
+        key.clone(),
+        cli.with_observation,
+    )?;
     // A fenced plain start never enters the interactive interview, so a
     // terminal user cannot turn it into a deletion.
     let interactive_start = matches!(
@@ -382,6 +391,7 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             ..
         })
     ) && cli.if_session_id.is_none()
+        && !cli.with_observation
         && !cli.json
         && !cli.quiet
         && io::stdin().is_terminal()
@@ -401,6 +411,7 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             },
             fences.workspace_id.clone(),
             None,
+            false,
         )?;
         let output = match status {
             protocol_boundary::DirectResponseV1::Success(output) => output,
@@ -435,12 +446,13 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
                     },
                     fences.workspace_id,
                     None,
+                    false,
                 )?;
                 return Ok(direct_response_result(&cli.command, response));
             }
             ExistingStartResolution::Replace => {
                 let command = typed_command(&cli, &fences)?;
-                let response = invocation.execute(command, fences.workspace_id, key)?;
+                let response = invocation.execute(command, fences.workspace_id, key, false)?;
                 return Ok(direct_response_result(&cli.command, response));
             }
         }
@@ -990,7 +1002,12 @@ mod admit003_tests {
         let key = |value: &str| Some(protocol_boundary::IdempotencyKeyV1::new(value).unwrap());
         assert!(matches!(
             invocation
-                .execute(Direct::WorkspaceInit { repair: false }, None, key("init"))
+                .execute(
+                    Direct::WorkspaceInit { repair: false },
+                    None,
+                    key("init"),
+                    false
+                )
                 .unwrap(),
             protocol_boundary::DirectResponseV1::Success(_)
         ));
@@ -1008,7 +1025,8 @@ mod admit003_tests {
                 .execute(
                     typed_command(&cli, &ExplicitPreconditions::default()).unwrap(),
                     None,
-                    key("start")
+                    key("start"),
+                    false
                 )
                 .unwrap(),
             protocol_boundary::DirectResponseV1::Success(_)
@@ -1034,6 +1052,7 @@ mod admit003_tests {
                 )),
                 Some(facts.workspace_id),
                 key("begin"),
+                false,
             )
             .unwrap();
         let protocol_boundary::DirectResponseV1::Success(output) = response else {

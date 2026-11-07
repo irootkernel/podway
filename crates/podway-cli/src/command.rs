@@ -603,6 +603,7 @@ fn supplied_workspace_options(cli: &Cli) -> Vec<&'static str> {
         ("--if-item-revision", cli.if_item_revision.is_some()),
         ("--if-goal-revision", cli.if_goal_revision.is_some()),
         ("--yes", cli.yes),
+        ("--with-observation", cli.with_observation),
     ]
     .into_iter()
     .filter(|(_, supplied)| *supplied)
@@ -730,6 +731,27 @@ fn validate_direct_flags(cli: &Cli) -> Result<(), LocalFailure> {
     if plain_start && (cli.if_session_id.is_some() != cli.if_session_revision.is_some()) {
         return Err(LocalFailure::request_invalid(
             "plain start requires --if-session-id and --if-session-revision together",
+        ));
+    }
+    if cli.with_observation
+        && !matches!(
+            command,
+            Command::Start(args)
+                if plain_start && !args.dry_run
+        )
+        && !matches!(
+            command,
+            Command::Begin(_)
+                | Command::Record(_)
+                | Command::Complete
+                | Command::Decide(_)
+                | Command::Goal {
+                    command: GoalCommand::AssessCriteria(_)
+                }
+        )
+    {
+        return Err(LocalFailure::request_invalid(
+            "--with-observation applies only to plain start, begin, record, complete, decide, and goal assess-criteria",
         ));
     }
     let plain_start_fenced = plain_start && cli.if_session_id.is_some();
@@ -2822,6 +2844,181 @@ mod tests {
                     6,
                 );
             }
+        }
+    }
+
+    #[test]
+    fn agent005_with_observation_accepts_only_six_selected_routes_and_rejects_local_or_excluded() {
+        for accepted in [
+            vec![
+                "podway",
+                "start",
+                "--preset",
+                "sw-dev-v2",
+                "--task",
+                "task",
+                "--with-observation",
+            ],
+            vec!["podway", "begin", "--with-observation"],
+            vec!["podway", "record", "--stdin", "--with-observation"],
+            vec!["podway", "complete", "--with-observation"],
+            vec![
+                "podway",
+                "decide",
+                "--option",
+                "approve",
+                "--reason",
+                "ok",
+                "--with-observation",
+            ],
+            vec![
+                "podway",
+                "goal",
+                "assess-criteria",
+                "--stdin",
+                "--with-observation",
+            ],
+        ] {
+            let cli = Cli::try_parse_from(&accepted).unwrap();
+            assert!(
+                validate_direct_flags(&cli).is_ok(),
+                "expected accepted: {accepted:?}"
+            );
+            assert!(cli.with_observation);
+        }
+
+        for rejected_direct in [
+            vec![
+                "podway",
+                "start",
+                "--preset",
+                "sw-dev-v2",
+                "--task",
+                "task",
+                "--dry-run",
+                "--with-observation",
+            ],
+            vec![
+                "podway",
+                "start",
+                "--preset",
+                "sw-dev-v2",
+                "--task",
+                "task",
+                "--on-existing",
+                "preserve",
+                "--supersede-reason",
+                "reason",
+                "--with-observation",
+            ],
+            vec![
+                "podway",
+                "start",
+                "--preset",
+                "sw-dev-v2",
+                "--task",
+                "task",
+                "--on-existing",
+                "delete",
+                "--progress-summary",
+                "summary",
+                "--yes",
+                "--with-observation",
+            ],
+            vec!["podway", "observe", "--with-observation"],
+            vec!["podway", "status", "--with-observation"],
+            vec!["podway", "next", "--with-observation"],
+            vec!["podway", "skip", "--with-observation"],
+            vec!["podway", "cancel", "--reason", "no", "--with-observation"],
+            vec![
+                "podway",
+                "rework",
+                "--to",
+                "work",
+                "--reason",
+                "fix",
+                "--with-observation",
+            ],
+            vec![
+                "podway",
+                "goal",
+                "define",
+                "--goal",
+                "g",
+                "--criterion",
+                "c=s",
+                "--with-observation",
+            ],
+            vec![
+                "podway",
+                "goal",
+                "assess-criterion",
+                "c",
+                "--status",
+                "satisfied",
+                "--reason",
+                "r",
+                "--with-observation",
+            ],
+            vec![
+                "podway",
+                "disposition",
+                "not-required",
+                "--reason",
+                "r",
+                "--with-observation",
+            ],
+            vec![
+                "podway",
+                "delegation",
+                "accept",
+                "--stdin",
+                "--with-observation",
+            ],
+            vec!["podway", "check", "confirm", "--with-observation"],
+            vec!["podway", "set", "note", "val", "--with-observation"],
+            vec!["podway", "reset", "--with-observation"],
+            vec!["podway", "archive", "--with-observation"],
+            vec![
+                "podway",
+                "outcome",
+                "lookup",
+                "--idempotency-key",
+                "k",
+                "--with-observation",
+            ],
+            vec![
+                "podway",
+                "integration",
+                "show",
+                "dolgorae",
+                "--with-observation",
+            ],
+        ] {
+            let cli = Cli::try_parse_from(&rejected_direct).unwrap();
+            let err = validate_direct_flags(&cli).unwrap_err();
+            assert_eq!(err.code, "REQUEST_INVALID", "{rejected_direct:?}");
+            assert_eq!(err.exit_code, 2, "{rejected_direct:?}");
+        }
+
+        for rejected_local in [
+            vec!["podway", "help", "--with-observation"],
+            vec!["podway", "version", "--with-observation"],
+            vec!["podway", "completions", "bash", "--with-observation"],
+            vec!["podway", "preset", "list", "--with-observation"],
+            vec!["podway", "procedure", "scaffold", "--with-observation"],
+        ] {
+            let cli = Cli::try_parse_from(&rejected_local).unwrap();
+            let err = super::execute_local(&cli)
+                .err()
+                .expect("local command must reject --with-observation");
+            assert_eq!(err.code, "REQUEST_INVALID", "{rejected_local:?}");
+            assert_eq!(err.exit_code, 2, "{rejected_local:?}");
+            assert!(
+                err.message.contains("--with-observation"),
+                "{rejected_local:?}: {}",
+                err.message
+            );
         }
     }
 }

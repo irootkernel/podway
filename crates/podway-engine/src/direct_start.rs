@@ -4,26 +4,24 @@ use std::{cell::RefCell, time::Instant};
 
 use podway_core::{
     ActorAttributionV2, ReasonV2, Revision, SessionLifecycle, Sha256Digest, TerminalDispositionV2,
-    UnixMillis, WorkspaceId, canonicalize_json_v1,
+    UnixMillis, WorkspaceId,
 };
 use podway_git::{GitResolverContractV1, WorktreeSelectorV1};
 use podway_protocol::{
-    CommandNameV1, DirectSessionOutputV1, OutputEnvelopeInputV4, OutputEnvelopeV4, RequestIdV1,
-    Rfc3339MillisV1, SessionDeletionModeV1, SessionStartCommandV1, SessionStartReplaceV1,
-    SessionStartSourceV1, SessionStartV1, SliceCommandV1, TerminalDispositionInputV1,
-    WorkspaceOutputV1, canonical_direct_start_identity_v1,
+    CommandNameV1, OutputEnvelopeInputV4, OutputEnvelopeV4, RequestIdV1, Rfc3339MillisV1,
+    SessionDeletionModeV1, SessionStartCommandV1, SessionStartReplaceV1, SessionStartSourceV1,
+    SessionStartV1, SliceCommandV1, TerminalDispositionInputV1, WorkspaceOutputV1,
+    canonical_direct_start_digest_with_observation_v1,
 };
 use podway_store::{
-    CanonicalExecutionJsonV1, GraphMutationErrorV2, GraphSessionStateV2, IdempotencyKeyV1,
-    StoreErrorV1,
+    GraphMutationErrorV2, GraphSessionStateV2, IdempotencyKeyV1, StoreErrorV1,
     direct_store::{DirectMutationRequestV1, DirectOutcomeScopeV1, DirectStoreErrorV1},
 };
 use serde_json::{Value, json};
-use sha2::{Digest as _, Sha256};
 
 use crate::{
     direct_execution::{DirectExecutionErrorV1, DirectIdSourceV1},
-    direct_mutation::check_session_fences,
+    direct_mutation::{check_session_fences, graph_success_with_observation},
     execution::{
         ExecutionClockV1, PreparedProcedureSourceV2,
         ProcedureV2StartPreparationErrorV1 as StartError, prepare_preset_procedure_source_v2,
@@ -68,7 +66,7 @@ pub fn start_session_v1<R: GitResolverContractV1>(
     clock: &impl ExecutionClockV1,
     ids: &impl DirectIdSourceV1,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
-    start_session_with_context_v1(resolver, request, clock, ids, None)
+    start_session_with_context_v1(resolver, request, clock, ids, None, false)
 }
 
 pub(crate) fn start_session_with_context_v1<R: GitResolverContractV1>(
@@ -77,7 +75,19 @@ pub(crate) fn start_session_with_context_v1<R: GitResolverContractV1>(
     clock: &impl ExecutionClockV1,
     ids: &impl DirectIdSourceV1,
     context: Option<&mut crate::direct_api::DirectInvocationContextV1>,
+    return_observation: bool,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
+    if return_observation
+        && !matches!(
+            &request.command,
+            DirectStartCommandV1::Start(command) if !command.start.dry_run
+        )
+    {
+        return Err(DirectStoreErrorV1::InvalidInput {
+            reason: "return_observation is only supported for non-dry-run plain session.start",
+        }
+        .into());
+    }
     let (resolved, store, binding) = resolver.resolve_existing_with_binding(
         request.selector,
         request.expected_workspace_id.as_ref(),
@@ -158,10 +168,16 @@ pub(crate) fn start_session_with_context_v1<R: GitResolverContractV1>(
                 }
                 let output: OutputEnvelopeV4 = serde_json::from_str(outcome.response().as_str())
                     .map_err(|_| DirectStoreErrorV1::Unreadable)?;
-                serde_json::from_value::<Sha256Digest>(
-                    output.as_value()["result"]["procedure_digest"].clone(),
-                )
-                .map_err(|_| DirectStoreErrorV1::Unreadable)?
+                let result_value = &output.as_value()["result"];
+                let digest_value = if result_value.get("schema").and_then(Value::as_str)
+                    == Some("podway.mutation-observation-result/v1")
+                {
+                    &result_value["mutation_result"]["procedure_digest"]
+                } else {
+                    &result_value["procedure_digest"]
+                };
+                serde_json::from_value::<Sha256Digest>(digest_value.clone())
+                    .map_err(|_| DirectStoreErrorV1::Unreadable)?
             } else {
                 let mut retained = source.borrow_mut();
                 match retained
@@ -177,17 +193,15 @@ pub(crate) fn start_session_with_context_v1<R: GitResolverContractV1>(
                     }
                 }
             };
-            let canonical = canonical_direct_start_identity_v1(
+            let digest = canonical_direct_start_digest_with_observation_v1(
                 &command,
                 resolved.store_identity().workspace_uuid(),
                 &original_digest,
+                return_observation,
             )
             .map_err(|_| DirectStoreErrorV1::InvalidInput {
                 reason: "invalid start semantic identity",
             })?;
-            let digest =
-                Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())))
-                    .expect("SHA-256 produces a canonical digest");
             DirectMutationRequestV1::new(
                 key.clone(),
                 digest,
@@ -246,6 +260,30 @@ pub(crate) fn start_session_with_context_v1<R: GitResolverContractV1>(
             .map_err(GraphMutationErrorV2::InvalidState)?;
             if let (Some(prior), Some(policy)) = (prior, policy) {
                 body["existing_session"] = existing_session(prior, policy);
+            }
+            body["session_id"] = json!(session);
+            body["revision"] = json!(0);
+            let body_map = body.as_object().expect("start result is an object").clone();
+            if matches!(request.command, DirectStartCommandV1::Start(_)) {
+                let response = graph_success_with_observation(
+                    transaction,
+                    &resolved,
+                    request.request_id.clone(),
+                    command.command_name(),
+                    prior,
+                    &graph,
+                    body_map,
+                    return_observation,
+                )?;
+                if let (Some(prior), Some(Policy::Archive)) = (prior, policy) {
+                    transaction
+                        .archive_graph(prior.workspace_revision(), prior.trace().revision())?;
+                }
+                transaction.create_graph(&graph)?;
+                transaction.scope_created_session_outcome(&session)?;
+                return Ok(response);
+            }
+            if let (Some(prior), Some(policy)) = (prior, policy) {
                 match policy {
                     Policy::Delete => transaction
                         .clear_graph(prior.workspace_revision(), prior.trace().revision())?,
@@ -320,51 +358,16 @@ pub(crate) fn start_session_with_context_v1<R: GitResolverContractV1>(
                     }
                 }
             }
-            body["session_id"] = json!(session);
-            body["revision"] = json!(0);
-            let output = OutputEnvelopeV4::new(OutputEnvelopeInputV4 {
-                request_id: request.request_id.clone(),
-                command: CommandNameV1::new(command.command_name()).expect("static command"),
-                generated_at: Rfc3339MillisV1::from_unix_millis(now.get()).map_err(|_| {
-                    DirectStoreErrorV1::InvalidInput {
-                        reason: "clock exceeds the public timestamp range",
-                    }
-                })?,
-                workspace: Some(
-                    WorkspaceOutputV1::new(
-                        transaction.binding().identity().workspace_uuid().clone(),
-                        resolved
-                            .worktree()
-                            .roots()
-                            .worktree_root()
-                            .display()
-                            .as_str(),
-                        transaction.next_workspace_sequence()?,
-                    )
-                    .map_err(|_| DirectStoreErrorV1::BindingMismatch)?,
-                ),
-                session: Some(DirectSessionOutputV1 {
-                    id: session.clone(),
-                    title: input.task_title.clone(),
-                    lifecycle: SessionLifecycle::Prepared,
-                    revision_before: prior
-                        .as_ref()
-                        .map_or(Revision::ZERO, |graph| graph.trace().revision()),
-                    revision_after: Revision::ZERO,
-                }),
-                result: body.as_object().expect("start result is an object").clone(),
-                warnings: Vec::new(),
-            })
-            .map_err(|_| DirectStoreErrorV1::InvalidInput {
-                reason: "start success violates the canonical envelope",
-            })?;
-            let response = CanonicalExecutionJsonV1::new(
-                canonicalize_json_v1(output.as_value())
-                    .map_err(|_| DirectStoreErrorV1::Unreadable)?,
-            )
-            .map_err(|_| DirectStoreErrorV1::InvalidInput {
-                reason: "start success exceeds the outcome bound",
-            })?;
+            let response = graph_success_with_observation(
+                transaction,
+                &resolved,
+                request.request_id.clone(),
+                command.command_name(),
+                prior,
+                &graph,
+                body_map,
+                false,
+            )?;
             transaction.create_graph(&graph)?;
             transaction.scope_created_session_outcome(&session)?;
             Ok(response)

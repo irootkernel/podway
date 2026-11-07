@@ -83,6 +83,7 @@ fn request(input: &Value) -> DirectRequestV1 {
         observed_at: Rfc3339MillisV1::new("2023-11-14T22:13:20.001Z").unwrap(),
         timeout_ms: 5000,
         generation: podway_protocol::ContractGenerationV1::Generation1,
+        return_observation: false,
     }
 }
 fn reset_request(input: &Value) -> DirectMaintenanceRequestV1 {

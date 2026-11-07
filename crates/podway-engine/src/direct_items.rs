@@ -7,7 +7,8 @@ use podway_git::{GitResolverContractV1, WorktreeSelectorV1};
 use podway_protocol::{
     ItemAddV1, ItemAttachSourceV1, ItemAttachV1, ItemCheckV1, ItemClearV1,
     ItemMutationPreconditionsWireV1, ItemRemoveV1, ItemSetV1, ItemUncheckV1, OutputEnvelopeV4,
-    RequestIdV1, SliceCommandV1, canonical_direct_slice_mutation_identity_v1,
+    RequestIdV1, SliceCommandV1, canonical_direct_slice_mutation_digest_with_observation_v1,
+    canonical_direct_slice_mutation_identity_v1,
 };
 use podway_store::{
     GraphMutationErrorV2, IdempotencyKeyV1,
@@ -17,7 +18,9 @@ use sha2::{Digest as _, Sha256};
 
 use crate::{
     direct_execution::DirectExecutionErrorV1,
-    direct_mutation::{check_attempt_fence, check_session_fences, graph_success},
+    direct_mutation::{
+        check_attempt_fence, check_session_fences, graph_success, graph_success_with_observation,
+    },
     execution::{ExecutionClockV1, prepare_procedure_v2_item_mutation_v1},
     workspace::DirectWorkspaceResolverV1,
 };
@@ -96,8 +99,17 @@ fn validate_record_many_input_bound(
 /// The same typed operations serve parsed stdin and programmatic callers.
 pub fn record_many_v1<R: GitResolverContractV1>(
     resolver: &DirectWorkspaceResolverV1<R>,
+    request: DirectRecordManyRequestV1,
+    clock: &impl ExecutionClockV1,
+) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
+    record_many_with_observation_v1(resolver, request, clock, false)
+}
+
+pub(crate) fn record_many_with_observation_v1<R: GitResolverContractV1>(
+    resolver: &DirectWorkspaceResolverV1<R>,
     mut request: DirectRecordManyRequestV1,
     clock: &impl ExecutionClockV1,
+    return_observation: bool,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
     use crate::execution::{ResolvedBatchArtifactV1, prepare_procedure_v2_item_mutations_v1};
     let (resolved, store, binding) = resolver.resolve_existing_with_binding(
@@ -126,15 +138,14 @@ pub fn record_many_v1<R: GitResolverContractV1>(
         .operations
         .sort_by(|left, right| left.item_id.cmp(&right.item_id));
     let command = SliceCommandV1::ItemRecordMany(request.input.clone());
-    let canonical = canonical_direct_slice_mutation_identity_v1(
+    let digest = canonical_direct_slice_mutation_digest_with_observation_v1(
         &command,
         resolved.store_identity().workspace_uuid(),
+        return_observation,
     )
     .map_err(|_| DirectStoreErrorV1::InvalidInput {
         reason: "invalid batch semantic identity",
     })?;
-    let digest = Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())))
-        .expect("SHA-256 produces a canonical digest");
     let fences = &request.input.preconditions;
     let mutation = DirectMutationRequestV1::new(
         request.key,
@@ -230,8 +241,16 @@ pub fn record_many_v1<R: GitResolverContractV1>(
         let body = serde_json::json!({"schema":"podway.item-record-many-result/v2", "changed":outcome.changed(),
             "graph_node_id":active.graph_node_id(), "attempt_id":active.attempt_id(), "attempt_number":active.number().get(),
             "revision":next.trace().revision(), "items":items});
-        let response = graph_success(transaction, &resolved, request.request_id, command.command_name(), prior, next,
-            body.as_object().expect("batch result is an object").clone())?;
+        let response = graph_success_with_observation(
+            transaction,
+            &resolved,
+            request.request_id,
+            command.command_name(),
+            Some(prior),
+            next,
+            body.as_object().expect("batch result is an object").clone(),
+            return_observation,
+        )?;
         if outcome.changed() { transaction.replace_graph(prior.workspace_revision(), prior.trace().revision(), next)?; }
         Ok(response)
     });

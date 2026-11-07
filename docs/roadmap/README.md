@@ -52,11 +52,11 @@ technical dependencies are AGENT-002 on 001; 003 on 001/002; 004 on 001; 005 on
 | `AGENT-002` | Share stdin-owned fence classification | Completed | Transfer DF-014 into one local CLI classifier while preserving document fences, flag rejection and error precedence. | [Requirements and acceptance](../todo/TODO-podway-agent-interaction-simplification.md#agent-002-share-stdin-owned-fence-classification) |
 | `AGENT-003` | Implement atomic criterion assessment batches | Completed | Apply a bounded partial or full batch as one successor with atomic rollback, stable cursor/goal revision and exact replay. | [Requirements and acceptance](../todo/TODO-podway-agent-interaction-simplification.md#agent-003-implement-atomic-criterion-assessment-batches) |
 | `AGENT-004` | Extract coherent observation composition and budget reuse | Completed | Share only feature-required projection/budget logic while preserving observation v5/v6 and snapshot-owned readiness facts. | [Requirements and acceptance](../todo/TODO-podway-agent-interaction-simplification.md#agent-004-extract-coherent-observation-composition-and-budget-reuse) |
-| `AGENT-005` | Return commit-bound observations | Planned | Return opt-in observations for selected mutations with precommit admission, lookup headroom and historical replay. | [Requirements and acceptance](../todo/TODO-podway-agent-interaction-simplification.md#agent-005-return-commit-bound-observations) |
+| `AGENT-005` | Return commit-bound observations | Completed | Return opt-in observations for selected mutations with precommit admission, lookup headroom and historical replay. | [Requirements and acceptance](../todo/TODO-podway-agent-interaction-simplification.md#agent-005-return-commit-bound-observations) |
 | `AGENT-006` | Align guidance and qualify integrated workflows | Planned | Verify normal and recovery CLI flows, promote durable documentation and prepare independent review and owner-approved closeout. | [Requirements and acceptance](../todo/TODO-podway-agent-interaction-simplification.md#agent-006-align-skills-examples-and-integrated-workflows) |
 
 CANON, AGENT-001 and AGENT-002 are complete; AGENT-003 is Completed.
-AGENT-004 is Completed; AGENT-005 and AGENT-006 remain Planned.
+AGENT-004 is Completed; AGENT-005 is Completed; AGENT-006 remains Planned.
 No release, installation, runtime activation or consumer change is authorized.
 Each future executable/contract candidate requires focused checks and `make test`.
 Whole-Epic review, explicit owner acceptance and dossier retirement are separate

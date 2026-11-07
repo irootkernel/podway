@@ -7,7 +7,7 @@ This file records concise shipped outcomes and the planned next stable release.
 ### Added
 
 - Add `podway goal assess-criteria --stdin` to record 1 to 16 current-attempt criterion assessments atomically with document-owned fences and exact replay.
-- Reserve `podway.mutation-observation-result/v1` and opt-in `--with-observation` canonical identities with `outcome.lookup` envelope headroom checks.
+- Add opt-in `--with-observation` on plain `start`, `begin`, `record --stdin`, `complete`, `decide`, and `goal assess-criteria --stdin` to return `podway.mutation-observation-result/v1` with an embedded `v6` observation and `outcome.lookup` headroom checks.
 
 ### Changed
 

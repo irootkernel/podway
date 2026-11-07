@@ -249,6 +249,16 @@ separate from unsigned `u64` revision and size fields.
 Run the Python `--self-test` negative controls separately; `make test` checks the
 known-answer fixture through the manifest check but does not run these sentinels.
 
+Protocol's [`int_v2dfc006_direct_envelopes`](../../crates/podway-protocol/tests/int_v2dfc006_direct_envelopes.rs)
+and [`int_v2_result_contract`](../../crates/podway-protocol/tests/int_v2_result_contract.rs),
+Engine's `direct_mutation::tests::agent005_*` unit tests and
+[`int_guide009_generation2_observation`](../../crates/podway-engine/tests/int_guide009_generation2_observation.rs),
+and CLI's [`e2e_guide009_generation2_lifecycle`](../../crates/podway-cli/tests/e2e_guide009_generation2_lifecycle.rs)
+own the `AGENT-005` commit-bound `--with-observation` wrapper contract,
+worst-case `outcome.lookup` headroom and real-transaction rollback across all
+six routes, bidirectional `IDEMPOTENCY_KEY_REUSED` conflicts, and route grammar
+and completion parity.
+
 Through Gaori with the pinned repository toolchain, run `make architecture`,
 `make contract-manifest` and `make test-int`. Architecture's static prerequisites
 include documentation/link checks, contract/schema integrity and the prepared

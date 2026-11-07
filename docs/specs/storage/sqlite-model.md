@@ -102,9 +102,14 @@ daemon-era migration.
 ## Success outcomes and journal
 
 `mutation_outcomes` stores only successful canonical `podway.output/v4`
-envelopes, keyed by idempotency key, with request digest, command name, unique
-committed workspace sequence, retention scope and recorded time. Its response
-bound is 1,048,576 bytes. It stores no rejected-request or queued/running state.
+envelopes (including opt-in `podway.mutation-observation-result/v1` envelopes on
+the 6 supported `--with-observation` routes), keyed by idempotency key, with
+request digest, command name, unique committed workspace sequence, retention
+scope and recorded time. Its response bound is 1,048,576 bytes, and every
+`podway.mutation-observation-result/v1` envelope is additionally checked before
+commit for worst-case `outcome.lookup` headroom (`<= 1,048,576` outer bytes and
+stored envelope depth `<= 61` so the outer `outcome.lookup` envelope stays at
+depth `<= 64`). It stores no rejected-request or queued/running state.
 Engine owns command-specific public result validation; Store validates retained
 success headers, identity, digest and sequence consistency.
 

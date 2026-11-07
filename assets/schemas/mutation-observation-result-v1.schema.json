@@ -67,5 +67,5 @@
       "maximum": 18446744073709551615
     }
   },
-  "$comment": "Reserved by AGENT-001 under ADR-0043; combined mutation and observation result wrapper."
+  "$comment": "Activated by AGENT-005 under ADR-0043 (originally reserved by AGENT-001); combined mutation and observation result wrapper."
 }

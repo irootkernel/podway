@@ -1,12 +1,11 @@
 //! In-process command boundaries. No job, IPC, registry or runtime-mode authority.
 
-use sha2::{Digest as _, Sha256};
 use std::time::Instant;
 
 use podway_core::{
     ActorAttributionV2, AttemptId, BlockerId, DelegationReceiptIdV1, DomainError,
     GoalRevisionNumberV2, GoalStatementV2, GraphNodeId, ItemId, ProcedureSnapshotId, ReasonV2,
-    Revision, SessionId, SessionLifecycle, Sha256Digest, TraceSequenceV2, WorkspaceId,
+    Revision, SessionId, SessionLifecycle, TraceSequenceV2, WorkspaceId,
 };
 use podway_git::{GitResolverContractV1, WorktreeSelectorV1};
 use podway_protocol::{
@@ -15,7 +14,8 @@ use podway_protocol::{
     ProcedureV2MutationCommandV1, ProtocolError, RequestIdV1, Rfc3339MillisV1, SessionBeginV1,
     SessionBlockV1, SessionCancelV1, SessionCompleteV1, SessionMutationPreconditionsWireV1,
     SessionRetryV1, SessionSkipV1, SessionUnblockV1, SliceCommandV1, WorkspaceOutputV1,
-    canonical_direct_slice_mutation_identity_v1, canonical_procedure_v2_command_identity_v1,
+    canonical_direct_slice_mutation_digest_with_observation_v1,
+    canonical_procedure_v2_command_digest_with_observation_v1,
 };
 use podway_store::{
     GraphInitialGoalV2, GraphMutationErrorV2, IdempotencyKeyV1,
@@ -23,7 +23,7 @@ use podway_store::{
 };
 
 use crate::{
-    direct_mutation::{check_attempt_fence, check_session_fences, graph_success},
+    direct_mutation::{check_attempt_fence, check_session_fences, graph_success_with_observation},
     direct_read_service::{
         project_direct_delegation_package_v1, project_direct_evidence_v1, project_direct_next_v1,
         project_direct_observation_v1, project_direct_status_v1,
@@ -95,7 +95,7 @@ pub fn execute_cursor_v1<R: GitResolverContractV1>(
     clock: &impl ExecutionClockV1,
     ids: &impl DirectIdSourceV1,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
-    execute_cursor_with_context_v1(resolver, request, clock, ids, None)
+    execute_cursor_with_context_v1(resolver, request, clock, ids, None, false)
 }
 
 pub(crate) fn execute_cursor_with_context_v1<R: GitResolverContractV1>(
@@ -104,22 +104,28 @@ pub(crate) fn execute_cursor_with_context_v1<R: GitResolverContractV1>(
     clock: &impl ExecutionClockV1,
     ids: &impl DirectIdSourceV1,
     context: Option<&mut crate::direct_api::DirectInvocationContextV1>,
+    return_observation: bool,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
+    if return_observation && !matches!(request.command, DirectCursorCommandV1::Complete(_)) {
+        return Err(DirectStoreErrorV1::InvalidInput {
+            reason: "observation return is not supported for this cursor command",
+        }
+        .into());
+    }
     let (resolved, store, binding) = resolver.resolve_existing_with_binding(
         request.selector,
         request.expected_workspace_id.as_ref(),
         request.deadline,
     )?;
     let command = request.command.slice_command();
-    let canonical = canonical_direct_slice_mutation_identity_v1(
+    let digest = canonical_direct_slice_mutation_digest_with_observation_v1(
         &command,
         resolved.store_identity().workspace_uuid(),
+        return_observation,
     )
     .map_err(|_| DirectStoreErrorV1::InvalidInput {
         reason: "invalid cursor semantic identity",
     })?;
-    let digest = Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())))
-        .expect("SHA-256 produces a canonical digest");
     let fences = request.command.preconditions();
     let mutation = DirectMutationRequestV1::new(
         request.key,
@@ -234,8 +240,16 @@ pub(crate) fn execute_cursor_with_context_v1<R: GitResolverContractV1>(
         body["from_graph_node_id"] = serde_json::json!(active.graph_node_id());
         body["from_attempt_id"] = serde_json::json!(active.attempt_id());
         body["revision"] = serde_json::json!(next.trace().revision());
-        let response = graph_success(transaction, &resolved, request.request_id, command.command_name(), prior, &next,
-            body.as_object().expect("cursor result is an object").clone())?;
+        let response = graph_success_with_observation(
+            transaction,
+            &resolved,
+            request.request_id,
+            command.command_name(),
+            Some(prior),
+            &next,
+            body.as_object().expect("cursor result is an object").clone(),
+            return_observation,
+        )?;
         transaction.replace_graph(prior.workspace_revision(), prior.trace().revision(), &next)?;
         Ok(response)
     });
@@ -282,7 +296,7 @@ pub fn begin_session_v1<R: GitResolverContractV1>(
     clock: &impl ExecutionClockV1,
     ids: &impl DirectIdSourceV1,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
-    begin_session_with_context_v1(resolver, request, clock, ids, None)
+    begin_session_with_context_v1(resolver, request, clock, ids, None, false)
 }
 
 pub(crate) fn begin_session_with_context_v1<R: GitResolverContractV1>(
@@ -291,21 +305,21 @@ pub(crate) fn begin_session_with_context_v1<R: GitResolverContractV1>(
     clock: &impl ExecutionClockV1,
     ids: &impl DirectIdSourceV1,
     context: Option<&mut crate::direct_api::DirectInvocationContextV1>,
+    return_observation: bool,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
     let (resolved, store) = resolver.resolve_existing(
         request.selector,
         request.expected_workspace_id.as_ref(),
         request.deadline,
     )?;
-    let canonical = canonical_procedure_v2_command_identity_v1(
+    let digest = canonical_procedure_v2_command_digest_with_observation_v1(
         &ProcedureV2MutationCommandV1::SessionBegin(request.input.clone()),
         resolved.store_identity().workspace_uuid(),
+        return_observation,
     )
     .map_err(|_| DirectStoreErrorV1::InvalidInput {
         reason: "invalid begin semantic identity",
     })?;
-    let digest = Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())))
-        .expect("SHA-256 produces a canonical digest");
     let mutation = DirectMutationRequestV1::new(
         request.key,
         digest,
@@ -359,7 +373,16 @@ pub(crate) fn begin_session_with_context_v1<R: GitResolverContractV1>(
             "goal_tracking":next.snapshot().goal_tracking(), "goal_defined":outcome.goal_revision().is_some(),
             "goal_revision":outcome.goal_revision().map(|revision| revision.get()),
         }).as_object().expect("begin result is an object").clone();
-        let response = graph_success(transaction, &resolved, request.request_id, "session.begin", prior, next, body)?;
+        let response = graph_success_with_observation(
+            transaction,
+            &resolved,
+            request.request_id,
+            "session.begin",
+            Some(prior),
+            next,
+            body,
+            return_observation,
+        )?;
         transaction.replace_graph(prior.workspace_revision(), prior.trace().revision(), next)?;
         Ok(response)
     });

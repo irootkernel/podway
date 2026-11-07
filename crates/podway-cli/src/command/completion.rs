@@ -276,6 +276,10 @@ const ITEM: Flag = Flag {
     long: "item",
     takes_value: true,
 };
+const WITH_OBSERVATION: Flag = Flag {
+    long: "with-observation",
+    takes_value: false,
+};
 
 const DISPLAY_FLAGS: &[&Flag] = &[&JSON, &NO_COLOR, &QUIET, &CONTRACT_GENERATION];
 const DIRECT_READ_FLAGS: &[&Flag] = &[
@@ -286,7 +290,7 @@ const DIRECT_READ_FLAGS: &[&Flag] = &[
     &QUIET,
     &CONTRACT_GENERATION,
 ];
-const SESSION_MUTATION_FLAGS: &[&Flag] = &[
+const COMPLETE_FLAGS: &[&Flag] = &[
     &JSON,
     &WORKTREE,
     &TIMEOUT,
@@ -298,6 +302,7 @@ const SESSION_MUTATION_FLAGS: &[&Flag] = &[
     &IF_SESSION_ID,
     &IF_SESSION_REVISION,
     &IF_ATTEMPT,
+    &WITH_OBSERVATION,
 ];
 const ITEM_MUTATION_FLAGS: &[&Flag] = &[
     &JSON,
@@ -320,6 +325,7 @@ const RECORD_FLAGS: &[&Flag] = &[
     &QUIET,
     &CONTRACT_GENERATION,
     &STDIN,
+    &WITH_OBSERVATION,
 ];
 const START_FLAGS: &[&Flag] = &[
     &JSON,
@@ -342,6 +348,7 @@ const START_FLAGS: &[&Flag] = &[
     &PROGRESS_SUMMARY,
     &DRY_RUN,
     &YES,
+    &WITH_OBSERVATION,
 ];
 const RESET_FLAGS: &[&Flag] = &[
     &JSON,
@@ -567,6 +574,7 @@ const ROUTES: &[Route] = &[
             &GOAL,
             &CRITERION,
             &ACTOR,
+            &WITH_OBSERVATION,
         ],
         values: "",
         dynamic: None,
@@ -684,7 +692,7 @@ const ROUTES: &[Route] = &[
     },
     Route {
         words: "complete",
-        flags: SESSION_MUTATION_FLAGS,
+        flags: COMPLETE_FLAGS,
         values: "",
         dynamic: None,
     },
@@ -706,6 +714,7 @@ const ROUTES: &[Route] = &[
             &OPTION,
             &REASON,
             &ACTOR,
+            &WITH_OBSERVATION,
         ],
         values: "",
         dynamic: Some("decision-options"),
@@ -1802,7 +1811,8 @@ mod tests {
                 "no-color",
                 "quiet",
                 "contract-generation",
-                "stdin"
+                "stdin",
+                "with-observation"
             ]
         );
         assert_eq!(route.values, "");
@@ -1814,5 +1824,26 @@ mod tests {
                 "missing goal assess-criteria in {shell:?}"
             );
         }
+        let offered: Vec<&str> = ROUTES
+            .iter()
+            .filter(|route| {
+                route
+                    .flags
+                    .iter()
+                    .any(|flag| flag.long == "with-observation")
+            })
+            .map(|route| route.words)
+            .collect();
+        assert_eq!(
+            offered,
+            [
+                "start",
+                "begin",
+                "complete",
+                "decide",
+                "goal assess-criteria",
+                "record"
+            ]
+        );
     }
 }

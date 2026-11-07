@@ -65,6 +65,7 @@ fn integ003_typed_query_rejects_keys_and_workspace_fences_before_git_or_home() {
                 observed_at: Rfc3339MillisV1::new("2026-11-01T00:00:00.000Z").unwrap(),
                 timeout_ms: 1000,
                 generation: ContractGenerationV1::Generation1,
+                return_observation: false,
             },
             &NoClock,
             &NativeDirectIdSourceV1,

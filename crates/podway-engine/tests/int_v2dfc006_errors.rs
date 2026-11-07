@@ -468,6 +468,7 @@ fn admit001_cold_preparation_rejects_unstamped_post_preflight_corruption() {
                 observed_at: Rfc3339MillisV1::new("2023-11-14T22:13:20.001Z").unwrap(),
                 timeout_ms: 5000,
                 generation: podway_protocol::ContractGenerationV1::Generation1,
+                return_observation: false,
             },
             &Clock,
             &NativeDirectIdSourceV1,
@@ -719,6 +720,7 @@ fn actual_connection_gate_contention_returns_a_valid_public_error() {
                 observed_at: Rfc3339MillisV1::new("2023-11-14T22:13:20.001Z").unwrap(),
                 timeout_ms: timeout,
                 generation: podway_protocol::ContractGenerationV1::Generation1,
+                return_observation: false,
             },
             &Clock,
             &NativeDirectIdSourceV1,
@@ -1076,6 +1078,7 @@ mod reads004_equivalence {
             observed_at: Rfc3339MillisV1::new("2023-11-14T22:13:20.001Z").unwrap(),
             timeout_ms: 5000,
             generation: podway_protocol::ContractGenerationV1::Generation1,
+            return_observation: false,
         }
     }
 
@@ -2132,6 +2135,7 @@ fn admit003_failed_final_preflight_witness_cannot_publish_or_keep_a_hint() {
             observed_at: Rfc3339MillisV1::new("2023-11-14T22:13:20.001Z").unwrap(),
             timeout_ms: 5000,
             generation: podway_protocol::ContractGenerationV1::Generation1,
+            return_observation: false,
         },
         &Clock,
         &NativeDirectIdSourceV1,

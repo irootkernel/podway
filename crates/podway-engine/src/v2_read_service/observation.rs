@@ -21,14 +21,7 @@ use super::{
     project_running_next, session_identity,
 };
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "AGENT-005 wires in-transaction successor observation projection for --with-observation"
-    )
-)]
-pub(super) struct SuccessorObservationContextV1<'a> {
+pub(crate) struct SuccessorObservationContextV1<'a> {
     identity: &'a DurableWorktreeIdentityV1,
     successor: &'a GraphSessionStateV2,
     receipts: DelegationReceiptSnapshotV1,
@@ -36,14 +29,7 @@ pub(super) struct SuccessorObservationContextV1<'a> {
 }
 
 impl<'a> SuccessorObservationContextV1<'a> {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "AGENT-005 wires in-transaction successor observation projection for --with-observation"
-        )
-    )]
-    pub(super) fn from_transaction<Clock: FnOnce() -> UnixMillis>(
+    pub(crate) fn from_transaction<Clock: FnOnce() -> UnixMillis>(
         transaction: &'a podway_store::direct_store::DirectTransactionV1<'_, '_, Clock>,
         successor: &'a GraphSessionStateV2,
     ) -> podway_store::direct_store::DirectStoreResultV1<Self> {
@@ -57,24 +43,10 @@ impl<'a> SuccessorObservationContextV1<'a> {
         })
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "AGENT-005 wires in-transaction successor observation projection for --with-observation"
-        )
-    )]
-    pub(super) fn workspace_sequence(&self) -> u64 {
+    pub(crate) fn workspace_sequence(&self) -> u64 {
         self.workspace_sequence
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "AGENT-005 wires in-transaction successor observation projection for --with-observation"
-        )
-    )]
     pub(super) fn read_scope(&self) -> ReadScope<'_> {
         ReadScope {
             identity: self.identity,
@@ -86,14 +58,7 @@ impl<'a> SuccessorObservationContextV1<'a> {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "AGENT-005 wires in-transaction successor observation projection for --with-observation"
-    )
-)]
-pub(super) fn project_successor_observation_v1(
+pub(crate) fn project_successor_observation_v1(
     context: &SuccessorObservationContextV1<'_>,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
     finalize_direct_observation_in(&context.read_scope(), ContractGenerationV1::Generation2)

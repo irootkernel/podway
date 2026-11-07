@@ -205,7 +205,17 @@ have recorded values in that decision attempt. `not_applicable` cites neither.
 
 In generation 1, both Direct and delegated snapshots use
 status/compact/observation v5, running next v5, and prepared next v3;
-generation 2 substitutes observation v6 on `session.observe`. Delegation data
+generation 2 substitutes observation v6 on `session.observe`. Opt-in
+`--with-observation` on plain `session.start` (including disposed-terminal
+auto-archive start), `session.begin`, `item.record_many`, `session.complete`,
+`session.decide`, and `goal.assess_criteria` returns
+`podway.mutation-observation-result/v1` with an embedded
+`podway.observation-result/v6` in both contract generations, includes
+`"return_observation": true` in canonical request identity only when opted in
+(so reusing an idempotency key across default and `--with-observation` modes
+fails closed with `IDEMPOTENCY_KEY_REUSED` in both directions), and rolls back
+both the mutation and observation if post-mutation projection or
+`outcome.lookup` headroom validation fails. Delegation data
 remains conditional and truthful; there is no invented worker on a Direct
 placement or cursor on prepared state.
 The active-item allocation covers the validated maximum; template truncation must

@@ -382,7 +382,14 @@ pub const DAEMON_FREE_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
     result_schema_v2(
         "podway.mutation-observation-result/v1",
         "schemas/mutation-observation-result-v1.schema.json",
-        &[],
+        &[
+            "session.start",
+            "session.begin",
+            "item.record_many",
+            "session.complete",
+            "session.decide",
+            "goal.assess_criteria",
+        ],
     ),
     result_schema_v2(
         "podway.mutation-outcome-unknown-details/v3",
@@ -2013,6 +2020,11 @@ fn daemon_free_generation_correlations_v1(schema: &str, value: &Value) -> bool {
         "podway.mutation-observation-result/v1" => value
             .as_object()
             .is_some_and(mutation_observation_result_v1_correlations),
+        "podway.outcome-lookup-result/v1" => {
+            let response = &value["outcome"]["response"];
+            response.is_null()
+                || daemon_free_generation_correlations_v1("podway.output/v4", response)
+        }
         "podway.workspace-contract-mismatch-details/v2" => value
             .as_object()
             .is_some_and(workspace_mismatch_v2_release_agrees_v1),
@@ -2023,6 +2035,26 @@ fn daemon_free_generation_correlations_v1(schema: &str, value: &Value) -> bool {
                 result
                     .as_object()
                     .is_some_and(observation_v6_correlations_v2)
+            } else if result.get("schema").and_then(Value::as_str)
+                == Some("podway.mutation-observation-result/v1")
+            {
+                value
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .is_some_and(|command| {
+                        validate_mutation_observation_command_result_v1(command, result).is_ok()
+                    })
+                    && value
+                        .get("workspace")
+                        .and_then(|workspace| workspace.get("latest_workspace_sequence"))
+                        .and_then(Value::as_u64)
+                        == result.get("workspace_sequence").and_then(Value::as_u64)
+            } else if result.get("schema").and_then(Value::as_str)
+                == Some("podway.outcome-lookup-result/v1")
+            {
+                let response = &result["outcome"]["response"];
+                response.is_null()
+                    || daemon_free_generation_correlations_v1("podway.output/v4", response)
             } else {
                 true
             }
@@ -2087,6 +2119,10 @@ pub fn validate_v2_output_warnings(warnings: &[Map<String, Value>]) -> bool {
 }
 
 pub fn validate_command_result_v2(command: &str, result: &Value) -> Result<(), ProtocolError> {
+    if result.get("schema").and_then(Value::as_str) == Some("podway.mutation-observation-result/v1")
+    {
+        return validate_mutation_observation_command_result_v1(command, result);
+    }
     if decode_result_schema_contract_v2(result)
         .is_some_and(|contract| contract.commands.contains(&command))
         || (PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V1.contains(&command)

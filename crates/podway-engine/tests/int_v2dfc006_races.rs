@@ -95,6 +95,7 @@ fn request(selector: &WorktreeSelectorV1, command: DirectCommandV1, key: &str) -
         observed_at: Rfc3339MillisV1::new("2023-11-14T22:13:20.001Z").unwrap(),
         timeout_ms: 5000,
         generation: podway_protocol::ContractGenerationV1::Generation1,
+        return_observation: false,
     }
 }
 

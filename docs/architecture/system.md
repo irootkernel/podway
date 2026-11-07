@@ -113,7 +113,12 @@ construct an IPC request as an intermediate representation.
 
 Expensive preparation occurs outside the mutation transaction. Native worktree,
 artifact, Procedure and prepared-state identities are revalidated before commit.
-A validated success envelope is persisted with the domain effect. Engine
+On the 6 opt-in `--with-observation` mutation routes, Engine projects the
+post-mutation `podway.observation-result/v6` snapshot from the uncommitted
+successor graph and verifies both complete `OutputEnvelopeV4` admission and
+worst-case `outcome.lookup` headroom inside the same write transaction before
+archiving a disposed predecessor or persisting state changes. A validated
+success envelope is persisted with the domain effect. Engine
 maintenance resumes exact persisted intent through the owning Store lease.
 
 The Engine workspace resolver owns the complete explicit-UUID and selector-derived
