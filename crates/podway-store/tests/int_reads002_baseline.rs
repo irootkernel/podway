@@ -1472,7 +1472,7 @@ fn production_chunk_sql_plan_is_metadata_only_on_real_connection() {
             opcodes.iter().all(|op| !op.opcode.starts_with("Sorter")),
             "no payload sorter: {opcodes:?}"
         );
-        assert_eq!(rusqlite::version(), "3.51.3");
+        assert_eq!(rusqlite::version(), "3.54.1");
         assert_eq!(
             podway_store::test_support::read_query_settings(
                 snapshot,

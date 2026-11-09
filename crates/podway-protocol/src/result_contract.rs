@@ -665,6 +665,10 @@ pub const RELEASED_CONTRACT_MANIFESTS_V1: &[(&str, &str)] = &[
         "v0.2.16",
         "sha256:57cb8463f0f24033f9bd0437ed1943e77b21b754a888e654bd847bec13f4b91d",
     ),
+    (
+        "v0.2.17",
+        "sha256:f5e56e344a79022766fb69af7991c60d57e7793495b2599c1c3d3ef296309100",
+    ),
 ];
 
 /// Map a stored writer manifest digest to its release, or `None` when the
@@ -2855,6 +2859,10 @@ mod guide007_generation_tests {
                     "v0.2.16",
                     "sha256:57cb8463f0f24033f9bd0437ed1943e77b21b754a888e654bd847bec13f4b91d"
                 ),
+                (
+                    "v0.2.17",
+                    "sha256:f5e56e344a79022766fb69af7991c60d57e7793495b2599c1c3d3ef296309100"
+                ),
             ]
         );
         assert_eq!(
@@ -2880,6 +2888,12 @@ mod guide007_generation_tests {
                 "sha256:57cb8463f0f24033f9bd0437ed1943e77b21b754a888e654bd847bec13f4b91d"
             ),
             Some("v0.2.16")
+        );
+        assert_eq!(
+            released_writer_release_v1(
+                "sha256:f5e56e344a79022766fb69af7991c60d57e7793495b2599c1c3d3ef296309100"
+            ),
+            Some("v0.2.17")
         );
         assert_eq!(
             released_writer_release_v1(

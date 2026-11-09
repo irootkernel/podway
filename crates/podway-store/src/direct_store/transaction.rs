@@ -632,7 +632,7 @@ impl DirectStoreV1 {
         self.revalidate_files(&lease, &database)?;
         commit(transaction)?;
         self.boundary(DirectTransactionBoundaryV1::AfterCommitBeforeOutput);
-        checkpoint_after_success(&connection, &self.layout);
+        checkpoint_after_success(&mut connection, &self.layout);
         Ok(DirectMutationResultV1 {
             outcome,
             replayed: false,
@@ -685,7 +685,7 @@ impl DirectStoreV1 {
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         connection.execute_batch(super::DIRECT_STORE_DDL_V1)?;
-        configure_connection(&connection, false, deadline)?;
+        configure_connection(&mut connection, false, deadline)?;
         self.boundary(DirectTransactionBoundaryV1::BeforeBegin);
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         self.boundary(DirectTransactionBoundaryV1::AfterBegin);
@@ -959,7 +959,7 @@ fn commit_error(error: rusqlite::Error) -> DirectStoreErrorV1 {
     }
 }
 
-fn checkpoint_after_success(connection: &Connection, layout: &super::DirectWorkspaceLayoutV1) {
+fn checkpoint_after_success(connection: &mut Connection, layout: &super::DirectWorkspaceLayoutV1) {
     // A committed success must not become an error because best-effort bounded
     // checkpointing meets another active snapshot or writer. Passive work never
     // waits; an oversized WAL gets at most 100 ms to truncate on close.

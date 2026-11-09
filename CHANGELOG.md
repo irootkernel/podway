@@ -2,6 +2,12 @@
 
 This file records concise shipped outcomes and the planned next stable release.
 
+## v0.2.18 - Unreleased
+
+### Fixed
+
+- Update bundled SQLite to prevent memory disclosure from database/WAL pairs with mismatched page sizes (RUSTSEC-2026-0459).
+
 ## v0.2.17 - 2026-11-08
 
 ### Added

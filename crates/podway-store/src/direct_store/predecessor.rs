@@ -92,9 +92,9 @@ impl DirectStoreV1 {
             {
                 // A retry after COMMIT can observe the successor in WAL before
                 // its main-file checkpoint finished. Complete that same suffix.
-                let connection = self.open_connection(false, deadline)?;
+                let mut connection = self.open_connection(false, deadline)?;
                 self.validate_connection(&connection)?;
-                self.checkpoint_migration(&connection, lease, &database)?;
+                self.checkpoint_migration(&mut connection, lease, &database)?;
             } else {
                 // TRUNCATE can have completed before a prior durability sync failed.
                 self.sync_migration_durability(&database)?;
@@ -148,13 +148,13 @@ impl DirectStoreV1 {
         // Engine retries its durable migration intent and checks writer identity;
         // this internal maintenance step is not a public mutation outcome.
         transaction.commit()?;
-        self.checkpoint_migration(&connection, lease, &database)?;
+        self.checkpoint_migration(&mut connection, lease, &database)?;
         Ok(true)
     }
 
     fn checkpoint_migration(
         &self,
-        connection: &rusqlite::Connection,
+        connection: &mut rusqlite::Connection,
         lease: &ExclusiveMaintenanceLeaseV1,
         database: &std::fs::File,
     ) -> DirectStoreResultV1<()> {
@@ -522,7 +522,7 @@ mod tests {
         });
     }
     pub(super) fn install_checkpoint_busy_handler(
-        connection: &rusqlite::Connection,
+        connection: &mut rusqlite::Connection,
     ) -> rusqlite::Result<()> {
         if CHECKPOINT_FAULT.with(|state| {
             state

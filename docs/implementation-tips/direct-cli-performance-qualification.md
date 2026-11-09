@@ -437,7 +437,7 @@ header discovery nor payload chunks.
 The chunk statement orders `(ordinal, attempt UUID, rowid)` metadata in a
 `LIMIT -1` subquery, then uses a `CROSS JOIN` with both rowid and attempt equality
 to seek each slot. Explicit outer ordering preserves requested positions. On
-pinned SQLite 3.51.3, the real Store EXPLAIN test pins one four-field metadata
+pinned SQLite 3.54.1, the real Store EXPLAIN test pins one four-field metadata
 record, ordering before rowid seek, payload columns after that seek, and no
 payload sorter or automatic index. The same connection proves query-only mode,
 the unchanged 1,064,960-byte length limit and 256 parameters. A compatible list

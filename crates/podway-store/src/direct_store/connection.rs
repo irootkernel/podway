@@ -65,7 +65,7 @@ fn short_busy_wait(_attempts: i32) -> bool {
 }
 
 pub(super) fn install_busy_deadline(
-    connection: &Connection,
+    connection: &mut Connection,
     deadline: Instant,
 ) -> DirectStoreResultV1<()> {
     BUSY_DEADLINE.with(|current| current.set(Some(deadline)));
@@ -327,7 +327,7 @@ impl DirectStoreV1 {
             }
             let path = entry.path();
             let file = super::classification::open_read_nofollow(&path)?;
-            let connection = match Connection::open_with_flags(
+            let mut connection = match Connection::open_with_flags(
                 file_uri(&path, true),
                 OpenFlags::SQLITE_OPEN_URI
                     | OpenFlags::SQLITE_OPEN_READ_ONLY
@@ -336,7 +336,7 @@ impl DirectStoreV1 {
                 Ok(connection) => connection,
                 Err(_) => continue,
             };
-            configure_connection(&connection, true, deadline)?;
+            configure_connection(&mut connection, true, deadline)?;
             let Ok(binding) = self.validate_connection(&connection) else {
                 continue;
             };
@@ -525,11 +525,11 @@ impl DirectStoreV1 {
         } else if heap_snapshot {
             uri.push_str("&vfs=unix-flock");
         }
-        let connection = Connection::open_with_flags(uri, flags)?;
+        let mut connection = Connection::open_with_flags(uri, flags)?;
         if heap_snapshot && !immutable {
             connection.execute_batch("PRAGMA locking_mode=EXCLUSIVE;")?;
         }
-        configure_connection(&connection, readonly, deadline)?;
+        configure_connection(&mut connection, readonly, deadline)?;
         Ok(connection)
     }
 
@@ -1019,7 +1019,7 @@ impl DirectWorkspaceViewV1 {
 }
 
 pub(super) fn configure_connection(
-    connection: &Connection,
+    connection: &mut Connection,
     readonly: bool,
     deadline: Instant,
 ) -> DirectStoreResultV1<()> {
