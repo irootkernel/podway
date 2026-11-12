@@ -11,13 +11,14 @@ import subprocess
 import sys
 
 import release_archive
+import rust_toolchain
 
 ROOT = Path(__file__).resolve().parents[1]
 STEPS = (
     ("make", "test"),
     ("make", "release-prepare"),
     ("make", "test-fuzzing"),
-    ("rustup", "run", "1.97.1", "cargo", "build", "--release", "--locked", "-p", "podway-cli", "--bin", "podway"),
+    ("rustup", "run", rust_toolchain.pinned_version(), "cargo", "build", "--release", "--locked", "-p", "podway-cli", "--bin", "podway"),
 )
 
 

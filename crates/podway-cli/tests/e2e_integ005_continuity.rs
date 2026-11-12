@@ -8,7 +8,8 @@ use serde_json::Value;
 fn integ005_permission_matrix_preserves_receipts_and_original_replay() {
     let qualifier = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tools/qualify_integration_settings.py");
-    let output = Command::new("python3")
+    let python = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tools/python");
+    let output = Command::new(python)
         .arg(qualifier)
         .arg("--podway")
         .arg(super::cli_fixture::podway_binary())

@@ -19,5 +19,5 @@
 - Preserve accepted ADR history and archived roadmap history.
 - Update all affected links after moving or renaming a document.
 
-Run `python3 tools/verify_docs.py` for fast feedback and the complete `make test`
+Run `./tools/python tools/verify_docs.py` for fast feedback and the complete `make test`
 gate before release acceptance.

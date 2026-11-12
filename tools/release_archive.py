@@ -20,6 +20,7 @@ import tempfile
 from typing import Any, Callable
 
 import repository_assets
+import rust_toolchain as repository_toolchain
 import release_evidence
 import verify_patch_release
 
@@ -811,8 +812,10 @@ def verify_source_payloads(extracted: Path, cli: Path) -> None:
 
 def rust_toolchain() -> str:
     output = run(["rustc", "--version"], label="Rust toolchain probe").decode("utf-8").strip()
-    if not output.startswith("rustc 1.97.1 "):
-        fail(f"release archive requires rustc 1.97.1, observed {output}")
+    try:
+        repository_toolchain.require_version(output)
+    except repository_toolchain.ToolchainError as error:
+        fail(str(error))
     return output
 
 

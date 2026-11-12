@@ -2,6 +2,9 @@
 
 ## Verification layers
 
+`make test-prepare` also checks exact Rust and Python toolchain selection and refusal with
+isolated fixtures; it does not install or upgrade either interpreter.
+
 ```bash
 make test-prepare   # formatting, lint, static checks, contracts, architecture
 make test-rust      # unit, architecture, and integration tests
@@ -239,7 +242,7 @@ tests actually execute. The local emitter boundary is a library unit test.
 Core's [canonical unit tests](../../crates/podway-core/src/canonical.rs),
 Protocol's [build-identity suite](../../crates/podway-protocol/tests/int_build_identity_git_refs.rs),
 the [shared known-answer fixture](../../tests/fixtures/contract/canonicalization-v1.json)
-and `python3 tools/contract_manifest.py --self-test` own the
+and `./tools/python tools/contract_manifest.py --self-test` own the
 `[-9223372036854775808, 18446744073709551615]` integer boundary, boolean
 preservation and recursive float/out-of-range rejection. Protocol's
 [`int_v2agt004_record_many`](../../crates/podway-protocol/tests/int_v2agt004_record_many.rs)
@@ -262,7 +265,7 @@ and completion parity.
 Through Gaori with the pinned repository toolchain, run `make architecture`,
 `make contract-manifest` and `make test-int`. Architecture's static prerequisites
 include documentation/link checks, contract/schema integrity and the prepared
-adapter self-test; `python3 tools/verify_contracts.py --sentinels` supplements
+adapter self-test; `./tools/python tools/verify_contracts.py --sentinels` supplements
 these checks. Then run the configured `full` command (`make test`) on the frozen
 final candidate. Inspect repository status and the complete diff after checks.
 Focused results and compilation do not replace the complete development gate.
@@ -1107,10 +1110,11 @@ refusal alongside that query evidence.
 [`verify_dolgorae_connection_tests.py`](../../tools/verify_dolgorae_connection_tests.py).
 It is registered in `architecture-static`, hence `make test-prepare` and the
 required `make test` gate. Its `python-prepare` prerequisite creates the ignored
-`target/dev-python` virtual environment from the selected `python3` and installs
+`target/dev-python/<version>` virtual environment using `./tools/python` and
+the exact version in `.python-version`, and installs
 [`tools/requirements-dev.txt`](../../tools/requirements-dev.txt) there. The first
-preparation, or a requirements change, needs access to the configured package
-index or a populated pip cache. Later runs reuse that environment; no global
+preparation, a Python pin change, or a requirements change needs access to the
+configured package index or a populated pip cache. Later runs reuse that environment; no global
 Python modification or PATH override is needed. `make python-prepare` can prepare
 it separately. Installation failure stops Make before the controls run.
 The verifier reports missing validator prerequisites as incomplete; the control
@@ -1166,7 +1170,7 @@ binary and its retained private identity report (`sha256` plus
 `identity.result`), then use an exclusively new output:
 
 ```sh
-python3 tools/qualify_integration_settings.py --podway /absolute/candidate/podway \
+./tools/python tools/qualify_integration_settings.py --podway /absolute/candidate/podway \
   --previous /absolute/verified-previous/podway --previous-sha256 SELECTED_SHA256 \
   --previous-identity /absolute/private/previous-identity.json \
   --output /private/tmp/owned-evidence/matrix.json

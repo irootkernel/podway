@@ -8,7 +8,8 @@ use serde_json::Value;
 fn supervised_delegation_preserves_documented_example_hosts_and_recovery() {
     let qualifier = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tools/qualify_supervised_delegation.py");
-    let output = Command::new("python3")
+    let python = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tools/python");
+    let output = Command::new(python)
         .arg(qualifier)
         .arg("--podway")
         .arg(super::cli_fixture::podway_binary())

@@ -6,6 +6,11 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Fixed
 
+- Pin contributor Python through `.python-version` and use versioned validation environments.
+
+- Update rustix to fix zero-length extended-attribute buffer handling (RUSTSEC-2026-0486).
+- Select the pinned Rust build toolchain consistently across contributor and qualification tools.
+
 - Update bundled SQLite to prevent memory disclosure from database/WAL pairs with mismatched page sizes (RUSTSEC-2026-0459).
 
 ## v0.2.17 - 2026-11-08

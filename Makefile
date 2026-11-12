@@ -1,6 +1,12 @@
 SHELL := /bin/sh
 
-RUST_TOOLCHAIN := 1.97.1
+PYTHON := $(CURDIR)/tools/python
+PYTHON_VERSION := $(shell cat .python-version)
+
+RUST_TOOLCHAIN := $(shell "$(PYTHON)" tools/rust_toolchain.py version)
+ifeq ($(RUST_TOOLCHAIN),)
+$(error Cannot determine the pinned Rust version; check rust-toolchain.toml)
+endif
 RUST_TOOLCHAIN_CARGO := $(shell rustup which --toolchain $(RUST_TOOLCHAIN) cargo 2>/dev/null)
 ifeq ($(RUST_TOOLCHAIN_CARGO),)
 $(error Rust $(RUST_TOOLCHAIN) is required; install it with rustup)
@@ -12,7 +18,7 @@ TEST_THREADS ?= 4
 DIST_DIR ?= dist
 PRESET_DIR ?= assets/presets
 PRESET_VALIDATOR ?= target/debug/podway
-DEV_PYTHON_ENV := target/dev-python
+DEV_PYTHON_ENV := target/dev-python/$(PYTHON_VERSION)
 DEV_PYTHON := $(DEV_PYTHON_ENV)/bin/python3
 export PRESET_ID PRESET_NAME PRESET_DESCRIPTION PRESET_FILE PRESET_DIR PRESET_VALIDATOR
 
@@ -23,6 +29,7 @@ export PRESET_ID PRESET_NAME PRESET_DESCRIPTION PRESET_FILE PRESET_DIR PRESET_VA
 .PHONY: test-native-qualification development-qualification
 
 toolchain:
+	@"$(PYTHON)" --version
 	@$(RUST_TOOLCHAIN_ENV) cargo --version
 	@$(RUST_TOOLCHAIN_ENV) rustc --version
 
@@ -40,17 +47,17 @@ test-prepare: toolchain
 
 release-prepare:
 	$(MAKE) lint-all
-	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_contracts.py --sentinels
-	$(RUST_TOOLCHAIN_ENV) python3 tools/release_evidence.py self-test
-	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py self-test
-	$(RUST_TOOLCHAIN_ENV) python3 tools/qualify_distribution.py self-test
-	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_release_bundle.py self-test
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/verify_contracts.py --sentinels
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/release_evidence.py self-test
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/release_archive.py self-test
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/qualify_distribution.py self-test
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/verify_release_bundle.py self-test
 
 dist-preflight:
-	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py preflight
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/release_archive.py preflight
 
 patch-release-preflight: dist-preflight
-	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_patch_release.py check \
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/verify_patch_release.py check \
 		--base "$(PATCH_BASE_COMMIT)" \
 		--confirmed "$(PRIOR_MAKE_TEST_PASSED)"
 
@@ -75,20 +82,23 @@ architecture: architecture-static
 		--test-threads=$(TEST_THREADS)
 
 architecture-static:
-	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_docs.py
-	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_docs.py self-test
-	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
-	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_quality_contracts.py
-	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_qualification_tools.py
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/verify_python_toolchain.py
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/verify_rust_toolchain.py
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/verify_docs.py
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/verify_docs.py self-test
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/verify_test_layout.py --check
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/verify_quality_contracts.py
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/verify_qualification_tools.py
 	$(MAKE) dolgorae-connection-test
-	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_patch_release.py self-test
-	$(RUST_TOOLCHAIN_ENV) python3 tools/create_dolgorae_handoff.py self-test
-	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_contracts.py --check
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/verify_patch_release.py self-test
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/create_dolgorae_handoff.py self-test
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/verify_contracts.py --check
 
 python-prepare: $(DEV_PYTHON_ENV)/.requirements-ready
+	@"$(DEV_PYTHON)" -I -c 'import platform; from pathlib import Path; expected = Path(".python-version").read_text().strip(); observed = platform.python_version(); assert observed == expected, f"development Python mismatch: expected {expected}, observed {observed}; recreate the versioned environment"'
 
-$(DEV_PYTHON_ENV)/.requirements-ready: tools/requirements-dev.txt
-	$(RUST_TOOLCHAIN_ENV) python3 -m venv "$(DEV_PYTHON_ENV)"
+$(DEV_PYTHON_ENV)/.requirements-ready: tools/requirements-dev.txt .python-version
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" -m venv "$(DEV_PYTHON_ENV)"
 	"$(DEV_PYTHON)" -m pip install --disable-pip-version-check -r tools/requirements-dev.txt
 	touch "$@"
 
@@ -96,7 +106,7 @@ dolgorae-connection-test: python-prepare
 	$(RUST_TOOLCHAIN_ENV) "$(DEV_PYTHON)" tools/verify_dolgorae_connection_tests.py
 
 contract-manifest:
-	$(RUST_TOOLCHAIN_ENV) python3 tools/contract_manifest.py --check
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/contract_manifest.py --check
 
 preset-validator:
 	@if [ "$(PRESET_VALIDATOR_READY)" = "1" ]; then \
@@ -109,7 +119,7 @@ preset-create: preset-validator
 	@test -n "$$PRESET_ID" || { echo "PRESET_ID is required" >&2; exit 2; }
 	@test -n "$$PRESET_NAME" || { echo "PRESET_NAME is required" >&2; exit 2; }
 	@test -n "$$PRESET_DESCRIPTION" || { echo "PRESET_DESCRIPTION is required" >&2; exit 2; }
-	$(RUST_TOOLCHAIN_ENV) python3 tools/manage_presets.py create \
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/manage_presets.py create \
 		--id "$$PRESET_ID" \
 		--name "$$PRESET_NAME" \
 		--description "$$PRESET_DESCRIPTION" \
@@ -118,13 +128,13 @@ preset-create: preset-validator
 
 preset-import: preset-validator
 	@test -n "$$PRESET_FILE" || { echo "PRESET_FILE is required" >&2; exit 2; }
-	$(RUST_TOOLCHAIN_ENV) python3 tools/manage_presets.py import \
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/manage_presets.py import \
 		--source "$$PRESET_FILE" \
 		--output-dir "$$PRESET_DIR" \
 		--podway "$$PRESET_VALIDATOR"
 
 preset-tool-test: preset-validator
-	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_preset_tooling.py --podway "$$PRESET_VALIDATOR"
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/verify_preset_tooling.py --podway "$$PRESET_VALIDATOR"
 
 test-rust:
 	$(RUST_GATE_ENV) cargo test --workspace --lib --bins \
@@ -136,7 +146,7 @@ test-unit:
 		--test-threads=$(TEST_THREADS)
 
 test-int:
-	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/verify_test_layout.py --check
 	$(RUST_GATE_ENV) cargo test --workspace --test 'int_*' --features podway-store/test-support --locked -- \
 		--test-threads=$(TEST_THREADS)
 
@@ -149,24 +159,24 @@ contract-verifier-test:
 		int_release_contract_verifier -- --test-threads=$(TEST_THREADS)
 
 test-fuzzing:
-	$(RUST_GATE_ENV) python3 tools/run_fuzzing.py
+	$(RUST_GATE_ENV) "$(PYTHON)" tools/run_fuzzing.py
 
 test-e2e:
-	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
-	$(RUST_GATE_ENV) python3 tools/run_e2e.py
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/verify_test_layout.py --check
+	$(RUST_GATE_ENV) "$(PYTHON)" tools/run_e2e.py
 
 test-e2e-exact:
-	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
-	$(RUST_GATE_ENV) python3 tools/run_e2e.py --exact-test "$(E2E_TEST)"
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/verify_test_layout.py --check
+	$(RUST_GATE_ENV) "$(PYTHON)" tools/run_e2e.py --exact-test "$(E2E_TEST)"
 
 test-native-qualification:
-	$(RUST_GATE_ENV) python3 tools/run_native_qualification.py --evidence-parent "$(NATIVE_EVIDENCE_PARENT)"
+	$(RUST_GATE_ENV) "$(PYTHON)" tools/run_native_qualification.py --evidence-parent "$(NATIVE_EVIDENCE_PARENT)"
 
 development-qualification:
-	$(RUST_GATE_ENV) python3 tools/qualify_development.py --output-dir "$(DEVELOPMENT_OUTPUT_DIR)"
+	$(RUST_GATE_ENV) "$(PYTHON)" tools/qualify_development.py --output-dir "$(DEVELOPMENT_OUTPUT_DIR)"
 
 release-version-check:
-	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py verify-version \
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/release_archive.py verify-version \
 		--podway target/release/podway
 
 dist:
@@ -176,15 +186,15 @@ dist:
 	$(MAKE) test-fuzzing
 	$(RUST_GATE_ENV) cargo build --release --locked \
 		-p podway-cli --bin podway
-	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py package \
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/release_archive.py package \
 		--artifact-class distribution \
 		--podway target/release/podway \
 		--output-dir $(DIST_DIR)
-	$(RUST_TOOLCHAIN_ENV) python3 tools/qualify_distribution.py qualify \
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/qualify_distribution.py qualify \
 		--output-dir $(DIST_DIR)
-	$(RUST_TOOLCHAIN_ENV) python3 tools/create_dolgorae_handoff.py create \
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/create_dolgorae_handoff.py create \
 		--output-dir $(DIST_DIR)
-	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_release_bundle.py verify \
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/verify_release_bundle.py verify \
 		--output-dir $(DIST_DIR)
 
 dist-patch:
@@ -195,16 +205,16 @@ dist-patch:
 	$(RUST_GATE_ENV) cargo build --release --locked \
 		-p podway-cli --bin podway
 	$(MAKE) release-version-check
-	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py package \
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/release_archive.py package \
 		--artifact-class distribution \
 		--gate patch \
 		--patch-base-commit "$(PATCH_BASE_COMMIT)" \
 		--prior-make-test-passed "$(PRIOR_MAKE_TEST_PASSED)" \
 		--podway target/release/podway \
 		--output-dir $(DIST_DIR)
-	$(RUST_TOOLCHAIN_ENV) python3 tools/create_dolgorae_handoff.py create \
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/create_dolgorae_handoff.py create \
 		--gate patch \
 		--output-dir $(DIST_DIR)
-	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_release_bundle.py verify \
+	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/verify_release_bundle.py verify \
 		--gate patch \
 		--output-dir $(DIST_DIR)

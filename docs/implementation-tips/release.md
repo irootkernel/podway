@@ -12,9 +12,9 @@ repository authorities. Refresh the manifest to validate changed schema bytes,
 then refresh it again to bind the new adapter catalog:
 
 ```bash
-python3 tools/contract_manifest.py --write
-python3 tools/create_dolgorae_handoff.py prepare-adapter
-python3 tools/contract_manifest.py --write
+./tools/python tools/contract_manifest.py --write
+./tools/python tools/create_dolgorae_handoff.py prepare-adapter
+./tools/python tools/contract_manifest.py --write
 ```
 
 This updates Podway's manifest-bound prepared contract. It does not modify
