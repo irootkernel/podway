@@ -13,6 +13,9 @@ mod layout;
 mod native;
 mod resolver;
 
+#[cfg(feature = "test-support")]
+pub mod test_support;
+
 pub use layout::{
     WorkspaceLayoutElementStatusV1, WorkspaceLayoutInitializerV1, WorkspaceLayoutReportV1,
 };

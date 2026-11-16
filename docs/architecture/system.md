@@ -377,6 +377,28 @@ Reset/archive revalidate native identity before prepared selection. Source-backe
 start and attachment hashing keep their position before graph preparation; no
 per-artifact native check is removed or moved into an earlier admission stage.
 
+### Required artifacts and native stamps
+
+Engine `execution::required_local_artifact_facts_v2` owns the pure projection of
+required local item IDs, recorded artifact metadata, slot revisions and active
+attempt IDs. It validates snapshot/item alignment and derives facts from the same
+admitted slots. The existing tuple projection for deep Doctor consumes those
+facts. Native preparation hashes their files outside the writer and retains
+request-local descriptor stamps; native verification compares the complete
+current fact set and reobserves stamps inside the existing transaction. Pure
+projection failures retain preparation error mapping; filesystem and changed
+facts retain their native boundary mappings. Caller fences and exact replay
+still precede consumption of captured preparation failures.
+
+Git's nondefault `test-support` feature supplies a scoped, current-thread observer
+at `OpenedArtifact::read`, immediately after the actual descriptor file read.
+Engine tests exercise attach, record, complete and decide, with positive read
+counts during preparation and no reads from `BeforeBegin` through completion or
+replay. This conservatively includes the pre-BEGIN gap as well as the admitted
+writer. A separate process commits during actual preparation reads. The hook
+covers this native read abstraction, not arbitrary OS I/O or other threads, and
+is absent from ordinary product builds. See the [regression owners](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions).
+
 ### Pure graph state and persisted admission
 
 Core owns [graph/session transitions](../../crates/podway-core/src/graph_v2.rs),

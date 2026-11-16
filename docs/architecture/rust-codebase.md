@@ -72,6 +72,25 @@ checks. Store admission and native revalidation retain their independent
 boundaries; the helper opens no Store and chooses no validation order. See
 [System Architecture](system.md#read-path) for the read composition.
 
+### Required-artifact preparation
+
+Engine `execution::RequiredLocalArtifactV2` and
+`required_local_artifact_facts_v2` own pure required-item, revision, active-attempt
+and recorded-artifact facts. Native preparation and in-writer verification
+consume the same projection; the public tuple helper retains deep Doctor's
+existing interface. Native file access, descriptor stamps and stamp comparison
+stay in `native_execution` and Git. Snapshot/item admission already guarantees
+an active memory slot for every projected item, so native code performs no second
+slot lookup or slot-lookup error conversion. Hashing remains outside the writer;
+current facts and stamps are checked inside it at the existing validation stage.
+
+The Git `test-support` feature is enabled only by Engine's development dependency.
+Its scoped thread-local observer sits at the actual `OpenedArtifact::read` call,
+without product flags or process-global observer state. Native route tests and a
+deliberate in-writer sensitivity control distinguish observed byte reads from
+metadata-only stamp checks. [System Architecture](system.md#required-artifacts-and-native-stamps)
+records ownership and the current-thread/native-abstraction proof limit.
+
 ## Dependency rules
 
 The executable [`cargo-adjacency.json`](../../contracts/cargo-adjacency.json)

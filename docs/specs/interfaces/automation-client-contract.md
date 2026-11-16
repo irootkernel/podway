@@ -84,6 +84,15 @@ most 100 entries or 30 days with pruning on successful writes; session outcomes
 survive archival and archive purge until session/runtime reset or workspace
 removal.
 
+Artifact preparation uses one pure Engine required-artifact fact projection for
+recorded metadata, slot revision and active attempt. Native preparation hashes
+before the writer; transaction-current fact/stamp checks retain their existing
+caller-fence, typed-failure and exact-replay order under `AUT-DIRECT-004` and
+`AUT-DIRECT-007`. Native read-boundary tests cover attach, record, complete and
+decide, with an actual separate-writer commit during preparation. The scoped
+current-thread test hook is absent from ordinary builds and grants no universal
+OS-read interception or performance claim.
+
 ## Retained invocation and identity requirements
 
 | ID | Normative requirement |

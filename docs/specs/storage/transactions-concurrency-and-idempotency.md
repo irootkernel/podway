@@ -184,6 +184,15 @@ an effect. Caller fences retain their ordinary typed rejection ordering. Consume
 captured preparation failures only after authoritative successful-outcome replay
 and caller fences, so an exact replay does not depend on today's file.
 
+Engine's pure required-artifact projection supplies item, revision, attempt and
+recorded metadata to both native phases. Native file/stamp admission remains an
+independent filesystem boundary. The test-only lower native read observer proves
+all four routes perform real preparation reads before writer admission, while a
+separate process can commit; it detects any read through that abstraction from
+`BeforeBegin` through completion/replay. It does not intercept arbitrary OS reads
+or other threads. Native writer tests separately reject required-set, revision
+and attempt drift before stamp use, including rollback of fixture graph writes.
+
 The filesystem may change afterward; Podway is not a security boundary against
 same-user processes and retains metadata rather than artifact bytes. The separate
 deep Doctor check retains its exclusive integrity-lease verification.

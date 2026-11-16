@@ -574,9 +574,29 @@ fn rehydrate_procedure_v2_execution_v1(
     Ok(validated.parsed().clone())
 }
 
+/// Pure required-item facts shared by native preparation and its in-writer comparison.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RequiredLocalArtifactV2 {
+    pub(crate) item_id: ItemId,
+    pub(crate) artifact: ArtifactValueV1,
+    pub(crate) item_revision: Revision,
+    pub(crate) attempt_id: AttemptId,
+}
+
 pub fn required_local_artifacts_v2(
     state: &GraphSessionStateV2,
 ) -> Result<Vec<(ItemId, ArtifactValueV1)>, ExecutionErrorV1> {
+    required_local_artifact_facts_v2(state).map(|facts| {
+        facts
+            .into_iter()
+            .map(|fact| (fact.item_id, fact.artifact))
+            .collect()
+    })
+}
+
+pub(crate) fn required_local_artifact_facts_v2(
+    state: &GraphSessionStateV2,
+) -> Result<Vec<RequiredLocalArtifactV2>, ExecutionErrorV1> {
     let Some(active) = state.trace().active_attempt() else {
         return Ok(Vec::new());
     };
@@ -633,7 +653,12 @@ pub fn required_local_artifacts_v2(
             let artifact = slot.value().and_then(|value| value.as_artifact())?;
             (specification.required_now(items, &values)
                 && artifact.location_kind() == ArtifactLocationKindV1::LocalPath)
-                .then(|| (slot.item_id().clone(), artifact.clone()))
+                .then(|| RequiredLocalArtifactV2 {
+                    item_id: slot.item_id().clone(),
+                    artifact: artifact.clone(),
+                    item_revision: slot.revision(),
+                    attempt_id: active.attempt_id().clone(),
+                })
         })
         .collect())
 }
@@ -870,8 +895,163 @@ pub fn invalid_execution_v1(reason: &'static str) -> ExecutionErrorV1 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    pub(crate) fn artifact_fact_states_for_test(
+        recorded: ArtifactValueV1,
+    ) -> (
+        GraphSessionStateV2,
+        Vec<(&'static str, GraphSessionStateV2)>,
+    ) {
+        let source = serde_json::to_vec(&serde_json::json!({
+            "schema":"podway.procedure/v2", "id":"artifact-facts", "version":"1",
+            "name":"Artifact facts", "purpose":"Project required artifact metadata without native access.",
+            "node_definitions":{"work":{"type":"action", "title":"Work", "intent":"Record reports.",
+                "items":[{"id":"mode", "type":"choice", "prompt":"Choose a mode.", "required":true, "choices":["strict","relaxed"]},
+                    {"id":"report", "type":"artifact", "prompt":"Attach report.", "required":true},
+                    {"id":"extra", "type":"artifact", "prompt":"Attach extra report.", "required":false,
+                        "required_when":[{"item":"mode","equals":"strict"}]}]}},
+            "graph":{"entry":"first", "nodes":[{"id":"first","use":"work","next":"second"},
+                {"id":"second","use":"work","terminal":true}]}
+        })).unwrap();
+        let snapshot = workspace_procedure_snapshot_from_bytes_v2(
+            "facts.json",
+            &source,
+            ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000001").unwrap(),
+            UnixMillis::new(1),
+        )
+        .unwrap();
+        let prepared = GraphSessionStateV2::prepared(
+            Revision::new(1),
+            "Artifact facts",
+            snapshot,
+            SessionId::new("00000000-0000-4000-8000-000000000002").unwrap(),
+            UnixMillis::new(1),
+        )
+        .unwrap();
+        let attempt = AttemptId::new("00000000-0000-4000-8000-000000000003").unwrap();
+        let mut current = prepared
+            .begin_v2(Revision::ZERO, attempt.clone(), None, UnixMillis::new(2))
+            .unwrap()
+            .into_state();
+        let mutate = |state: &GraphSessionStateV2, item: &str, mutation| {
+            let memory = state
+                .workflow_memory()
+                .attempts()
+                .iter()
+                .find(|memory| {
+                    memory.attempt_id() == state.trace().active_attempt().unwrap().attempt_id()
+                })
+                .unwrap();
+            let revision = memory
+                .item_slots()
+                .iter()
+                .find(|slot| slot.item_id().as_str() == item)
+                .unwrap()
+                .revision();
+            state
+                .mutate_active_item_v2(
+                    state.trace().active_attempt().unwrap().attempt_id(),
+                    &ItemId::new(item).unwrap(),
+                    revision,
+                    mutation,
+                    UnixMillis::new(state.workspace_revision().get() + 10),
+                )
+                .unwrap()
+                .into_state()
+        };
+
+        for item in ["report", "extra"] {
+            current = mutate(
+                &current,
+                item,
+                ActiveItemMutationV2::Attach {
+                    value: recorded.clone(),
+                },
+            );
+        }
+        current = mutate(
+            &current,
+            "mode",
+            ActiveItemMutationV2::Set {
+                value: "relaxed".into(),
+            },
+        );
+        let changed_set = mutate(
+            &current,
+            "mode",
+            ActiveItemMutationV2::Set {
+                value: "strict".into(),
+            },
+        );
+        let cleared = mutate(&current, "report", ActiveItemMutationV2::Clear);
+        let revised = mutate(
+            &cleared,
+            "report",
+            ActiveItemMutationV2::Attach {
+                value: recorded.clone(),
+            },
+        );
+        let next_attempt = AttemptId::new("00000000-0000-4000-8000-000000000004").unwrap();
+        let next = current
+            .complete_active_action_v2(
+                current.trace().revision(),
+                &attempt,
+                Some(next_attempt),
+                UnixMillis::new(100),
+            )
+            .unwrap()
+            .into_state();
+        let next = next
+            .mutate_active_item_v2(
+                next.trace().active_attempt().unwrap().attempt_id(),
+                &ItemId::new("report").unwrap(),
+                Revision::ZERO,
+                ActiveItemMutationV2::Attach { value: recorded },
+                UnixMillis::new(101),
+            )
+            .unwrap()
+            .into_state();
+        (
+            current,
+            vec![
+                ("required-set", changed_set),
+                ("item-revision", revised),
+                ("attempt", next),
+            ],
+        )
+    }
+
+    #[test]
+    fn typed004_required_artifact_facts_follow_required_sets_revisions_and_attempts() {
+        let recorded = ArtifactValueV1::local_path(
+            "missing-but-pure.txt",
+            Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
+            10,
+            "text/plain",
+        )
+        .unwrap();
+        let (current, changed) = artifact_fact_states_for_test(recorded.clone());
+        let baseline = required_local_artifact_facts_v2(&current).unwrap();
+        assert_eq!(baseline.len(), 1);
+        assert_eq!(baseline[0].item_id.as_str(), "report");
+        assert_eq!(baseline[0].item_revision, Revision::new(1));
+        assert_eq!(baseline[0].artifact, recorded);
+        assert_eq!(
+            required_local_artifacts_v2(&current).unwrap(),
+            vec![(baseline[0].item_id.clone(), recorded)]
+        );
+        let projections: Vec<_> = changed
+            .iter()
+            .map(|(_, state)| required_local_artifact_facts_v2(state).unwrap())
+            .collect();
+        assert_eq!(projections[0].len(), 2);
+        assert_eq!(projections[0][1].item_id.as_str(), "extra");
+        assert_eq!(projections[1][0].artifact, baseline[0].artifact);
+        assert_ne!(projections[1][0].item_revision, baseline[0].item_revision);
+        assert_ne!(projections[2][0].attempt_id, baseline[0].attempt_id);
+    }
 
     #[test]
     fn schema_admission_deduplicates_error_codes_before_applying_the_wire_cap() {

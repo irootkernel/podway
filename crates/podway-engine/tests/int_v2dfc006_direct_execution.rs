@@ -3123,6 +3123,64 @@ fn cursor_commands_preserve_fences_history_and_exact_replay_across_a_real_store(
 }
 
 #[test]
+fn typed004_lower_read_observer_detects_in_writer_bytes_and_restores_scope() {
+    use podway_engine::native_execution::NativeDirectWorkspaceV1;
+    use podway_git::test_support::with_artifact_read_observer_v1;
+    use std::{cell::Cell, rc::Rc};
+    let (fixture, selector, store, _) = fixture();
+    let path = fixture.path().join("sensitivity.txt");
+    std::fs::write(&path, "Actual native bytes.\n").unwrap();
+    let (resolved, _) = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest())
+        .resolve_existing(selector, None, deadline())
+        .unwrap();
+    let native = NativeDirectWorkspaceV1::new(resolved);
+    let reads = Rc::new(Cell::new(0));
+    let observed = Rc::clone(&reads);
+    let canonical = std::fs::canonicalize(&path).unwrap();
+    let request = DirectMutationRequestV1::new(
+        IdempotencyKeyV1::new("typed004-read-sensitivity").unwrap(),
+        digest(),
+        "workspace.repair",
+        ORIGINAL_RESPONSE,
+        DirectOutcomeScopeV1::Workspace,
+    )
+    .unwrap();
+    with_artifact_read_observer_v1(
+        move |path, bytes| {
+            if path == canonical {
+                observed.set(observed.get() + bytes);
+            }
+        },
+        || {
+            store.mutate(&request, deadline(), || UnixMillis::new(NOW + 20), |transaction| {
+            transaction.now();
+            // Deliberately read inside an admitted fixture writer to prove the lower observer
+            // detects the regression forbidden on actual attach/record/complete/decide routes.
+            native.prepare_local_artifact_v1(transaction.binding(), "sensitivity.txt", None).unwrap();
+            assert!(reads.get() > 0);
+            Ok(CanonicalExecutionJsonV1::new(canonicalize_json_v1(&json!({
+                "schema":"podway.output/v4", "request_id":ORIGINAL_RESPONSE, "command":"workspace.repair",
+                "generated_at":"2023-11-14T22:13:20.020Z", "result":{}, "warnings":[]
+            })).unwrap()).unwrap())
+        }).unwrap();
+        },
+    );
+    let observed_in_writer = reads.get();
+    let binding = store
+        .read(deadline(), |snapshot| Ok(snapshot.binding().clone()))
+        .unwrap();
+    native
+        .prepare_local_artifact_v1(&binding, "sensitivity.txt", None)
+        .unwrap();
+    assert_eq!(
+        reads.get(),
+        observed_in_writer,
+        "observer escaped its scoped installation"
+    );
+    store.verify_integrity(deadline()).unwrap();
+}
+
+#[test]
 fn direct_artifact_verification_checks_prepared_stamps_without_artifact_byte_reads() {
     use podway_core::DomainError;
     use podway_engine::{

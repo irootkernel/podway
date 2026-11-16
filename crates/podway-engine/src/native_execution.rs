@@ -128,9 +128,7 @@ impl PreparedLocalArtifactV1 {
 
 #[derive(Debug)]
 pub(crate) struct PreparedRequiredArtifactV2 {
-    item_id: ItemId,
-    item_revision: podway_core::Revision,
-    attempt_id: podway_core::AttemptId,
+    required: crate::execution::RequiredLocalArtifactV2,
     artifact: PreparedLocalArtifactV1,
 }
 
@@ -195,29 +193,20 @@ impl NativeDirectWorkspaceV1 {
     {
         use crate::direct_execution::DirectExecutionErrorV1 as E;
         let required =
-            crate::execution::required_local_artifacts_v2(state).map_err(E::Preparation)?;
+            crate::execution::required_local_artifact_facts_v2(state).map_err(E::Preparation)?;
         required
             .into_iter()
-            .map(|(item_id, recorded)| {
+            .map(|required| {
+                let recorded = &required.artifact;
                 let artifact = self
                     .prepare_artifact(binding, recorded.location(), recorded.media_type(), true)
                     .map_err(E::Boundary)?;
-                if artifact.artifact != recorded {
+                if &artifact.artifact != recorded {
                     return Err(E::Boundary(ExecutionBoundaryErrorV1::domain(
                         DomainError::ArtifactChanged,
                     )));
                 }
-                Ok(PreparedRequiredArtifactV2 {
-                    item_revision: active_item_revision(state, &item_id).map_err(E::Boundary)?,
-                    attempt_id: state
-                        .trace()
-                        .active_attempt()
-                        .expect("required artifact has an active attempt")
-                        .attempt_id()
-                        .clone(),
-                    item_id,
-                    artifact,
-                })
+                Ok(PreparedRequiredArtifactV2 { required, artifact })
             })
             .collect()
     }
@@ -235,19 +224,12 @@ impl NativeDirectWorkspaceV1 {
             ))
         };
         let current =
-            crate::execution::required_local_artifacts_v2(state).map_err(E::Preparation)?;
+            crate::execution::required_local_artifact_facts_v2(state).map_err(E::Preparation)?;
         if current.len() != prepared.len() {
             return Err(changed());
         }
-        for ((item, artifact), prior) in current.iter().zip(prepared) {
-            if item != &prior.item_id
-                || artifact != prior.artifact.artifact()
-                || active_item_revision(state, item).map_err(E::Boundary)? != prior.item_revision
-                || state
-                    .trace()
-                    .active_attempt()
-                    .is_none_or(|active| active.attempt_id() != &prior.attempt_id)
-            {
+        for (required, prior) in current.iter().zip(prepared) {
+            if required != &prior.required {
                 return Err(changed());
             }
             self.verify_prepared_local_artifact_v1(binding, &prior.artifact)
@@ -344,30 +326,6 @@ impl NativeDirectWorkspaceV1 {
             stamp: hashed.stamp(),
         })
     }
-}
-
-fn active_item_revision(
-    state: &podway_store::GraphSessionStateV2,
-    item: &ItemId,
-) -> Result<podway_core::Revision, ExecutionBoundaryErrorV1> {
-    state
-        .trace()
-        .active_attempt()
-        .and_then(|active| {
-            state
-                .workflow_memory()
-                .attempts()
-                .iter()
-                .find(|memory| memory.attempt_id() == active.attempt_id())
-        })
-        .and_then(|memory| {
-            memory
-                .item_slots()
-                .iter()
-                .find(|slot| slot.item_id() == item)
-        })
-        .map(|slot| slot.revision())
-        .ok_or_else(|| domain_invalid_state_v1("required artifact has no active item slot"))
 }
 
 fn direct_artifact_boundary_error_v1(
@@ -627,4 +585,149 @@ fn artifact_revalidation_boundary_error_v1(error: GitResolverErrorV1) -> Executi
 
 fn domain_invalid_state_v1(reason: &'static str) -> ExecutionBoundaryErrorV1 {
     ExecutionBoundaryErrorV1::domain(DomainError::InvalidState { reason })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        direct_api::{DirectCommandV1, DirectRequestV1, DirectResponseV1, execute_direct_v1},
+        direct_execution::{DirectExecutionErrorV1, NativeDirectIdSourceV1},
+        workspace::DirectWorkspaceResolverV1,
+    };
+    use podway_core::Sha256Digest;
+    use podway_protocol::{ContractGenerationV1, RequestIdV1, Rfc3339MillisV1};
+    use podway_store::{
+        CanonicalExecutionJsonV1, IdempotencyKeyV1,
+        direct_store::{DirectMutationRequestV1, DirectOutcomeScopeV1},
+    };
+    use std::{
+        os::unix::ffi::OsStrExt,
+        time::{Duration, Instant},
+    };
+
+    #[test]
+    fn typed004_writer_rejects_required_set_revision_and_attempt_drift_before_native_stamps() {
+        let owned = tempfile::Builder::new()
+            .prefix("typed004-native-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "--quiet"])
+                .arg(owned.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        let root = std::fs::canonicalize(owned.path()).unwrap();
+        let selector = WorktreeSelectorV1::new(
+            WORKTREE_SELECTOR_VERSION_V1,
+            None,
+            LosslessPathV1::from_raw_bytes(
+                root.as_os_str().as_bytes(),
+                DiagnosticPathDisplayV1::new("owned native comparison fixture").unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let digest = Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap();
+        let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest.clone());
+        let deadline = || Instant::now() + Duration::from_secs(10);
+        let response = execute_direct_v1(
+            &resolver,
+            DirectRequestV1 {
+                request_id: RequestIdV1::new("00000000-0000-4000-8000-000000000005").unwrap(),
+                selector: selector.clone(),
+                expected_workspace_id: None,
+                command: DirectCommandV1::WorkspaceInit { repair: false },
+                idempotency_key: Some(IdempotencyKeyV1::new("typed004-init").unwrap()),
+                deadline: deadline(),
+                observed_at: Rfc3339MillisV1::new("2023-11-14T22:13:20.000Z").unwrap(),
+                timeout_ms: 5000,
+                generation: ContractGenerationV1::Generation1,
+                return_observation: false,
+            },
+            &WallUtcExecutionClockV1,
+            &NativeDirectIdSourceV1,
+        )
+        .unwrap();
+        assert!(matches!(response, DirectResponseV1::Success(_)));
+        let (resolved, store) = resolver
+            .resolve_existing(selector, None, deadline())
+            .unwrap();
+        let native = NativeDirectWorkspaceV1::new(resolved);
+        std::fs::write(root.join("artifact.txt"), b"Current bytes.\n").unwrap();
+        let binding = store
+            .read(deadline(), |snapshot| Ok(snapshot.binding().clone()))
+            .unwrap();
+        let artifact = native
+            .prepare_local_artifact_v1(&binding, "artifact.txt", Some("text/plain"))
+            .unwrap();
+        let (prior, mut cases) =
+            crate::execution::tests::artifact_fact_states_for_test(artifact.artifact().clone());
+        let prepared = native
+            .prepare_required_artifacts_v2(&binding, &prior)
+            .unwrap();
+        cases.push(("unchanged-control", prior));
+        for (case, current) in cases {
+            let request = DirectMutationRequestV1::new(
+                IdempotencyKeyV1::new(format!("typed004-{case}")).unwrap(),
+                digest.clone(),
+                "workspace.repair",
+                "00000000-0000-4000-8000-000000000006",
+                DirectOutcomeScopeV1::Workspace,
+            )
+            .unwrap();
+            let result = podway_git::test_support::with_artifact_read_observer_v1(
+                |_, _| panic!("native verification read bytes under writer"),
+                || {
+                    store.mutate_typed(
+                        &request,
+                        deadline(),
+                        || UnixMillis::new(1_700_000_000_000),
+                        |transaction| -> Result<CanonicalExecutionJsonV1, DirectExecutionErrorV1> {
+                            transaction.now();
+                            transaction.create_graph(&current)?;
+                            let verified = native.verify_required_artifacts_v2(
+                                transaction.binding(),
+                                transaction.current_graph()?.unwrap(),
+                                &prepared,
+                            );
+                            if case == "unchanged-control" {
+                                verified.unwrap();
+                            } else {
+                                assert!(
+                                    matches!(
+                                        verified,
+                                        Err(DirectExecutionErrorV1::Boundary(
+                                            ExecutionBoundaryErrorV1::Domain(
+                                                DomainError::ArtifactChanged
+                                            )
+                                        ))
+                                    ),
+                                    "{case}: {verified:?}"
+                                );
+                            }
+                            // Deliberately roll back the inserted fixture graph, including the positive
+                            // stamp-verification control; no synthetic success outcome is persisted.
+                            Err(DirectExecutionErrorV1::Boundary(
+                                ExecutionBoundaryErrorV1::domain(DomainError::ArtifactChanged),
+                            ))
+                        },
+                    )
+                },
+            );
+            assert!(result.is_err());
+            store
+                .read(deadline(), |snapshot| {
+                    assert!(snapshot.current_graph()?.is_none());
+                    assert_eq!(snapshot.committed_sequence()?, 1);
+                    assert!(snapshot.outcome(request.key())?.is_none());
+                    Ok(())
+                })
+                .unwrap();
+        }
+        store.verify_integrity(deadline()).unwrap();
+    }
 }

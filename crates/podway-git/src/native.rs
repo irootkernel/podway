@@ -605,13 +605,16 @@ impl OpenedArtifact {
     }
 
     pub(crate) fn read(&mut self, buffer: &mut [u8]) -> Result<usize, GitResolverErrorV1> {
-        self.file.file.read(buffer).map_err(|error| {
+        let count = self.file.file.read(buffer).map_err(|error| {
             map_io(
                 &self.file.path,
                 GitReadOperationV1::ReadLocalArtifact,
                 error,
             )
-        })
+        })?;
+        #[cfg(feature = "test-support")]
+        crate::test_support::observe_artifact_read(&self.file.path, count);
+        Ok(count)
     }
 
     pub(crate) fn validate(&self) -> Result<(), GitResolverErrorV1> {

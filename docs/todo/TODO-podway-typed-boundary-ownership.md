@@ -47,9 +47,12 @@ mismatch construction, used at the unchanged ordinary-resolution and token-backe
 read boundaries. It performs no Store open and leaves native revalidation, token
 binding and public error priority at their existing stages. Both generations are
 covered by the native readback matrix documented in the testing guide.
-`native_execution` combines pure item/revision/attempt selection
-with native artifact preparation and stamp validation. Its hash observer covers
-preparation streams, not every potential read in stamp verification.
+Engine `execution::required_local_artifact_facts_v2` now projects required item,
+revision, active attempt and recorded metadata for both native phases. Native
+file/stamp work retains its separate boundary. The dev-only Git lower-read hook
+and native route/writer tests cover actual read admission, drift and separate
+writer progress, with current-thread/native-abstraction proof limits recorded in
+architecture and testing guidance.
 Engine's citation precheck shares Core's numeric bound but repeats its diagnostic.
 
 These are ownership and regression-protection improvements. The observations

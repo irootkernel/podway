@@ -37,7 +37,7 @@ locator alone does not establish a passing run or Task acceptance.
 | TYPED-001 | DF-002, DF-003, DF-011 | Core `procedure::tests::typed001_item_wire_names_preserve_all_seven_discriminators`; Config `procedure_v2_delegation_package::tests::typed001_package_reserves_cover_source_boundaries` and `int_v2sdg003_package`; Protocol `int_v2_result_contract::typed001_delegation_schema_bounds_match_shared_domain_limits`; Store `int_v2sdg004_receipt::typed001_receipt_ddl_enforces_shared_byte_boundary` and existing receipt codec checks |
 | TYPED-002 | DF-005, DF-012, DF-013, DF-016, DF-017 | Protocol `int_v2_result_contract::typed002_acceptance_view_preserves_original_document_and_closed_admission`; Store `int_v2sdg004_receipt` domain and cold corruption checks; Engine `int_v2dfc006_delegation_ports::typed002_decision_named_delegation_rejects_package_and_acceptance_without_effects`; CLI `e2e_v2sdg008_qualification` and its native qualifier's `Fixture.human` assertions |
 | TYPED-003 | DF-022 | Engine `int_v2dfc006_readback_ports::decisions::typed003_workspace_uuid_comparison_preserves_read_order_and_public_details`; existing `v2scl004_production_dispatch_serves_and_fences_evidence_read` and workspace resolver/native-binding regressions |
-| TYPED-004 | DF-024, DF-027 | Engine artifact preparation/race suites and actual native file-read instrumentation while the writer is admitted |
+| TYPED-004 | DF-024, DF-027 | Engine `execution::tests::typed004_required_artifact_facts_follow_required_sets_revisions_and_attempts`; `native_execution::tests::typed004_writer_rejects_required_set_revision_and_attempt_drift_before_native_stamps`; registered `int_v2dfc006_races::typed004_` route tests and direct-execution lower-read sensitivity control |
 | TYPED-005 | DF-025 | Core citation bounds and Engine single/batch assessment boundary, error-ordering and replay suites |
 | TYPED-006 | All twelve | Cross-Task compatibility, supported Store continuation, complete development gate and durable-document/reference reconciliation |
 
@@ -82,7 +82,33 @@ Competing invalid configuration and corrupt persisted identity are rejected befo
 UUID comparison or token binding. Existing token tests retain wrong-item and
 stale caller-attempt order, while native resolver tests retain preliminary retry,
 binding and revalidation behavior. The shared pure helper performs no Store open
-and changes no replay or generation boundary. Tasks after TYPED-003 remain planned.
+and changes no replay or generation boundary.
+
+TYPED-004 observes actual descriptor-backed reads at Git `OpenedArtifact::read`,
+not only the preparation hash observer. Its nondefault test-support feature uses
+scoped thread-local callbacks, restored on return/unwind, without product flags.
+A deliberate in-writer native-read control proves sensitivity and normal return
+restores the observer. Actual attach, record, complete and decide each produce
+positive preparation byte counts and no reads from the conservative `BeforeBegin`
+boundary through completion and exact replay after the file is removed. Separate
+owned native children commit during lower-level preparation reads on every route;
+item-local attach preserves the independent write, while cursor-fenced routes
+retain the session-revision conflict and absent rejected outcome.
+
+Pure projection cases cover conditional required-set changes, identical recorded
+metadata with changed slot revision, and a new active attempt. A native verifier
+test uses those current graphs in admitted Store writer callbacks, rejects each
+drift as typed `ArtifactChanged`, checks an unchanged native-stamp control, and
+rolls back fixture graph writes without outcomes. These are native comparison
+cases, separate from public-route caller-fence races. Missing-artifact cases pin
+`ARTIFACT_NOT_FOUND` for attach/record and `ARTIFACT_CHANGED` for complete/decide.
+Existing same-byte rename, same-size rewrite, mid-hash, every-stamp and caller-fence
+suites retain failure, retry, replay and rollback coverage. Children are bounded
+and reaped by the existing fixture helper; temporary fixtures retain RAII cleanup.
+The observer covers the current thread and native artifact read abstraction,
+including stamp-path regressions using it; it is not universal OS interception,
+a benchmark, packaged qualification or evidence that ignored release stress ran.
+Tasks after TYPED-004 remain planned.
 
 DF-014 retains its [AGENT owner](#agent-source-feedback-and-revisit-conditions).
 PARSE-004's first-parse authoring facts remain delivered; TYPED-002 covers only

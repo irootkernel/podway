@@ -1196,7 +1196,8 @@ fn artifact_route_fixture(route: &str) -> (tempfile::TempDir, WorktreeSelectorV1
         let source = serde_json::to_vec(&json!({"schema":"podway.procedure/v2", "id":"artifact-decision", "version":"1",
             "name":"Artifact decision", "purpose":"Verify decision artifact preparation.",
             "node_definitions":{"choice":{"type":"decision", "title":"Choose", "objective":"Use a current artifact.",
-                "prompt":"Continue?", "items":[{"id":"artifact", "type":"artifact", "prompt":"Attach report.", "required":true}],
+                "prompt":"Continue?", "items":[{"id":"artifact", "type":"artifact", "prompt":"Attach report.", "required":true},
+                    {"id":"i01", "type":"text", "prompt":"Record concurrent evidence.", "required":false}],
                 "options":[{"id":"continue", "label":"Continue"}], "reason":{"required":true}},
                 "finish":{"type":"action", "title":"Finish", "intent":"Finish the fixture."}},
             "graph":{"entry":"choice", "nodes":[{"id":"choice", "use":"choice", "routes":{"continue":{"to":"finish", "effect":"advance"}}},
@@ -1300,6 +1301,162 @@ fn artifact_command(current: &GraphSessionStateV2, route: &str) -> DirectCommand
             },
         )),
         _ => unreachable!(),
+    }
+}
+
+#[test]
+fn typed004_all_artifact_routes_read_bytes_only_before_writer_admission_and_replay() {
+    use podway_git::test_support::with_artifact_read_observer_v1;
+    for route in ["attach", "record", "complete", "decide"] {
+        let (temporary, selector, store) = artifact_route_fixture(route);
+        if route == "decide" {
+            attach(&selector, &store, "typed004-decision-artifact");
+        }
+        let path = std::fs::canonicalize(temporary.path().join("artifact.txt")).unwrap();
+        let before = graph(&store);
+        let before_sequence = sequence(&store);
+        let input = request(
+            &selector,
+            artifact_command(&before, route),
+            "typed004-read-boundary",
+        );
+        let admitted = Arc::new(AtomicUsize::new(0));
+        let reads = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&reads);
+        let writer = Arc::clone(&admitted);
+        let native = resolver().with_store_boundary_observer_v1({
+            let admitted = Arc::clone(&admitted);
+            move |boundary| {
+                if boundary == DirectTransactionBoundaryV1::BeforeBegin {
+                    admitted.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        });
+        with_artifact_read_observer_v1(
+            move |read_path, bytes| {
+                if read_path == path {
+                    assert_eq!(
+                        writer.load(Ordering::SeqCst),
+                        0,
+                        "{route}: native artifact read after writer admission"
+                    );
+                    observed.fetch_add(bytes, Ordering::SeqCst);
+                }
+            },
+            || {
+                let output = success(
+                    execute_direct_v1(&native, input.clone(), &Clock, &NativeDirectIdSourceV1)
+                        .unwrap(),
+                );
+                assert_eq!(admitted.load(Ordering::SeqCst), 1);
+                assert!(
+                    reads.load(Ordering::SeqCst) > 0,
+                    "actual lower file-read observer was not exercised"
+                );
+                let prepared_bytes = reads.load(Ordering::SeqCst);
+                std::fs::remove_file(temporary.path().join("artifact.txt")).unwrap();
+                assert_eq!(
+                    success(execute_direct_v1(&native, input, &NoEffects, &NoEffects).unwrap()),
+                    output
+                );
+                assert_eq!(reads.load(Ordering::SeqCst), prepared_bytes);
+                assert_eq!(sequence(&store), before_sequence + 1);
+            },
+        );
+        store.verify_integrity(deadline()).unwrap();
+    }
+}
+
+#[test]
+fn typed004_another_process_commits_during_lower_native_reads_on_every_route() {
+    use podway_git::test_support::with_artifact_read_observer_v1;
+    for route in ["attach", "record", "complete", "decide"] {
+        let (temporary, selector, store) = artifact_route_fixture(route);
+        if route == "decide" {
+            attach(&selector, &store, "typed004-decision-artifact");
+        }
+        let path = std::fs::canonicalize(temporary.path().join("artifact.txt")).unwrap();
+        let before = graph(&store);
+        let before_sequence = sequence(&store);
+        let competitor = Arc::new(Mutex::new(Competitor::with_trials(temporary.path(), 1)));
+        let acknowledged = Arc::new(Mutex::new(None));
+        let entered = Arc::new(AtomicUsize::new(0));
+        let native = resolver().with_store_boundary_observer_v1({
+            let entered = Arc::clone(&entered);
+            move |boundary| {
+                if boundary == DirectTransactionBoundaryV1::BeforeBegin {
+                    entered.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        });
+        let other = Arc::clone(&competitor);
+        let result = Arc::clone(&acknowledged);
+        let admitted = Arc::clone(&entered);
+        let input = request(
+            &selector,
+            artifact_command(&before, route),
+            "typed004-concurrent-read",
+        );
+        let response = with_artifact_read_observer_v1(
+            move |read_path, bytes| {
+                if read_path == path && bytes > 0 {
+                    assert_eq!(admitted.load(Ordering::SeqCst), 0);
+                    let mut result = result.lock().unwrap();
+                    if result.is_none() {
+                        *result = Some(other.lock().unwrap().commit_item(0, "i01"));
+                    }
+                }
+            },
+            || execute_direct_v1(&native, input, &Clock, &NativeDirectIdSourceV1).unwrap(),
+        );
+        assert_eq!(entered.load(Ordering::SeqCst), 1);
+        let committed = acknowledged
+            .lock()
+            .unwrap()
+            .take()
+            .expect("actual artifact read must release a competing writer");
+        assert_eq!(outcome(&store, "g6-competing-0"), Some(committed));
+        if route == "attach" {
+            success(response);
+            assert_eq!(sequence(&store), before_sequence + 2);
+        } else {
+            rejection(response, "SESSION_REVISION_CONFLICT");
+            assert_eq!(sequence(&store), before_sequence + 1);
+            assert!(outcome(&store, "typed004-concurrent-read").is_none());
+        }
+        competitor.lock().unwrap().finish();
+        store.verify_integrity(deadline()).unwrap();
+    }
+}
+
+#[test]
+fn typed004_missing_artifacts_preserve_typed_failures_and_rollback_on_every_route() {
+    for route in ["attach", "record", "complete", "decide"] {
+        let (temporary, selector, store) = artifact_route_fixture(route);
+        if route == "decide" {
+            attach(&selector, &store, "typed004-missing-baseline");
+        }
+        let before = graph(&store);
+        let before_sequence = sequence(&store);
+        let input = request(
+            &selector,
+            artifact_command(&before, route),
+            "typed004-missing",
+        );
+        std::fs::remove_file(temporary.path().join("artifact.txt")).unwrap();
+        let response = execute_direct_v1(&resolver(), input, &NoEffects, &NoEffects).unwrap();
+        rejection(
+            response,
+            if matches!(route, "attach" | "record") {
+                "ARTIFACT_NOT_FOUND"
+            } else {
+                "ARTIFACT_CHANGED"
+            },
+        );
+        assert_eq!(graph(&store), before);
+        assert_eq!(sequence(&store), before_sequence);
+        assert!(outcome(&store, "typed004-missing").is_none());
+        store.verify_integrity(deadline()).unwrap();
     }
 }
 

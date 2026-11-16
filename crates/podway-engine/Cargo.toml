@@ -21,6 +21,7 @@ sha2.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+podway-git = { path = "../podway-git", features = ["test-support"] }
 serde_norway.workspace = true
 podway-store = { path = "../podway-store", features = ["test-support"] }
 tempfile.workspace = true
