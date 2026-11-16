@@ -32,10 +32,10 @@ work. Each owning Task promotes actual behavior and regression ownership here
 and into architecture, specifications and requirements traceability. A proof
 locator alone does not establish a passing run or Task acceptance.
 
-| Task | Feedback | Planned regression ownership |
+| Task | Feedback | Regression ownership |
 |---|---|---|
 | TYPED-001 | DF-002, DF-003, DF-011 | Core `procedure::tests::typed001_item_wire_names_preserve_all_seven_discriminators`; Config `procedure_v2_delegation_package::tests::typed001_package_reserves_cover_source_boundaries` and `int_v2sdg003_package`; Protocol `int_v2_result_contract::typed001_delegation_schema_bounds_match_shared_domain_limits`; Store `int_v2sdg004_receipt::typed001_receipt_ddl_enforces_shared_byte_boundary` and existing receipt codec checks |
-| TYPED-002 | DF-005, DF-012, DF-013, DF-016, DF-017 | Config parsed delegation facts; Protocol closed decoding and identity; Store receipt/semantic suites; Engine delegation ports; actual CLI non-JSON package, acceptance and receipt |
+| TYPED-002 | DF-005, DF-012, DF-013, DF-016, DF-017 | Protocol `int_v2_result_contract::typed002_acceptance_view_preserves_original_document_and_closed_admission`; Store `int_v2sdg004_receipt` domain and cold corruption checks; Engine `int_v2dfc006_delegation_ports::typed002_decision_named_delegation_rejects_package_and_acceptance_without_effects`; CLI `e2e_v2sdg008_qualification` and its native qualifier's `Fixture.human` assertions |
 | TYPED-003 | DF-022 | Engine ordinary and token-backed read identity, precedence and typed public error checks |
 | TYPED-004 | DF-024, DF-027 | Engine artifact preparation/race suites and actual native file-read instrumentation while the writer is admitted |
 | TYPED-005 | DF-025 | Core citation bounds and Engine single/batch assessment boundary, error-ordering and replay suites |
@@ -52,7 +52,27 @@ admission tests retain below/over-limit rejection; Protocol ties schema limits
 to Core, and Store executes the canonical DDL at the exact receipt byte ceiling,
 one byte over and a multibyte overrun. The DDL test isolates the SQL byte guard;
 closed receipt shape and relational admission remain independently verified by
-the codec and transaction suites. Later Task rows remain planned.
+the codec and transaction suites. Undelivered Task rows remain planned.
+
+TYPED-002 verifies the Config predicate through existing first-parse/preview and
+native Direct/delegated projection suites. A Direct decision option named
+`delegation` causes no receipt-table queries; both package and acceptance routes
+reject with `DELEGATION_NOT_APPLICABLE` / `direct_attempt` and unchanged session,
+attempt, sequence and outcomes. The same native case preserves stale-fence
+priority over malformed raw input. Protocol tests pin raw-document and canonical
+request identity through the immutable carrier, borrowing of execution facts,
+closed fields, numeric representation and round/disposition limits. Store tests
+retain closed codec admission and cold refusal of invalid Role, round,
+disposition and unknown-field corruption independently of Protocol.
+
+The deterministic supervised-delegation qualifier executes actual non-JSON CLI
+package, acceptance and receipt successes for both host labels. It asserts
+meaningful schema/digest/receipt/summary content, empty stderr and no error
+output, then reconciles the acceptance through exact JSON replay. Existing
+rollback, retry/conflict, archived receipt and Direct/delegated generation
+checks remain in their original suites. This uses the generic renderer and
+establishes no live adapter or model qualification. Tasks after TYPED-002 remain
+planned.
 
 DF-014 retains its [AGENT owner](#agent-source-feedback-and-revisit-conditions).
 PARSE-004's first-parse authoring facts remain delivered; TYPED-002 covers only

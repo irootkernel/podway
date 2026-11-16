@@ -139,9 +139,7 @@ fn delegated_placement_count(procedure: &ParsedProcedureV2) -> usize {
         .graph()
         .placements()
         .iter()
-        .filter(|placement| {
-            matches!(placement, GraphPlacementV2::Action(action) if action.delegation().is_some())
-        })
+        .filter(|placement| ParsedProcedureV2::placement_is_delegated(placement))
         .count()
 }
 
@@ -472,7 +470,7 @@ pub(crate) fn project_delegation_receipt_read_in(
     let procedure = scope.procedure()?;
     let delegated = procedure.graph().placements().iter().any(|placement| {
         placement.id() == attempt.graph_node_id()
-            && matches!(placement, GraphPlacementV2::Action(action) if action.delegation().is_some())
+            && ParsedProcedureV2::placement_is_delegated(placement)
     });
     if !delegated {
         return Err(GraphViewErrorV2::DelegationNotApplicable);
@@ -1579,7 +1577,7 @@ impl<'a> CurrentProjection<'a> {
     }
 
     fn delegated(&self) -> bool {
-        matches!(self.placement, GraphPlacementV2::Action(action) if action.delegation().is_some())
+        ParsedProcedureV2::placement_is_delegated(self.placement)
     }
 
     fn readiness_value(&self) -> Value {

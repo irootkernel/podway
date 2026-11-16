@@ -4045,3 +4045,75 @@ fn typed001_delegation_schema_bounds_match_shared_domain_limits() {
         );
     }
 }
+
+#[test]
+fn typed002_acceptance_view_preserves_original_document_and_closed_admission() {
+    use podway_protocol::{DelegationAcceptanceInputV1, validated_delegation_acceptance_v1};
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/v2/protocol/current-contracts.json"
+    ))
+    .unwrap();
+    let original = fixture["fixtures"]["podway.delegation-accept-input/v1"].clone();
+    let fields = validated_delegation_acceptance_v1(&original).unwrap();
+    assert!(std::ptr::eq(fields.execution, &original["execution"]));
+    assert_eq!(fields.session_id, original["session_id"].as_str().unwrap());
+    assert_eq!(
+        fields.rounds_used,
+        original["rounds_used"].as_u64().unwrap()
+    );
+    let admitted = DelegationAcceptanceInputV1::new(original.clone()).unwrap();
+    assert_eq!(admitted.fields().idempotency_key, fields.idempotency_key);
+    let preconditions = podway_protocol::SessionMutationPreconditionsWireV1 {
+        expected_session_id: podway_core::SessionId::new(fields.session_id).unwrap(),
+        expected_session_revision: podway_core::Revision::new(fields.session_revision),
+        expected_attempt_id: podway_core::AttemptId::new(fields.attempt_id).unwrap(),
+    };
+    let workspace = podway_core::WorkspaceId::new(fields.workspace_uuid).unwrap();
+    let identity = |input| {
+        podway_protocol::canonical_direct_slice_mutation_identity_v1(
+            &podway_protocol::SliceCommandV1::DelegationAccept(
+                podway_protocol::DelegationAcceptV1 {
+                    input,
+                    preconditions: preconditions.clone(),
+                },
+            ),
+            &workspace,
+        )
+        .unwrap()
+    };
+    let before_identity = identity(original.clone());
+    let declaration_schema = read_schema("schemas/delegation-components-v1.schema.json");
+    assert_eq!(
+        declaration_schema["$defs"]["declaration"]["properties"]["max_rounds"]["minimum"],
+        podway_core::MIN_DELEGATION_ROUNDS_V1
+    );
+    assert_eq!(
+        declaration_schema["$defs"]["declaration"]["properties"]["max_rounds"]["maximum"],
+        podway_core::MAX_DELEGATION_ROUNDS_V1
+    );
+    let returned = admitted.into_value();
+    assert_eq!(identity(returned.clone()), before_identity);
+    assert_eq!(returned, original);
+    assert_eq!(
+        podway_core::canonicalize_json_v1(&returned).unwrap(),
+        podway_core::canonicalize_json_v1(&original).unwrap()
+    );
+    for (field, value) in [
+        ("unknown", json!(true)),
+        ("rounds_used", json!(0)),
+        ("rounds_used", json!(33)),
+        ("session_revision", json!(1.0)),
+        ("worker_disposition", json!("busy")),
+    ] {
+        let mut invalid = original.clone();
+        invalid[field] = value;
+        assert!(
+            validated_delegation_acceptance_v1(&invalid).is_none(),
+            "{field}"
+        );
+        assert!(
+            DelegationAcceptanceInputV1::new(invalid).is_none(),
+            "{field}"
+        );
+    }
+}

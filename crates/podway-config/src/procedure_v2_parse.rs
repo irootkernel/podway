@@ -105,13 +105,18 @@ impl ParsedProcedureV2 {
         &self.graph
     }
 
+    /// Classifies parsed action placements without interpreting decision option names.
+    pub fn placement_is_delegated(placement: &GraphPlacementV2) -> bool {
+        matches!(placement, GraphPlacementV2::Action(action) if action.delegation().is_some())
+    }
+
     /// Returns delegated action placement IDs in authored graph order.
     pub fn delegated_placements(&self) -> Vec<String> {
         self.graph()
             .placements()
             .iter()
             .filter_map(|placement| match placement {
-                GraphPlacementV2::Action(action) if action.delegation().is_some() => {
+                GraphPlacementV2::Action(action) if Self::placement_is_delegated(placement) => {
                     Some(action.id().as_str().to_owned())
                 }
                 _ => None,

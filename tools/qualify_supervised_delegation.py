@@ -186,6 +186,19 @@ class Fixture:
         self.mutate(worktree, ["set", "result", "Final output"], item="result")
         return worktree
 
+    def human(self, worktree: Path, args: list[str], expected: list[str],
+              *, payload: dict | None = None) -> None:
+        assert worktree.is_relative_to(self.root) and worktree.is_dir()
+        completed = bounded_process(
+            [str(self.cli), "--worktree", str(worktree), *args], cwd=worktree,
+            payload=None if payload is None else json.dumps(payload).encode(),
+        )
+        assert completed.returncode == 0 and not completed.stderr, completed
+        text = completed.stdout.decode()
+        assert "podway.error" not in text and "error:" not in text.lower(), text
+        for value in expected:
+            assert value in text, (args, value, text)
+
     def observe(self, worktree: Path) -> dict:
         return self.call(worktree, ["observe"])
 
@@ -296,8 +309,15 @@ def host_matrix(f: Fixture, host: str) -> None:
     over_budget = deepcopy(payload)
     over_budget.update(rounds_used=4, idempotency_key=str(uuid.uuid4()))
     f.accept(worktree, over_budget, "DELEGATION_BINDING_MISMATCH")
+    f.human(worktree, ["delegation", "package"],
+            ["podway.delegation-package-result/v1", payload["package_digest"]])
+    f.human(worktree, ["delegation", "accept", "--stdin"],
+            ["podway.delegation-accept-result/v2", "accepted", payload["result_digest"]], payload=payload)
     accepted = f.accept(worktree, payload)
     receipt = f.receipt(worktree, payload)
+    f.human(worktree, ["delegation", "receipt", "--session", payload["session_id"],
+                       "--attempt", payload["attempt_id"]],
+            ["podway.delegation-receipt-result/v1", receipt["receipt"]["receipt_id"], payload["summary"]])
     assert receipt["receipt"]["execution"] == payload["execution"], receipt
     assert receipt["receipt"]["rounds_used"] == 3
     assert receipt["receipt"]["worker_disposition"] == "idle"

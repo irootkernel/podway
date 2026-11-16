@@ -433,6 +433,10 @@ fn v2sdg004_cold_reads_reject_well_formed_mismatched_and_noncanonical_receipts()
         "placement_id",
         "delegation",
         "noncanonical",
+        "invalid_role",
+        "invalid_rounds",
+        "invalid_disposition",
+        "unknown_field",
         "archived_procedure_digest",
         "archived_receipt_id",
     ] {
@@ -501,10 +505,22 @@ fn v2sdg004_cold_reads_reject_well_formed_mismatched_and_noncanonical_receipts()
                 value["delegation"]["role_ref"] = json!("other-role");
                 value["execution"]["role_ref"] = json!("other-role");
             }
+            "invalid_role" => {
+                value["delegation"]["role_ref"] = json!("role\n");
+                value["execution"]["role_ref"] = json!("role\n");
+            }
+            "invalid_rounds" => value["delegation"]["max_rounds"] = json!(33),
+            "invalid_disposition" => value["worker_disposition"] = json!("released"),
+            "unknown_field" => value["delegation"]["extra"] = json!(true),
             "noncanonical" => {}
             _ => unreachable!(),
         }
-        let stored = if variant == "noncanonical" {
+        let stored = if matches!(
+            variant,
+            "invalid_role" | "invalid_rounds" | "invalid_disposition" | "unknown_field"
+        ) {
+            canonicalize_json_v1(&value).unwrap()
+        } else if variant == "noncanonical" {
             format!("{} ", original.canonical_json())
         } else {
             DelegationReceiptV1::new(value)
@@ -1527,4 +1543,32 @@ fn typed001_receipt_ddl_enforces_shared_byte_boundary() {
         "INSERT INTO v2_delegation_receipts (attempt_id, session_id, receipt_id, receipt_json) VALUES ('utf8', 'session', 'utf8', ?1)",
         [multibyte],
     ).is_err());
+}
+
+#[test]
+fn typed002_receipt_reuses_domain_role_round_and_disposition_admission() {
+    let base = receipt(&session_state()).value().clone();
+    for role in ["", "role\n", "role\0", &"é".repeat(129)] {
+        let mut value = base.clone();
+        value["delegation"]["role_ref"] = json!(role);
+        value["execution"]["role_ref"] = json!(role);
+        assert!(DelegationReceiptV1::new(value).is_err());
+    }
+    for rounds in [0_u64, 33, 256, u64::MAX] {
+        let mut value = base.clone();
+        value["delegation"]["max_rounds"] = json!(rounds);
+        assert!(DelegationReceiptV1::new(value).is_err());
+    }
+    for (policy, disposition, accepted) in [
+        ("retain", "idle", true),
+        ("retain", "released", false),
+        ("release", "released", true),
+        ("release", "idle", false),
+        ("other", "idle", false),
+    ] {
+        let mut value = base.clone();
+        value["delegation"]["after_accept"] = json!(policy);
+        value["worker_disposition"] = json!(disposition);
+        assert_eq!(DelegationReceiptV1::new(value).is_ok(), accepted);
+    }
 }

@@ -2,6 +2,11 @@
 
 use crate::{DelegationBindingRefV1, DomainError, Sha256Digest};
 
+/// Minimum rounds admitted by a delegated action declaration and its receipts.
+pub const MIN_DELEGATION_ROUNDS_V1: u8 = 1;
+/// Maximum rounds admitted by a delegated action declaration and its receipts.
+pub const MAX_DELEGATION_ROUNDS_V1: u8 = 32;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DelegationRoleRefV1(String);
 
@@ -27,6 +32,14 @@ pub enum DelegationAfterAcceptV1 {
 }
 
 impl DelegationAfterAcceptV1 {
+    /// Whether the executor's settled disposition satisfies this declaration policy.
+    pub fn accepts_worker_disposition(self, disposition: &str) -> bool {
+        matches!(
+            (self, disposition),
+            (Self::Retain, "idle") | (Self::Release, "released")
+        )
+    }
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Retain => "retain",
@@ -66,7 +79,7 @@ impl DelegationDeclarationV1 {
         max_rounds: u8,
         after_accept: DelegationAfterAcceptV1,
     ) -> Result<Self, DomainError> {
-        if !(1..=32).contains(&max_rounds) {
+        if !(MIN_DELEGATION_ROUNDS_V1..=MAX_DELEGATION_ROUNDS_V1).contains(&max_rounds) {
             return Err(DomainError::InvalidState {
                 reason: "delegation max_rounds must be between one and 32",
             });

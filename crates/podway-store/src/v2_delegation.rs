@@ -1,7 +1,8 @@
 //! Closed, bounded storage codec for one immutable delegated attempt receipt.
 
 use podway_core::{
-    AttemptId, DelegationReceiptIdV1, GraphNodeId, SessionAttemptV2, SessionId, Sha256Digest,
+    AttemptId, DelegationAfterAcceptV1, DelegationReceiptIdV1, DelegationRoleRefV1, GraphNodeId,
+    MAX_DELEGATION_ROUNDS_V1, MIN_DELEGATION_ROUNDS_V1, SessionAttemptV2, SessionId, Sha256Digest,
     WorkspaceId, canonicalize_json_v1, verify_canonical_json_v1,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
@@ -55,8 +56,12 @@ pub fn acceptance_binding_mismatch_v1(
         > declaration["max_rounds"].as_u64().unwrap_or(0)
     {
         Some(Reason::RoundLimit)
-    } else if (declaration["after_accept"] == "retain" && input["worker_disposition"] != "idle")
-        || (declaration["after_accept"] == "release" && input["worker_disposition"] != "released")
+    } else if declaration["after_accept"]
+        .as_str()
+        .and_then(|policy| policy.parse::<DelegationAfterAcceptV1>().ok())
+        .is_some_and(|policy| {
+            !policy.accepts_worker_disposition(input["worker_disposition"].as_str().unwrap_or(""))
+        })
     {
         Some(Reason::DispositionMismatch)
     } else {
@@ -444,7 +449,7 @@ pub(crate) fn receipt_snapshot_connection_v1(
         .snapshot()
         .graph_nodes()
         .iter()
-        .any(|node| node.canonical_placement_json().contains("\"delegation\":"))
+        .any(|node| node.has_delegation())
     {
         return Ok(DelegationReceiptSnapshotV1::empty());
     }
@@ -728,13 +733,18 @@ fn declaration(value: &Value) -> bool {
         ],
     ) && field(object, "binding_ref")
         .is_some_and(|text| podway_core::DelegationBindingRefV1::new(text).is_ok())
-        && opaque(object, "role_ref")
+        && field(object, "role_ref")
+            .is_some_and(|role| DelegationRoleRefV1::new(role.to_owned()).is_ok())
         && digest(object, "role_snapshot_digest")
         && object
             .get("max_rounds")
             .and_then(Value::as_u64)
-            .is_some_and(|rounds| (1..=32).contains(&rounds))
-        && matches!(field(object, "after_accept"), Some("retain" | "release"))
+            .is_some_and(|rounds| {
+                (u64::from(MIN_DELEGATION_ROUNDS_V1)..=u64::from(MAX_DELEGATION_ROUNDS_V1))
+                    .contains(&rounds)
+            })
+        && field(object, "after_accept")
+            .is_some_and(|policy| policy.parse::<DelegationAfterAcceptV1>().is_ok())
 }
 
 fn execution(value: &Value, declaration: &Map<String, Value>) -> bool {
@@ -857,7 +867,7 @@ fn validate_receipt(value: &Value) -> Result<(), StoreErrorV1> {
             .get("rounds_used")
             .and_then(Value::as_u64)
             .is_some_and(|rounds| {
-                rounds >= 1
+                rounds >= u64::from(MIN_DELEGATION_ROUNDS_V1)
                     && rounds
                         <= object
                             .get("delegation")
@@ -876,10 +886,13 @@ fn validate_receipt(value: &Value) -> Result<(), StoreErrorV1> {
             .and_then(|value| value.get("after_accept"))
             .and_then(Value::as_str)
             .is_some_and(|policy| {
-                matches!(
-                    (policy, field(object, "worker_disposition")),
-                    ("retain", Some("idle")) | ("release", Some("released"))
-                )
+                policy
+                    .parse::<DelegationAfterAcceptV1>()
+                    .ok()
+                    .is_some_and(|policy| {
+                        field(object, "worker_disposition")
+                            .is_some_and(|value| policy.accepts_worker_disposition(value))
+                    })
             })
         || object.get("accepted") != Some(&Value::Bool(true))
         || !field(object, "accepted_at").is_some_and(timestamp)

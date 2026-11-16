@@ -205,6 +205,23 @@ The Store atomically persists the immutable receipt, accepted item-state digest
 and successful mutation outcome. Completion rechecks ordinary gates and receipt
 currency in its own state transaction.
 
+Config's `ParsedProcedureV2::placement_is_delegated` owns parsed placement
+classification for authoring budgets, delegated-ID facts and Engine projections.
+Store instead consumes `GraphNodeSnapshotV2::has_delegation` from independently
+admitted persisted state. It never searches serialized placement text or depends
+on Config. A Direct decision option named `delegation` remains Direct and does
+not acquire a receipt history window.
+
+Protocol's `DelegationAcceptanceInputV1` owns exactly the original admitted CLI
+JSON Value. Its typed fields borrow that value; CLI extracts document-owned
+fences without another parse or competing canonical payload. Direct Engine keeps
+the original Value for request identity and replay, then obtains a validated
+borrowed `DelegationAcceptanceFieldsV1` only after its existing replay, fence,
+lifecycle and native revalidation stages. Store independently validates the
+closed receipt shape, persisted values and input-to-receipt bindings. It reuses
+Core's Role constructor, named round bounds and after-accept disposition
+predicate without merging source, protocol and persistence admission.
+
 The external integration owns dispatch, feedback, executor identity, acceptance,
 worker settlement and uncertain external effects. A host label or matching digest
 grants no approval or permission. Direct Procedures require no adapter or receipt.

@@ -1286,15 +1286,11 @@ fn prepare_stdin_payload(command: &mut Command) -> Result<(), LocalFailure> {
             let input: Value = serde_json::from_slice(&bytes).map_err(|_| {
                 LocalFailure::request_invalid("delegation acceptance stdin is not JSON")
             })?;
-            if !podway_protocol::validate_delegation_document_v1(
-                "podway.delegation-accept-input/v1",
-                &input,
-            ) {
-                return Err(LocalFailure::request_invalid(
-                    "delegation acceptance input is invalid",
-                ));
-            }
-            args.input = Some(input);
+            args.input = Some(
+                podway_protocol::DelegationAcceptanceInputV1::new(input).ok_or_else(|| {
+                    LocalFailure::request_invalid("delegation acceptance input is invalid")
+                })?,
+            );
         }
         Command::Goal {
             command: GoalCommand::AssessCriteria(args),
@@ -1356,20 +1352,12 @@ fn apply_record_input(cli: &mut Cli) -> Result<(), LocalFailure> {
             .input
             .as_ref()
             .ok_or_else(|| LocalFailure::request_invalid("delegation accept requires --stdin"))?;
-        let field = |name: &str| {
-            input
-                .get(name)
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .ok_or_else(|| {
-                    LocalFailure::request_invalid("delegation acceptance input identity is invalid")
-                })
-        };
-        cli.idempotency_key = Some(field("idempotency_key")?);
-        cli.if_workspace_uuid = Some(field("workspace_uuid")?);
-        cli.if_session_id = Some(field("session_id")?);
-        cli.if_session_revision = input.get("session_revision").and_then(Value::as_u64);
-        cli.if_attempt = Some(field("attempt_id")?);
+        let input = input.fields();
+        cli.idempotency_key = Some(input.idempotency_key.to_owned());
+        cli.if_workspace_uuid = Some(input.workspace_uuid.to_owned());
+        cli.if_session_id = Some(input.session_id.to_owned());
+        cli.if_session_revision = Some(input.session_revision);
+        cli.if_attempt = Some(input.attempt_id.to_owned());
         return Ok(());
     }
     if let Command::Goal {

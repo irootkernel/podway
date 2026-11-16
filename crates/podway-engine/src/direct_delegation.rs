@@ -6,7 +6,7 @@ use podway_core::{SessionLifecycle, Sha256Digest, WorkspaceId};
 use podway_git::{GitResolverContractV1, WorktreeSelectorV1};
 use podway_protocol::{
     DelegationAcceptV1, OutputEnvelopeV4, RequestIdV1, Rfc3339MillisV1, SliceCommandV1,
-    canonical_direct_slice_mutation_identity_v1, validate_delegation_document_v1,
+    canonical_direct_slice_mutation_identity_v1, validated_delegation_acceptance_v1,
 };
 use podway_store::{
     DelegationReceiptV1, GraphMutationErrorV2, GraphWorkspaceViewV2, IdempotencyKeyV1,
@@ -77,14 +77,15 @@ pub fn accept_delegation_v1<R: GitResolverContractV1>(
         check_attempt_fence(prior, &fences.expected_attempt_id)?;
         if prior.trace().lifecycle() != SessionLifecycle::Running { return Err(GraphMutationErrorV2::SessionNotRunning.into()); }
         resolver.revalidate(&resolved, transaction.binding()).map_err(DirectExecutionErrorV1::from)?;
-        let input = &request.input.input;
-        if !validate_delegation_document_v1("podway.delegation-accept-input/v1", input)
-            || input["workspace_uuid"].as_str() != Some(transaction.binding().identity().workspace_uuid().as_str())
-            || input["session_id"].as_str() != Some(fences.expected_session_id.as_str())
-            || input["session_revision"].as_u64() != Some(fences.expected_session_revision.get())
-            || input["attempt_id"].as_str() != Some(fences.expected_attempt_id.as_str())
-            || input["idempotency_key"].as_str() != Some(request.key.as_str()) {
-            return Err(DirectStoreErrorV1::InvalidInput { reason: "invalid delegation acceptance input or fences" }.into());
+        let raw_input = &request.input.input;
+        let invalid_input = || DirectStoreErrorV1::InvalidInput { reason: "invalid delegation acceptance input or fences" };
+        let input = validated_delegation_acceptance_v1(raw_input).ok_or_else(invalid_input)?;
+        if input.workspace_uuid != transaction.binding().identity().workspace_uuid().as_str()
+            || input.session_id != fences.expected_session_id.as_str()
+            || input.session_revision != fences.expected_session_revision.get()
+            || input.attempt_id != fences.expected_attempt_id.as_str()
+            || input.idempotency_key != request.key.as_str() {
+            return Err(invalid_input().into());
         }
         let receipts = transaction.delegation_receipts()?;
         let view = GraphWorkspaceViewV2::new(transaction.binding().identity().clone(), Some(prior.clone()),
@@ -96,10 +97,10 @@ pub fn accept_delegation_v1<R: GitResolverContractV1>(
             })?;
         let failure = if receipts.readiness() != DelegationReadinessV1::ReceiptMissing {
             Some(Failure::AlreadyAccepted)
-        } else if input["package_digest"].as_str() != Some(package.digest().as_str()) {
+        } else if input.package_digest != package.digest().as_str() {
             Some(Failure::BindingMismatch(DelegationBindingMismatchReasonV1::PackageMismatch))
         } else {
-            acceptance_binding_mismatch_v1(&package.package()["delegation"], input).map(Failure::BindingMismatch)
+            acceptance_binding_mismatch_v1(&package.package()["delegation"], raw_input).map(Failure::BindingMismatch)
         };
         if let Some(failure) = failure {
             return Err(DirectExecutionErrorV1::Delegation(failure));
@@ -115,14 +116,14 @@ pub fn accept_delegation_v1<R: GitResolverContractV1>(
             "procedure_digest":prior.snapshot().digest(), "session_id":fences.expected_session_id,
             "placement_id":prior.trace().active_attempt().expect("attempt fence validated").graph_node_id(),
             "attempt_id":fences.expected_attempt_id, "delegation":package.package()["delegation"],
-            "package_digest":package.digest(), "execution":input["execution"], "rounds_used":input["rounds_used"],
-            "result_digest":input["result_digest"], "summary":input["summary"], "worker_disposition":input["worker_disposition"],
+            "package_digest":package.digest(), "execution":input.execution, "rounds_used":input.rounds_used,
+            "result_digest":input.result_digest, "summary":input.summary, "worker_disposition":input.worker_disposition,
             "accepted":true, "accepted_items_digest":items_digest, "accepted_at":Rfc3339MillisV1::from_unix_millis(now.get())
                 .map_err(|_| DirectStoreErrorV1::InvalidInput { reason: "clock exceeds the public timestamp range" })? }))?;
         let body = json!({"schema":"podway.delegation-accept-result/v2", "receipt_id":receipt_id,
             "workspace_uuid":transaction.binding().identity().workspace_uuid(), "session_id":fences.expected_session_id,
             "session_revision":next.trace().revision(), "attempt_id":fences.expected_attempt_id,
-            "package_digest":package.digest(), "result_digest":input["result_digest"], "acceptance_state":"accepted"});
+            "package_digest":package.digest(), "result_digest":input.result_digest, "acceptance_state":"accepted"});
         let response = graph_success(transaction, &resolved, request.request_id, command.command_name(), prior, &next,
             body.as_object().expect("delegation result is an object").clone())?;
         transaction.accept_delegation(prior.workspace_revision(), prior.trace().revision(), &next, package.digest(), &receipt)?;

@@ -228,9 +228,11 @@ pub(crate) fn placement_budget(
         };
     };
     let evidence = evidence_charges(procedure, placement);
-    let delegated_snapshot = procedure.graph().placements().iter().any(|candidate| {
-        matches!(candidate, GraphPlacementV2::Action(action) if action.delegation().is_some())
-    });
+    let delegated_snapshot = procedure
+        .graph()
+        .placements()
+        .iter()
+        .any(ParsedProcedureV2::placement_is_delegated);
     ProcedurePlacementBudgetV2 {
         next_static: next_static_charge(procedure, placement, definition, delegated_snapshot),
         decision_records: evidence.decision_records,

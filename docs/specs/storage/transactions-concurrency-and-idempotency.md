@@ -148,6 +148,14 @@ one stored success.
 
 ## Supervised delegation
 
+Typed acceptance extraction occurs at the existing Protocol admission boundary.
+CLI retains one immutable original JSON Value; Direct Engine uses that original
+for canonical identity and exact replay before obtaining borrowed typed fields
+after caller fences, lifecycle and native revalidation. Store independently
+admits receipt shape, persisted fields and binding facts. Sharing Core Role,
+round and after-accept predicates does not merge those trust boundaries or alter
+which error wins.
+
 Acceptance verifies declaration, current package binding, trusted expected
 package digest, current item-state digest, supplied execution facts and ordinary
 action gates before storing one immutable attempt receipt. Engine supplies the

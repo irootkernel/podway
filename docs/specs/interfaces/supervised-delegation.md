@@ -27,6 +27,24 @@ keeps both Primary-host mappings, trusted controller/configuration ownership,
 complete byte domains, response-loss recovery and live comparative acceptance.
 A permission query or metadata observation supplies none of those external facts.
 
+## Admission ownership
+
+Parsed delegation is a property of an action placement, never a decision option
+name. Config owns this predicate for parsed source consumers; Store classifies
+independently admitted runtime snapshots structurally. Direct and delegated
+result generations and first-parse authoring facts retain their existing rules.
+
+Protocol extracts typed acceptance fields from the original closed document.
+CLI's immutable carrier owns that one JSON Value and obtains its stdin-owned
+fences from it. Direct Engine retains the original document for canonical
+request identity, digest and exact replay; typed extraction stays after the
+existing successful-outcome replay, caller fences, lifecycle and native
+revalidation checks. It does not make malformed direct input outrank a stale
+session fence. Store keeps independent closed-shape, persisted-value and
+input-to-receipt admission, sharing only Core Role construction, round bounds
+and the declared after-accept disposition predicate. No public field or wire
+representation changes.
+
 ## SDG-001: Responsibilities and scope
 
 Keep the Procedure v2 Action/Decision distinction and exactly one authoritative

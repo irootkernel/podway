@@ -8,7 +8,6 @@ use std::{
 use clap::{ArgAction, ArgMatches, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use podway_config::ScaffoldTemplate;
 use podway_protocol::{CriterionAssessmentManyInputV1, ItemRecordManyInputV1};
-use serde_json::Value;
 
 use super::completion::Shell;
 use super::{LocalFailure, MAX_DIRECT_COMMAND_TIMEOUT_MILLIS_V1, retirement};
@@ -694,7 +693,7 @@ pub(super) struct DelegationAcceptArgs {
     #[arg(long, required = true, action = ArgAction::SetTrue)]
     pub(super) stdin: bool,
     #[arg(skip)]
-    pub(super) input: Option<Value>,
+    pub(super) input: Option<podway_protocol::DelegationAcceptanceInputV1>,
 }
 
 impl Command {

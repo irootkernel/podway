@@ -664,7 +664,7 @@ pub(super) fn typed_command(
         Command::Delegation {
             command: DelegationCommand::Accept(args),
         } => Direct::DelegationAccept(protocol::DelegationAcceptV1 {
-            input: required(args.input.clone(), "--stdin")?,
+            input: required(args.input.clone(), "--stdin")?.into_value(),
             preconditions: mutation(fences)?,
         }),
         Command::Complete => Direct::Cursor(Cursor::Complete(protocol::SessionCompleteV1 {

@@ -214,6 +214,68 @@ pub struct DelegationAcceptV1 {
     pub preconditions: SessionMutationPreconditionsWireV1,
 }
 
+/// A CLI-admitted acceptance document. The original JSON is the only owned representation;
+/// canonical identity and independent Engine/Store admission still consume that document.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DelegationAcceptanceInputV1(Value);
+
+impl DelegationAcceptanceInputV1 {
+    pub fn new(input: Value) -> Option<Self> {
+        validated_delegation_acceptance_v1(&input)?;
+        Some(Self(input))
+    }
+
+    pub fn fields(&self) -> DelegationAcceptanceFieldsV1<'_> {
+        delegation_acceptance_fields_v1(&self.0)
+            .expect("the immutable acceptance document was admitted at construction")
+    }
+
+    pub fn into_value(self) -> Value {
+        self.0
+    }
+}
+
+/// Borrowed extraction at the existing protocol boundary, never a second serialized payload.
+#[derive(Clone, Copy, Debug)]
+pub struct DelegationAcceptanceFieldsV1<'a> {
+    pub workspace_uuid: &'a str,
+    pub session_id: &'a str,
+    pub session_revision: u64,
+    pub attempt_id: &'a str,
+    pub idempotency_key: &'a str,
+    pub package_digest: &'a str,
+    pub execution: &'a Value,
+    pub rounds_used: u64,
+    pub result_digest: &'a str,
+    pub summary: &'a str,
+    pub worker_disposition: &'a str,
+}
+
+pub fn validated_delegation_acceptance_v1(
+    input: &Value,
+) -> Option<DelegationAcceptanceFieldsV1<'_>> {
+    if !crate::validate_delegation_document_v1("podway.delegation-accept-input/v1", input) {
+        return None;
+    }
+    delegation_acceptance_fields_v1(input)
+}
+
+fn delegation_acceptance_fields_v1(input: &Value) -> Option<DelegationAcceptanceFieldsV1<'_>> {
+    Some(DelegationAcceptanceFieldsV1 {
+        workspace_uuid: input.get("workspace_uuid")?.as_str()?,
+        session_id: input.get("session_id")?.as_str()?,
+        session_revision: input.get("session_revision")?.as_u64()?,
+        attempt_id: input.get("attempt_id")?.as_str()?,
+        idempotency_key: input.get("idempotency_key")?.as_str()?,
+        package_digest: input.get("package_digest")?.as_str()?,
+        execution: input.get("execution")?,
+        rounds_used: input.get("rounds_used")?.as_u64()?,
+        result_digest: input.get("result_digest")?.as_str()?,
+        summary: input.get("summary")?.as_str()?,
+        worker_disposition: input.get("worker_disposition")?.as_str()?,
+    })
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ItemCheckV1 {

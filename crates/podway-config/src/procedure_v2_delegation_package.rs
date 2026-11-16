@@ -33,7 +33,7 @@ pub(crate) fn validate_delegation_package_budget_v1(
         let podway_core::GraphPlacementV2::Action(action) = placement else {
             continue;
         };
-        if action.delegation().is_none() {
+        if !ParsedProcedureV2::placement_is_delegated(placement) {
             continue;
         }
         let definition = parsed

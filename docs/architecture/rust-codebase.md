@@ -49,6 +49,18 @@ unchanged and are checked against the Rust values. Config's package reserve
 proof checks actual source constructors and emitted worst-case metadata without
 exporting unrelated private goal limits.
 
+### Parsed delegation and acceptance admission
+
+Config owns parsed-placement delegation classification; Engine and authoring
+budget consumers share that predicate. Store uses admitted Core snapshot facts
+and retains no Config dependency or serialized substring detection. Protocol
+owns typed acceptance extraction: an immutable CLI carrier owns the original
+JSON and a borrowed view supplies fields to Engine at its existing validation
+stage. Canonical identity and Store admission retain the original Value; no
+parallel normalized payload is stored. Store's closed receipt admission reuses
+Core Role, round and disposition rules while preserving its own structural,
+persisted-value and binding checks.
+
 ## Dependency rules
 
 The executable [`cargo-adjacency.json`](../../contracts/cargo-adjacency.json)

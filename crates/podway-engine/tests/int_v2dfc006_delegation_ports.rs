@@ -609,3 +609,99 @@ fn v2sdg007_native_delegation_round_trip_and_closed_failures() {
         historical
     );
 }
+
+#[test]
+fn typed002_decision_named_delegation_rejects_package_and_acceptance_without_effects() {
+    let source = r#"schema: podway.procedure/v2
+id: direct-decision
+version: "1"
+name: Direct decision
+purpose: Keep decision option names distinct from action delegation.
+node_definitions:
+  choose:
+    type: decision
+    title: Choose
+    objective: Choose the next step.
+    prompt: Continue?
+    options:
+      - id: delegation
+        label: Continue
+    reason:
+      required: true
+  finish:
+    type: action
+    title: Finish
+    intent: Finish the direct task.
+graph:
+  entry: choose
+  nodes:
+    - id: choose
+      use: choose
+      routes:
+        delegation:
+          to: finish
+          effect: advance
+    - id: finish
+      use: finish
+      terminal: true
+"#;
+    let engine = Engine::new(source);
+    let accountant = podway_store::test_support::query_account::QueryAccountant::start();
+    let status = read(
+        &engine,
+        DirectReadCommandV1::Status {
+            tier: podway_engine::v2_read_service::GraphStatusTierV2::Standard,
+            history_before: None,
+        },
+    );
+    let report = accountant.finish();
+    assert_eq!(status["schema"], "podway.status-result/v5");
+    assert!(status.get("delegation").is_none());
+    assert!(
+        !report
+            .sql
+            .keys()
+            .any(|sql| sql.contains("v2_delegation_receipts")),
+        "{report:?}"
+    );
+    reject(
+        &engine,
+        DirectCommandV1::Read {
+            command: DirectReadCommandV1::DelegationPackage,
+            expected_session_id: None,
+        },
+        "decision-package",
+        "DELEGATION_NOT_APPLICABLE",
+        Some("direct_attempt"),
+    );
+    let package = json!({"package_digest":format!("sha256:{}", "a".repeat(64))});
+    let valid = input(&engine, &package, "decision-accept", "idle", 1);
+    reject(
+        &engine,
+        accept(&engine, valid.clone()),
+        "decision-accept",
+        "DELEGATION_NOT_APPLICABLE",
+        Some("direct_attempt"),
+    );
+    // Malformed input remains after the session fence, rather than eager typed construction.
+    let mut malformed = valid;
+    malformed["unknown"] = json!(true);
+    let mut stale = accept(&engine, malformed.clone());
+    if let DirectCommandV1::DelegationAccept(request) = &mut stale {
+        request.preconditions.expected_session_revision = podway_core::Revision::ZERO;
+    }
+    reject(
+        &engine,
+        stale,
+        "stale-malformed",
+        "SESSION_REVISION_CONFLICT",
+        None,
+    );
+    reject(
+        &engine,
+        accept(&engine, malformed),
+        "current-malformed",
+        "REQUEST_INVALID",
+        None,
+    );
+}

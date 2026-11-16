@@ -31,13 +31,16 @@ byte bounds. Package static reserves retain their fixed charges, with a
 source-bound emitted-metadata proof and the actual-byte backstop. Permanent
 ownership and regression references live in architecture, testing and
 requirements traceability.
-Store receipt admission repeats Core Role, round and disposition predicates.
+Store receipt admission now shares Core Role, named round bounds and
+after-accept predicates while retaining its independent closed-shape and
+persisted-value checks.
 
-Protocol's `DelegationAcceptV1` carries a JSON Value; CLI constructs it and
-Engine `direct_delegation` repeatedly extracts string-keyed fields.
-Store's receipt snapshot fast path searches canonical placement JSON for a
-delegation key. Config authoring admission and Store persisted admission remain
-distinct trust boundaries; their validation must not be collapsed.
+Protocol now owns typed acceptance extraction over the one original JSON Value.
+CLI's immutable admitted carrier provides document-owned fences; Engine extracts
+a borrowed view only at its existing post-fence validation stage. Config owns
+parsed placement classification, while Store consumes its independently admitted
+snapshot's structural delegation facts. Config authoring admission and Store
+persisted admission remain distinct trust boundaries.
 
 Engine `workspace` and the token-backed read in `direct_execution` repeat UUID
 comparison. `native_execution` combines pure item/revision/attempt selection
