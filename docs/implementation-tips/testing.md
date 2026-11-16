@@ -131,7 +131,52 @@ these are bounded functional regressions, not allocation or timing benchmarks.
 Public `REQUEST_INVALID` code/empty-detail equality alone does not distinguish
 count from status or reason priority; exact Core domain-error assertions and
 unchanged Engine call placement establish that internal ordering.
-TYPED-006 remains planned.
+### TYPED integrated qualification
+
+The following reconciliation connects every original revisit condition above
+to its delivered ownership response. The Task regression table and detailed
+coverage paragraphs retain the executable owners and their proof limits; the
+historical feedback rows remain unchanged.
+
+| Feedback / Task | Response to the original revisit condition | Durable production and contract owners |
+|---|---|---|
+| DF-002 / TYPED-001 | One exhaustive seven-name mapping feeds both projections; schema and projection regressions retain agreement. | Core `ItemTypeV1::wire_name`; [shared names and bounds](../architecture/system.md#shared-item-names-and-delegation-bounds), [Rust ownership](../architecture/rust-codebase.md) |
+| DF-003 / TYPED-001 | Existing fixed reserves are checked against actual maximum admitted source values and emitted metadata, with boundary admission and the actual-byte backstop retained. | Config package projector; [shared names and bounds](../architecture/system.md#shared-item-names-and-delegation-bounds) |
+| DF-005 / TYPED-002 | Parsed classification has one Config API; Store uses structural admitted facts with no Config dependency. Direct and delegated generations remain covered together. | Config `ParsedProcedureV2::placement_is_delegated`, Store snapshot `has_delegation`; [delegation ownership](../architecture/system.md#supervised-delegation) |
+| DF-011 / TYPED-001 | Core owns shared receipt/result byte limits; decoder, canonical DDL, schemas and actual emission retain their unchanged limits. | Core shared bounds; [shared names and bounds](../architecture/system.md#shared-item-names-and-delegation-bounds), [delegation contract](../specs/interfaces/supervised-delegation.md) |
+| DF-012 / TYPED-002 | Receipt admission reuses Role, round and disposition predicates while independently checking closed shapes, persisted values and relational bindings. | Core domain constructors and Store receipt codec; [delegation ownership](../architecture/system.md#supervised-delegation) |
+| DF-013 / TYPED-002 | Protocol extracts borrowed typed fields from one original admitted document; CLI fences, post-fence Engine semantics, canonical identity and independent Store checks retain their stages. | Protocol `DelegationAcceptanceInputV1` / `DelegationAcceptanceFieldsV1`; [delegation contract](../specs/interfaces/supervised-delegation.md), [transactions](../specs/storage/transactions-concurrency-and-idempotency.md) |
+| DF-016 / TYPED-002 | Decision-current package and acceptance rejection assert exact code/reason and unchanged session, attempt, sequence and outcomes. | Engine delegation ports; [delegation contract](../specs/interfaces/supervised-delegation.md) |
+| DF-017 / TYPED-002 | Native non-JSON package, acceptance and receipt success assert meaningful content and empty error output; exact JSON replay reconciles acceptance. | CLI generic renderer and deterministic qualifier; [delegation implementation guidance](supervised-delegation.md) |
+| DF-022 / TYPED-003 | One UUID comparison constructs the typed mismatch at both original call positions; both generations retain ordinary/token ordering and competing configuration/corruption priority. | Engine `workspace::check_workspace_uuid_v1`; [read path](../architecture/system.md#read-path), [automation contract](../specs/interfaces/automation-client-contract.md) |
+| DF-024 / TYPED-004 | One pure projection supplies required item, revision, attempt and metadata; native file/stamp checks remain independent and revalidate under the writer. | Engine `execution::required_local_artifact_facts_v2`; [artifact ownership](../architecture/system.md#required-artifacts-and-native-stamps), [transactions](../specs/storage/transactions-concurrency-and-idempotency.md) |
+| DF-025 / TYPED-005 | Core owns the bounded count result and diagnostic; early single preparation, separate batch field admission and post-fence semantics retain their distinct order. | Core `validate_criterion_citation_count_v2`; [citation ownership](../architecture/system.md#bounded-criterion-citations), [automation contract](../specs/interfaces/automation-client-contract.md) |
+| DF-027 / TYPED-004 | The actual native lower-read observer has an in-writer sensitivity control; attach, record, complete and decide prove zero writer-admitted reads and separate-writer progress during preparation. | Git `OpenedArtifact::read` test-support hook and Engine native/race suites; [artifact ownership and limits](../architecture/system.md#required-artifacts-and-native-stamps) |
+
+TYPED-006 reuses the passed TYPED-005 development gate for exactly unchanged
+executable, test and contract inputs. That `make test` run includes the
+registered cross-boundary Core/Config/Protocol/Store/Engine suites, both
+contract generations, native CLI supervised-delegation qualification, and
+success-only rollback and exact-replay coverage. Reuse does not mean that the
+earlier gate executed later TYPED-006 documentation. New documentation receives
+its own reference, authority and verifier checks. No executable or normative
+contract change is introduced by this reconciliation.
+
+The remaining native gap is covered by the fresh-process
+[supported Store continuation](#supported-store-continuity) scenario below.
+It independently checks original response domains and exact stored canonical
+success, preserving source, protocol, persistence and native admission rather
+than replacing them with one shared trust boundary. The [Rust codebase guide](../architecture/rust-codebase.md)
+and [System Architecture](../architecture/system.md) already describe each
+implemented owner; their audit found no additional ownership change to promote.
+[Requirements traceability](../specs/quality/requirements-traceability.md)
+connects these delivered boundaries to their regression owners.
+
+The original six Task contracts and twelve historical feedback rows remain
+intact. The temporary dossier and its references remain until the separately
+required whole-Epic validation and Master's acceptance of the exact closeout
+candidate. TYPED-006 prepares that reference/deletion inventory; qualification
+does not itself grant either acceptance.
 
 DF-014 retains its [AGENT owner](#agent-source-feedback-and-revisit-conditions).
 PARSE-004's first-parse authoring facts remain delivered; TYPED-002 covers only
@@ -251,6 +296,40 @@ that existed before the completion commit. Retain that actual build stamp and
 binary hash; bind the reviewed source-file hashes to the accepted commit rather
 than relabeling the artifact. Recheck replay/continuation after a later rebuild
 when claiming behavior of that rebuilt CLI.
+
+TYPED-006 exercises this scenario for both contract generations with a retained
+prechange stable v0.2.17 CLI from `31cbd110573271ea3376cb07eb961f3dc257a05d`
+(SHA-256 `c9923c6c1fee8c31e595c8163863051ebc5d62ae651c3a947b8662cd3aa927a7`)
+and the reviewed candidate CLI
+(`cfec044864c385fdeb3ac5dd8dc4a39be81dcddbbe7fd5fab04154d1a334abf9`).
+The candidate actually embeds source parent
+`e441ffe9d95a098044c3497468091ea76f880efd`, built during the dirty
+TYPED-005 gate; unchanged executable/test/contract source inputs bind that gate
+to accepted commit `8a17cde3f06ddf7b0d3468edbeabaa6bcaed35b6`.
+This is not a clean build stamp for that later commit. The retained stable is a
+verified local tagged ancestor of the initial Epic base, with matching manifest;
+it is not an exact initial-base build or downloaded-archive qualification.
+
+Two owned standalone Git fixtures retain old-CLI init/start/begin and fully
+fenced batch recording of required text and a native artifact. Every CLI
+observation and mutation uses a new process. Fifty checks cover same recorded
+state and status, both byte-identical old-request replays, independent response
+domains, read-only exact canonical outcome lookup, key conflict and stale-fence
+rejection without outcomes, native completion to the next node/new attempt,
+and unchanged generation-15 writer rows and canonical snapshot bytes/digests.
+Only explicit current-fenced completion advances sequence 4 to 5; later replay
+retains the original old attempt and item fences. Read-only logical inspection
+uses quiescent copies and preserves authentic runtime bytes and witnesses.
+All children are reaped and exactly the owned fixtures are removed.
+
+The executed harness retained full snapshot rows at all twelve checkpoints.
+Its auxiliary display mislabeled the digest column as canonical JSON; a separate
+schema-column reconciliation extracts the actual retained canonical bytes and
+verifies their SHA-256 against the stored digest at every checkpoint. Original
+receipts remain unchanged. Full-row identity and actual replay/continuation
+checks are independent of that display defect. This evidence establishes
+supported matching-writer continuation, with no reset, migration, release,
+installation or installed-runtime qualification.
 
 BOUND-006 exercises this scenario across the CLI decomposition against a
 supported generation-15 Store. It complements registered persistence/replay tests

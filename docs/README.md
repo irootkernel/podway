@@ -27,7 +27,7 @@ Current adopted work is tracked by the [active roadmap](roadmap/).
 [TYPED](roadmap/README.md#typed-typed-boundary-ownership) is In Progress, with six
 Tasks for internal type, validation and preparation ownership. Its
 [temporary execution dossier](todo/TODO-podway-typed-boundary-ownership.md)
-owns unfinished design; [original feedback and planned verification owners](implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions)
+owns unfinished design; [original feedback and regression owners](implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions)
 are permanently retained. Each Task promotes actual behavior and regression
 ownership into canonical documents before completion. Registration claims no
 implementation, acceptance or release. The dossier is retired only at accepted
