@@ -53,7 +53,11 @@ file/stamp work retains its separate boundary. The dev-only Git lower-read hook
 and native route/writer tests cover actual read admission, drift and separate
 writer progress, with current-thread/native-abstraction proof limits recorded in
 architecture and testing guidance.
-Engine's citation precheck shares Core's numeric bound but repeats its diagnostic.
+Core `validate_criterion_citation_count_v2` now owns the bounded combined-count
+result used by Core result/batch construction and Engine's early single-command
+precheck. The existing four-citation limit, diagnostic, per-field batch guard,
+post-fence semantics and outside-writer preparation remain unchanged; regression
+owners and proof limits are recorded in canonical architecture/testing guidance.
 
 These are ownership and regression-protection improvements. The observations
 do not establish a current public-result defect, unqualified native read path,

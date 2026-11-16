@@ -6,7 +6,7 @@ use podway_core::{
     ActorAttributionV2, CriterionAssessmentBatchEntryV2, CriterionAssessmentReasonV2,
     CriterionAssessmentResultV2, CriterionCitationV2, CriterionStatusV2, DomainError,
     GoalRevisionNumberV2, GoalRevisionReasonV2, GoalStatementV2, ReasonV2, SessionLifecycle,
-    TerminalDispositionV2, WorkspaceId,
+    TerminalDispositionV2, WorkspaceId, validate_criterion_citation_count_v2,
 };
 use podway_git::{GitResolverContractV1, WorktreeSelectorV1};
 use podway_protocol::{
@@ -182,14 +182,10 @@ pub(crate) fn execute_procedure_with_context_v1<R: GitResolverContractV1>(
     let assessment = if let C::GoalAssessCriterion(input) = command {
         Some(
             (|| -> Result<CriterionAssessmentResultV2, DirectStoreErrorV1> {
-                if input.evidence.len().saturating_add(input.items.len())
-                    > podway_core::MAX_CRITERION_CITATIONS_V2
-                {
-                    return Err(GraphMutationErrorV2::Domain(DomainError::InvalidState {
-                        reason: "a criterion result carries at most four citations",
-                    })
-                    .into());
-                }
+                validate_criterion_citation_count_v2(
+                    input.evidence.len().saturating_add(input.items.len()),
+                )
+                .map_err(GraphMutationErrorV2::Domain)?;
                 let status = input.status.parse::<CriterionStatusV2>().map_err(|_| {
                     DirectStoreErrorV1::InvalidInput {
                         reason: "invalid criterion status",

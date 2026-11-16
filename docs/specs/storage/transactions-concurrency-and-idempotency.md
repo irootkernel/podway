@@ -242,6 +242,15 @@ mutation, whereas reusing that key with a reordered `assessments` array or
 different fence/actor/entry payload fails closed with `IDEMPOTENCY_KEY_REUSED`.
 Any validation failure rolls back all criterion result and citation rows with
 zero partial state or outcome row.
+
+Core owns the combined four-citation validation result at the existing semantic
+entry stage. Batch per-array resource checks still precede live fences, while
+combined count, status, duplicate and reason validation follows them. Raw batch
+entries remain prepared outside the transaction. Single assessment captures its
+count result before status/duplicate/citation cloning outside the writer, then
+consumes it only after retained replay and live fences. Shared diagnostic
+ownership changes no rollback, outcome, canonical request or replay boundary.
+
 `AGENT-001` registered the opt-in `--with-observation` request identity,
 digest, and lookup-headroom contracts in `podway-protocol`
 (`canonical_direct_slice_mutation_identity_with_observation_v1`,

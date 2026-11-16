@@ -91,6 +91,22 @@ deliberate in-writer sensitivity control distinguish observed byte reads from
 metadata-only stamp checks. [System Architecture](system.md#required-artifacts-and-native-stamps)
 records ownership and the current-thread/native-abstraction proof limit.
 
+### Bounded criterion citation validation
+
+Core `validate_criterion_citation_count_v2(usize)` returns the existing domain
+error for a combined count above `MAX_CRITERION_CITATIONS_V2` (four), without
+cloning or traversing citations. Core result construction and batch-entry
+conversion share it. Engine's single-assessment preparation consumes the result
+at its existing early count check, before status, duplicate and clone work;
+error conversion and delayed consumption after live fences remain unchanged.
+
+Protocol's per-array decoder and Engine's typed batch resource guard retain their
+own field diagnostics. Combined batch count validation stays at the existing
+post-fence semantic stage; raw entry preparation stays outside the writer.
+This adds no input shape, persisted value, dependency edge or new validation
+stage. [System Architecture](system.md#bounded-criterion-citations) records the
+intentional single/batch boundary distinction.
+
 ## Dependency rules
 
 The executable [`cargo-adjacency.json`](../../contracts/cargo-adjacency.json)

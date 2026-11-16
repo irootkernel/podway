@@ -26,6 +26,15 @@ pub const MAX_GOAL_ASSESSMENT_RESULTS: usize = 16;
 /// Maximum citations retained by one typed criterion assessment.
 pub const MAX_CRITERION_CITATIONS_V2: usize = 4;
 
+/// Validates the combined citation count without traversing or cloning citations.
+/// Callers retain their own validation stage and error conversion.
+pub fn validate_criterion_citation_count_v2(count: usize) -> Result<(), DomainError> {
+    if count > MAX_CRITERION_CITATIONS_V2 {
+        return Err(invalid("a criterion result carries at most four citations"));
+    }
+    Ok(())
+}
+
 const fn invalid(reason: &'static str) -> DomainError {
     DomainError::InvalidState { reason }
 }
@@ -248,9 +257,7 @@ impl CriterionAssessmentResultV2 {
         reason: CriterionAssessmentReasonV2,
         citations: Vec<CriterionCitationV2>,
     ) -> Result<Self, DomainError> {
-        if citations.len() > MAX_CRITERION_CITATIONS_V2 {
-            return Err(invalid("a criterion result carries at most four citations"));
-        }
+        validate_criterion_citation_count_v2(citations.len())?;
         if citations.iter().collect::<BTreeSet<_>>().len() != citations.len() {
             return Err(invalid("criterion result citations must be unique"));
         }
@@ -331,9 +338,7 @@ impl CriterionAssessmentBatchEntryV2 {
     }
 
     pub fn into_result(self) -> Result<CriterionAssessmentResultV2, DomainError> {
-        if self.citations.len() > MAX_CRITERION_CITATIONS_V2 {
-            return Err(invalid("a criterion result carries at most four citations"));
-        }
+        validate_criterion_citation_count_v2(self.citations.len())?;
         let status = self.status.parse::<CriterionStatusV2>()?;
         if self.citations.iter().collect::<BTreeSet<_>>().len() != self.citations.len() {
             return Err(invalid("criterion result citations must be unique"));
@@ -581,6 +586,85 @@ mod tests {
             Some(&ItemId::new("assessment-note").unwrap())
         );
         assert!(item.as_evidence().is_none());
+    }
+
+    #[test]
+    fn typed005_citation_count_result_preserves_bounds_and_validation_order() {
+        for count in 0..=MAX_CRITERION_CITATIONS_V2 {
+            assert_eq!(validate_criterion_citation_count_v2(count), Ok(()));
+        }
+        let too_many = invalid("a criterion result carries at most four citations");
+        for count in [MAX_CRITERION_CITATIONS_V2 + 1, usize::MAX] {
+            assert_eq!(
+                validate_criterion_citation_count_v2(count),
+                Err(too_many.clone())
+            );
+        }
+        let citation = CriterionCitationV2::Item(ItemId::new("note").unwrap());
+        let many = vec![citation.clone(); MAX_CRITERION_CITATIONS_V2 + 1];
+        // Count still precedes duplicate, status, reason and not-applicable checks.
+        assert_eq!(
+            CriterionAssessmentResultV2::new(
+                criterion_id("c"),
+                CriterionStatusV2::NotApplicable,
+                CriterionAssessmentReasonV2::new("obsolete").unwrap(),
+                many.clone()
+            )
+            .unwrap_err(),
+            too_many
+        );
+        assert_eq!(
+            CriterionAssessmentBatchEntryV2::new(criterion_id("c"), "unknown", "", many)
+                .into_result()
+                .unwrap_err(),
+            too_many
+        );
+        assert_eq!(
+            CriterionAssessmentBatchEntryV2::new(
+                criterion_id("c"),
+                "unknown",
+                "",
+                vec![citation.clone(); 2]
+            )
+            .into_result()
+            .unwrap_err(),
+            invalid("unknown criterion assessment status")
+        );
+        assert_eq!(
+            CriterionAssessmentBatchEntryV2::new(
+                criterion_id("c"),
+                "satisfied",
+                "",
+                vec![citation; 2]
+            )
+            .into_result()
+            .unwrap_err(),
+            invalid("criterion result citations must be unique")
+        );
+        for count in [0, MAX_CRITERION_CITATIONS_V2] {
+            let citations: Vec<_> = (0..count)
+                .map(|i| CriterionCitationV2::Item(ItemId::new(format!("note-{i}")).unwrap()))
+                .collect();
+            assert!(
+                CriterionAssessmentResultV2::new(
+                    criterion_id("c"),
+                    CriterionStatusV2::Satisfied,
+                    CriterionAssessmentReasonV2::new("ok").unwrap(),
+                    citations.clone()
+                )
+                .is_ok()
+            );
+            assert!(
+                CriterionAssessmentBatchEntryV2::new(
+                    criterion_id("c"),
+                    "satisfied",
+                    "ok",
+                    citations
+                )
+                .into_result()
+                .is_ok()
+            );
+        }
     }
 
     #[test]

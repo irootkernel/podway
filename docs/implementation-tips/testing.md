@@ -38,7 +38,7 @@ locator alone does not establish a passing run or Task acceptance.
 | TYPED-002 | DF-005, DF-012, DF-013, DF-016, DF-017 | Protocol `int_v2_result_contract::typed002_acceptance_view_preserves_original_document_and_closed_admission`; Store `int_v2sdg004_receipt` domain and cold corruption checks; Engine `int_v2dfc006_delegation_ports::typed002_decision_named_delegation_rejects_package_and_acceptance_without_effects`; CLI `e2e_v2sdg008_qualification` and its native qualifier's `Fixture.human` assertions |
 | TYPED-003 | DF-022 | Engine `int_v2dfc006_readback_ports::decisions::typed003_workspace_uuid_comparison_preserves_read_order_and_public_details`; existing `v2scl004_production_dispatch_serves_and_fences_evidence_read` and workspace resolver/native-binding regressions |
 | TYPED-004 | DF-024, DF-027 | Engine `execution::tests::typed004_required_artifact_facts_follow_required_sets_revisions_and_attempts`; `native_execution::tests::typed004_writer_rejects_required_set_revision_and_attempt_drift_before_native_stamps`; registered `int_v2dfc006_races::typed004_` route tests and direct-execution lower-read sensitivity control |
-| TYPED-005 | DF-025 | Core citation bounds and Engine single/batch assessment boundary, error-ordering and replay suites |
+| TYPED-005 | DF-025 | Core `goal_record_v2::tests::typed005_citation_count_result_preserves_bounds_and_validation_order`; Engine `int_v2dfc006_goal_ports::typed005_single_and_batch_citation_bounds_preserve_fences_details_and_replay`; retained typed citation race, batch ordered-error and exact-replay suites; Protocol `int_v2agt004_record_many` batch decoder |
 | TYPED-006 | All twelve | Cross-Task compatibility, supported Store continuation, complete development gate and durable-document/reference reconciliation |
 
 TYPED-001 gives wire names and shared delegation bounds one Core owner. Config's
@@ -108,7 +108,30 @@ and reaped by the existing fixture helper; temporary fixtures retain RAII cleanu
 The observer covers the current thread and native artifact read abstraction,
 including stamp-path regressions using it; it is not universal OS interception,
 a benchmark, packaged qualification or evidence that ignored release stress ran.
-Tasks after TYPED-004 remain planned.
+
+TYPED-005 checks the shared Core count result at zero, maximum, one over and
+`usize::MAX`, preserving the exact domain diagnostic and its priority over
+status, duplicate, reason and not-applicable failures at the original Core
+stages. Both immutable and raw batch conversions retain bounded success/failure.
+The registered native Engine single/batch matrix exercises both generations:
+zero and four combined citations succeed; over-combined and individual-array
+bounds, duplicates, invalid status/reason/targets and competing stale fences
+retain their distinct stages, typed codes/details and unchanged graph/sequence.
+Every rejected key has no outcome. Exact successes replay after cold reopen,
+and changed input with the same key fails without effects.
+
+The existing typed citation race proves single early count failures remain
+behind caller fences and allow corrected-key retry/replay. The batch ordered
+error suite retains post-fence semantics and the separate pre-fence per-array
+guard; the Protocol decoder suite admits four plus four raw entries for deferred
+semantics and refuses five in either array. Batch commit/replay tests retain
+atomic rows, request order and key-conflict identity. Source inspection preserves
+the early constant-size count call before citation cloning or duplicate scans;
+these are bounded functional regressions, not allocation or timing benchmarks.
+Public `REQUEST_INVALID` code/empty-detail equality alone does not distinguish
+count from status or reason priority; exact Core domain-error assertions and
+unchanged Engine call placement establish that internal ordering.
+TYPED-006 remains planned.
 
 DF-014 retains its [AGENT owner](#agent-source-feedback-and-revisit-conditions).
 PARSE-004's first-parse authoring facts remain delivered; TYPED-002 covers only

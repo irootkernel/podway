@@ -1089,6 +1089,217 @@ fn entry(
 }
 
 #[test]
+fn typed005_single_and_batch_citation_bounds_preserve_fences_details_and_replay() {
+    use podway_protocol::ContractGenerationV1;
+    let source = ASSESSMENT_PROCEDURE.replace("    options:\n", "      - id: citation-two\n        type: text\n        prompt: Record another citation.\n        required: false\n      - id: citation-three\n        type: text\n        prompt: Record a third citation.\n        required: false\n    options:\n");
+    let command = |engine: &Engine, batch: bool, assessment: CriterionAssessmentManyEntryWireV1| {
+        if batch {
+            assess_many(engine, vec![assessment], None)
+        } else {
+            DirectCommandV1::Procedure(P::GoalAssessCriterion(GoalAssessCriterionV2 {
+                criterion_id: assessment.criterion_id,
+                status: assessment.status,
+                reason: assessment.reason,
+                evidence: assessment.evidence,
+                items: assessment.items,
+                actor: None,
+                preconditions: engine.fences(),
+                expected_goal_revision: 1,
+            }))
+        }
+    };
+    for generation in [
+        ContractGenerationV1::Generation1,
+        ContractGenerationV1::Generation2,
+    ] {
+        for batch in [false, true] {
+            let mut engine = at_decision(&source);
+            for item in ["assessment-note", "citation-two", "citation-three"] {
+                engine.set(item, "Recorded citation.", &format!("typed005-{item}"));
+            }
+            let before = engine.graph();
+            let sequence = engine.sequence();
+            for (case, evidence, items, status, reason) in [
+                (
+                    "combined-over",
+                    vec!["perform", "perform", "unknown"],
+                    vec!["assessment-note", "citation-two"],
+                    "unknown",
+                    "",
+                ),
+                ("evidence-over", vec!["perform"; 5], vec![], "unknown", ""),
+                (
+                    "items-over",
+                    vec![],
+                    vec!["assessment-note"; 5],
+                    "unknown",
+                    "",
+                ),
+                ("duplicate", vec!["perform"; 2], vec![], "satisfied", "ok"),
+                (
+                    "invalid-citation",
+                    vec!["unknown"],
+                    vec![],
+                    "satisfied",
+                    "ok",
+                ),
+                ("invalid-status", vec![], vec![], "unknown", "ok"),
+                ("blank-reason", vec![], vec![], "satisfied", "   "),
+            ] {
+                for stale in [false, true] {
+                    let mut input = command(
+                        &engine,
+                        batch,
+                        entry("correct", status, reason, &evidence, &items),
+                    );
+                    if stale {
+                        match &mut input {
+                            DirectCommandV1::Procedure(P::GoalAssessCriterion(input)) => {
+                                input.preconditions.expected_session_revision = Revision::ZERO
+                            }
+                            DirectCommandV1::Procedure(P::GoalAssessCriteria(input)) => {
+                                input.preconditions.expected_session_revision = Revision::ZERO
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+                    let key = format!("typed005-{batch}-{case}-{stale}");
+                    let mut request = engine.request(input, &key);
+                    request.generation = generation;
+                    let per_field = matches!(case, "evidence-over" | "items-over");
+                    let response = if stale
+                        || (batch && per_field)
+                        || (!batch && case != "invalid-citation")
+                    {
+                        engine.execute(request, &NoClock)
+                    } else {
+                        engine.execute(request, &Clock)
+                    };
+                    let DirectResponseV1::Failure(error) = response else {
+                        panic!("{case} unexpectedly succeeded")
+                    };
+                    let error = error.into_value();
+                    let expected = if stale && !(batch && per_field) {
+                        "SESSION_REVISION_CONFLICT"
+                    } else if case == "invalid-citation" {
+                        "CRITERION_CITATION_INVALID"
+                    } else {
+                        "REQUEST_INVALID"
+                    };
+                    assert_eq!(
+                        error["code"], expected,
+                        "{generation:?}/{batch}/{case}/{stale}"
+                    );
+                    if expected == "REQUEST_INVALID" {
+                        assert_eq!(error["details"], json!({}));
+                        assert_eq!(error["exit_code"], 2);
+                        assert_eq!(error["retryable"], false);
+                    } else if expected == "CRITERION_CITATION_INVALID" {
+                        assert_eq!(error["details"]["criterion_id"], "correct");
+                        assert_eq!(
+                            error["details"]["citation"],
+                            json!({"reference_graph_node_id":"unknown"})
+                        );
+                        assert_eq!(error["exit_code"], 1);
+                        assert_eq!(error["retryable"], false);
+                        assert_eq!(
+                            error["details"]["schema"],
+                            if generation == ContractGenerationV1::Generation1 {
+                                "podway.v2-runtime-error-details/v2"
+                            } else {
+                                "podway.criterion-citation-invalid-details/v1"
+                            }
+                        );
+                        if generation == ContractGenerationV1::Generation2 {
+                            assert_eq!(
+                                error["details"]["citable_evidence_source_nodes"],
+                                json!(["perform"])
+                            );
+                            assert_eq!(
+                                error["details"]["citable_item_ids"],
+                                json!(["assessment-note", "citation-two", "citation-three"])
+                            );
+                        }
+                    }
+                    assert_eq!(engine.graph(), before);
+                    assert_eq!(engine.sequence(), sequence);
+                    assert!(
+                        engine
+                            .store
+                            .read(deadline(), |snapshot| snapshot
+                                .outcome(&IdempotencyKeyV1::new(&key).unwrap()))
+                            .unwrap()
+                            .is_none()
+                    );
+                }
+            }
+            let mut successes = Vec::new();
+            for (criterion, evidence, items) in [
+                ("tested", vec![], vec![]),
+                (
+                    "correct",
+                    vec!["perform"],
+                    vec!["assessment-note", "citation-two", "citation-three"],
+                ),
+            ] {
+                let input = command(
+                    &engine,
+                    batch,
+                    entry(
+                        criterion,
+                        "satisfied",
+                        "Bounded citation success.",
+                        &evidence,
+                        &items,
+                    ),
+                );
+                let mut request = engine.request(input, &format!("typed005-success-{criterion}"));
+                request.generation = generation;
+                let output = engine.output(engine.execute(request.clone(), &Clock));
+                let actual = if batch {
+                    &output["result"]["results"][0]["citations"]
+                } else {
+                    &output["result"]["result"]["citations"]
+                };
+                let expected = if criterion == "tested" {
+                    json!([])
+                } else {
+                    json!([{"reference_graph_node_id":"perform"},{"local_item_id":"assessment-note"},{"local_item_id":"citation-two"},{"local_item_id":"citation-three"}])
+                };
+                assert_eq!(*actual, expected);
+                successes.push((request, output));
+            }
+            assert_eq!(engine.sequence(), sequence + 2);
+            engine.cold();
+            let committed = engine.graph();
+            for (request, output) in successes {
+                assert_eq!(
+                    engine.output(engine.execute(request.clone(), &NoClock)),
+                    output
+                );
+                let mut conflict = request;
+                match &mut conflict.command {
+                    DirectCommandV1::Procedure(P::GoalAssessCriterion(input)) => {
+                        input.reason.push_str(" Changed.")
+                    }
+                    DirectCommandV1::Procedure(P::GoalAssessCriteria(input)) => {
+                        input.assessments[0].reason.push_str(" Changed.")
+                    }
+                    _ => unreachable!(),
+                }
+                let DirectResponseV1::Failure(error) = engine.execute(conflict, &NoClock) else {
+                    panic!("changed key input replayed")
+                };
+                assert_eq!(error.into_value()["code"], "IDEMPOTENCY_KEY_REUSED");
+                assert_eq!(engine.graph(), committed);
+                assert_eq!(engine.sequence(), sequence + 2);
+            }
+            engine.store.verify_integrity(deadline()).unwrap();
+        }
+    }
+}
+
+#[test]
 fn agent003_goal_assess_criteria_enforces_pre_fence_bounds_fences_and_ordered_entry_errors() {
     use podway_protocol::ContractGenerationV1;
 

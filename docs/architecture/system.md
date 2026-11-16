@@ -377,6 +377,23 @@ Reset/archive revalidate native identity before prepared selection. Source-backe
 start and attachment hashing keep their position before graph preparation; no
 per-artifact native check is removed or moved into an earlier admission stage.
 
+### Bounded criterion citations
+
+Core `goal_record_v2::validate_criterion_citation_count_v2` owns the four-citation
+bound result and its existing domain diagnostic. Both immutable result
+construction and deferred batch-entry conversion consume it. Engine's single
+assessment preparation calls that same result before status parsing, duplicate
+scanning and citation cloning, using a saturating combined length. Preparation
+remains outside the writer; captured failure consumption still follows retained
+success replay and live fences.
+
+Batch per-array decoding and typed resource admission remain distinct from the
+combined semantic bound: each list admits at most four entries before live
+fences, while a bounded combined list can still exceed four and is rejected by
+Core's existing post-fence batch-entry conversion. Raw batch preparation remains
+outside the writer. Status, duplicate, reason, applicability and citation-target
+checks keep their command-specific order and public error mapping.
+
 ### Required artifacts and native stamps
 
 Engine `execution::required_local_artifact_facts_v2` owns the pure projection of

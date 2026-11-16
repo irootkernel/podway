@@ -195,6 +195,14 @@ within each kind and limited to four combined. Eligible evidence is a declared,
 resolved and still-valid source of the current decision attempt; eligible items
 have recorded values in that decision attempt. `not_applicable` cites neither.
 
+Core owns the bounded combined-count result used by immutable results and batch
+semantics. Single-assessment preparation checks that count before duplicate work
+or citation cloning, outside the writer, while its failure remains deferred
+behind replay and live fences. Batch field-list resource bounds still precede
+fences, and combined semantic count/status/duplicate/reason checks retain their
+existing post-fence entry order. Clients must preserve the original request and
+key for exact success replay; refreshed fences form a different request.
+
 ## Retained reconciliation, observation, and evidence requirements
 
 | ID | Normative requirement |

@@ -419,6 +419,17 @@ bounded acceptance or encoding before a parsed field path is available,
 including exceeding the 1,048,576-byte complete-input ceiling on `record --stdin`
 or `goal assess-criteria --stdin`.
 
+The shared Core combined citation count result retains the four-citation domain
+diagnostic. It does not replace the batch decoder/typed per-array resource guard.
+An oversized batch array fails `REQUEST_INVALID` before live fences; an admitted
+combined count above four remains a post-fence semantic rejection. Single typed
+assessment count rejection is prepared before status/duplicate/clone work but
+consumed after live fences, so a competing stale fence retains its typed error.
+Bound and shape refusals retain `REQUEST_INVALID`, exit 2 and empty details;
+invalid citation targets retain `CRITERION_CITATION_INVALID`, exit 1 and the
+existing generation-specific details. Rejections create no partial results or
+success outcomes.
+
 Malformed/oversized/cross-session/wrong-binding tokens fail `REQUEST_INVALID`
 before state comparison. Undeclared/unresolved/skipped references, unselected
 items and absent values use `EVIDENCE_NOT_AVAILABLE`. Availability precedes token
