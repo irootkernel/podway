@@ -61,6 +61,17 @@ parallel normalized payload is stored. Store's closed receipt admission reuses
 Core Role, round and disposition rules while preserving its own structural,
 persisted-value and binding checks.
 
+### Workspace identity comparisons
+
+Engine `workspace::check_workspace_uuid_v1` owns the pure UUID comparison and
+typed mismatch construction. Ordinary resolution checks supplied and durable
+selector UUIDs after Store binding admission and before bound native revalidation.
+Token-backed evidence reads keep the supplied UUID check after the committed
+view and token session/item binding, before supplied session and consumer-attempt
+checks. Store admission and native revalidation retain their independent
+boundaries; the helper opens no Store and chooses no validation order. See
+[System Architecture](system.md#read-path) for the read composition.
+
 ## Dependency rules
 
 The executable [`cargo-adjacency.json`](../../contracts/cargo-adjacency.json)

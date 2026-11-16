@@ -565,17 +565,11 @@ pub fn execute_read_v1<R: GitResolverContractV1>(
                     token.as_ref(),
                 )?;
             }
-            if token_read
-                && let Some(expected) = &request.expected_workspace_id
-                && expected != snapshot.binding().identity().workspace_uuid()
-            {
-                return Err(
-                    crate::workspace::WorkspaceResolutionErrorV1::ExpectedWorkspaceUuidMismatch {
-                        expected: expected.clone(),
-                        actual: snapshot.binding().identity().workspace_uuid().clone(),
-                    }
-                    .into(),
-                );
+            if token_read && let Some(expected) = &request.expected_workspace_id {
+                crate::workspace::check_workspace_uuid_v1(
+                    expected,
+                    snapshot.binding().identity().workspace_uuid(),
+                )?;
             }
             if let Some(expected) = request.expected_session_id
                 && !view

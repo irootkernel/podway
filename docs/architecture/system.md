@@ -465,8 +465,11 @@ Store's `read_admitting_typed`; CLI sees no Store connection, snapshot or lease.
 Preliminary native discovery and config checks still precede Store admission.
 The transaction is established during binding qualification, before the supplied
 and durable-selector UUID checks and resolver-stage bound Git revalidation.
+Engine `workspace::check_workspace_uuid_v1` owns the pure UUID comparison and
+typed mismatch construction for both ordinary resolution and token-backed reads.
 Evidence continuation reads still defer the supplied UUID until after the view
-and page-token binding checks. Both native revalidations remain at their logical
+and page-token binding checks. The helper opens no Store and does not select
+validation order. Both native revalidations remain at their logical
 stages, including the operation's existing `revalidate` before clock/view work.
 
 Store owns an initial file witness and a binding-completion witness before the

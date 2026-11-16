@@ -1012,6 +1012,166 @@ mod decisions {
         assert_eq!(error.into_value()["code"], "ATTEMPT_NOT_CURRENT");
         assert_malformed_token_rejected_at_protocol_boundary();
     }
+
+    #[test]
+    fn typed003_workspace_uuid_comparison_preserves_read_order_and_public_details() {
+        use podway_core::WorkspaceId;
+        use podway_protocol::ContractGenerationV1;
+        for generation in [
+            ContractGenerationV1::Generation1,
+            ContractGenerationV1::Generation2,
+        ] {
+            let engine = Engine::new(READBACK_PROCEDURE);
+            let session = engine.graph().trace().session_id().as_str().to_owned();
+            let mut number = 99_000;
+            set_item(&engine, &session, &mut number, "result", "proof");
+            complete(&engine, &session, &mut number);
+            let graph = engine.graph();
+            let sequence = engine.sequence();
+            let consumer = graph.trace().active_attempt().unwrap().attempt_id().clone();
+            let actual = engine
+                .store
+                .read(deadline(), |snapshot| {
+                    Ok(snapshot.binding().identity().workspace_uuid().clone())
+                })
+                .unwrap();
+            let wrong = WorkspaceId::new("00000000-0000-4000-8000-0000000000fd").unwrap();
+            let page = query(
+                &engine,
+                &session,
+                &mut number,
+                "evidence.read",
+                json!({"source":"work","item_id":"result"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            );
+            let source = page["source"]["attempt_id"].as_str().unwrap();
+            let digest = page["value_digest"].as_str().unwrap();
+            let bound =
+                EvidencePageTokenV1::new(&session, consumer.as_str(), source, "result", digest, 0)
+                    .unwrap()
+                    .encode();
+            let stale = EvidencePageTokenV1::new(&session, source, source, "result", digest, 0)
+                .unwrap()
+                .encode();
+            let foreign = EvidencePageTokenV1::new(
+                "00000000-0000-4000-8000-0000000000fe",
+                consumer.as_str(),
+                source,
+                "result",
+                digest,
+                0,
+            )
+            .unwrap()
+            .encode();
+            let mut ordinary = query_request(
+                next_number(&mut number),
+                "evidence.read",
+                &engine,
+                &session,
+                json!({"source":"work","item_id":"result","expected_consumer_attempt_id":consumer})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            );
+            ordinary.generation = generation;
+            ordinary.expected_workspace_id = Some(actual.clone());
+            let mut token = ordinary.clone();
+            if let DirectCommandV1::Read {
+                command: DirectReadCommandV1::Evidence { token, .. },
+                ..
+            } = &mut token.command
+            {
+                *token = Some(EvidencePageTokenV1::decode(&bound).unwrap());
+            }
+            let failure = |request: &DirectRequestV1| {
+                let DirectResponseV1::Failure(error) = engine.execute(request.clone(), &Clock)
+                else {
+                    panic!("expected refusal");
+                };
+                error.into_value()
+            };
+            for request in [&ordinary, &token] {
+                let DirectResponseV1::Success(output) = dispatch(&engine, request) else {
+                    panic!("matching UUID refused");
+                };
+                assert_eq!(output.as_value()["result"]["page"]["data"], "proof");
+                let mut mismatch = request.clone();
+                mismatch.expected_workspace_id = Some(wrong.clone());
+                let error = failure(&mismatch);
+                assert_eq!(error["code"], "WORKSPACE_UUID_MISMATCH");
+                assert_eq!(error["exit_code"], 4);
+                assert_eq!(error["retryable"], false);
+                assert_eq!(
+                    error["details"],
+                    json!({
+                        "schema":"podway.workspace-uuid-mismatch-details/v3",
+                        "expected_workspace_uuid":wrong,"actual_workspace_uuid":actual,
+                        "recovery":{"action":"diagnose_workspace","command":"workspace.doctor",
+                            "argv":["podway","--json","doctor"],
+                            "reason":"Inspect the worktree-local Store and its binding.","requires_explicit_authorization":false}
+                    })
+                );
+            }
+            let with_token = |encoded: &str, workspace: WorkspaceId| {
+                let mut request = ordinary.clone();
+                request.expected_workspace_id = Some(workspace);
+                if let DirectCommandV1::Read {
+                    command: DirectReadCommandV1::Evidence { token, .. },
+                    ..
+                } = &mut request.command
+                {
+                    *token = Some(EvidencePageTokenV1::decode(encoded).unwrap());
+                }
+                request
+            };
+            let unbound = with_token(&foreign, wrong.clone());
+            assert_eq!(failure(&unbound)["code"], "REQUEST_INVALID");
+            assert_eq!(failure(&unbound)["details"], json!({}));
+            assert_eq!(
+                failure(&with_token(&stale, wrong.clone()))["code"],
+                "WORKSPACE_UUID_MISMATCH"
+            );
+            assert_eq!(
+                failure(&with_token(&stale, actual.clone()))["code"],
+                "EVIDENCE_PAGE_TOKEN_STALE"
+            );
+            assert_eq!(engine.graph(), graph);
+            assert_eq!(engine.sequence(), sequence);
+
+            // Configuration and corrupt persisted identity admission stay ahead of either UUID
+            // comparison and of token binding. These are isolated test-owned runtime fixtures.
+            let config = engine.temporary.path().join(".podway/config.yaml");
+            assert!(!config.exists());
+            std::fs::write(&config, b"schema: podway.workspace/v1\nunknown: true\n").unwrap();
+            for request in [&ordinary, &token, &unbound] {
+                let mut request = request.clone();
+                request.expected_workspace_id = Some(wrong.clone());
+                assert_eq!(failure(&request)["code"], "WORKSPACE_CONFIG_INVALID");
+            }
+            std::fs::remove_file(&config).unwrap();
+            assert_eq!(engine.graph(), graph);
+            let connection = rusqlite::Connection::open(engine.store.layout().database()).unwrap();
+            connection
+                .execute(
+                    "UPDATE workspace_state SET workspace_uuid = 'invalid-uuid'",
+                    [],
+                )
+                .unwrap();
+            for request in [&ordinary, &token, &unbound] {
+                let mut request = request.clone();
+                request.expected_workspace_id = Some(wrong.clone());
+                assert_eq!(failure(&request)["code"], "WORKSPACE_STATE_UNREADABLE");
+            }
+            let stored: String = connection
+                .query_row("SELECT workspace_uuid FROM workspace_state", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(stored, "invalid-uuid");
+        }
+    }
 }
 
 mod goals {

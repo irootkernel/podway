@@ -47,6 +47,21 @@ use podway_store::{
     },
 };
 
+/// Compare admitted workspace identities without opening a Store or choosing read precedence.
+/// Ordinary resolution and token-backed reads call this at their distinct existing boundaries.
+pub(crate) fn check_workspace_uuid_v1(
+    expected: &WorkspaceId,
+    actual: &WorkspaceId,
+) -> Result<(), WorkspaceResolutionErrorV1> {
+    if expected != actual {
+        return Err(WorkspaceResolutionErrorV1::ExpectedWorkspaceUuidMismatch {
+            expected: expected.clone(),
+            actual: actual.clone(),
+        });
+    }
+    Ok(())
+}
+
 /// The complete request identity assertions for maintenance admission.
 pub fn workspace_identity_fences_v1<'a>(
     expected_workspace_id: Option<&'a WorkspaceId>,
@@ -1950,13 +1965,7 @@ impl<R: GitResolverContractV1> DirectWorkspaceResolverV1<R> {
         binding: &WorkspaceBindingV1,
     ) -> Result<ResolvedWorkspaceV1, DirectWorkspaceResolutionErrorV1> {
         for expected in workspace_identity_fences_v1(expected_workspace_id, selector) {
-            if expected != binding.identity().workspace_uuid() {
-                return Err(WorkspaceResolutionErrorV1::ExpectedWorkspaceUuidMismatch {
-                    expected: expected.clone(),
-                    actual: binding.identity().workspace_uuid().clone(),
-                }
-                .into());
-            }
+            check_workspace_uuid_v1(expected, binding.identity().workspace_uuid())?;
         }
         let revalidated = self.revalidate_worktree(preliminary, binding, selector)?;
         let path = require_stable_database_path(database_path, &revalidated)?;

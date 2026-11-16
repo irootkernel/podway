@@ -248,6 +248,16 @@ session, and Procedure-digest mismatches are non-retryable exit-4 conflicts;
 revision/attempt conflicts are retryable exit-4 conflicts. Retryability permits
 safe reassessment, not blind resubmission with new fences.
 
+Ordinary resolution and token-backed evidence reads use the same Engine UUID
+comparison and typed mismatch construction. Both generations retain the exact
+`workspace-uuid-mismatch-details/v3` expected/actual fields and diagnosis recipe.
+Ordinary UUID checks follow Store binding admission and precede resolver-stage
+native revalidation. Continuation reads check the supplied UUID after the view
+and token session/item binding, before supplied session and consumer-attempt
+checks. Invalid configuration or corrupt persisted identity can therefore fail
+admission before either comparison; a validly bound stale token with a wrong
+UUID retains `WORKSPACE_UUID_MISMATCH` priority.
+
 Revision details carry `expected_revision` and/or `current_revision` plus refresh.
 A null `actual_session_id` means the expected session is no longer current.
 Use the returned `observe` or `doctor` recipe, reassess ownership and graph state,

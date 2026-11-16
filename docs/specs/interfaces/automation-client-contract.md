@@ -111,6 +111,12 @@ release, installation, or external consumer adoption.
 | `AUT-ID-008` | `item.record_many` MUST enforce workspace UUID, session ID, session revision, active attempt, and every selected item revision before atomically changing any selected item; `goal.assess_criteria` MUST enforce workspace UUID, session ID, session revision, active attempt, and current goal revision before atomically recording any criterion assessment. |
 | `AUT-ID-009` | `begin`, terminal disposition, eligible or force replacement, and eligible or force reset MUST enforce the exact observed workspace UUID, session ID, and session revision; begin and disposition MUST NOT accept an attempt fence. |
 
+Ordinary reads enforce UUID assertions during binding resolution, before its bound
+native revalidation. Evidence continuation reads retain the supplied UUID check
+after the committed view and page-token session/item binding checks, before the
+supplied session and consumer-attempt checks. Shared Engine comparison ownership
+does not move either boundary or bypass configuration and Store admission.
+
 `record --stdin` uses closed `podway.item-record-many-input/v1`; each operation
 contains a typed complete record or `clear: true`. Operations and outcomes are
 canonicalized by item ID. It returns `podway.item-record-many-result/v2` and

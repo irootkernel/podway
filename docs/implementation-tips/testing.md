@@ -36,7 +36,7 @@ locator alone does not establish a passing run or Task acceptance.
 |---|---|---|
 | TYPED-001 | DF-002, DF-003, DF-011 | Core `procedure::tests::typed001_item_wire_names_preserve_all_seven_discriminators`; Config `procedure_v2_delegation_package::tests::typed001_package_reserves_cover_source_boundaries` and `int_v2sdg003_package`; Protocol `int_v2_result_contract::typed001_delegation_schema_bounds_match_shared_domain_limits`; Store `int_v2sdg004_receipt::typed001_receipt_ddl_enforces_shared_byte_boundary` and existing receipt codec checks |
 | TYPED-002 | DF-005, DF-012, DF-013, DF-016, DF-017 | Protocol `int_v2_result_contract::typed002_acceptance_view_preserves_original_document_and_closed_admission`; Store `int_v2sdg004_receipt` domain and cold corruption checks; Engine `int_v2dfc006_delegation_ports::typed002_decision_named_delegation_rejects_package_and_acceptance_without_effects`; CLI `e2e_v2sdg008_qualification` and its native qualifier's `Fixture.human` assertions |
-| TYPED-003 | DF-022 | Engine ordinary and token-backed read identity, precedence and typed public error checks |
+| TYPED-003 | DF-022 | Engine `int_v2dfc006_readback_ports::decisions::typed003_workspace_uuid_comparison_preserves_read_order_and_public_details`; existing `v2scl004_production_dispatch_serves_and_fences_evidence_read` and workspace resolver/native-binding regressions |
 | TYPED-004 | DF-024, DF-027 | Engine artifact preparation/race suites and actual native file-read instrumentation while the writer is admitted |
 | TYPED-005 | DF-025 | Core citation bounds and Engine single/batch assessment boundary, error-ordering and replay suites |
 | TYPED-006 | All twelve | Cross-Task compatibility, supported Store continuation, complete development gate and durable-document/reference reconciliation |
@@ -71,8 +71,18 @@ meaningful schema/digest/receipt/summary content, empty stderr and no error
 output, then reconciles the acceptance through exact JSON replay. Existing
 rollback, retry/conflict, archived receipt and Direct/delegated generation
 checks remain in their original suites. This uses the generic renderer and
-establishes no live adapter or model qualification. Tasks after TYPED-002 remain
-planned.
+establishes no live adapter or model qualification.
+
+TYPED-003 pins matching and mismatched UUIDs through actual native ordinary and
+continuation reads for both contract generations. It compares the complete public
+mismatch details, exit and retryability; verifies wrong-session token refusal,
+UUID priority over a bound stale token, and stale-token refusal with a matching
+UUID; and preserves session state, sequence and outcomes on healthy reads.
+Competing invalid configuration and corrupt persisted identity are rejected before
+UUID comparison or token binding. Existing token tests retain wrong-item and
+stale caller-attempt order, while native resolver tests retain preliminary retry,
+binding and revalidation behavior. The shared pure helper performs no Store open
+and changes no replay or generation boundary. Tasks after TYPED-003 remain planned.
 
 DF-014 retains its [AGENT owner](#agent-source-feedback-and-revisit-conditions).
 PARSE-004's first-parse authoring facts remain delivered; TYPED-002 covers only

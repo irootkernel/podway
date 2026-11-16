@@ -42,8 +42,12 @@ parsed placement classification, while Store consumes its independently admitted
 snapshot's structural delegation facts. Config authoring admission and Store
 persisted admission remain distinct trust boundaries.
 
-Engine `workspace` and the token-backed read in `direct_execution` repeat UUID
-comparison. `native_execution` combines pure item/revision/attempt selection
+Engine `workspace::check_workspace_uuid_v1` now owns UUID comparison and typed
+mismatch construction, used at the unchanged ordinary-resolution and token-backed
+read boundaries. It performs no Store open and leaves native revalidation, token
+binding and public error priority at their existing stages. Both generations are
+covered by the native readback matrix documented in the testing guide.
+`native_execution` combines pure item/revision/attempt selection
 with native artifact preparation and stamp validation. Its hash observer covers
 preparation streams, not every potential read in stamp verification.
 Engine's citation precheck shares Core's numeric bound but repeats its diagnostic.
