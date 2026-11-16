@@ -24,7 +24,7 @@ write-free snapshot reads are the current product boundaries.
 [Examples](examples/) provide walkthroughs and versioned known-answer payloads.
 
 Current adopted work is tracked by the [active roadmap](roadmap/).
-[TYPED](roadmap/README.md#typed-typed-boundary-ownership) is Planned, with six
+[TYPED](roadmap/README.md#typed-typed-boundary-ownership) is In Progress, with six
 Tasks for internal type, validation and preparation ownership. Its
 [temporary execution dossier](todo/TODO-podway-typed-boundary-ownership.md)
 owns unfinished design; [original feedback and planned verification owners](implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions)

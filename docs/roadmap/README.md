@@ -22,7 +22,7 @@ identifiers. Do not rename completed work to apply the new convention.
 
 ## TYPED — Typed Boundary Ownership
 
-Dependencies: implemented BOUND, PARSE and AGENT foundations. Status: Planned.
+Dependencies: implemented BOUND, PARSE and AGENT foundations. Status: In Progress.
 Execution owner: `aquarium:epic-handler` when explicitly invoked.
 Detailed SOT: [temporary TYPED execution dossier](../todo/TODO-podway-typed-boundary-ownership.md).
 Durable source feedback: [original findings and revisit conditions](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions).
@@ -47,7 +47,7 @@ This registration starts no implementation, session, commit or release.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `TYPED-001` | Consolidate wire names and delegation bounds | Planned | Give item wire names and shared bounds one owner; verify package reserves against their source limits without changing accepted bytes or limits. | [Task contract](../todo/TODO-podway-typed-boundary-ownership.md#typed-001); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
+| `TYPED-001` | Consolidate wire names and delegation bounds | Completed | Give item wire names and shared bounds one owner; verify package reserves against their source limits without changing accepted bytes or limits. | [Task contract](../todo/TODO-podway-typed-boundary-ownership.md#typed-001); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
 | `TYPED-002` | Type delegation acceptance and reuse domain predicates | Planned | Share admitted delegation facts and domain predicates, extract typed acceptance at Protocol, and retain independent Store admission plus native and human-output coverage. | [Task contract](../todo/TODO-podway-typed-boundary-ownership.md#typed-002); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
 | `TYPED-003` | Unify workspace identity comparisons | Planned | Share workspace UUID comparison while preserving ordinary and token-backed read ordering and typed details. | [Task contract](../todo/TODO-podway-typed-boundary-ownership.md#typed-003); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
 | `TYPED-004` | Separate artifact preparation and verify writer reads | Planned | Separate pure required-artifact facts from native stamps and instrument actual in-writer reads on all four artifact routes. | [Task contract](../todo/TODO-podway-typed-boundary-ownership.md#typed-004); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |

@@ -108,7 +108,7 @@ impl DelegationEvidenceItemV1 {
                 "state": "present",
                 "item_revision": item_revision.get(),
                 "value_digest": value_digest.as_str(),
-                "value_type": item_type_name(*value_type),
+                "value_type": value_type.wire_name(),
                 "size_bytes": size_bytes,
             }),
         }
@@ -399,14 +399,172 @@ fn invalid_evidence() -> ConfigError {
     }
 }
 
-fn item_type_name(value: ItemTypeV1) -> &'static str {
-    match value {
-        ItemTypeV1::Confirm => "confirm",
-        ItemTypeV1::Text => "text",
-        ItemTypeV1::Choice => "choice",
-        ItemTypeV1::Integer => "integer",
-        ItemTypeV1::List => "list",
-        ItemTypeV1::Artifact => "artifact",
-        ItemTypeV1::CheckResult => "check_result",
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use podway_core::{
+        CriterionId, DelegationRoleRefV1, GoalCriterionV2, GoalDefinitionV2, GoalRevisionNumberV2,
+        GoalRevisionReasonV2, GoalStatementV2, MAX_PROCEDURE_IDENTIFIER_BYTES, TraceSequenceV2,
+        UnixMillis,
+    };
+
+    #[test]
+    fn typed001_package_reserves_cover_source_boundaries() {
+        // These private goal limits are checked against their constructors instead of exposing
+        // unrelated domain APIs merely for package budgeting. A changed bound fails this proof.
+        let statement = "\u{1}".repeat(1_000);
+        assert!(GoalStatementV2::new(format!("{statement}x")).is_err());
+        let criterion_statement = "\u{1}".repeat(300);
+        let id = "a".repeat(MAX_PROCEDURE_IDENTIFIER_BYTES);
+        assert!(CriterionId::new(format!("{id}a")).is_err());
+        assert!(
+            GoalCriterionV2::new(
+                CriterionId::new(&id).unwrap(),
+                format!("{criterion_statement}x")
+            )
+            .is_err()
+        );
+        let criteria = (0..16)
+            .map(|index| {
+                GoalCriterionV2::new(
+                    CriterionId::new(format!("c{index:063}")).unwrap(),
+                    &criterion_statement,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let mut over = criteria.clone();
+        over.push(GoalCriterionV2::new(CriterionId::new("extra").unwrap(), "x").unwrap());
+        assert!(GoalDefinitionV2::new(over).is_err());
+        let goal = GoalRevisionRecordV2::new(
+            GoalRevisionNumberV2::new(u64::MAX),
+            Some(GoalRevisionNumberV2::new(u64::MAX - 1)),
+            GoalStatementV2::new(statement).unwrap(),
+            GoalDefinitionV2::new(criteria).unwrap(),
+            Some(GoalRevisionReasonV2::new("Revise.").unwrap()),
+            Some(GraphNodeId::new("d".repeat(MAX_PROCEDURE_IDENTIFIER_BYTES)).unwrap()),
+            false,
+            None,
+            TraceSequenceV2::FIRST,
+            UnixMillis::new(1),
+        )
+        .unwrap();
+        let role = "\"".repeat(256);
+        assert!(DelegationRoleRefV1::new(role.clone()).is_ok());
+        assert!(DelegationRoleRefV1::new(format!("{role}x")).is_err());
+        let items = (0..MAX_ITEMS_PER_DEFINITION_V2)
+            .map(|index| {
+                json!({
+                    "id": format!("i{index:063}"), "type": "text", "prompt": "Record.",
+                    "required": false,
+                })
+            })
+            .collect::<Vec<_>>();
+        for selected in [false, true] {
+            let count = if selected {
+                16
+            } else {
+                MAX_ITEMS_PER_DEFINITION_V2
+            };
+            let mut source = json!({
+                "schema": "podway.procedure/v2", "id": "reserve-proof", "version": "1",
+                "name": "Reserve proof", "purpose": "Check actual emitted metadata.",
+                "goal_tracking": true,
+                "node_definitions": {"work": {"type": "action", "title": "Work", "intent": "Record.", "items": items}},
+                "graph": {"entry": id, "nodes": [
+                    {"id": id, "use": "work", "next": "d".repeat(MAX_PROCEDURE_IDENTIFIER_BYTES)},
+                    {"id": "d".repeat(MAX_PROCEDURE_IDENTIFIER_BYTES), "use": "work", "terminal": true,
+                     "delegation": {"binding_ref": "b".repeat(MAX_PROCEDURE_IDENTIFIER_BYTES),
+                        "role_ref": role, "role_snapshot_digest": format!("sha256:{}", "a".repeat(64)),
+                        "max_rounds": 32, "after_accept": "release"},
+                     "evidence_from": [{"node": id, "required": true,
+                        "items": (0..16).map(|index| format!("i{index:063}")).collect::<Vec<_>>()}]}
+                ]},
+            });
+            if !selected {
+                source["graph"]["nodes"][1]["evidence_from"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("items");
+            }
+            let crate::ParsedProcedure::V2(parsed) = crate::parse_procedure_document(
+                source.to_string().as_bytes(),
+                crate::ProcedureDocumentFormat::Json,
+            )
+            .unwrap();
+            let procedure = crate::validate_procedure_v2(parsed).unwrap();
+            let podway_core::GraphPlacementV2::Action(action) =
+                &procedure.parsed().graph().placements()[1]
+            else {
+                panic!("action")
+            };
+            let digest = Sha256Digest::new(format!("sha256:{}", "f".repeat(64))).unwrap();
+            let evidence = [DelegationEvidenceV1 {
+                selector: action.evidence_from().unwrap().entries()[0].clone(),
+                resolution: DelegationEvidenceResolutionV1::Resolved {
+                    source_attempt_id: AttemptId::new("55555555-5555-4555-8555-555555555555")
+                        .unwrap(),
+                    source_attempt_number: AttemptNumberV2::new(u64::MAX),
+                    source_items_digest: digest.clone(),
+                },
+                items: (0..count)
+                    .map(|index| DelegationEvidenceItemV1::Present {
+                        item_id: ItemId::new(format!("i{index:063}")).unwrap(),
+                        item_revision: Revision::new(u64::MAX),
+                        value_digest: digest.clone(),
+                        value_type: ItemTypeV1::Text,
+                        size_bytes: u64::MAX,
+                    })
+                    .collect(),
+            }];
+            let package = project_delegation_work_package_v1(DelegationWorkPackageInputV1 {
+                procedure: &procedure,
+                workspace_uuid: &WorkspaceId::new("11111111-1111-4111-8111-111111111111").unwrap(),
+                session_id: &SessionId::new("22222222-2222-4222-8222-222222222222").unwrap(),
+                placement_id: &GraphNodeId::new("d".repeat(MAX_PROCEDURE_IDENTIFIER_BYTES))
+                    .unwrap(),
+                attempt_id: &AttemptId::new("33333333-3333-4333-8333-333333333333").unwrap(),
+                goal: Some(&goal),
+                evidence: &evidence,
+            })
+            .unwrap();
+            let encoded_len = |value: &Value| {
+                canonical_json_from_serializable(value)
+                    .unwrap()
+                    .as_str()
+                    .len()
+            };
+            let mut fixed = package.package().clone();
+            fixed.as_object_mut().unwrap().remove("action");
+            fixed.as_object_mut().unwrap().remove("evidence");
+            assert!(encoded_len(&fixed) <= PACKAGE_FIXED_RESERVE_BYTES);
+            let emitted = &package.package()["evidence"][0];
+            let mut metadata = emitted.clone();
+            metadata["items"] = json!([]);
+            metadata["selector"]
+                .as_object_mut()
+                .unwrap()
+                .remove("items");
+            assert!(encoded_len(&metadata) <= PACKAGE_EVIDENCE_RESERVE_BYTES);
+            for item in emitted["items"].as_array().unwrap() {
+                // Each selected ID is emitted once in the selector and again in item metadata.
+                assert!(
+                    encoded_len(item)
+                        + encoded_len(&item["item_id"])
+                        + 2
+                        + (ItemTypeV1::CheckResult.wire_name().len()
+                            - ItemTypeV1::Text.wire_name().len())
+                        <= PACKAGE_ITEM_RESERVE_BYTES
+                );
+            }
+            assert!(
+                encoded_len(emitted)
+                    <= PACKAGE_EVIDENCE_RESERVE_BYTES
+                        + MAX_ITEMS_PER_DEFINITION_V2 * PACKAGE_ITEM_RESERVE_BYTES
+            );
+            assert!(
+                package.canonical_json().as_str().len() <= MAX_DELEGATION_WORK_PACKAGE_BYTES_V1
+            );
+        }
     }
 }

@@ -36,6 +36,8 @@ use podway_core::{
     ItemPredicateOperatorV2,
     ItemSpecV2,
     ItemTypeV1,
+    MAX_DELEGATION_PACKAGE_RESULT_BYTES_V1,
+    MAX_DELEGATION_RECEIPT_RESULT_BYTES_V1,
     MAX_EVIDENCE_PAGE_BYTES_V2,
     MAX_EVIDENCE_PREVIEW_BYTES_V2,
     MAX_EVIDENCE_PREVIEW_SCALARS_V2,
@@ -87,9 +89,6 @@ const BLOCKER_WINDOW_BYTES_MAX: usize = 49_152;
 const HISTORY_WINDOW_BYTES_MAX: usize = 65_536;
 const OBSERVATION_ITEM_VALUE_CHARS_MAX: usize = 128;
 const OBSERVATION_ITEM_VALUE_BYTES_MAX: usize = 1_024;
-// Result schemas bound these values independently of the aggregate direct output cap.
-const MAX_DELEGATION_PACKAGE_RESULT_BYTES_V1: usize = 1_000_000;
-const MAX_DELEGATION_RECEIPT_RESULT_BYTES_V1: usize = 65_536;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GraphStatusTierV2 {
@@ -922,7 +921,7 @@ pub(crate) fn project_evidence_read_in(
         "item".to_owned(),
         json!({
             "item_id": selected.item_id().as_str(),
-            "type": item_type(selected.value().item_type()),
+            "type": selected.value().item_type().wire_name(),
             "revision": selected.item_revision().get(),
         }),
     );
@@ -1599,7 +1598,7 @@ impl<'a> CurrentProjection<'a> {
             .map(|(spec, slot)| {
                 json!({
                     "item_id": spec.id().as_str(),
-                    "type": item_type(spec.item_type()),
+                    "type": spec.item_type().wire_name(),
                     "required": spec.common().required(),
                     "satisfied": slot.value().is_some_and(|value| spec.is_satisfied_by(value)),
                     "revision": slot.revision().get(),
@@ -1696,7 +1695,7 @@ impl<'a> CurrentProjection<'a> {
             .map(|(spec, slot)| {
                 let mut descriptor = Map::new();
                 descriptor.insert("item_id".to_owned(), json!(spec.id().as_str()));
-                descriptor.insert("type".to_owned(), json!(item_type(spec.item_type())));
+                descriptor.insert("type".to_owned(), json!(spec.item_type().wire_name()));
                 descriptor.insert("prompt".to_owned(), json!(spec.common().prompt()));
                 if let Some(help) = spec.common().help() {
                     descriptor.insert("help".to_owned(), json!(help));
@@ -3095,7 +3094,7 @@ fn readback_value(
         metadata.insert("item_id".to_owned(), json!(item.id().as_str()));
         metadata.insert(
             "type".to_owned(),
-            json!(item_type(item.value().item_type())),
+            json!(item.value().item_type().wire_name()),
         );
         metadata.insert("revision".to_owned(), json!(revision.get()));
         metadata.insert("value_digest".to_owned(), json!(digest.as_str()));
@@ -4222,18 +4221,6 @@ fn truncate_chars(value: &str, maximum: usize) -> (String, bool) {
 fn push_unique<'a>(values: &mut Vec<&'a str>, value: &'a str) {
     if !values.contains(&value) {
         values.push(value);
-    }
-}
-
-const fn item_type(value: ItemTypeV1) -> &'static str {
-    match value {
-        ItemTypeV1::Confirm => "confirm",
-        ItemTypeV1::Text => "text",
-        ItemTypeV1::Choice => "choice",
-        ItemTypeV1::Integer => "integer",
-        ItemTypeV1::List => "list",
-        ItemTypeV1::Artifact => "artifact",
-        ItemTypeV1::CheckResult => "check_result",
     }
 }
 

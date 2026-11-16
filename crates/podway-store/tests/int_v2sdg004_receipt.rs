@@ -1490,3 +1490,41 @@ fn state004_readiness_acquisition_pins_window_derivation_absence_fallback_and_wr
     assert_eq!(receipts.summaries().len(), 1);
     assert!(!receipts.truncated());
 }
+
+#[test]
+fn typed001_receipt_ddl_enforces_shared_byte_boundary() {
+    let connection = rusqlite::Connection::open_in_memory().unwrap();
+    connection
+        .execute_batch(include_str!(
+            "../../../assets/specifications/sqlite-v15.sql"
+        ))
+        .unwrap();
+    // This isolates the DDL byte guard; closed receipt shape and relational admission are tested
+    // independently by the codec and transaction suites, not bypassed in production.
+    connection
+        .execute_batch("PRAGMA foreign_keys = OFF;")
+        .unwrap();
+    let bound = podway_core::MAX_DELEGATION_RECEIPT_BYTES_V1;
+    assert_eq!(
+        bound,
+        podway_store::v2_delegation::MAX_DELEGATION_RECEIPT_BYTES_V1
+    );
+    for (extra, accepted) in [(0, true), (1, false)] {
+        let json = format!("\"{}\"", "x".repeat(bound - 2 + extra));
+        let result = connection.execute(
+            "INSERT INTO v2_delegation_receipts (attempt_id, session_id, receipt_id, receipt_json) VALUES (?1, 'session', ?1, ?2)",
+            rusqlite::params![format!("attempt-{extra}"), json],
+        );
+        assert_eq!(
+            result.is_ok(),
+            accepted,
+            "byte boundary +{extra}: {result:?}"
+        );
+    }
+    // UTF-8 bytes, rather than SQLite's text-character count, own the stored limit.
+    let multibyte = format!("\"{}\"", "é".repeat(bound / 2));
+    assert!(connection.execute(
+        "INSERT INTO v2_delegation_receipts (attempt_id, session_id, receipt_id, receipt_json) VALUES ('utf8', 'session', 'utf8', ?1)",
+        [multibyte],
+    ).is_err());
+}

@@ -38,6 +38,17 @@ inspection. Engine then descriptor-validates project configuration against that
 root witness and selects HOME only after project validation. Ordinary Direct
 resolution retains its existing containment and Store admission checks.
 
+### Shared wire names and delegation limits
+
+`podway-core` owns `ItemTypeV1::wire_name` and shared work-package, receipt and
+package/receipt result byte bounds. Config and Engine use that discriminator;
+Store preserves its receipt-limit re-export, and Protocol/Engine consume the
+shared bounds without reverse dependencies. Local decoder, projection and
+observation budgets retain their owners. Schema and SQLite literals remain
+unchanged and are checked against the Rust values. Config's package reserve
+proof checks actual source constructors and emitted worst-case metadata without
+exporting unrelated private goal limits.
+
 ## Dependency rules
 
 The executable [`cargo-adjacency.json`](../../contracts/cargo-adjacency.json)

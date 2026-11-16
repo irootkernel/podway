@@ -14,7 +14,7 @@ use crate::{
     StoreValueErrorV1, map_rusqlite_error_v1,
 };
 
-pub const MAX_DELEGATION_RECEIPT_BYTES_V1: usize = 45_000;
+pub use podway_core::MAX_DELEGATION_RECEIPT_BYTES_V1;
 const ACCEPTED_ITEMS_DIGEST_DOMAIN_V1: &str = "podway.delegation-accepted-items/v1\n";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

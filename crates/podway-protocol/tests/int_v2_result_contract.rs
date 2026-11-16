@@ -4017,3 +4017,31 @@ fn agent001_reserved_batch_assessment_and_mutation_observation_contracts_validat
         validate_mutation_observation_command_result_v1("item.record_many", &v5_wrapper).is_err()
     );
 }
+
+#[test]
+fn typed001_delegation_schema_bounds_match_shared_domain_limits() {
+    for (schema, bound) in [
+        (
+            "delegation-work-package-v1.schema.json",
+            podway_core::MAX_DELEGATION_WORK_PACKAGE_BYTES_V1,
+        ),
+        (
+            "delegation-receipt-v1.schema.json",
+            podway_core::MAX_DELEGATION_RECEIPT_BYTES_V1,
+        ),
+        (
+            "delegation-package-result-v1.schema.json",
+            podway_core::MAX_DELEGATION_PACKAGE_RESULT_BYTES_V1,
+        ),
+        (
+            "delegation-receipt-result-v1.schema.json",
+            podway_core::MAX_DELEGATION_RECEIPT_RESULT_BYTES_V1,
+        ),
+    ] {
+        assert_eq!(
+            read_schema(&format!("schemas/{schema}"))["x-podway-max-json-bytes"],
+            bound,
+            "{schema}"
+        );
+    }
+}

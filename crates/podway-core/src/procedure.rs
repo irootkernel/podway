@@ -164,6 +164,21 @@ pub enum ItemTypeV1 {
     CheckResult,
 }
 
+impl ItemTypeV1 {
+    /// The stable public JSON discriminator shared by item and evidence projections.
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::Confirm => "confirm",
+            Self::Text => "text",
+            Self::Choice => "choice",
+            Self::Integer => "integer",
+            Self::List => "list",
+            Self::Artifact => "artifact",
+            Self::CheckResult => "check_result",
+        }
+    }
+}
+
 pub(crate) fn validate_media_type(value: &str) -> Result<(), DomainError> {
     if value.len() > 255 {
         return Err(invalid("media type exceeds 255 bytes"));
@@ -226,6 +241,25 @@ const fn invalid(reason: &'static str) -> DomainError {
 mod tests {
     use super::CanonicalProcedureJsonV1;
     use crate::{DomainError, MAX_PROCEDURE_DOCUMENT_BYTES};
+
+    #[test]
+    fn typed001_item_wire_names_preserve_all_seven_discriminators() {
+        use super::ItemTypeV1::*;
+        let actual = [Confirm, Text, Choice, Integer, List, Artifact, CheckResult]
+            .map(super::ItemTypeV1::wire_name);
+        assert_eq!(
+            actual,
+            [
+                "confirm",
+                "text",
+                "choice",
+                "integer",
+                "list",
+                "artifact",
+                "check_result"
+            ]
+        );
+    }
 
     #[test]
     fn canonical_procedure_json_enforces_empty_and_exact_byte_bounds() {

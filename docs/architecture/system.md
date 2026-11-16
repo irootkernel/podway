@@ -177,6 +177,23 @@ maintenance use exclusive exclusion. The Store has a bounded process-local
 connection gate to keep a read-only connection from inheriting another connection's
 writable SHM mapping; this creates no persistent or per-user state.
 
+### Shared item names and delegation bounds
+
+Core's `ItemTypeV1::wire_name` owns the seven public item discriminators consumed
+by Config's delegation evidence and Engine's read projections. Core also owns
+the shared work-package, receipt and public package/receipt result byte bounds.
+Store re-exports its existing receipt-limit name; Protocol and Engine import the
+same values. Layer-specific input, projection and observation budgets remain at
+their existing boundaries. Schema and DDL literals remain canonical assets;
+executable checks bind them to these unchanged Rust bounds.
+
+Config retains the existing package admission reserves and actual-byte backstop.
+Its source-bound proof exercises the largest admitted goal and criterion values
+with six-byte JSON escaping, maximum identifier/role sizes, selected and full
+source-item metadata, and maximum unsigned revision and size fields. Source
+constructors check private bounds directly rather than expanding Core's API for
+budgeting. These ownership changes preserve canonical package bytes and digests.
+
 ### Supervised delegation
 
 An explicitly authored action placement may require delegation under

@@ -349,6 +349,14 @@ fn v2sdg003_package_digest_is_domain_separated_and_attempt_bound() {
         package.digest().as_str(),
         format!("sha256:{:x}", Sha256::digest(domain.as_bytes()))
     );
+    assert_eq!(
+        package.digest().as_str(),
+        "sha256:5f36866311e0386c93978bf272606c4db702e10a1991f8150f2d17046c317420"
+    );
+    assert_eq!(
+        package.canonical_json().as_str(),
+        r#"{"action":{"intent":"Record the Primary's direct result.","items":[{"id":"result","max_length":256,"min_length":0,"multiline":true,"prompt":"Record the result.","required":true,"type":"text"}],"title":"Record work"},"attempt_id":"33333333-3333-4333-8333-333333333333","delegation":{"after_accept":"retain","binding_ref":"local-specialist","max_rounds":3,"role_ref":"reviewer","role_snapshot_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"evidence":[],"goal":null,"placement_id":"work","procedure_digest":"sha256:a8d643b744994e46791eed3f272be569f919b010bc3388b4fe086e51d3f970bd","schema":"podway.delegation-work-package/v1","session_id":"22222222-2222-4222-8222-222222222222","workspace_uuid":"11111111-1111-4111-8111-111111111111"}"#
+    );
     assert_ne!(package.digest(), procedure.digest());
 
     // Mutable output values and session revisions are deliberately absent from the input. A

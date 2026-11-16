@@ -10,6 +10,14 @@ A proof locator is not a passing result. The active roadmap owns task status;
 `make test` is the combined development gate, and the adopted dossier owns its
 additional native qualification criteria.
 
+## Typed boundary ownership
+
+| Requirement | Production owner | Executable proof |
+| --- | --- | --- |
+| DF-002: seven stable item wire names have one owner | Core `ItemTypeV1::wire_name`; Config delegation evidence and Engine read projections | Core `procedure::tests::typed001_item_wire_names_preserve_all_seven_discriminators`; Config `int_v2sdg003_package`; Engine `int_v2run002_views` |
+| DF-003: package reserves cover admitted source limits without changing admission or canonical identity | Config `procedure_v2_delegation_package`, retaining fixed/evidence/item reserves and the actual-byte check | Config `typed001_package_reserves_cover_source_boundaries`; `int_v2sdg003_package` admission and golden canonical package/digest checks |
+| DF-011: shared delegation byte limits preserve decoder, SQL, schema and emission agreement | Core limits; Store receipt re-export; Protocol document/result validation; Engine package/receipt result projections | Protocol `typed001_delegation_schema_bounds_match_shared_domain_limits`; Store `typed001_receipt_ddl_enforces_shared_byte_boundary` and receipt codec suite; Config package and Engine delegation suites |
+
 ## Retained domain and compatibility requirements
 
 | Requirement | Authority | Current executable proof |

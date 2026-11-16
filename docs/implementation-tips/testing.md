@@ -25,21 +25,34 @@ design and does not duplicate this detailed register.
 | DF-025 | V2DFC-014 maintainability review | The Engine's bounded citation precheck repeats the domain's diagnostic text. | The shared numeric bound agrees today; early rejection prevents quadratic duplicate checks and cloning oversized input, so removing it would weaken resource bounds. Diagnostic ownership is independent future work. | Before changing citation bounds or their diagnostics, expose one domain-owned bounded validation result and verify Engine and domain errors together without moving preparation into the writer. |
 | DF-027 | V2DFC-014 testing review | The hash observer sees preparation streams but does not instrument every potential future read inside stamp verification. | The current descriptor-stamp resolver reads metadata only, and same-byte rename tests reject a digest-only regression. Broader instrumentation is independent future regression protection, not an unverified current byte-reading path. | Before changing stamp verification or introducing another artifact read there, instrument the actual in-writer file-read boundary and prove all four routes read no artifact bytes while a separate writer can progress during preparation. |
 
-### Planned verification and durable owners
+### Verification and durable owners
 
-The following mapping is an implementation and verification plan, not evidence
-that TYPED checks ran or its changes exist. Each owning Task promotes actual
-behavior and regression ownership here and into architecture, specifications
-and requirements traceability before its completion.
+The mapping distinguishes delivered regression owners from remaining planned
+work. Each owning Task promotes actual behavior and regression ownership here
+and into architecture, specifications and requirements traceability. A proof
+locator alone does not establish a passing run or Task acceptance.
 
 | Task | Feedback | Planned regression ownership |
 |---|---|---|
-| TYPED-001 | DF-002, DF-003, DF-011 | Core wire-name/bound tests, Config package budgeting, Protocol result bounds, Store receipt admission and canonical schema/DDL agreement |
+| TYPED-001 | DF-002, DF-003, DF-011 | Core `procedure::tests::typed001_item_wire_names_preserve_all_seven_discriminators`; Config `procedure_v2_delegation_package::tests::typed001_package_reserves_cover_source_boundaries` and `int_v2sdg003_package`; Protocol `int_v2_result_contract::typed001_delegation_schema_bounds_match_shared_domain_limits`; Store `int_v2sdg004_receipt::typed001_receipt_ddl_enforces_shared_byte_boundary` and existing receipt codec checks |
 | TYPED-002 | DF-005, DF-012, DF-013, DF-016, DF-017 | Config parsed delegation facts; Protocol closed decoding and identity; Store receipt/semantic suites; Engine delegation ports; actual CLI non-JSON package, acceptance and receipt |
 | TYPED-003 | DF-022 | Engine ordinary and token-backed read identity, precedence and typed public error checks |
 | TYPED-004 | DF-024, DF-027 | Engine artifact preparation/race suites and actual native file-read instrumentation while the writer is admitted |
 | TYPED-005 | DF-025 | Core citation bounds and Engine single/batch assessment boundary, error-ordering and replay suites |
 | TYPED-006 | All twelve | Cross-Task compatibility, supported Store continuation, complete development gate and durable-document/reference reconciliation |
+
+TYPED-001 gives wire names and shared delegation bounds one Core owner. Config's
+reserve proof projects actual packages with maximum escaped goal/criterion
+values, maximum identifiers and role references, selected and full evidence
+sets, and maximum revision/size fields. It checks the private source limits at
+and beyond their boundaries, each fixed/evidence/item reserve, and the retained
+actual-byte backstop. The package identity regression pins canonical bytes and
+the domain-separated digest observed before the refactor. Existing package
+admission tests retain below/over-limit rejection; Protocol ties schema limits
+to Core, and Store executes the canonical DDL at the exact receipt byte ceiling,
+one byte over and a multibyte overrun. The DDL test isolates the SQL byte guard;
+closed receipt shape and relational admission remain independently verified by
+the codec and transaction suites. Later Task rows remain planned.
 
 DF-014 retains its [AGENT owner](#agent-source-feedback-and-revisit-conditions).
 PARSE-004's first-parse authoring facts remain delivered; TYPED-002 covers only

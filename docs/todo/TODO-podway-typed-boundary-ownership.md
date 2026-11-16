@@ -25,10 +25,12 @@ PARSE-004's completed first-parse CLI authoring facts remain outside this work.
 
 ## Verified context
 
-Current code still repeats the item wire-name mapping in Config's
-`procedure_v2_delegation_package` and Engine's `v2_read_service`.
-Package static reserves are fixed charges against bounds owned elsewhere;
-receipt and result limits are repeated in Store, Protocol and Engine.
+Core now owns `ItemTypeV1::wire_name` for Config's delegation package and
+Engine's read projections, and the shared receipt and package/receipt result
+byte bounds. Package static reserves retain their fixed charges, with a
+source-bound emitted-metadata proof and the actual-byte backstop. Permanent
+ownership and regression references live in architecture, testing and
+requirements traceability.
 Store receipt admission repeats Core Role, round and disposition predicates.
 
 Protocol's `DelegationAcceptV1` carries a JSON Value; CLI constructs it and

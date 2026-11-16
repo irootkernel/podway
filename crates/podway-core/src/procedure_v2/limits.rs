@@ -45,6 +45,12 @@ pub const MAX_ATTEMPT_CONTENT_SCALARS_V2: u64 = 16_777_216;
 /// The maximum items one node definition may declare and one attempt may record.
 pub const MAX_ITEMS_PER_DEFINITION_V2: usize = 128;
 pub const MAX_DELEGATION_WORK_PACKAGE_BYTES_V1: usize = 950_000;
+/// Maximum canonical bytes of one immutable delegation receipt, including persisted admission.
+pub const MAX_DELEGATION_RECEIPT_BYTES_V1: usize = 45_000;
+/// Maximum encoded bytes of the public package result, including its identity metadata.
+pub const MAX_DELEGATION_PACKAGE_RESULT_BYTES_V1: usize = 1_000_000;
+/// Maximum encoded bytes of the public receipt result, including its applicability metadata.
+pub const MAX_DELEGATION_RECEIPT_RESULT_BYTES_V1: usize = 65_536;
 
 /// The bytes one Unicode scalar may occupy once JSON-escaped in the worst case.
 ///
