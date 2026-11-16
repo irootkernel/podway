@@ -20,6 +20,40 @@ sequence, for example `OPTIM-001`. Existing alphanumeric epic IDs, including
 `V2CTR` and `REL12`, and the compact `REL12` task IDs remain unchanged historical
 identifiers. Do not rename completed work to apply the new convention.
 
+## TYPED — Typed Boundary Ownership
+
+Dependencies: implemented BOUND, PARSE and AGENT foundations. Status: Planned.
+Execution owner: `aquarium:epic-handler` when explicitly invoked.
+Detailed SOT: [temporary TYPED execution dossier](../todo/TODO-podway-typed-boundary-ownership.md).
+Durable source feedback: [original findings and revisit conditions](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions).
+Target release: unassigned.
+
+TYPED adopts DF-002, DF-003, DF-005, DF-011, DF-012, DF-013, DF-016,
+DF-017, DF-022, DF-024, DF-025 and DF-027 as one owner-selected internal
+improvement Epic. It preserves public CLI/JSON, canonical bytes and digests,
+error precedence, exact replay, Store/writer contracts, independent persisted
+admission and crate dependency direction. DF-014 remains owned by AGENT-002;
+PARSE-004's completed authoring work is not reopened. Graph, Aquarium and
+Dolgorae integration are not dependencies or deliverables.
+
+Execute TYPED-001 through TYPED-006 in numeric order with one active Task.
+Only the first incomplete Task may be In Progress, In Review or Blocked.
+Each Task includes focused verification and affected durable documentation;
+executable changes require the development gate. TYPED-006 prepares closeout
+but does not substitute for whole-Epic validation or actual owner acceptance.
+The dossier has TYPED as its sole consumer and is deleted only at accepted final
+closeout after all durable content and references have moved to canonical owners.
+This registration starts no implementation, session, commit or release.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `TYPED-001` | Consolidate wire names and delegation bounds | Planned | Give item wire names and shared bounds one owner; verify package reserves against their source limits without changing accepted bytes or limits. | [Task contract](../todo/TODO-podway-typed-boundary-ownership.md#typed-001); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
+| `TYPED-002` | Type delegation acceptance and reuse domain predicates | Planned | Share admitted delegation facts and domain predicates, extract typed acceptance at Protocol, and retain independent Store admission plus native and human-output coverage. | [Task contract](../todo/TODO-podway-typed-boundary-ownership.md#typed-002); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
+| `TYPED-003` | Unify workspace identity comparisons | Planned | Share workspace UUID comparison while preserving ordinary and token-backed read ordering and typed details. | [Task contract](../todo/TODO-podway-typed-boundary-ownership.md#typed-003); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
+| `TYPED-004` | Separate artifact preparation and verify writer reads | Planned | Separate pure required-artifact facts from native stamps and instrument actual in-writer reads on all four artifact routes. | [Task contract](../todo/TODO-podway-typed-boundary-ownership.md#typed-004); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
+| `TYPED-005` | Centralize bounded citation diagnostics | Planned | Reuse a Core-owned bounded validation result without weakening early rejection or changing command-specific error precedence. | [Task contract](../todo/TODO-podway-typed-boundary-ownership.md#typed-005); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
+| `TYPED-006` | Qualify integration and prepare durable closeout | Planned | Reconcile all twelve findings, integrated correctness and durable owners; prepare the later whole-Epic validation and owner-approved dossier retirement. | [Task contract](../todo/TODO-podway-typed-boundary-ownership.md#typed-006); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
+
 ## CANON — Canonical Integer Contract Alignment
 
 Dependencies: existing canonicalization and contract-generation tooling. Status: Completed.
@@ -166,9 +200,9 @@ Implemented ownership: [CLI guidance](../specs/interfaces/cli-specification.md),
 [integrated qualification and historical feedback](../implementation-tips/testing.md#integrated-cli-guidance-qualification).
 
 CALLS covers DF-044, DF-047, DF-048, DF-049 and DF-051 through existing-interface
-guidance, preserving command/result families and separate mutations. The
-[continuing interaction candidate](../todo/TODO-podway-agent-workflow-simplification.md)
-retains unselected combined operations and returned observations. No release,
+guidance, preserving command/result families and separate mutations. Atomic
+criterion batches and commit-bound observations were delivered separately by
+[AGENT](#agent-agent-interaction-simplification). No release,
 installation, external-consumer change or Git publication is selected.
 
 The ordinary qualification member, its normal completion commit, internal
@@ -294,8 +328,8 @@ external-consumer change is selected by this design registration.
   to mutations. Preserve deadlines as behavior without measuring performance.
 - Keep separate start/reset observations and existing user interaction semantics.
   [CALLS](#calls-agent-workflow-guidance) separately owns adopted guidance work.
-  Combined mutation and returned-observation changes remain in the
-  [unadopted interaction candidate](../todo/TODO-podway-agent-workflow-simplification.md).
+  Atomic criterion batches and commit-bound observations are separately owned by
+  [AGENT](#agent-agent-interaction-simplification).
 
 The completed task-local ownership ledgers informed the durable
 [read architecture](../architecture/system.md#read-path),

@@ -24,6 +24,14 @@ write-free snapshot reads are the current product boundaries.
 [Examples](examples/) provide walkthroughs and versioned known-answer payloads.
 
 Current adopted work is tracked by the [active roadmap](roadmap/).
+[TYPED](roadmap/README.md#typed-typed-boundary-ownership) is Planned, with six
+Tasks for internal type, validation and preparation ownership. Its
+[temporary execution dossier](todo/TODO-podway-typed-boundary-ownership.md)
+owns unfinished design; [original feedback and planned verification owners](implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions)
+are permanently retained. Each Task promotes actual behavior and regression
+ownership into canonical documents before completion. Registration claims no
+implementation, acceptance or release. The dossier is retired only at accepted
+final Epic closeout after all lasting information and references have moved.
 [CANON](roadmap/README.md#canon-canonical-integer-contract-alignment) is complete;
 its integer rules and compatibility boundaries are in the
 [JSON contract](specs/interfaces/json-contract.md), and its regression owners are
@@ -100,8 +108,6 @@ Implemented guidance is owned by the [CLI specification](specs/interfaces/cli-sp
 [built-in preset specification](specs/domain/built-in-presets.md) and
 [durable feedback and regression ownership](implementation-tips/testing.md#guidance-source-feedback-and-revisit-conditions).
 The roadmap retains the qualification and final acceptance boundaries.
-Optional combined operations remain in the
-[interaction candidate](todo/TODO-podway-agent-workflow-simplification.md).
 Selected atomic criterion batches and returned observations are delivered by
 [AGENT](roadmap/README.md#agent-agent-interaction-simplification); CALLS retains
 its separate existing-interface guidance scope.

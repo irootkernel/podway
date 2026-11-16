@@ -76,8 +76,8 @@ must not use the release-program identifier as a synthetic epic or task prefix.
   one detailed owner, including its source, rationale and revisit condition;
   duplicate detail tables and a second status authority are unnecessary.
   Promotion closes the selected deferral, not implementation or acceptance;
-  the roadmap alone owns those states. For example, adopting DF-013 and DF-014
-  from TYPED leaves its other eleven entries Open under their continuing owner.
+  the roadmap alone owns those states. Partial promotion leaves every unselected
+  entry Open under its continuing detailed owner.
 - Update the dossier before implementation when a material design decision
   changes. During implementation, promote every lasting decision and behavior to
   its proper durable authority: accepted ADRs, canonical machine assets,
@@ -97,29 +97,29 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-None. Completed AGENT behavior and regression ownership are linked from the
-[roadmap](../roadmap/README.md#agent-agent-interaction-simplification). Actual
-adapter and live qualification remain in the continuing executor candidate below.
+- [TYPED execution dossier](TODO-podway-typed-boundary-ownership.md) owns the
+  unfinished design for the sole consumer TYPED, with six roadmap Tasks.
+  Original feedback is permanently retained in the
+  [testing guide](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions).
+  Delete the dossier at accepted final closeout after promoting all lasting
+  content and replacing its references. The roadmap alone owns lifecycle state.
 
 ## Related candidates
 
-These five documents group possible epic scopes. Their working labels reserve
+These three documents group possible epic scopes. Their working labels reserve
 no roadmap identifiers and establish no task order or implementation commitment.
 Each remains `Candidate`; adoption requires closing its decisions and registering
-bounded work in the active roadmap. Existing-interface guidance is adopted as
-CALLS; AGENT selects batches and returned observations, while combined operations
-remain a continuing candidate.
+bounded work in the active roadmap. Existing-interface guidance was delivered by
+CALLS; AGENT delivered batches and returned observations.
 
 Select work from a concrete product need and each finding's revisit condition.
-These groupings are not five sequential implementation commitments: TYPED is
-not a prerequisite for INTEG, and independent improvements do not wait for the
-entire PROOF program. A selected scope carries its applicable correctness and
-verification obligations; grouping does not waive them.
+These groupings are not three sequential implementation commitments.
+Independent improvements do not wait for the entire PROOF program. A selected
+scope carries its applicable correctness and verification obligations; grouping
+does not waive them.
 
 | Working label | Candidate | Proposed outcome | Source feedback |
 |---|---|---|---|
-| Future interaction semantics | [Agent workflow simplification](TODO-podway-agent-workflow-simplification.md) | Assess unselected combined operations against a concrete caller need | Unselected interaction research |
-| TYPED | [Typed boundary ownership](TODO-podway-typed-boundary-ownership.md) | Explicit owners for existing values, bounds, extraction and validation reuse | DF-002, DF-003, DF-005, DF-011, DF-012, DF-013, DF-016, DF-017, DF-022, DF-024, DF-025, DF-027 |
 | Future executor qualification | [Executor integration](TODO-podway-executor-integration.md) | Real adapter and selected-build qualification beyond the bounded INTEG readiness work | Existing real executor candidate |
 | PROOF | [Graph evolution feasibility](TODO-podway-graph-evolution-feasibility.md) | Per-shape evidence for coordination and topology-lineage needs | Existing graph and continuation research |
 | WEBUI | [Operations console](TODO-podway-operations-console.md) | Foreground human operations after the graph direction is settled | Existing Web console candidate |

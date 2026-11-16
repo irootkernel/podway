@@ -1,5 +1,52 @@
 # Testing
 
+## TYPED source feedback and revisit conditions
+
+TYPED adopts the twelve findings below. Their original source, feedback,
+deferral reason and revisit condition are retained verbatim from the former
+candidate. They describe the historical reasons for postponement, not current
+implementation or acceptance status. Roadmap promotion closes the deferrals
+only; the [roadmap](../roadmap/README.md#typed-typed-boundary-ownership) owns
+delivery and acceptance. The temporary dossier owns the unfinished execution
+design and does not duplicate this detailed register.
+
+| ID | Source | Feedback | Deferral reason | Revisit condition |
+|---|---|---|---|---|
+| DF-002 | V2SDG-003 maintainability review | The `ItemTypeV1` wire-name mapping is repeated in the delegation package projector and Engine read projection. | Exhaustive Rust matches and current schema checks keep the seven names aligned; consolidating both consumers crosses this task's reviewed scope. | Before adding or renaming an item type, give its wire name one owner and verify both projections and schemas. |
+| DF-003 | V2SDG-003 maintainability review | Delegation package static-budget reserves depend on bounded goal and evidence values owned elsewhere. | Current limits fit the reserves and the projection has an actual-byte backstop; exporting all bounds solely for this task would widen the public core API. | Before changing goal, selector, identifier, or item bounds, derive or assert the worst-case reserve against those limits and verify admission-time rejection. |
+| DF-005 | V2SDG-006 and V2SDG validation maintainability reviews | Delegated-placement detection is repeated across Config, Engine, and Store; the Store receipt fast path searches canonical placement JSON. PARSE-004 already relocated CLI authoring detection to Config-owned first-parse facts. | Current typed predicates and fail-closed Store checks preserve emitted results; a Direct decision option named `delegation` only causes redundant receipt queries. Consolidation is independent drift prevention. | Before changing placement variants or delegation detection, give parsed-Procedure detection one config-owned API and keep Store detection structural behind its persisted-state boundary, without adding a Store-to-config dependency; verify Direct and delegated result generations together. |
+| DF-011 | V2SDG final epic maintainability review | Receipt byte limits are repeated in Store and protocol validation, and delegation result limits are repeated in protocol and Engine projection. | Current constants, schemas, Store DDL, and emitted bounds agree; consolidating ownership is future drift prevention rather than a current correctness fix. | Before changing receipt or delegation result byte limits, give shared bounds a core owner and verify decoder, Store DDL, schema, and emission agreement. |
+| DF-012 | V2SDG final epic maintainability review | Store receipt validation repeats core RoleRef, round-count, and after-acceptance disposition predicates. | Current core, Store, and protocol validators agree; sharing their implementation is independent maintainability work. | Before changing role references, round bounds, or after-acceptance dispositions, reuse core constructors or named bounds while preserving closed JSON shapes and verify authoring, receipts, protocol, and schemas together. |
+| DF-013 | V2SDG validation maintainability review | Delegation acceptance passes validated JSON between protocol, CLI, Engine, and Store through repeated string-keyed field access. | Closed protocol validation and transaction-time input-to-receipt checks currently reject malformed input; a shared typed carrier would prevent future field drift rather than repair current behavior. | Before changing acceptance-input fields, consolidate their typed extraction at the existing protocol boundary while retaining independent Store validation and the closed wire shape; verify malformed inputs and replay identity. |
+| DF-016 | V2SDG validation testing review | Native delegation route tests do not separately assert package and acceptance rejection while a decision placement is current. | Both routes use the same explicit non-action rejection in the package projector; Direct rejection and valid decision-source evidence are covered, and no current result defect is known. This is additional branch coverage. | Before changing active-placement classification or delegation error mapping, add a decision-current route case asserting the error code and reason for package and acceptance, plus unchanged session and attempt state. |
+| DF-017 | V2SDG validation testing review | Delegation command success paths lack dedicated human-output smoke cases. | All three use the existing generic v2 success renderer, whose complete result rendering is already tested; there is no missing delegation-specific rendering branch. Dedicated cases are future coverage. | Before changing delegation success rendering or adding schema-specific output, assert successful non-JSON package, acceptance, and receipt output through the CLI, including meaningful result content and absence of error output. |
+| DF-022 | V2DFC-013 maintainability review | The expected workspace UUID comparison is duplicated in the workspace resolver and the token-backed read path. | Both paths currently preserve the same typed error and details, and public ordering tests cover their intentional placement. Consolidating them is independent maintenance work with no current behavior defect. | Before changing workspace identity fence rules or their public error context, consolidate the comparison under one owner and verify both token-backed and ordinary reads retain their ordering and typed details. |
+| DF-024 | V2DFC-014 maintainability review | Required-artifact preparation in the native Engine adapter maps orchestration errors and traverses workflow-memory slots. | Current required-set, active-attempt and item-revision checks agree with pure preparation and fail closed; relocating their ownership is independent maintenance work. | Before changing required-artifact slot or attempt structure, give the pure item/revision projection one Engine owner and keep native stamp checks at the filesystem boundary; preserve typed errors and replay ordering. |
+| DF-025 | V2DFC-014 maintainability review | The Engine's bounded citation precheck repeats the domain's diagnostic text. | The shared numeric bound agrees today; early rejection prevents quadratic duplicate checks and cloning oversized input, so removing it would weaken resource bounds. Diagnostic ownership is independent future work. | Before changing citation bounds or their diagnostics, expose one domain-owned bounded validation result and verify Engine and domain errors together without moving preparation into the writer. |
+| DF-027 | V2DFC-014 testing review | The hash observer sees preparation streams but does not instrument every potential future read inside stamp verification. | The current descriptor-stamp resolver reads metadata only, and same-byte rename tests reject a digest-only regression. Broader instrumentation is independent future regression protection, not an unverified current byte-reading path. | Before changing stamp verification or introducing another artifact read there, instrument the actual in-writer file-read boundary and prove all four routes read no artifact bytes while a separate writer can progress during preparation. |
+
+### Planned verification and durable owners
+
+The following mapping is an implementation and verification plan, not evidence
+that TYPED checks ran or its changes exist. Each owning Task promotes actual
+behavior and regression ownership here and into architecture, specifications
+and requirements traceability before its completion.
+
+| Task | Feedback | Planned regression ownership |
+|---|---|---|
+| TYPED-001 | DF-002, DF-003, DF-011 | Core wire-name/bound tests, Config package budgeting, Protocol result bounds, Store receipt admission and canonical schema/DDL agreement |
+| TYPED-002 | DF-005, DF-012, DF-013, DF-016, DF-017 | Config parsed delegation facts; Protocol closed decoding and identity; Store receipt/semantic suites; Engine delegation ports; actual CLI non-JSON package, acceptance and receipt |
+| TYPED-003 | DF-022 | Engine ordinary and token-backed read identity, precedence and typed public error checks |
+| TYPED-004 | DF-024, DF-027 | Engine artifact preparation/race suites and actual native file-read instrumentation while the writer is admitted |
+| TYPED-005 | DF-025 | Core citation bounds and Engine single/batch assessment boundary, error-ordering and replay suites |
+| TYPED-006 | All twelve | Cross-Task compatibility, supported Store continuation, complete development gate and durable-document/reference reconciliation |
+
+DF-014 retains its [AGENT owner](#agent-source-feedback-and-revisit-conditions).
+PARSE-004's first-parse authoring facts remain delivered; TYPED-002 covers only
+the remaining parsed-Procedure and independent persisted-state boundaries.
+No performance measurement, provider, installed-runtime or release qualification
+is introduced by this Epic.
+
 ## Verification layers
 
 `make test-prepare` also checks exact Rust and Python toolchain selection and refusal with
@@ -921,8 +968,7 @@ preserved verbatim from GUIDE's design review and UTM reruns. They describe the
 original gaps before CALLS implementation. Promotion closed their deferrals;
 the roadmap alone records implementation and acceptance. Current behavior belongs
 to the CLI, JSON, built-in preset and writer specifications and the linked
-regression owners, with the continuing interaction candidate retaining its
-unselected questions and DF-050 retaining its independent owner.
+regression owners. DF-050 retains its independent owner.
 
 | ID | Source | Feedback | Deferral reason | Revisit condition |
 |---|---|---|---|---|
