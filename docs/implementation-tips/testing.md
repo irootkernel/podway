@@ -7,8 +7,9 @@ deferral reason and revisit condition are retained verbatim from the former
 candidate. They describe the historical reasons for postponement, not current
 implementation or acceptance status. Roadmap promotion closes the deferrals
 only; the [roadmap](../roadmap/README.md#typed-typed-boundary-ownership) owns
-delivery and acceptance. The temporary dossier owns the unfinished execution
-design and does not duplicate this detailed register.
+delivery and acceptance. The delivered ownership and verification response is
+recorded below; this detailed register preserves the original history after
+retirement of the execution dossier.
 
 | ID | Source | Feedback | Deferral reason | Revisit condition |
 |---|---|---|---|---|
@@ -27,10 +28,10 @@ design and does not duplicate this detailed register.
 
 ### Verification and durable owners
 
-The mapping distinguishes delivered regression owners from remaining planned
-work. Each owning Task promotes actual behavior and regression ownership here
-and into architecture, specifications and requirements traceability. A proof
-locator alone does not establish a passing run or Task acceptance.
+The mapping records delivered regression owners. Each owning Task promoted
+actual behavior and regression ownership here and into architecture,
+specifications and requirements traceability. A proof locator alone does not
+establish a passing run or Task acceptance.
 
 | Task | Feedback | Regression ownership |
 |---|---|---|
@@ -52,7 +53,7 @@ admission tests retain below/over-limit rejection; Protocol ties schema limits
 to Core, and Store executes the canonical DDL at the exact receipt byte ceiling,
 one byte over and a multibyte overrun. The DDL test isolates the SQL byte guard;
 closed receipt shape and relational admission remain independently verified by
-the codec and transaction suites. Undelivered Task rows remain planned.
+the codec and transaction suites.
 
 TYPED-002 verifies the Config predicate through existing first-parse/preview and
 native Direct/delegated projection suites. A Direct decision option named
@@ -172,11 +173,12 @@ implemented owner; their audit found no additional ownership change to promote.
 [Requirements traceability](../specs/quality/requirements-traceability.md)
 connects these delivered boundaries to their regression owners.
 
-The original six Task contracts and twelve historical feedback rows remain
-intact. The temporary dossier and its references remain until the separately
-required whole-Epic validation and Master's acceptance of the exact closeout
-candidate. TYPED-006 prepares that reference/deletion inventory; qualification
-does not itself grant either acceptance.
+The twelve original historical feedback rows remain intact above. The six Task
+IDs, completed scope and canonical references remain in the roadmap. Whole-Epic
+review and independent validation preceded Master's acceptance of the exact
+closeout candidate; the temporary execution dossier and its references are
+retired. TYPED-006 qualification supplied the reference/deletion inventory and
+did not itself grant either acceptance.
 
 DF-014 retains its [AGENT owner](#agent-source-feedback-and-revisit-conditions).
 PARSE-004's first-parse authoring facts remain delivered; TYPED-002 covers only

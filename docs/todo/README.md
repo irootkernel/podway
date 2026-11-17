@@ -97,12 +97,8 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-- [TYPED execution dossier](TODO-podway-typed-boundary-ownership.md) owns the
-  unfinished design for the sole consumer TYPED, with six roadmap Tasks.
-  Original feedback is permanently retained in the
-  [testing guide](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions).
-  Delete the dossier at accepted final closeout after promoting all lasting
-  content and replacing its references. The roadmap alone owns lifecycle state.
+None. Completed work and its durable authorities are recorded in the
+[roadmap](../roadmap/README.md).
 
 ## Related candidates
 

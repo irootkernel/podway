@@ -22,9 +22,9 @@ identifiers. Do not rename completed work to apply the new convention.
 
 ## TYPED — Typed Boundary Ownership
 
-Dependencies: implemented BOUND, PARSE and AGENT foundations. Status: In Progress.
+Dependencies: implemented BOUND, PARSE and AGENT foundations. Status: Completed.
 Execution owner: `aquarium:epic-handler` when explicitly invoked.
-Detailed SOT: [temporary TYPED execution dossier](../todo/TODO-podway-typed-boundary-ownership.md).
+Delivered ownership: [System Architecture](../architecture/system.md), [Rust codebase guide](../architecture/rust-codebase.md) and [integrated qualification](../implementation-tips/testing.md#typed-integrated-qualification).
 Durable source feedback: [original findings and revisit conditions](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions).
 Target release: unassigned.
 
@@ -36,23 +36,24 @@ admission and crate dependency direction. DF-014 remains owned by AGENT-002;
 PARSE-004's completed authoring work is not reopened. Graph, Aquarium and
 Dolgorae integration are not dependencies or deliverables.
 
-Execute TYPED-001 through TYPED-006 in numeric order with one active Task.
-Only the first incomplete Task may be In Progress, In Review or Blocked.
-Each Task includes focused verification and affected durable documentation;
-executable changes require the development gate. TYPED-006 prepares closeout
-but does not substitute for whole-Epic validation or actual owner acceptance.
-The dossier has TYPED as its sole consumer and is deleted only at accepted final
-closeout after all durable content and references have moved to canonical owners.
-This registration starts no implementation, session, commit or release.
+TYPED-001 through TYPED-006 completed in numeric order, with focused checks and
+affected durable documentation for each Task. The development gate covers the
+unchanged executable, test and contract inputs; separate native qualification
+covers both-generation matching-writer Store continuation and exact replay.
+Whole-Epic review and independent validation completed before actual owner
+acceptance of the exact closeout candidate. The execution dossier is retired;
+lasting behavior, compatibility boundaries, regression owners and proof limits
+remain in canonical documents. Completion authorizes no release, installation,
+runtime activation or external-consumer change.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `TYPED-001` | Consolidate wire names and delegation bounds | Completed | Give item wire names and shared bounds one owner; verify package reserves against their source limits without changing accepted bytes or limits. | [Task contract](../todo/TODO-podway-typed-boundary-ownership.md#typed-001); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
-| `TYPED-002` | Type delegation acceptance and reuse domain predicates | Completed | Share admitted delegation facts and domain predicates, extract typed acceptance at Protocol, and retain independent Store admission plus native and human-output coverage. | [Task contract](../todo/TODO-podway-typed-boundary-ownership.md#typed-002); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
-| `TYPED-003` | Unify workspace identity comparisons | Completed | Share workspace UUID comparison while preserving ordinary and token-backed read ordering and typed details. | [Task contract](../todo/TODO-podway-typed-boundary-ownership.md#typed-003); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
-| `TYPED-004` | Separate artifact preparation and verify writer reads | Completed | Separate pure required-artifact facts from native stamps and instrument actual in-writer reads on all four artifact routes. | [Task contract](../todo/TODO-podway-typed-boundary-ownership.md#typed-004); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
-| `TYPED-005` | Centralize bounded citation diagnostics | Completed | Reuse a Core-owned bounded validation result without weakening early rejection or changing command-specific error precedence. | [Task contract](../todo/TODO-podway-typed-boundary-ownership.md#typed-005); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
-| `TYPED-006` | Qualify integration and prepare durable closeout | Completed | Reconcile all twelve findings, integrated correctness and durable owners; prepare the later whole-Epic validation and owner-approved dossier retirement. | [Task contract](../todo/TODO-podway-typed-boundary-ownership.md#typed-006); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
+| `TYPED-001` | Consolidate wire names and delegation bounds | Completed | Give item wire names and shared bounds one owner; verify package reserves against their source limits without changing accepted bytes or limits. | [Delivered ownership](../architecture/system.md#shared-item-names-and-delegation-bounds); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
+| `TYPED-002` | Type delegation acceptance and reuse domain predicates | Completed | Share admitted delegation facts and domain predicates, extract typed acceptance at Protocol, and retain independent Store admission plus native and human-output coverage. | [Delivered ownership](../architecture/system.md#supervised-delegation); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
+| `TYPED-003` | Unify workspace identity comparisons | Completed | Share workspace UUID comparison while preserving ordinary and token-backed read ordering and typed details. | [Delivered ownership](../architecture/system.md#read-path); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
+| `TYPED-004` | Separate artifact preparation and verify writer reads | Completed | Separate pure required-artifact facts from native stamps and instrument actual in-writer reads on all four artifact routes. | [Delivered ownership](../architecture/system.md#required-artifacts-and-native-stamps); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
+| `TYPED-005` | Centralize bounded citation diagnostics | Completed | Reuse a Core-owned bounded validation result without weakening early rejection or changing command-specific error precedence. | [Delivered ownership](../architecture/system.md#bounded-criterion-citations); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
+| `TYPED-006` | Qualify integration and prepare durable closeout | Completed | Reconcile all twelve findings, integrated correctness and durable owners; prepare the later whole-Epic validation and owner-approved dossier retirement. | [Delivered ownership](../implementation-tips/testing.md#typed-integrated-qualification); [feedback](../implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions) |
 
 ## CANON — Canonical Integer Contract Alignment
 

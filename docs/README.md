@@ -24,14 +24,17 @@ write-free snapshot reads are the current product boundaries.
 [Examples](examples/) provide walkthroughs and versioned known-answer payloads.
 
 Current adopted work is tracked by the [active roadmap](roadmap/).
-[TYPED](roadmap/README.md#typed-typed-boundary-ownership) is In Progress, with six
-Tasks for internal type, validation and preparation ownership. Its
-[temporary execution dossier](todo/TODO-podway-typed-boundary-ownership.md)
-owns unfinished design; [original feedback and regression owners](implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions)
-are permanently retained. Each Task promotes actual behavior and regression
-ownership into canonical documents before completion. Registration claims no
-implementation, acceptance or release. The dossier is retired only at accepted
-final Epic closeout after all lasting information and references have moved.
+[TYPED](roadmap/README.md#typed-typed-boundary-ownership) is completed and
+owner-accepted. Its six Tasks delivered shared wire names and bounds, typed
+delegation acceptance, workspace identity comparison, pure artifact facts and
+bounded citation diagnostics. [System Architecture](architecture/system.md), the
+[Rust codebase guide](architecture/rust-codebase.md) and the
+[integrated qualification](implementation-tips/testing.md#typed-integrated-qualification)
+preserve implemented owners, regression coverage and proof limits. The twelve
+[original feedback and revisit conditions](implementation-tips/testing.md#typed-source-feedback-and-revisit-conditions)
+remain intact. Its execution dossier is retired; the roadmap alone owns status.
+No target release is assigned, and development completion establishes no release,
+installation, runtime activation or live executor qualification.
 [CANON](roadmap/README.md#canon-canonical-integer-contract-alignment) is complete;
 its integer rules and compatibility boundaries are in the
 [JSON contract](specs/interfaces/json-contract.md), and its regression owners are

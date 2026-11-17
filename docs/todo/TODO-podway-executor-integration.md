@@ -181,9 +181,10 @@ different authority boundary. Any new Primary handoff or parallel model needs
 its own explicit architecture decision. Register implementation work only once
 these decisions and dependencies are closed.
 
-The local typed-boundary cleanup is tracked separately in
-[TYPED](TODO-podway-typed-boundary-ownership.md). It is not proof of a compatible
-live executor and is not made a mandatory dependency by this reorganization.
+The delivered local typed-boundary cleanup and its limits are documented in
+[TYPED integrated qualification](../implementation-tips/testing.md#typed-integrated-qualification).
+It is not proof of a compatible live executor and is not made a mandatory
+dependency by this reorganization.
 
 ## 7. References
 
