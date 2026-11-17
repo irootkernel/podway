@@ -4117,3 +4117,496 @@ fn typed002_acceptance_view_preserves_original_document_and_closed_admission() {
         );
     }
 }
+
+#[test]
+fn frame001_successor_schema_contracts_are_closed_and_registered() {
+    use podway_core::execution_groups::*;
+    let validator = |file: &str| {
+        jsonschema::options()
+            .with_retriever(local_schemas())
+            .build(&read_schema(&format!("schemas/{file}.schema.json")))
+            .unwrap()
+    };
+    let procedure = json!({"schema":PROCEDURE_SCHEMA_V3,"id":"example","version":"1","name":"Example","purpose":"A bounded group.",
+        "node_definitions":{"work":{"type":"action","title":"Work","intent":"Complete work."}},
+        "graph":{"entry":"design","nodes":[{"id":"design","use":"work","next":"finish"},{"id":"finish","use":"work","terminal":true}]},
+        "execution_group":{"anchor":"design","success_return":"finish","plan_inputs":[],"result_items":[],"replan_decisions":[]}});
+    assert_eq!(
+        read_schema("schemas/procedure-v3.schema.json")["$defs"]["graph"]["properties"]["nodes"]["maxItems"],
+        json!(MAX_GROUP_PLACEMENTS_V1)
+    );
+    let base = validator("procedure-v3");
+    assert!(base.is_valid(&procedure));
+    let mut invalid = procedure.clone();
+    invalid.as_object_mut().unwrap().remove("execution_group");
+    assert!(!base.is_valid(&invalid));
+    invalid = procedure.clone();
+    invalid["unexpected"] = json!(true);
+    assert!(!base.is_valid(&invalid));
+    let mut group = procedure.clone();
+    group["schema"] = json!(EXECUTION_GROUP_SCHEMA_V1);
+    group.as_object_mut().unwrap().remove("execution_group");
+    group["plan_inputs"] = json!([]);
+    let groups = validator("execution-group-v1");
+    assert!(groups.is_valid(&group));
+    group["goal_tracking"] = json!(true);
+    assert!(!groups.is_valid(&group));
+    group.as_object_mut().unwrap().remove("goal_tracking");
+    group["graph"]["nodes"][0] =
+        json!({"id":"choose","use":"choose","routes":{"replan":{"effect":"replan"}}});
+    // Guard/reference semantics are FRAME-002's vetting responsibility, not a schema assertion.
+    assert!(groups.is_valid(&group));
+    group["graph"]["nodes"][0]["routes"]["replan"]["to"] = json!("design");
+    assert!(!groups.is_valid(&group));
+    assert!(!podway_protocol::validate_daemon_free_document_v1(
+        PROCEDURE_SCHEMA_V3,
+        &procedure
+    ));
+    let records = read_schema("schemas/execution-group-records-v1.schema.json");
+    let fragments = |name: &str| {
+        jsonschema::options().with_retriever(local_schemas()).build(&json!({"$ref":format!("urn:podway:schema:execution-group-records:v1#/$defs/{name}")})).unwrap()
+    };
+    assert_eq!(
+        records["$defs"]["prior_work"]["properties"]["rationale"]["maxLength"],
+        json!(2000)
+    );
+    let basis = json!({"descriptor":"dirty source","digest":DIGEST});
+    assert!(fragments("working_copy_basis").is_valid(&basis));
+    let mut activation = json!({"group_execution_id":UUID,"session":UUID,"base_digest":DIGEST,"definition_digest":DIGEST,"anchor":"design","plan":{"design_attempt":UUID,"item_set_digest":DIGEST,"items":[]},"working_copy_basis":basis,"prior_work":[]});
+    let activations = fragments("activation");
+    assert!(activations.is_valid(&activation));
+    activation["predecessor"] = json!("00000000-0000-4000-8000-000000000002");
+    assert!(!activations.is_valid(&activation));
+    let prior = json!({"group_execution_id":"00000000-0000-4000-8000-000000000003","choice":"retain","rationale":"Retain original work."});
+    activation["prior_work"] = json!(vec![prior.clone(); MAX_PRIOR_WORK_DISPOSITIONS_V1]);
+    assert!(activations.is_valid(&activation));
+    activation["prior_work"] = json!(vec![prior; MAX_PRIOR_WORK_DISPOSITIONS_V1 + 1]);
+    assert!(!activations.is_valid(&activation));
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(root().join("contracts/contract-manifest-v2.json")).unwrap(),
+    )
+    .unwrap();
+    for name in [
+        "procedure-v3.schema.json",
+        "execution-group-v1.schema.json",
+        "execution-group-records-v1.schema.json",
+    ] {
+        assert!(
+            manifest["assets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|asset| asset["path"] == format!("schemas/{name}")),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn frame001_scoped_guard_schemas_close_local_and_current_port_sources() {
+    let guard_schema = json!({"$ref":"urn:podway:schema:procedure:v3#/$defs/evidence_predicate"});
+    let validator = jsonschema::options()
+        .with_retriever(local_schemas())
+        .build(&guard_schema)
+        .unwrap();
+    for source in [
+        json!({"scope":"local","node":"assess","item":"score"}),
+        json!({"scope":"plan","item":"score"}),
+        json!({"scope":"execution_result","item":"score"}),
+    ] {
+        assert!(validator.is_valid(&json!({"evidence":source,"at_least":80})));
+    }
+    for source in [
+        json!({"scope":"history","group_execution_id":UUID,"item":"score"}),
+        json!({"scope":"execution_result","node":"old-assess","item":"score"}),
+        json!({"scope":"local","item":"score"}),
+    ] {
+        assert!(!validator.is_valid(&json!({"evidence":source,"at_least":80})));
+    }
+    assert!(!validator.is_valid(
+        &json!({"evidence":{"scope":"execution_result","item":"score"},"expression":"score >= 80"})
+    ));
+    let definition = json!({"type":"decision","title":"Review","objective":"Assess current result","prompt":"Choose","reason":{"required":true},"options":[{"id":"replan","label":"Replan","guards":[{"evidence":{"scope":"execution_result","item":"score"},"at_least":80}]}]});
+    let definition_schema = json!({"$ref":"urn:podway:schema:procedure:v3#/$defs/node_definition"});
+    let definitions = jsonschema::options()
+        .with_retriever(local_schemas())
+        .build(&definition_schema)
+        .unwrap();
+    assert!(definitions.is_valid(&definition));
+    assert_eq!(
+        read_schema("schemas/execution-group-v1.schema.json")["properties"]["node_definitions"]["additionalProperties"]
+            ["$ref"],
+        json!("urn:podway:schema:procedure:v3#/$defs/node_definition")
+    );
+}
+
+#[test]
+fn frame001_regression_recorded_value_binding_rejects_zero_revision() {
+    let schema = json!({"$ref":"urn:podway:schema:execution-group-records:v1#/$defs/plan_item"});
+    let validator = jsonschema::options()
+        .with_retriever(local_schemas())
+        .build(&schema)
+        .unwrap();
+    assert!(!validator.is_valid(&json!({"item":"score","revision":0,"value_digest":DIGEST})));
+}
+
+fn frame001_record_schema(fragment: &str) -> jsonschema::Validator {
+    jsonschema::options().with_retriever(local_schemas())
+        .build(&json!({"$ref":format!("urn:podway:schema:execution-group-records:v1#/$defs/{fragment}")})).unwrap()
+}
+fn frame001_target_json(value: &podway_core::execution_groups::ScopedAttemptV1) -> Value {
+    use podway_core::execution_groups::ExecutionScopeV1;
+    let scope = match value.scope() {
+        ExecutionScopeV1::Base => json!({"kind":"base"}),
+        ExecutionScopeV1::Group {
+            group_execution_id,
+            definition_digest,
+        } => {
+            json!({"kind":"group","group_execution_id":group_execution_id.as_str(),"definition_digest":definition_digest.as_str()})
+        }
+    };
+    json!({"session":value.session().as_str(),"base_digest":value.base_digest().as_str(),"scope":scope,"node":value.node().as_str(),"attempt":value.attempt().as_str()})
+}
+fn frame001_plan_item_json(value: &podway_core::execution_groups::PlanItemBindingV1) -> Value {
+    json!({"item":value.item().as_str(),"revision":value.revision().get(),"value_digest":value.value_digest().as_str()})
+}
+#[test]
+fn frame001_record_fragments_pair_typed_values_with_closed_schema_boundaries() {
+    use podway_core::execution_groups::*;
+    use podway_core::{
+        AttemptId, CheckResultInputBasisV2, GraphNodeId, ItemId, OptionId, Revision, SessionId,
+        Sha256Digest,
+    };
+    let digest = Sha256Digest::new(DIGEST).unwrap();
+    let group = GroupExecutionIdV1::new(UUID).unwrap();
+    let base = ScopedAttemptV1::new(
+        SessionId::new(UUID).unwrap(),
+        digest.clone(),
+        ExecutionScopeV1::Base,
+        GraphNodeId::new("review").unwrap(),
+        AttemptId::new(UUID).unwrap(),
+    );
+    let grouped = ScopedAttemptV1::new(
+        base.session().clone(),
+        digest.clone(),
+        ExecutionScopeV1::Group {
+            group_execution_id: group.clone(),
+            definition_digest: digest.clone(),
+        },
+        base.node().clone(),
+        base.attempt().clone(),
+    );
+    for target in [&base, &grouped] {
+        let value = frame001_target_json(target);
+        assert!(frame001_record_schema("scoped_attempt").is_valid(&value));
+        assert!(frame001_record_schema("scope").is_valid(&value["scope"]));
+        let mut missing = value.clone();
+        missing.as_object_mut().unwrap().remove("attempt");
+        assert!(!frame001_record_schema("scoped_attempt").is_valid(&missing));
+    }
+    assert!(
+        !frame001_record_schema("scope")
+            .is_valid(&json!({"kind":"base","group_execution_id":UUID}))
+    );
+    assert!(
+        !frame001_record_schema("scope")
+            .is_valid(&json!({"kind":"group","group_execution_id":UUID}))
+    );
+    let item = PlanItemBindingV1::new(
+        ItemId::new("score").unwrap(),
+        Revision::new(1),
+        digest.clone(),
+    )
+    .unwrap();
+    let item_json = frame001_plan_item_json(&item);
+    let items = frame001_record_schema("plan_item");
+    assert!(items.is_valid(&item_json));
+    let max_item =
+        PlanItemBindingV1::new(item.item().clone(), Revision::new(u64::MAX), digest.clone())
+            .unwrap();
+    assert!(items.is_valid(&frame001_plan_item_json(&max_item)));
+    let mut missing = item_json.clone();
+    missing.as_object_mut().unwrap().remove("value_digest");
+    assert!(!items.is_valid(&missing));
+    let plan =
+        PlanBindingV1::new(base.attempt().clone(), digest.clone(), vec![item.clone()]).unwrap();
+    let mut value = json!({"design_attempt":plan.design_attempt().as_str(),"item_set_digest":plan.item_set_digest().as_str(),"items":plan.items().iter().map(frame001_plan_item_json).collect::<Vec<_>>()});
+    let plans = frame001_record_schema("plan");
+    assert!(plans.is_valid(&value));
+    value["items"] = json!(vec![item_json.clone(); 128]);
+    assert!(plans.is_valid(&value));
+    value["items"] = json!(vec![item_json.clone(); 129]);
+    assert!(!plans.is_valid(&value));
+    let historical =
+        HistoricalItemV1::new(base.attempt().clone(), item.item().clone(), digest.clone());
+    let historical_json = json!({"attempt":historical.attempt().as_str(),"item":historical.item().as_str(),"value_digest":historical.value_digest().as_str()});
+    assert!(frame001_record_schema("historical_item").is_valid(&historical_json));
+    let mut missing = historical_json.clone();
+    missing.as_object_mut().unwrap().remove("value_digest");
+    assert!(!frame001_record_schema("historical_item").is_valid(&missing));
+    for choice in [
+        PriorWorkChoiceV1::Retain,
+        PriorWorkChoiceV1::Revalidate,
+        PriorWorkChoiceV1::Modify,
+        PriorWorkChoiceV1::Revert,
+    ] {
+        for reference in [
+            HistoricalReferenceV1::Attempt(base.attempt().clone()),
+            HistoricalReferenceV1::Item(historical.clone()),
+        ] {
+            let prior = PriorWorkDispositionV1::new(
+                group.clone(),
+                Some(reference),
+                choice,
+                "x".repeat(2000),
+            )
+            .unwrap();
+            let choice = match prior.choice() {
+                PriorWorkChoiceV1::Retain => "retain",
+                PriorWorkChoiceV1::Revalidate => "revalidate",
+                PriorWorkChoiceV1::Modify => "modify",
+                PriorWorkChoiceV1::Revert => "revert",
+            };
+            let mut value = json!({"group_execution_id":prior.group().as_str(),"choice":choice,"rationale":prior.rationale()});
+            match prior.item().unwrap() {
+                HistoricalReferenceV1::Attempt(attempt) => {
+                    value["attempt"] = json!(attempt.as_str())
+                }
+                HistoricalReferenceV1::Item(_) => value["item"] = historical_json.clone(),
+            }
+            let schema = frame001_record_schema("prior_work");
+            assert!(schema.is_valid(&value));
+            let mut both = value.clone();
+            both["attempt"] = json!(UUID);
+            both["item"] = historical_json.clone();
+            assert!(!schema.is_valid(&both));
+            value["rationale"] = json!("x".repeat(2001));
+            assert!(!schema.is_valid(&value));
+        }
+    }
+    for stage in [
+        AssessmentStageV1::NotScored,
+        AssessmentStageV1::Lightweight,
+        AssessmentStageV1::Scored,
+    ] {
+        for verdict in [
+            AssessmentVerdictV1::Success,
+            AssessmentVerdictV1::Failure,
+            AssessmentVerdictV1::Inconclusive,
+        ] {
+            let record =
+                AssessmentRecordV1::new(grouped.clone(), verdict, stage, 80, vec![item.clone()])
+                    .unwrap();
+            let stage = match record.stage() {
+                AssessmentStageV1::NotScored => "not-scored",
+                AssessmentStageV1::Lightweight => "lightweight",
+                AssessmentStageV1::Scored => "scored",
+            };
+            let verdict = match record.verdict() {
+                AssessmentVerdictV1::Success => "success",
+                AssessmentVerdictV1::Failure => "failure",
+                AssessmentVerdictV1::Inconclusive => "inconclusive",
+            };
+            let mut value = json!({"source":frame001_target_json(record.source()),"verdict":verdict,"stage":stage,"score":record.score(),"evidence":record.evidence().iter().map(frame001_plan_item_json).collect::<Vec<_>>()});
+            let schema = frame001_record_schema("assessment");
+            assert!(schema.is_valid(&value));
+            for score in [0, 79, 80, 100] {
+                value["score"] = json!(score);
+                assert!(schema.is_valid(&value));
+            }
+            value["score"] = json!(101);
+            assert!(!schema.is_valid(&value));
+            value["score"] = json!(80);
+            value["evidence"] = json!([]);
+            assert!(!schema.is_valid(&value));
+            value["evidence"] = json!(vec![item_json.clone(); 16]);
+            assert!(schema.is_valid(&value));
+            value["evidence"] = json!(vec![item_json.clone(); 17]);
+            assert!(!schema.is_valid(&value));
+            value["evidence"] = json!([item_json]);
+            value["stage"] = json!("automatic");
+            assert!(!schema.is_valid(&value));
+        }
+    }
+    let entry = DecisionEntryV1::new(base.clone(), group.clone(), 1).unwrap();
+    let mut value = json!({"target":frame001_target_json(entry.target()),"selected_group":entry.selected_group().as_str(),"ordinal":entry.ordinal()});
+    let schema = frame001_record_schema("decision_entry");
+    assert!(schema.is_valid(&value));
+    value["ordinal"] = json!(u64::MAX);
+    assert!(schema.is_valid(&value));
+    value["ordinal"] = json!(0);
+    assert!(!schema.is_valid(&value));
+    value["ordinal"] = json!(1);
+    value.as_object_mut().unwrap().remove("selected_group");
+    assert!(!schema.is_valid(&value));
+    let binding = ScopedDelegationBindingV1::new(grouped.clone(), digest.clone());
+    let mut value = json!({"target":frame001_target_json(binding.target()),"package_digest":binding.package_digest().as_str()});
+    let schema = frame001_record_schema("delegation_binding");
+    assert!(schema.is_valid(&value));
+    value.as_object_mut().unwrap().remove("package_digest");
+    assert!(!schema.is_valid(&value));
+    let feedback = ReplanFeedbackV1::new(
+        base,
+        OptionId::new("replan").unwrap(),
+        "x".repeat(2000),
+        CheckResultInputBasisV2::new("dirty source", digest).unwrap(),
+        "x".repeat(4000),
+    )
+    .unwrap();
+    let mut value = json!({"decision":frame001_target_json(feedback.decision()),"option":feedback.option().as_str(),"reason":feedback.reason(),"working_copy_basis":{"descriptor":feedback.working_copy_basis().descriptor(),"digest":feedback.working_copy_basis().digest().as_str()},"feedback":feedback.feedback()});
+    let schema = frame001_record_schema("replan_feedback");
+    assert!(schema.is_valid(&value));
+    value["reason"] = json!("x".repeat(2001));
+    assert!(!schema.is_valid(&value));
+    value["reason"] = json!(feedback.reason());
+    value["feedback"] = json!("x".repeat(4001));
+    assert!(!schema.is_valid(&value));
+    value["feedback"] = json!(feedback.feedback());
+    value["score"] = json!(80);
+    assert!(!schema.is_valid(&value));
+    for outcome in [
+        GroupExecutionOutcomeV1::Running,
+        GroupExecutionOutcomeV1::Completed,
+        GroupExecutionOutcomeV1::Abandoned,
+        GroupExecutionOutcomeV1::TerminatedByCancel,
+    ] {
+        let name = match outcome {
+            GroupExecutionOutcomeV1::Running => "running",
+            GroupExecutionOutcomeV1::Completed => "completed",
+            GroupExecutionOutcomeV1::Abandoned => "abandoned",
+            GroupExecutionOutcomeV1::TerminatedByCancel => "terminated_by_cancel",
+        };
+        assert!(frame001_record_schema("outcome").is_valid(&json!(name)));
+    }
+    for cause in [
+        SelectionClosureCauseV1::Replan,
+        SelectionClosureCauseV1::GoalRevision,
+        SelectionClosureCauseV1::Reactivation,
+        SelectionClosureCauseV1::Completion,
+        SelectionClosureCauseV1::Cancel,
+    ] {
+        let name = match cause {
+            SelectionClosureCauseV1::Replan => "replan",
+            SelectionClosureCauseV1::GoalRevision => "goal_revision",
+            SelectionClosureCauseV1::Reactivation => "reactivation",
+            SelectionClosureCauseV1::Completion => "completion",
+            SelectionClosureCauseV1::Cancel => "cancel",
+        };
+        assert!(frame001_record_schema("closure_cause").is_valid(&json!(name)));
+    }
+    assert!(!frame001_record_schema("outcome").is_valid(&json!("selected")));
+    assert!(!frame001_record_schema("closure_cause").is_valid(&json!("rollback")));
+}
+
+#[test]
+fn frame001_nonempty_ports_and_shared_bounds_have_closed_shapes() {
+    use podway_core::execution_groups::*;
+    let validator = |fragment: &str| {
+        jsonschema::options()
+            .with_retriever(local_schemas())
+            .build(&json!({"$ref":format!("urn:podway:schema:procedure:v3#/$defs/{fragment}")}))
+            .unwrap()
+    };
+    let plan = json!({"id":"plan","type":"text","prompt":"Plan","required":true,"min_length":1,"max_length":2000});
+    let result = json!({"id":"verdict","type":"choice","prompt":"Verdict","required":true,"choices":["success","failure"]});
+    let review = json!({"type":"decision","title":"Review","objective":"Assess current output","prompt":"Choose","reason":{"required":true},"options":[{"id":"finish","label":"Finish"},{"id":"replan","label":"Replan","guards":[{"evidence":{"scope":"execution_result","item":"verdict"},"equals":"failure"}]}]});
+    let boundary = json!({"anchor":"design","success_return":"review","plan_inputs":["plan"],"result_items":[result],"replan_decisions":["review"]});
+    let procedure = json!({"schema":PROCEDURE_SCHEMA_V3,"id":"example","version":" ","name":"Example","purpose":"A bounded group",
+        "node_definitions":{"design":{"type":"action","title":"Design","intent":"Create plan","items":[plan]},"review":review,"finish":{"type":"action","title":"Finish","intent":"Complete"}},
+        "graph":{"entry":"design","nodes":[{"id":"design","use":"design","next":"review"},{"id":"review","use":"review","evidence_from":[{"scope":"execution_result","items":["verdict"]}],"routes":{"finish":{"effect":"advance","to":"finish"},"replan":{"effect":"replan"}}},{"id":"finish","use":"finish","terminal":true}]},
+        "execution_group":boundary});
+    let base = jsonschema::options()
+        .with_retriever(local_schemas())
+        .build(&read_schema("schemas/procedure-v3.schema.json"))
+        .unwrap();
+    assert!(
+        base.is_valid(&procedure),
+        "{:?}",
+        base.iter_errors(&procedure).collect::<Vec<_>>()
+    );
+    let group = json!({"schema":EXECUTION_GROUP_SCHEMA_V1,"id":"work","version":"1","name":"Work","purpose":"Run the plan","plan_inputs":[plan],
+        "node_definitions":{"work":{"type":"action","title":"Work","intent":"Execute","items":[result]}},
+        "graph":{"entry":"work","nodes":[{"id":"work","use":"work","evidence_from":[{"scope":"plan","items":["plan"]}],"terminal":true}]}});
+    let groups = jsonschema::options()
+        .with_retriever(local_schemas())
+        .build(&read_schema("schemas/execution-group-v1.schema.json"))
+        .unwrap();
+    assert!(
+        groups.is_valid(&group),
+        "{:?}",
+        groups.iter_errors(&group).collect::<Vec<_>>()
+    );
+    let mut nested = group.clone();
+    nested["execution_group"] = boundary.clone();
+    assert!(!groups.is_valid(&nested));
+    for (field, max) in [("name", 120), ("purpose", 500)] {
+        let mut value = procedure.clone();
+        value[field] = json!("x".repeat(max));
+        assert!(base.is_valid(&value));
+        value[field] = json!("x".repeat(max + 1));
+        assert!(!base.is_valid(&value));
+    }
+    let evidence = validator("evidence_reference");
+    for scope in ["plan", "execution_result"] {
+        let mut value = json!({"scope":scope,"items":["plan"]});
+        assert!(evidence.is_valid(&value));
+        value["node"] = json!("work");
+        assert!(!evidence.is_valid(&value));
+    }
+    let mut local = json!({"scope":"local","node":"work","items":(0..16).map(|n|format!("item-{n}")).collect::<Vec<_>>()});
+    assert!(evidence.is_valid(&local));
+    local["items"] = json!((0..17).map(|n| format!("item-{n}")).collect::<Vec<_>>());
+    assert!(!evidence.is_valid(&local));
+    local["items"] = json!(["same", "same"]);
+    assert!(!evidence.is_valid(&local));
+    let from = validator("evidence_from");
+    assert!(from.is_valid(&json!(vec![
+            json!({"scope":"local","node":"work"});
+            podway_core::MAX_EVIDENCE_REFERENCES_PER_PLACEMENT_V2
+        ])));
+    assert!(!from.is_valid(&json!(vec![
+        json!({"scope":"local","node":"work"});
+        podway_core::MAX_EVIDENCE_REFERENCES_PER_PLACEMENT_V2
+            + 1
+    ])));
+    for count in [128, 129] {
+        let mut value = boundary.clone();
+        value["plan_inputs"] = json!((0..count).map(|n| format!("plan-{n}")).collect::<Vec<_>>());
+        assert_eq!(validator("boundary").is_valid(&value), count == 128);
+        value = boundary.clone();
+        value["result_items"] = json!(
+            (0..count)
+                .map(|n| {
+                    let mut item = result.clone();
+                    item["id"] = json!(format!("result-{n}"));
+                    item
+                })
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(validator("boundary").is_valid(&value), count == 128);
+    }
+    let declaration = json!({"binding_ref":"native","role_ref":"worker","role_snapshot_digest":DIGEST,"max_rounds":1,"after_accept":"retain"});
+    let mut delegated = json!({"id":"work","use":"work","terminal":true,"delegation":declaration});
+    assert!(
+        validator("action_placement").is_valid(&delegated),
+        "{:?}",
+        validator("action_placement")
+            .iter_errors(&delegated)
+            .collect::<Vec<_>>()
+    );
+    delegated["skip"] = json!({"allowed":true});
+    assert!(!validator("action_placement").is_valid(&delegated));
+    let schema = read_schema("schemas/procedure-v3.schema.json");
+    assert_eq!(
+        schema["properties"]["node_definitions"]["maxProperties"],
+        podway_core::MAX_NODE_DEFINITIONS_PER_PROCEDURE_V2
+    );
+    assert_eq!(
+        schema["$defs"]["decision_placement"]["properties"]["routes"]["maxProperties"],
+        podway_core::MAX_ROUTES_PER_DECISION_V2
+    );
+    assert_eq!(
+        schema["$defs"]["evidence_from"]["maxItems"],
+        podway_core::MAX_EVIDENCE_REFERENCES_PER_PLACEMENT_V2
+    );
+}

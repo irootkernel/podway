@@ -19,6 +19,12 @@ its in-process Direct Engine as one product and are grouped by concern:
   Its availability section distinguishes
   the accepted contract from current executable support.
 
+## Successor model values
+
+- [Execution groups](domain/execution-groups.md): internal successor authoring,
+  exact item interfaces, immutable identity and bounded caller records; public
+  Procedure v2 admission remains unchanged.
+
 ## Supervised delegation
 
 - [Host-neutral supervised delegation](interfaces/supervised-delegation.md): the opt-in contract, including Direct-work compatibility, package/receipt identity, runtime gates, and separate integration/rollout boundaries. Native routes and explicit custom-Procedure admission are implemented in source; this entry does not claim an installed stable-release capability.

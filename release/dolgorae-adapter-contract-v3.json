@@ -1165,6 +1165,16 @@
         "sha256": "sha256:1d14fbc0f218e5e3be6f33a88a7c25bce5c9c0120ffaded9fb46e899ec3f8a63"
       },
       {
+        "id": "urn:podway:schema:execution-group-records:v1",
+        "path": "schemas/execution-group-records-v1.schema.json",
+        "sha256": "sha256:fa755b224c28b31b31eccc6c072933e08a5b8711b4a3a28f1d6fe963a0e9b98f"
+      },
+      {
+        "id": "urn:podway:schema:execution-group:v1",
+        "path": "schemas/execution-group-v1.schema.json",
+        "sha256": "sha256:6e5ef78479a8ee71050599f774fed4bbe5096f775e24872bde14a27f97e0fc71"
+      },
+      {
         "id": "urn:podway:schema:goal-definition-result:v2",
         "path": "schemas/goal-definition-result-v2.schema.json",
         "sha256": "sha256:cc332464ce48129d46c8d3e3ea1750d83a2177011e7e5477c4ae8fb4b759b11d"
@@ -1288,6 +1298,11 @@
         "id": "urn:podway:schema:procedure:v2",
         "path": "schemas/procedure-v2.schema.json",
         "sha256": "sha256:9bf3348c45b8151eb0d0c7961ca7ba7b017fe4347cc769738d923d326c76c4df"
+      },
+      {
+        "id": "urn:podway:schema:procedure:v3",
+        "path": "schemas/procedure-v3.schema.json",
+        "sha256": "sha256:25a74b7070b2444a7bd45a5b26ee68b5c43189b02c6f7c5fc61558b4c96481c2"
       },
       {
         "id": "urn:podway:schema:procedure-validation-result:v2",
@@ -1545,7 +1560,7 @@
     "authoring_diagnostics": 59,
     "routes": 59,
     "runtime_errors": 98,
-    "schemas": 94
+    "schemas": 97
   },
   "migration_boundary": {
     "adapter_database_access": "forbidden",

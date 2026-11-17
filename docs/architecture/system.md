@@ -103,6 +103,15 @@ structured domain error. It has no SQLite, native Git, filesystem, process or
 service dependency. Recorded conditions evaluate bounded current values; they
 perform no external lookup or execution.
 
+### Internal successor model values
+
+Core's `execution_groups` module owns immutable successor authoring values and
+activation/provenance/assessment/scope records. It reuses typed item, guard, goal
+and delegation declaration contracts. Config owns their later graph admission;
+Store, Engine and CLI do not select a successor runtime merely because these
+values exist. The [model contract](../specs/domain/execution-groups.md) distinguishes
+internal model availability, manifest enrollment and the later atomic cutover.
+
 ### Direct Engine
 
 `podway-engine` composes configuration, core, protocol, Store, Git and presets.

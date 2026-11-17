@@ -831,6 +831,25 @@ pub enum ItemSpecV2 {
 }
 
 impl ItemSpecV2 {
+    /// Compares canonical declarations after constructor defaults, ignoring only the prompt.
+    /// Help, constraints, conditional rules and operation identity remain contractual.
+    pub fn same_boundary_contract(&self, other: &Self) -> bool {
+        fn without_prompt(mut item: ItemSpecV2) -> ItemSpecV2 {
+            let common = match &mut item {
+                ItemSpecV2::Confirm(value) => &mut value.common,
+                ItemSpecV2::Text(value) => &mut value.common,
+                ItemSpecV2::Choice(value) => &mut value.common,
+                ItemSpecV2::Integer(value) => &mut value.common,
+                ItemSpecV2::List(value) => &mut value.common,
+                ItemSpecV2::Artifact(value) => &mut value.common,
+                ItemSpecV2::CheckResult(value) => &mut value.common,
+            };
+            common.prompt.clear();
+            item
+        }
+        without_prompt(self.clone()) == without_prompt(other.clone())
+    }
+
     pub fn confirm(common: ItemCommonV2) -> Self {
         Self::Confirm(ConfirmItemSpecV2::new(common))
     }

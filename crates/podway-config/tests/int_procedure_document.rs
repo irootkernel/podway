@@ -131,3 +131,14 @@ fn raw_decoder_enforces_exact_byte_depth_and_node_boundaries_for_both_formats() 
         );
     }
 }
+
+#[test]
+fn frame001_successor_documents_remain_outside_public_v2_admission() {
+    for schema in ["podway.procedure/v3", "podway.execution-group/v1"] {
+        let document = serde_json::to_vec(&json!({"schema":schema})).unwrap();
+        let error =
+            podway_config::parse_procedure_document(&document, ProcedureDocumentFormat::Json)
+                .unwrap_err();
+        assert!(matches!(error, ConfigError::InvalidSchema { .. }));
+    }
+}

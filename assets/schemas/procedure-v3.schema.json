@@ -1,0 +1,550 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:procedure:v3",
+  "title": "Podway Procedure v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "version",
+    "name",
+    "purpose",
+    "node_definitions",
+    "graph",
+    "execution_group"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.procedure/v3"
+    },
+    "id": {
+      "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+    },
+    "version": {
+      "$ref": "urn:podway:schema:procedure:v2#/$defs/version"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "purpose": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 1000
+    },
+    "goal_tracking": {
+      "const": true
+    },
+    "node_definitions": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1024,
+      "propertyNames": {
+        "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/node_definition"
+      }
+    },
+    "graph": {
+      "$ref": "#/$defs/graph"
+    },
+    "manual_rework": {
+      "$ref": "urn:podway:schema:procedure:v2#/$defs/manual_rework"
+    },
+    "execution_group": {
+      "$ref": "#/$defs/boundary"
+    }
+  },
+  "$defs": {
+    "evidence_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope"
+      ],
+      "properties": {
+        "scope": {
+          "enum": [
+            "local",
+            "plan",
+            "execution_result"
+          ]
+        },
+        "node": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        },
+        "required": {
+          "type": "boolean",
+          "default": true
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+          },
+          "uniqueItems": true
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "scope": {
+              "const": "local"
+            }
+          },
+          "required": [
+            "node"
+          ]
+        },
+        {
+          "properties": {
+            "scope": {
+              "enum": [
+                "plan",
+                "execution_result"
+              ]
+            }
+          },
+          "required": [
+            "items"
+          ],
+          "not": {
+            "required": [
+              "node"
+            ]
+          }
+        }
+      ]
+    },
+    "evidence_from": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "$ref": "#/$defs/evidence_reference"
+      }
+    },
+    "route": {
+      "oneOf": [
+        {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/route"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "effect"
+          ],
+          "properties": {
+            "effect": {
+              "const": "replan"
+            }
+          }
+        }
+      ]
+    },
+    "action_placement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "use"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        },
+        "use": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        },
+        "evidence_from": {
+          "$ref": "#/$defs/evidence_from"
+        },
+        "delegation": {
+          "$ref": "urn:podway:schema:delegation-components:v1#/$defs/declaration"
+        },
+        "skip": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/skip_policy"
+        },
+        "next": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        },
+        "terminal": {
+          "const": true
+        }
+      },
+      "dependentSchemas": {
+        "delegation": {
+          "not": {
+            "required": [
+              "skip"
+            ]
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "next"
+          ],
+          "not": {
+            "required": [
+              "terminal"
+            ]
+          }
+        },
+        {
+          "required": [
+            "terminal"
+          ],
+          "not": {
+            "required": [
+              "next"
+            ]
+          }
+        }
+      ]
+    },
+    "decision_placement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "use",
+        "routes"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        },
+        "use": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        },
+        "evidence_from": {
+          "$ref": "#/$defs/evidence_from"
+        },
+        "routes": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 8,
+          "propertyNames": {
+            "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/route"
+          }
+        }
+      }
+    },
+    "graph_node": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/action_placement"
+        },
+        {
+          "$ref": "#/$defs/decision_placement"
+        }
+      ]
+    },
+    "graph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entry",
+        "nodes"
+      ],
+      "properties": {
+        "entry": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        },
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1024,
+          "items": {
+            "$ref": "#/$defs/graph_node"
+          }
+        }
+      }
+    },
+    "boundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "anchor",
+        "success_return",
+        "plan_inputs",
+        "result_items",
+        "replan_decisions"
+      ],
+      "properties": {
+        "anchor": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        },
+        "success_return": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        },
+        "plan_inputs": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 128,
+          "items": {
+            "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+          },
+          "uniqueItems": true
+        },
+        "result_items": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 128,
+          "items": {
+            "$ref": "urn:podway:schema:procedure:v2#/$defs/item"
+          }
+        },
+        "replan_decisions": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 1024,
+          "items": {
+            "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "guard_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "item"
+      ],
+      "properties": {
+        "scope": {
+          "enum": [
+            "local",
+            "plan",
+            "execution_result"
+          ]
+        },
+        "node": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        },
+        "item": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "scope": {
+              "const": "local"
+            }
+          },
+          "required": [
+            "node"
+          ]
+        },
+        {
+          "properties": {
+            "scope": {
+              "enum": [
+                "plan",
+                "execution_result"
+              ]
+            }
+          },
+          "not": {
+            "required": [
+              "node"
+            ]
+          }
+        }
+      ]
+    },
+    "evidence_predicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence"
+      ],
+      "properties": {
+        "evidence": {
+          "$ref": "#/$defs/guard_source"
+        },
+        "field": {
+          "const": "outcome"
+        },
+        "equals": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/predicate_value"
+        },
+        "not_equals": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/predicate_value"
+        },
+        "empty": {
+          "const": true
+        },
+        "non_empty": {
+          "const": true
+        },
+        "at_least": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "at_most": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "equals"
+          ]
+        },
+        {
+          "required": [
+            "not_equals"
+          ]
+        },
+        {
+          "required": [
+            "empty"
+          ]
+        },
+        {
+          "required": [
+            "non_empty"
+          ]
+        },
+        {
+          "required": [
+            "at_least"
+          ]
+        },
+        {
+          "required": [
+            "at_most"
+          ]
+        }
+      ]
+    },
+    "guards": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "items": {
+        "$ref": "#/$defs/evidence_predicate"
+      }
+    },
+    "decision_option": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "criteria": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "guards": {
+          "$ref": "#/$defs/guards"
+        }
+      }
+    },
+    "decision_definition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "title",
+        "objective",
+        "prompt",
+        "options",
+        "reason"
+      ],
+      "properties": {
+        "type": {
+          "const": "decision"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "objective": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "evidence_guidance": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "items": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/items"
+        },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/decision_option"
+          }
+        },
+        "reason": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/reason_policy"
+        },
+        "assessment": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/assessment"
+        }
+      }
+    },
+    "node_definition": {
+      "oneOf": [
+        {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/action_definition"
+        },
+        {
+          "$ref": "#/$defs/decision_definition"
+        }
+      ]
+    }
+  }
+}

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 pub mod aggregate;
 pub mod authoring;
 pub mod canonical;
+pub mod execution_groups;
 pub mod goal_record_v2;
 pub mod goal_state_v2;
 pub mod graph_v2;

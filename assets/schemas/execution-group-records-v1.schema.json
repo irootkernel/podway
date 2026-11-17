@@ -1,0 +1,421 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:execution-group-records:v1",
+  "title": "Podway Execution Group Records v1",
+  "$defs": {
+    "working_copy_basis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "descriptor",
+        "digest"
+      ],
+      "properties": {
+        "descriptor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "\\S"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "plan_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "item",
+        "revision",
+        "value_digest"
+      ],
+      "properties": {
+        "item": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "value_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "design_attempt",
+        "item_set_digest",
+        "items"
+      ],
+      "properties": {
+        "design_attempt": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "item_set_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "items": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/plan_item"
+          }
+        }
+      }
+    },
+    "scope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "base"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "group_execution_id",
+            "definition_digest"
+          ],
+          "properties": {
+            "kind": {
+              "const": "group"
+            },
+            "group_execution_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "definition_digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            }
+          }
+        }
+      ]
+    },
+    "scoped_attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "session",
+        "base_digest",
+        "scope",
+        "node",
+        "attempt"
+      ],
+      "properties": {
+        "session": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "base_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "node": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        },
+        "attempt": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        }
+      }
+    },
+    "historical_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt",
+        "item",
+        "value_digest"
+      ],
+      "properties": {
+        "attempt": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "item": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        },
+        "value_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "prior_work": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "group_execution_id",
+        "choice",
+        "rationale"
+      ],
+      "properties": {
+        "group_execution_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "item": {
+          "$ref": "#/$defs/historical_item"
+        },
+        "choice": {
+          "enum": [
+            "retain",
+            "revalidate",
+            "modify",
+            "revert"
+          ]
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "pattern": "\\S"
+        },
+        "attempt": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        }
+      },
+      "not": {
+        "required": [
+          "attempt",
+          "item"
+        ]
+      }
+    },
+    "activation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "group_execution_id",
+        "session",
+        "base_digest",
+        "definition_digest",
+        "anchor",
+        "plan",
+        "working_copy_basis",
+        "prior_work"
+      ],
+      "properties": {
+        "group_execution_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "session": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "base_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "definition_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "anchor": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        },
+        "goal_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "plan": {
+          "$ref": "#/$defs/plan"
+        },
+        "predecessor": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "working_copy_basis": {
+          "$ref": "#/$defs/working_copy_basis"
+        },
+        "prior_work": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/prior_work"
+          }
+        }
+      },
+      "if": {
+        "required": [
+          "predecessor"
+        ]
+      },
+      "then": {
+        "properties": {
+          "prior_work": {
+            "minItems": 1
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "prior_work": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    "assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "verdict",
+        "stage",
+        "score",
+        "evidence"
+      ],
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/scoped_attempt"
+        },
+        "verdict": {
+          "enum": [
+            "success",
+            "failure",
+            "inconclusive"
+          ]
+        },
+        "stage": {
+          "enum": [
+            "not-scored",
+            "lightweight",
+            "scored"
+          ]
+        },
+        "score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/plan_item"
+          }
+        }
+      }
+    },
+    "decision_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "selected_group",
+        "ordinal"
+      ],
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/scoped_attempt"
+        },
+        "selected_group": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        }
+      }
+    },
+    "delegation_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "package_digest"
+      ],
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/scoped_attempt"
+        },
+        "package_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "replan_feedback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision",
+        "option",
+        "reason",
+        "working_copy_basis",
+        "feedback"
+      ],
+      "properties": {
+        "decision": {
+          "$ref": "#/$defs/scoped_attempt"
+        },
+        "option": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "pattern": "\\S"
+        },
+        "working_copy_basis": {
+          "$ref": "#/$defs/working_copy_basis"
+        },
+        "feedback": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000,
+          "pattern": "\\S"
+        }
+      }
+    },
+    "outcome": {
+      "enum": [
+        "running",
+        "completed",
+        "abandoned",
+        "terminated_by_cancel"
+      ]
+    },
+    "closure_cause": {
+      "enum": [
+        "replan",
+        "goal_revision",
+        "reactivation",
+        "completion",
+        "cancel"
+      ]
+    }
+  }
+}

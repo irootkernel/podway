@@ -50,14 +50,14 @@ acceptance establishes no code delivery, release or installation authority.
 
 ## FRAME — Execution Group Model
 
-Dependencies: Implemented Core/Config/Direct foundations; Accepted ADR-0044. Status: Planned.
+Dependencies: Implemented Core/Config/Direct foundations; Accepted ADR-0044. Status: In Progress.
 Execution owner: `aquarium:epic-handler` when explicitly invoked.
 Detailed SOT: [Execution-group continuation](../todo/TODO-podway-continuation-groups.md).
 Target release: `v0.2.18` (planning only).
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `FRAME-001` | Establish successor schemas and domain types | Planned | Define base/group ports, immutable identity, declared replan options, assessment records and decision counters. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `FRAME-001` | Establish successor schemas and domain types | Completed | Define base/group ports, immutable identity, declared replan options, assessment records and decision counters. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
 | `FRAME-002` | Validate and project bounded execution groups | Planned | Validate anchors, references, guarded failure/replan routes (reject unguarded custom options), rework and termination; canonicalize, digest and project the graph. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
 | `FRAME-003` | Implement pure group lifecycle rules | Planned | Derive activation, return, decision-only scored replan, entry counts, goal and evidence-currentness transitions. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
 | `FRAME-004` | Qualify the model and finish the Epic | Planned | Verify model failures, architecture and development gate; promote durable model ownership. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |

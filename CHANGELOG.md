@@ -4,6 +4,10 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.2.18 - Unreleased
 
+### Changed
+
+- Re-pin the contract manifest for successor model schemas; Stores bound to the previous manifest, including v0.2.17, require their original writer.
+
 ### Fixed
 
 - Pin contributor Python through `.python-version` and use versioned validation environments.

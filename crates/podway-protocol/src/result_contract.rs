@@ -2613,6 +2613,23 @@ fn daemon_free_recovery_identity_v1(schema: &str, value: &Value) -> bool {
 
 #[cfg(test)]
 mod daemon_free_tests {
+    #[test]
+    fn frame001_successor_schemas_are_embedded_without_runtime_admission() {
+        let registry = super::embedded_schema_resources_v2().unwrap();
+        for id in [
+            "urn:podway:schema:procedure:v3",
+            "urn:podway:schema:execution-group:v1",
+            "urn:podway:schema:execution-group-records:v1",
+        ] {
+            assert!(registry.0.contains_key(id));
+        }
+        assert!(
+            super::DAEMON_FREE_DOCUMENT_SCHEMAS_V1
+                .iter()
+                .all(|contract| contract.schema != "podway.procedure/v3")
+        );
+    }
+
     const DELEGATION_COLD_SCHEMA: &str = "PODWAY_DELEGATION_COLD_SCHEMA";
     const DELEGATION_SCHEMAS: &[&str] = &[
         "podway.delegation-work-package/v1",

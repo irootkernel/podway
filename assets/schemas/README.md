@@ -13,7 +13,14 @@ legacy result generations were retired by V2DFC-008.
 input after YAML parsing. A legacy `job_queue` value is accepted within global
 parser bounds and ignored. Workspace v2 accepts only the optional legacy `prod`
 mode. Both legacy members are omitted from canonical serialization.
-`procedure-v2.schema.json` defines the closed, bounded authoring shape.
+`procedure-v2.schema.json` defines the current closed, bounded authoring shape.
+`procedure-v3.schema.json`, `execution-group-v1.schema.json` and
+`execution-group-records-v1.schema.json` define the internal successor model and
+record components. They share unchanged item/node declaration definitions by
+canonical references and enroll in the development manifest and offline/embedded
+registries. Registration does not admit successor documents to the public parser
+or runtime. [Model contracts](../../docs/specs/domain/execution-groups.md) state
+availability, port semantics, identity and compatibility boundaries.
 
 `version-result-v2.schema.json` and `contract-manifest-v2.schema.json` own the
 current single-binary version and manifest identity. Version emits Output v4.

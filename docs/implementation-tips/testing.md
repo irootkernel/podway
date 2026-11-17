@@ -1510,3 +1510,32 @@ the caller fixtures execute bounded owned-file readback and hashing, not an
 external login suite. Structural counts apply only to the declared normal
 segments. Release, distribution, installation, global skill activation and
 external-consumer acceptance require their own scope and evidence.
+
+## Execution group model value checks
+
+Core's `execution_groups::tests` verifies bounded immutable identities, exact
+prompt-only item compatibility across all seven item types, prior-work records,
+scoped delegation and decision-entry identity, score/basis bounds and successor
+port/topology constructor limits. Header/document construction, selected-group
+base entries, delegation with skip refusal, collection boundaries, self-reference
+rejection and positive recorded-value revisions have deterministic coverage.
+These checks establish value contracts only;
+Config graph admission and execution transitions have their own obligations.
+
+Protocol's registered `int_v2_result_contract::frame001_successor_schema_contracts_are_closed_and_registered`
+checks closed successor schemas, shared references, activation history bounds and
+manifest enrollment. The `frame001_record_fragments_pair_typed_values_with_closed_schema_boundaries`
+and `frame001_nonempty_ports_and_shared_bounds_have_closed_shapes` tests exercise
+nonempty typed record components, closed fields, port documents and shared limits.
+Test-only enum spellings check component agreement; production wire projection
+remains a separate owner. `frame001_scoped_guard_schemas_close_local_and_current_port_sources`
+checks local/plan/current-result guard references and historical-source refusal;
+Core's `scoped_guards_distinguish_local_plan_and_selected_current_result` checks
+the matching typed source and unchanged predicate value semantics.
+Protocol's `daemon_free_tests::frame001_successor_schemas_are_embedded_without_runtime_admission`
+checks embedded registration without adding a public result family. Config's
+`int_procedure_document::frame001_successor_documents_remain_outside_public_v2_admission`
+keeps public v2 schema dispatch closed. Existing offline-registry and current-v2
+conformance checks remain part of `make test`. These results do not prove group
+persistence, concurrent activation, process recovery, history paging or product
+CLI availability.
