@@ -6,6 +6,7 @@
 - Extends: [ADR-0007](0007-stage-items-not-evidence-ledger.md)
 - Extends: [ADR-0016](0016-recorded-item-workflow-memory.md)
 - Extends: [ADR-0019](0019-procedure-v2-only-product.md)
+- Extended by: [ADR-0044](0044-versioned-execution-groups.md), bounded retained group history without enlarging existing item or response limits; implementation follows FRAME, GROUP, TRACE and ADOPT
 
 ## Context
 

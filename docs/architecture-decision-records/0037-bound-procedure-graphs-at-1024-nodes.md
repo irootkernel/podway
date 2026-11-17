@@ -4,6 +4,7 @@
 - Date: 2026-09-22
 - Preserves: [ADR-0017](0017-single-cursor-convergence.md), [ADR-0024](0024-bounded-evidence-scale-and-paged-read-back.md)
 - Delivery owner: [V2GSC](../roadmap/README.md#v2gsc-procedure-graph-scale-correction)
+- Extended by: [ADR-0044](0044-versioned-execution-groups.md), bounded base/group graphs and combined current projections; implementation follows FRAME, GROUP, TRACE and ADOPT
 
 ## Context
 

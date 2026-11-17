@@ -50,7 +50,7 @@ establish that S7 ran, passed, failed, was Motivated or was Removed. S7 remains 
 unperformed historical comparison protocol. S1-S6, their evidence-to-scope rule
 and all unselected fan, claim, lease, map, join and failure mechanisms remain
 Candidate. The original research text below retains its dated provenance;
-selected execution decisions belong to the new dossier and Proposed ADR-0044.
+selected execution decisions belong to the new dossier and Accepted ADR-0044.
 No product implementation or accepted-ADR change is established by this amendment.
 
 ## 1. Context and goal

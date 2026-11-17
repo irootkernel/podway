@@ -4,6 +4,7 @@
 - Date: 2026-08-13
 - Partially supersedes: [ADR-0017](0017-single-cursor-convergence.md)
 - Supersedes: [ADR-0018](0018-v2-success-envelope.md)
+- Superseded in part by: [ADR-0044](0044-versioned-execution-groups.md), the v2-only product and fixed v2 preset identity clauses only at the ADOPT-001 product cutover; implementation follows FRAME, GROUP, TRACE and ADOPT
 
 ## Context
 

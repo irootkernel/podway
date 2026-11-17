@@ -45,12 +45,12 @@ The shared dossier survives every intermediate closeout. Each Epic promotes its
 own durable outcomes and replaces its own Detailed SOT link; only the last
 consumer's separately approved closeout may retire the dossier after every
 consumer is terminal and no roadmap reference remains. The roadmap alone owns
-identity, dependency ordering and status. ADR-0044 is Proposed; document adoption
-is not architecture acceptance, code delivery, release or installation authority.
+identity, dependency ordering and status. ADR-0044 is Accepted; its architecture
+acceptance establishes no code delivery, release or installation authority.
 
 ## FRAME — Execution Group Model
 
-Dependencies: Implemented Core/Config/Direct foundations; accepted ADR-0044 before behavior changes. Status: Planned.
+Dependencies: Implemented Core/Config/Direct foundations; Accepted ADR-0044. Status: Planned.
 Execution owner: `aquarium:epic-handler` when explicitly invoked.
 Detailed SOT: [Execution-group continuation](../todo/TODO-podway-continuation-groups.md).
 Target release: `v0.2.18` (planning only).

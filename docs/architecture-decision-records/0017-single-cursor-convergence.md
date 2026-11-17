@@ -5,6 +5,7 @@
 - Supersedes: [ADR-0015](0015-constrained-single-cursor-graph.md)
 - Procedure v1 preservation: Superseded by [ADR-0019](0019-procedure-v2-only-product.md)
 - Preserved by: [ADR-0028](0028-bounded-typed-procedure-guards.md)
+- Extended by: [ADR-0044](0044-versioned-execution-groups.md), one formal cursor across immutable base and execution-group scopes; implementation follows FRAME, GROUP, TRACE and ADOPT
 
 ## Context
 

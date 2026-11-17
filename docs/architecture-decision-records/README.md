@@ -57,6 +57,7 @@ narrative architecture and specifications when sources conflict.
 - [ADR-0041](0041-user-integration-settings.md): explicit read-only user integration settings with worktree overrides (settings path superseded by ADR-0042); settings/query and repository-only metadata tooling implemented, with readiness closeout tracked by INTEG
 - [ADR-0042](0042-separate-user-settings-namespace.md): fixed HOME-derived user settings outside the workspace configuration and removal namespace
 - [ADR-0043](0043-atomic-assessment-and-commit-bound-observations.md): accepted future atomic criterion batches and opt-in commit-bound observations; implementation remains planned under AGENT
-- [ADR-0044](0044-versioned-execution-groups.md): Proposed versioned execution groups,
-  retained execution history and a new-session-only single-model cutover; no
-  implementation or acceptance is established by its registration.
+- [ADR-0044](0044-versioned-execution-groups.md): Accepted versioned execution groups,
+  retained execution history and a new-session-only single-model cutover;
+  implementation remains planned under FRAME, GROUP, TRACE and ADOPT, with
+  product and preset supersession at ADOPT-001.

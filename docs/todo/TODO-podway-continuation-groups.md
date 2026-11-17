@@ -7,8 +7,8 @@
 - Consumer epics: FRAME, GROUP, TRACE, ADOPT
 - Planning release target: `v0.2.18`
 - Repository scope: Podway only
-- Delivery boundary: documentation only; product execution and architecture acceptance are separate
-- Architectural prerequisite: [ADR-0044](../architecture-decision-records/0044-versioned-execution-groups.md), currently Proposed
+- Delivery boundary: adopted design; product execution requires its separately approved workflow
+- Architectural prerequisite: [ADR-0044](../architecture-decision-records/0044-versioned-execution-groups.md), Accepted
 
 The [roadmap](../roadmap/README.md) alone owns epic/task identity, ordering,
 dependencies and status. This dossier owns the closed future implementation
@@ -19,8 +19,9 @@ Release targeting is not release acceptance or publication authority.
 
 No product behavior changes through application of this dossier. Accepted ADRs,
 canonical assets and current specifications remain authoritative until the
-named implementation tasks change them. Implementation must not cross the
-Proposed ADR's architecture boundary before its actual acceptance.
+named implementation tasks change them. ADR-0044 accepts the successor
+architecture and staged delivery; its ADOPT-001 cutover alone supersedes the
+current v2-only product and fixed preset identity clauses.
 
 ## 2. Verified context and decision basis
 
@@ -560,9 +561,10 @@ external task was stopped.
   Consumers must re-pin the complete successor manifest. Preserve explicit
   lifecycle, archive and disposition rules
   on new group history; old v2 state remains refused.
-- ADR-0044's accepted relationship update must cover ADR-0019's preset identity
-  clauses as well as its v2-only rule, and the affected ADR-0027, 0035, 0037 and
-  0039 contracts. No existing accepted ADR is rewritten by this design draft.
+- Accepted ADR-0044 records its relationship to ADR-0019's preset identity
+  clauses and v2-only rule, and to the affected ADR-0027, 0035, 0037 and 0039
+  contracts. Reciprocal links preserve the earlier decision bodies; the product
+  and preset supersession takes effect only at ADOPT-001.
 
 ### 5.1.1 Default Procedure quality and authoring examples
 
@@ -724,7 +726,7 @@ reports or transient workflow receipts in this dossier.
 - [Documentation precedence](../README.md#precedence)
 - [TODO lifecycle](README.md)
 - [Roadmap](../roadmap/README.md)
-- [Proposed architectural decision](../architecture-decision-records/0044-versioned-execution-groups.md)
+- [Accepted architectural decision](../architecture-decision-records/0044-versioned-execution-groups.md)
 - [PROOF candidate](TODO-podway-graph-evolution-feasibility.md)
 - [Continuation research](references/continuation-generations-research.md)
 - [Graph research](references/graph-engineering-research.md)

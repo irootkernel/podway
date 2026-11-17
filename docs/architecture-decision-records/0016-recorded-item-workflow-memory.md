@@ -5,6 +5,7 @@
 - Extends: [ADR-0007](0007-stage-items-not-evidence-ledger.md)
 - Extended by: [ADR-0025](0025-structurally-bound-external-check-results.md)
 - Extended by: [ADR-0028](0028-bounded-typed-procedure-guards.md)
+- Extended by: [ADR-0044](0044-versioned-execution-groups.md), attempt-local recorded items and retained group provenance; implementation follows FRAME, GROUP, TRACE and ADOPT
 
 ## Context
 

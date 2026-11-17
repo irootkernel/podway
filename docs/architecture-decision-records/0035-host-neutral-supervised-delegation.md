@@ -7,6 +7,7 @@
 - Preserves: [ADR-0003](0003-daemon-single-writer.md), [ADR-0006](0006-same-user-local-trust.md), [ADR-0017](0017-single-cursor-convergence.md), [ADR-0019](0019-procedure-v2-only-product.md), [ADR-0031](0031-keyed-runtime-modes-and-managed-development-service.md)
 - Delivery owner: [V2SDG](../roadmap/README.md#v2sdg-host-neutral-supervised-delegation-foundation)
 - Implementation availability: the source foundation is implemented; the linked roadmap owns release and live-integration status.
+- Extended by: [ADR-0044](0044-versioned-execution-groups.md), activation-bound base/group delegation while external roles stay external; implementation follows FRAME, GROUP, TRACE and ADOPT
 
 ## Context
 

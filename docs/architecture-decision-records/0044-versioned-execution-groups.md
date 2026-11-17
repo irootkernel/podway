@@ -1,20 +1,22 @@
 # ADR-0044: Version Execution Groups Under One Design Anchor
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-17
-- Proposed delivery owners: FRAME, GROUP, TRACE, ADOPT
+- Acceptance date: 2026-11-17
+- Delivery owners: FRAME, GROUP, TRACE, ADOPT
 - Planning release target: v0.2.18
 - Design: [Execution Group Continuation](../todo/TODO-podway-continuation-groups.md)
-- Architecture acceptance: not recorded; document approval does not accept this Proposed ADR
-- Planned partial supersession: [ADR-0019](0019-procedure-v2-only-product.md), the v2-only product and fixed v2 preset identity clauses at cutover
-- Planned extensions: [ADR-0017](0017-single-cursor-convergence.md), [ADR-0016](0016-recorded-item-workflow-memory.md), [ADR-0024](0024-bounded-evidence-scale-and-paged-read-back.md), [ADR-0027](0027-state-aware-session-start.md), [ADR-0035](0035-host-neutral-supervised-delegation.md), [ADR-0037](0037-bound-procedure-graphs-at-1024-nodes.md), [ADR-0039](0039-opt-in-contract-generations.md)
+- Architecture acceptance: the repository owner accepted this decision before FRAME execution
+- Partial supersession at the ADOPT-001 product cutover: [ADR-0019](0019-procedure-v2-only-product.md), the v2-only product and fixed v2 preset identity clauses at cutover
+- Extends: [ADR-0017](0017-single-cursor-convergence.md), [ADR-0016](0016-recorded-item-workflow-memory.md), [ADR-0024](0024-bounded-evidence-scale-and-paged-read-back.md), [ADR-0027](0027-state-aware-session-start.md), [ADR-0035](0035-host-neutral-supervised-delegation.md), [ADR-0037](0037-bound-procedure-graphs-at-1024-nodes.md), [ADR-0039](0039-opt-in-contract-generations.md)
 - Preserves: [ADR-0038](0038-remove-the-daemon.md), the single formal cursor, external execution and the same-user trust boundary
 
-This Proposed ADR does not amend accepted authority or current implementation.
-Its acceptance and later implementation remain separate from documentation
-write approval, commit, release, installation and consumer adoption. Accepted
-ADRs must receive reciprocal relationship links when this decision is actually
-accepted; application of this proposal does not rewrite them.
+This ADR accepts the successor architecture and its staged delivery boundaries.
+Current Procedure v2 behavior remains unchanged until the named implementation
+tasks deliver each part; the v2-only product and fixed preset identity clauses
+are superseded only at the ADOPT-001 cutover. Reciprocal relationship links
+preserve earlier decision bodies. Architecture acceptance establishes no
+implementation completion, release, installation or consumer adoption.
 
 ## Context
 
@@ -43,7 +45,7 @@ Aquarium's role/Writer contracts. A Podway cursor identifies formal
 progression; it is not a reason to prohibit that parallelism or require
 Dolgorae first.
 
-## Proposed decision
+## Decision
 
 1. **Immutable base and one anchor.** Introduce `podway.procedure/v3` and a
    `podway.execution-group/v1` document. One base action placement is the design
@@ -192,7 +194,7 @@ Dolgorae first.
     order. Keep incomplete successor capability outside public runtime admission
     until the integrated product is coherent. First-release history inspection
     is mandatory. Current specifications/assets change in their implementation
-    tasks; no feature is implemented by this proposal. Actual release gating,
+    tasks; this decision record implements no feature. Actual release gating,
     installed qualification and external consumer adoption remain distinct.
 
 ## Alternatives and reasons
@@ -221,8 +223,8 @@ cost is additional identity, persistence, history paging and consumer binding
 work, plus an intentional breaking cutover. Preserving history does not
 preserve external artifact bytes or prove that recorded actions occurred.
 
-Before implementation, obtain actual acceptance of this ADR and its
-relationship to accepted decisions. Before delivery, verify canonical
+Architecture acceptance and the relationships above are recorded before FRAME
+implementation. Before delivery, verify canonical
 source/runtime agreement, atomic activation/replan/base return, stale rejection
 and exact replay, fresh process recovery, maximum-value historical paging,
 no-rollback code continuity, archive retention, explicit destructive operations
@@ -230,5 +232,5 @@ and byte-identical legacy refusal using owned fixtures. Native/Herdr examples
 may demonstrate protocol compliance without claiming real provider, adapter or
 installed consumer success. The
 [dossier](../todo/TODO-podway-continuation-groups.md) owns task-level
-acceptance; the roadmap alone owns status. No acceptance is recorded by this
-file's creation.
+acceptance; the roadmap alone owns status. Architecture acceptance does not
+establish implementation completion or release readiness.
