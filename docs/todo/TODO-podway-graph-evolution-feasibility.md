@@ -13,6 +13,21 @@ This working label groups proposed work; it reserves no roadmap ID. This
 candidate adopts no implementation, public interface, release or consumer change.
 The [roadmap](../roadmap/README.md) alone owns adopted work and task status.
 
+## Owner-directed continuation adoption — November 17, 2026
+
+The owner selected same-session replacement of immutable execution groups from a
+design anchor as a direct product requirement. The bounded design is now owned by
+[Execution-group continuation](TODO-podway-continuation-groups.md) and the
+[FRAME, GROUP, TRACE and ADOPT roadmap](../roadmap/README.md#execution-group-continuation-program).
+This is a planning amendment for that selected continuation scope only. It
+replaces experiment-first adoption as a prerequisite for that scope; it does not
+establish that S7 ran, passed, failed, was Motivated or was Removed. S7 remains an
+unperformed historical comparison protocol. S1-S6, their evidence-to-scope rule
+and all unselected fan, claim, lease, map, join and failure mechanisms remain
+Candidate. The original research text below retains its dated provenance;
+selected execution decisions belong to the new dossier and Proposed ADR-0044.
+No product implementation or accepted-ADR change is established by this amendment.
+
 ## 1. Context
 
 Procedure v2 already permits external parallel work whose results are

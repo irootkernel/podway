@@ -24,6 +24,14 @@ write-free snapshot reads are the current product boundaries.
 [Examples](examples/) provide walkthroughs and versioned known-answer payloads.
 
 Current adopted work is tracked by the [active roadmap](roadmap/).
+The planned [execution-group continuation program](roadmap/README.md#execution-group-continuation-program)
+selects FRAME, GROUP, TRACE and ADOPT for a complete first-release target of
+`v0.2.18`, within the current open release cycle. Its
+[shared design dossier](todo/TODO-podway-continuation-groups.md) owns the intended
+new-session-only model and retained-history contract. The architecture decision
+is [Proposed ADR-0044](architecture-decision-records/0044-versioned-execution-groups.md);
+current Procedure v2 behavior remains unchanged. Document adoption establishes no
+implementation, ADR acceptance, release, installation or consumer activation.
 [TYPED](roadmap/README.md#typed-typed-boundary-ownership) is completed and
 owner-accepted. Its six Tasks delivered shared wire names and bounds, typed
 delegation acceptance, workspace identity comparison, pure artifact facts and

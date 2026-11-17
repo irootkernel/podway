@@ -38,6 +38,21 @@ the graph hypothesis or a live adapter; real executor integration belongs to
 foundation is already implemented under ADR-0025. The S1-S6 protocol is owned by
 PROOF; this note retains the possible mechanisms and their future design limits.
 
+## Owner-directed continuation adoption — November 17, 2026
+
+The owner selected same-session replacement of immutable execution groups from a
+design anchor as a direct product requirement. The bounded design is now owned by
+[Execution-group continuation](../TODO-podway-continuation-groups.md) and the
+[FRAME, GROUP, TRACE and ADOPT roadmap](../../roadmap/README.md#execution-group-continuation-program).
+This is a planning amendment for that selected continuation scope only. It
+replaces experiment-first adoption as a prerequisite for that scope; it does not
+establish that S7 ran, passed, failed, was Motivated or was Removed. S7 remains an
+unperformed historical comparison protocol. S1-S6, their evidence-to-scope rule
+and all unselected fan, claim, lease, map, join and failure mechanisms remain
+Candidate. The original research text below retains its dated provenance;
+selected execution decisions belong to the new dossier and Proposed ADR-0044.
+No product implementation or accepted-ADR change is established by this amendment.
+
 ## 1. Context and goal
 
 ### 1.1 Context

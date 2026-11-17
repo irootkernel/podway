@@ -32,6 +32,21 @@ Engine, worktree-local Store, serialized mutations and success-only outcomes.
 Experiments reopen the Store through a new invocation after a caller exits or is
 killed; they assume no resident process or daemon IPC.
 
+## Owner-directed continuation adoption — November 17, 2026
+
+The owner selected same-session replacement of immutable execution groups from a
+design anchor as a direct product requirement. The bounded design is now owned by
+[Execution-group continuation](../TODO-podway-continuation-groups.md) and the
+[FRAME, GROUP, TRACE and ADOPT roadmap](../../roadmap/README.md#execution-group-continuation-program).
+This is a planning amendment for that selected continuation scope only. It
+replaces experiment-first adoption as a prerequisite for that scope; it does not
+establish that S7 ran, passed, failed, was Motivated or was Removed. S7 remains an
+unperformed historical comparison protocol. S1-S6, their evidence-to-scope rule
+and all unselected fan, claim, lease, map, join and failure mechanisms remain
+Candidate. The original research text below retains its dated provenance;
+selected execution decisions belong to the new dossier and Proposed ADR-0044.
+No product implementation or accepted-ADR change is established by this amendment.
+
 ## 1. Context
 
 Task classification can select an initial Procedure or preset before enough work

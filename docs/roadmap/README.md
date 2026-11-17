@@ -20,6 +20,92 @@ sequence, for example `OPTIM-001`. Existing alphanumeric epic IDs, including
 `V2CTR` and `REL12`, and the compact `REL12` task IDs remain unchanged historical
 identifiers. Do not rename completed work to apply the new convention.
 
+## Execution Group Continuation Program
+
+Target product release: `v0.2.18`, selected by the owner for the current open
+release cycle. Complete FRAME, then GROUP, then TRACE, then ADOPT;
+complete each Epic's own checks, independent assessment and actual acceptance
+before starting the next Epic. At most the first unfinished Task is In Progress,
+In Review or Blocked; later Tasks remain Planned. Tasks run in numeric order
+within each Epic and depend on their immediate predecessor; each first Task
+depends on its Epic prerequisites below. These are scheduling and delivery
+boundaries, not evidence of completed implementation.
+
+All four Epics share one [Detailed SOT](../todo/TODO-podway-continuation-groups.md).
+The owner selects this bounded continuation requirement directly; no S7 experiment
+is claimed. Existing external subagent/Herdr parallel work remains available.
+Replan is limited to declared guarded failure decisions. Under default consumer
+policy, second-entry failure gets light screening; third and later failures get scored assessment and CO judgment.
+Default score 80 permits, never forces, replan; success advances immediately.
+Claims, leases, native fan/join, Dolgorae integration and consumer-repository edits
+are outside this program. Intermediate internals must not admit an incomplete new
+runtime model or ship as standalone feature releases.
+
+The shared dossier survives every intermediate closeout. Each Epic promotes its
+own durable outcomes and replaces its own Detailed SOT link; only the last
+consumer's separately approved closeout may retire the dossier after every
+consumer is terminal and no roadmap reference remains. The roadmap alone owns
+identity, dependency ordering and status. ADR-0044 is Proposed; document adoption
+is not architecture acceptance, code delivery, release or installation authority.
+
+## FRAME — Execution Group Model
+
+Dependencies: Implemented Core/Config/Direct foundations; accepted ADR-0044 before behavior changes. Status: Planned.
+Execution owner: `aquarium:epic-handler` when explicitly invoked.
+Detailed SOT: [Execution-group continuation](../todo/TODO-podway-continuation-groups.md).
+Target release: `v0.2.18` (planning only).
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `FRAME-001` | Establish successor schemas and domain types | Planned | Define base/group ports, immutable identity, declared replan options, assessment records and decision counters. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `FRAME-002` | Validate and project bounded execution groups | Planned | Validate anchors, references, guarded failure/replan routes (reject unguarded custom options), rework and termination; canonicalize, digest and project the graph. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `FRAME-003` | Implement pure group lifecycle rules | Planned | Derive activation, return, decision-only scored replan, entry counts, goal and evidence-currentness transitions. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `FRAME-004` | Qualify the model and finish the Epic | Planned | Verify model failures, architecture and development gate; promote durable model ownership. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+
+## GROUP — Transactional Group Lifecycle
+
+Dependencies: Completed FRAME. Status: Planned.
+Execution owner: `aquarium:epic-handler` when explicitly invoked.
+Detailed SOT: [Execution-group continuation](../todo/TODO-podway-continuation-groups.md).
+Target release: `v0.2.18` (planning only).
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `GROUP-001` | Persist execution group identity and history | Planned | Store immutable definitions, runs, activation lineage, planning bindings and independently admitted attempts. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `GROUP-002` | Activate and return atomically | Planned | Activate only from the satisfied anchor and return normal group completion to the declared base successor. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `GROUP-003` | Replan without losing completed work | Planned | Admit only declared failed decisions with current score/guards; atomically record choice, preserve old work and create the fresh planning attempt. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `GROUP-004` | Fence requests and recover original outcomes | Planned | Bind all affected mutations to exact group/attempt identity; preserve replay and response-loss recovery. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `GROUP-005` | Qualify lifecycle concurrency and recovery | Planned | Verify contention, process interruption, cold reconstruction and rollback; complete the development gate. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+
+## TRACE — Retained Execution History
+
+Dependencies: Completed GROUP. Status: Planned.
+Execution owner: `aquarium:epic-handler` when explicitly invoked.
+Detailed SOT: [Execution-group continuation](../todo/TODO-podway-continuation-groups.md).
+Target release: `v0.2.18` (planning only).
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `TRACE-001` | Query planning and activation lineage | Planned | Expose bounded paging of groups, decision entry counts, assessment/CO choices and replacement causes. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `TRACE-002` | Inspect historical DAGs and node execution | Planned | Render past graphs and read retained attempt values, results and provenance without making them current. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `TRACE-003` | Link prior work to the new planning basis | Planned | Query and project admitted prior-work judgments and exact historical execution references without inheriting gates. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `TRACE-004` | Qualify history retention and lifecycle | Planned | Verify archive, limits, explicit deletion boundaries and cold reopen; finish the development gate. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+
+## ADOPT — Product Adoption and Qualification
+
+Dependencies: Completed TRACE. Status: Planned.
+Execution owner: `aquarium:epic-handler` when explicitly invoked.
+Detailed SOT: [Execution-group continuation](../todo/TODO-podway-continuation-groups.md).
+Target release: `v0.2.18` (planning only).
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `ADOPT-001` | Expose the atomic successor product cutover | Planned | Switch CLI/parser/runtime, Store/writer/manifests, successor presets with complete node/failure guidance and scoped delegation contracts together. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `ADOPT-002` | Align successor guidance and additional examples | Planned | Provide normal, staged-failure and justified-replan authoring examples without artificial loops; align paired source skills; preserve installed copies and managed Procedures. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `ADOPT-003` | Specify external role and assignment consumption | Planned | Provide executor-neutral assignment, affected Evaluator/CO decisions, assessment reuse, settlement and late-result examples. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `ADOPT-004` | Qualify the single-model cutover | Planned | Verify unchanged refusal of authentic v2/previous-writer fixtures and explicit safe recovery. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `ADOPT-005` | Qualify the product and finish adoption | Planned | Exercise actual CLI normal/fault flows, make test and whole-program verification; promote durable outcomes. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+
 ## TYPED — Typed Boundary Ownership
 
 Dependencies: implemented BOUND, PARSE and AGENT foundations. Status: Completed.

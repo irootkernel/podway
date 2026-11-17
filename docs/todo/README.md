@@ -66,6 +66,10 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 ## Lifecycle
 
 - Keep an adopted dossier here while any task in its owning epic is incomplete.
+  A shared release-program dossier remains while any consumer epic is unfinished
+  or canonically references it. Each intermediate closeout replaces only its own
+  links and promotes its own outcomes; only the last accepted consumer may retire
+  the dossier/index entry after all references and durable owners are settled.
 - When only part of a candidate is adopted, promote only the selected findings
   into their actual roadmap tasks. Retain unselected findings under a continuing
   candidate owner; extracting a bounded adopted dossier can leave the original
@@ -86,7 +90,8 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 - After the owner accepts the exact closeout candidate and before marking the
   epic complete, replace every roadmap and documentation link
   to the dossier with the appropriate durable authority, remove the dossier from
-  this index, and delete its `TODO-*.md` file. No completed behavior, rationale,
+  this index, and delete its `TODO-*.md` file. For a shared dossier, apply this
+  deletion only at the last-consumer boundary above. No completed behavior, rationale,
   operational tip, compatibility boundary, or verification claim may exist only
   in the deleted dossier.
 - Do not move a completed TODO dossier into `docs/roadmap/archive/`. That directory
@@ -97,8 +102,11 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-None. Completed work and its durable authorities are recorded in the
-[roadmap](../roadmap/README.md).
+- [Execution-group continuation](TODO-podway-continuation-groups.md): shared
+  execution dossier for FRAME, GROUP, TRACE and ADOPT. The roadmap owns their
+  order, dependencies and status. Retain this dossier while any consumer remains
+  unfinished or still references it; promote each Epic's durable outcomes before
+  its closeout. Target product release: `v0.2.18` (planning only).
 
 ## Related candidates
 
@@ -117,7 +125,7 @@ does not waive them.
 | Working label | Candidate | Proposed outcome | Source feedback |
 |---|---|---|---|
 | Future executor qualification | [Executor integration](TODO-podway-executor-integration.md) | Real adapter and selected-build qualification beyond the bounded INTEG readiness work | Existing real executor candidate |
-| PROOF | [Graph evolution feasibility](TODO-podway-graph-evolution-feasibility.md) | Per-shape evidence for coordination and topology-lineage needs | Existing graph and continuation research |
+| PROOF | [Graph evolution feasibility](TODO-podway-graph-evolution-feasibility.md) | Unadopted coordination research and retained, unperformed S7 comparisons; selected continuation design is owned by the adopted dossier | Existing graph and continuation research |
 | WEBUI | [Operations console](TODO-podway-operations-console.md) | Foreground human operations after the graph direction is settled | Existing Web console candidate |
 
 The [deferred-feedback register](../deferred-feedback/README.md) retains each
@@ -132,7 +140,9 @@ DF-026, DF-028, DF-045 and DF-050 retain their full independent entries there.
 The `references/` documents preserve dated research, rejected alternatives,
 illustrative models, risks and unresolved implementation questions. They are
 non-normative supporting material for PROOF, not additional epic candidates,
-adopted dossiers or competing experiment plans. Future designs must revalidate
+adopted dossiers or competing experiment plans. The dated continuation adoption
+amendment links the selected owner-directed design; it does not convert research
+hypotheses into empirical results. Future designs must revalidate
 external comparisons and obtain accepted authority for any product change.
 
 - [Graph engineering research](references/graph-engineering-research.md)
