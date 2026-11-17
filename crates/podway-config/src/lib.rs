@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
+/// Internal successor authoring admission; the shipped Procedure dispatch remains v2-only.
+pub mod execution_groups;
 mod integration_settings;
 mod parser;
 mod procedure_v2_authoring;

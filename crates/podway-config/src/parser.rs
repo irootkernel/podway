@@ -198,7 +198,7 @@ pub fn parse_procedure_yaml(input: &[u8]) -> Result<ParsedProcedure, ConfigError
 /// True when the document's first non-whitespace byte opens a flow collection. A JSON procedure
 /// document (or a top-level YAML flow mapping/sequence) begins with `{` or `[`; block YAML — the
 /// normative v2 authoring form — does not. Nested flow collections are never at the first byte.
-fn begins_with_flow_collection(input: &[u8]) -> bool {
+pub(crate) fn begins_with_flow_collection(input: &[u8]) -> bool {
     matches!(
         input
             .iter()

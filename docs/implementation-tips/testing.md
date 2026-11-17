@@ -1511,6 +1511,61 @@ external login suite. Structural counts apply only to the declared normal
 segments. Release, distribution, installation, global skill activation and
 external-consumer acceptance require their own scope and evidence.
 
+## Execution group source admission checks
+
+Config's registered `int_execution_groups` suite admits actual internal base/group
+documents and checks their canonical output against the local canonical schemas
+with an offline retriever. It covers all seven shared item kinds and defaults,
+header bounds, interface equality and declaration order, required references
+versus optional source items, custom and default-style guards, selected ports,
+group-only success exits, session-goal assessment ownership, anchor/return
+dominance, ordinary and explicit boundary exits, local rework and conditional
+prefix manual targets. Mixed replan/ordinary cycles remain rejection cases.
+The source/format/graph checks preserve array order, normalize authoring maps,
+retain supported YAML comments and prove prompt changes still change definition
+digests. Explicit replan graph edges never acquire a synthetic local target.
+
+Run the registered namespace through Gaori using
+`cargo test --locked -p podway-config --test int_suite int_execution_groups::`.
+Then run Config's library and integration targets together to retain the existing
+exhaustive shared-graph reference checks. The library
+`execution_groups::projection::tests::frame002_projection_limits_preserve_canonical_bytes_and_formatted_scalars`
+checks exact/one-over source ceilings, including the distinction between canonical
+encoded bytes and formatted Unicode scalars. Node/definition/port/route/manual
+collection limits use real admitted documents. The dense composition has 1,024
+placements: 1,023 eight-route decisions and one actual terminal, yielding 8,184
+ordinary edges. Admission and graph projection assert that attainable maximum.
+The independent 8,192/8,193-edge boundary is unreachable under the unchanged
+node/route/success-exit caps; no malformed private model is injected to claim it.
+
+Config's `jsonschema` test dependency reuses the repository's existing locked
+version with default features disabled; schema retrieval reads local assets only.
+The complete development gate remains `make test` through configured Gaori
+`full`. These checks prove internal source admission and projection contracts.
+Additional registered settlement cases reproduce post-return Action and Decision
+escapes and missing/reversed selected input controllers before their fixes.
+Controls preserve first prefix arrival, local Advance/Rework and exact ordered
+interfaces. Finite-exit traps, malformed route targets, typed closed-shape
+rejections and formerly masked reference/dominance cases have direct assertions.
+Hand-authored nonlexical base/group YAML distinguishes source-map order from
+option-ordered graph edges and preserves an interior comment. Decoder seam
+cases cover nulls, unsupported YAML, duplicate mappings, depth and node count.
+
+Public API wiring tests admit an exact-1-MiB padded source and reject one byte
+over; a bounded dense long-ID definition fits source/canonical caps but exceeds
+graph/pretty-source/format output caps. Compact declarations whose materialized
+defaults exceed the canonical ceiling fail validation. These fixtures inspect
+actual sizes and typed bounds rather than mutating private limits.
+
+They do not execute selection/activation, current-value guard truth, wire-derived
+delegation-package or placement-local next/read-back/preview/token/envelope sizing
+(even for a single scope), combined base/group guidance budgets, Store/Engine
+mutations, history paging or the atomic product cutover. Protocol owns the
+successor wire allocations; GROUP-002 owns pre-effect activation/return budget
+admission and ADOPT-001 selects the public families. Current source/projection
+limits are still directly enforced here. Public v2 dispatch and the existing
+refusal checks remain required.
+
 ## Execution group model value checks
 
 Core's `execution_groups::tests` verifies bounded immutable identities, exact

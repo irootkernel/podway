@@ -283,7 +283,7 @@ fn items_value(items: &[ItemSpecV2]) -> Option<AuthoringValue> {
         .then(|| AuthoringValue::Seq(items.iter().map(item_value).collect::<Vec<_>>()))
 }
 
-fn item_value(item: &ItemSpecV2) -> AuthoringValue {
+pub(crate) fn item_value(item: &ItemSpecV2) -> AuthoringValue {
     let mut value = Entries::new();
     value.text("id", item.common().id().as_str());
     match item {
@@ -372,7 +372,7 @@ fn common_item_fields(value: &mut Entries, common: &ItemCommonV2) {
         .optional_value("required_when", common.required_when().map(condition_value));
 }
 
-fn condition_value(condition: &ItemConditionV2) -> AuthoringValue {
+pub(crate) fn condition_value(condition: &ItemConditionV2) -> AuthoringValue {
     AuthoringValue::Seq(
         condition
             .predicates()

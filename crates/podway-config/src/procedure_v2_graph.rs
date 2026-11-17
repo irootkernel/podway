@@ -109,9 +109,14 @@ impl Successor {
     }
 }
 
-/// A dense, author-ordered index over one validated Procedure v2 graph.
+// Borrow the original model without translating successor boundary operations into local edges.
+enum Placements<'a> {
+    V2(&'a [GraphPlacementV2]),
+    Successor(&'a [podway_core::execution_groups::PlacementV3]),
+}
+/// Bounded, author-ordered local adjacency shared by validated V2 and successor graphs.
 pub(crate) struct GraphIndex<'a> {
-    placements: &'a [GraphPlacementV2],
+    placements: Placements<'a>,
     index_by_id: BTreeMap<&'a str, usize>,
     successors: Vec<Vec<Successor>>,
     predecessors: Vec<Vec<usize>>,
@@ -169,7 +174,71 @@ impl<'a> GraphIndex<'a> {
             .copied()
             .unwrap_or(0);
         Self {
-            placements,
+            placements: Placements::V2(placements),
+            index_by_id,
+            successors,
+            predecessors,
+            entry,
+        }
+    }
+
+    /// Index only ordinary local edges. Replan remains an explicit boundary operation.
+    pub(crate) fn successor(graph: &'a podway_core::execution_groups::TopologyV3) -> Self {
+        use podway_core::execution_groups::{DecisionRouteV3, PlacementKindV3};
+        let placements = graph.nodes();
+        let index_by_id: BTreeMap<&str, usize> = placements
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (p.id().as_str(), i))
+            .collect();
+        let successors: Vec<Vec<Successor>> = placements
+            .iter()
+            .map(|p| {
+                let routes: Vec<(&GraphNodeId, Option<TransitionEffectV2>)> = match p.kind() {
+                    PlacementKindV3::Action {
+                        outcome: ActionOutcomeV2::Next(to),
+                        ..
+                    } => vec![(to, None)],
+                    PlacementKindV3::Action {
+                        outcome: ActionOutcomeV2::Terminal,
+                        ..
+                    } => vec![],
+                    PlacementKindV3::Decision { routes } => routes
+                        .iter()
+                        .filter_map(|(_, r)| match r {
+                            DecisionRouteV3::Advance(to) => {
+                                Some((to, Some(TransitionEffectV2::Advance)))
+                            }
+                            DecisionRouteV3::Rework(to) => {
+                                Some((to, Some(TransitionEffectV2::Rework)))
+                            }
+                            DecisionRouteV3::Replan => None,
+                        })
+                        .collect(),
+                };
+                routes
+                    .into_iter()
+                    .filter_map(|(to, effect)| {
+                        index_by_id.get(to.as_str()).map(|target| Successor {
+                            target: *target,
+                            effect,
+                        })
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut predecessors = vec![Vec::new(); placements.len()];
+        for (source, edges) in successors.iter().enumerate() {
+            for edge in edges {
+                predecessors[edge.target()].push(source);
+            }
+        }
+        let entry = index_by_id
+            .get(graph.entry().as_str())
+            .copied()
+            .unwrap_or(0);
+        Self {
+            placements: Placements::Successor(placements),
             index_by_id,
             successors,
             predecessors,
@@ -178,7 +247,10 @@ impl<'a> GraphIndex<'a> {
     }
 
     pub(crate) fn node_count(&self) -> usize {
-        self.placements.len()
+        match &self.placements {
+            Placements::V2(v) => v.len(),
+            Placements::Successor(v) => v.len(),
+        }
     }
 
     pub(crate) const fn entry(&self) -> usize {
@@ -190,7 +262,10 @@ impl<'a> GraphIndex<'a> {
     }
 
     pub(crate) fn placement(&self, node: usize) -> Option<&'a GraphPlacementV2> {
-        self.placements.get(node)
+        match &self.placements {
+            Placements::V2(v) => v.get(node),
+            Placements::Successor(_) => None,
+        }
     }
 
     pub(crate) fn successors(&self, node: usize) -> &[Successor] {
@@ -199,10 +274,18 @@ impl<'a> GraphIndex<'a> {
 
     /// Whether the placement is a terminal action. A decision is never terminal: it always routes.
     pub(crate) fn is_terminal(&self, node: usize) -> bool {
-        matches!(
-            self.placements.get(node),
-            Some(GraphPlacementV2::Action(action)) if action.outcome().is_terminal()
-        )
+        match &self.placements {
+            Placements::V2(v) => {
+                matches!(v.get(node),Some(GraphPlacementV2::Action(action)) if action.outcome().is_terminal())
+            }
+            Placements::Successor(v) => matches!(
+                v.get(node).map(|p| p.kind()),
+                Some(podway_core::execution_groups::PlacementKindV3::Action {
+                    outcome: ActionOutcomeV2::Terminal,
+                    ..
+                })
+            ),
+        }
     }
 
     /// Every node reachable from `node`, including `node` itself at distance zero.
@@ -219,10 +302,14 @@ impl<'a> GraphIndex<'a> {
     /// Every node with a finite path to a terminal action, following both advance and rework
     /// transitions. A reverse breadth-first walk is exact even in cyclic graphs.
     pub(crate) fn terminal_reachable_nodes(&self) -> NodeSet {
+        self.exit_reachable_nodes(|node| self.is_terminal(node))
+    }
+
+    pub(crate) fn exit_reachable_nodes(&self, is_exit: impl Fn(usize) -> bool) -> NodeSet {
         let mut reaches_terminal = NodeSet::empty();
         let mut frontier = VecDeque::new();
         for node in 0..self.node_count() {
-            if self.is_terminal(node) {
+            if is_exit(node) {
                 reaches_terminal.insert(node);
                 frontier.push_back(node);
             }
@@ -818,7 +905,7 @@ mod tests {
             }
         }
         let graph = GraphIndex {
-            placements: &placements,
+            placements: Placements::V2(&placements),
             index_by_id,
             successors,
             predecessors,
@@ -854,7 +941,7 @@ mod tests {
             }
         }
         let advance_graph = GraphIndex {
-            placements: &placements,
+            placements: Placements::V2(&placements),
             index_by_id: graph.index_by_id.clone(),
             successors: advance_successors,
             predecessors: advance_predecessors,
@@ -883,7 +970,7 @@ mod tests {
             }
         }
         let isolated_cycle_graph = GraphIndex {
-            placements: &placements,
+            placements: Placements::V2(&placements),
             index_by_id: graph.index_by_id.clone(),
             successors: isolated_cycle_successors,
             predecessors: isolated_cycle_predecessors,
@@ -948,7 +1035,7 @@ mod tests {
             }
         }
         let graph = GraphIndex {
-            placements: &placements,
+            placements: Placements::V2(&placements),
             index_by_id,
             successors,
             predecessors,

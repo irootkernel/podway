@@ -1,3 +1,5 @@
+#[path = "int_execution_groups.rs"]
+mod int_execution_groups;
 #[path = "int_integ002_settings.rs"]
 mod int_integ002_settings;
 #[path = "int_phase4_workspace_config.rs"]

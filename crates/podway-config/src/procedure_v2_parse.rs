@@ -243,7 +243,7 @@ fn strip_position_suffix(message: &str) -> Option<&str> {
     valid.then_some(body)
 }
 
-fn map_domain_error(error: DomainError) -> ConfigError {
+pub(crate) fn map_domain_error(error: DomainError) -> ConfigError {
     match error {
         DomainError::EmptyValue { field } => ConfigError::InvalidValue {
             field,
@@ -373,7 +373,7 @@ pub(crate) fn map_document(
     })
 }
 
-fn map_node_definition(
+pub(crate) fn map_node_definition(
     id: &str,
     wire: NodeDefinitionWire,
 ) -> Result<ParsedNodeDefinition, ConfigError> {
@@ -444,7 +444,7 @@ fn optional_nonempty<T>(field: &'static str, value: Option<Vec<T>>) -> Result<Ve
     }
 }
 
-fn map_items(items: Vec<ItemWire>) -> Result<Vec<ItemSpecV2>, ConfigError> {
+pub(crate) fn map_items(items: Vec<ItemWire>) -> Result<Vec<ItemSpecV2>, ConfigError> {
     items.into_iter().map(map_item).collect()
 }
 
@@ -612,7 +612,7 @@ fn item_common(
         .map_err(map_domain_error)
 }
 
-fn map_item_predicate(wire: ItemPredicateWire) -> Result<ItemPredicateV2, ConfigError> {
+pub(crate) fn map_item_predicate(wire: ItemPredicateWire) -> Result<ItemPredicateV2, ConfigError> {
     let item = ItemId::new(wire.item).map_err(map_domain_error)?;
     let field_outcome = match wire.field.as_deref() {
         None => false,
@@ -864,7 +864,7 @@ fn map_placement(wire: GraphPlacementWire) -> Result<GraphPlacementV2, ConfigErr
     )))
 }
 
-fn map_delegation(wire: DelegationWire) -> Result<DelegationDeclarationV1, ConfigError> {
+pub(crate) fn map_delegation(wire: DelegationWire) -> Result<DelegationDeclarationV1, ConfigError> {
     DelegationDeclarationV1::new(
         DelegationBindingRefV1::new(wire.binding_ref).map_err(map_domain_error)?,
         DelegationRoleRefV1::new(wire.role_ref).map_err(map_domain_error)?,
@@ -875,7 +875,7 @@ fn map_delegation(wire: DelegationWire) -> Result<DelegationDeclarationV1, Confi
     .map_err(map_domain_error)
 }
 
-fn map_action_outcome(
+pub(crate) fn map_action_outcome(
     next: Option<String>,
     terminal: Option<bool>,
 ) -> Result<ActionOutcomeV2, ConfigError> {
@@ -900,7 +900,7 @@ fn map_action_outcome(
     }
 }
 
-fn map_skip(wire: SkipPolicyWire) -> Result<SkipPolicyV2, ConfigError> {
+pub(crate) fn map_skip(wire: SkipPolicyWire) -> Result<SkipPolicyV2, ConfigError> {
     SkipPolicyV2::new(wire.allowed, wire.reason_required).map_err(map_domain_error)
 }
 

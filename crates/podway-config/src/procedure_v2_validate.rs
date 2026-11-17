@@ -222,7 +222,7 @@ fn validate_closed_references(parsed: &ParsedProcedureV2) -> Result<(), ConfigEr
 
 /// Definition-level checks. Only a decision definition carrying a session-goal assessment contract
 /// has any: an action definition is fully checked by its constructor.
-fn validate_definition(
+pub(crate) fn validate_definition(
     definition: &ParsedNodeDefinition,
     goal_tracking: bool,
 ) -> Result<(), ConfigError> {
@@ -267,7 +267,7 @@ fn validate_definition(
     Ok(())
 }
 
-fn validate_required_when(items: &[ItemSpecV2]) -> Result<(), ConfigError> {
+pub(crate) fn validate_required_when(items: &[ItemSpecV2]) -> Result<(), ConfigError> {
     for (dependent_index, dependent) in items.iter().enumerate() {
         let Some(condition) = dependent.common().required_when() else {
             continue;
@@ -300,7 +300,7 @@ fn validate_required_when(items: &[ItemSpecV2]) -> Result<(), ConfigError> {
     Ok(())
 }
 
-fn predicate_matches_item(
+pub(crate) fn predicate_matches_item(
     field_outcome: bool,
     operator: &ItemPredicateOperatorV2,
     controller: &ItemSpecV2,

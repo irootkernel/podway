@@ -348,7 +348,7 @@ fn projection_budget_diagnostic(
 // YAML emitter
 // ---------------------------------------------------------------------------------------------
 
-fn emit_yaml(document: &AuthoringValue, comments: SourceComments) -> String {
+pub(crate) fn emit_yaml(document: &AuthoringValue, comments: SourceComments) -> String {
     let mut out = String::new();
     let mut comments = comments;
     let root = FieldPath::root();
@@ -612,7 +612,7 @@ fn double_quoted(value: &str) -> String {
 // JSON emitter
 // ---------------------------------------------------------------------------------------------
 
-fn emit_json(document: &AuthoringValue) -> String {
+pub(crate) fn emit_json(document: &AuthoringValue) -> String {
     let mut out = String::new();
     emit_json_value(&mut out, document, 0);
     out.push('\n');

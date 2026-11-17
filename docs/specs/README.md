@@ -21,9 +21,10 @@ its in-process Direct Engine as one product and are grouped by concern:
 
 ## Successor model values
 
-- [Execution groups](domain/execution-groups.md): internal successor authoring,
-  exact item interfaces, immutable identity and bounded caller records; public
-  Procedure v2 admission remains unchanged.
+- [Execution groups](domain/execution-groups.md): internal successor source and
+  graph admission, canonical identities and projections, exact item interfaces,
+  immutable identity and bounded caller records; public Procedure v2 admission
+  remains unchanged.
 
 ## Supervised delegation
 

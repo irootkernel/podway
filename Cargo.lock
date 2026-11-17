@@ -879,6 +879,7 @@ dependencies = [
 name = "podway-config"
 version = "0.2.17"
 dependencies = [
+ "jsonschema",
  "podway-core",
  "serde",
  "serde_json",

@@ -107,9 +107,12 @@ perform no external lookup or execution.
 
 Core's `execution_groups` module owns immutable successor authoring values and
 activation/provenance/assessment/scope records. It reuses typed item, guard, goal
-and delegation declaration contracts. Config owns their later graph admission;
-Store, Engine and CLI do not select a successor runtime merely because these
-values exist. The [model contract](../specs/domain/execution-groups.md) distinguishes
+and delegation declaration contracts. Config's dedicated `execution_groups` API
+owns internal closed-reference/port admission, graph invariants, exact interface
+comparison, canonical definition identities and source/format/graph projections.
+It shares bounded graph algorithms and V2 item/metadata/predicate helpers without
+adding successor documents to the shipped parser dispatch. Store, Engine and CLI
+do not select a successor runtime merely because these values or APIs exist. The [model contract](../specs/domain/execution-groups.md) distinguishes
 internal model availability, manifest enrollment and the later atomic cutover.
 
 ### Direct Engine
