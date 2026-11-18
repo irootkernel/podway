@@ -1,5 +1,5 @@
-//! Test-only observation of the actual descriptor-backed artifact read boundary.
-//! Enabled only by explicit test-support consumers; no product setting selects it.
+//! Test-only descriptor-backed artifact read observation and no-follow metadata
+//! presence checks for candidate fixtures.
 
 use std::{cell::RefCell, path::Path, rc::Rc};
 

@@ -84,7 +84,8 @@ an active memory slot for every projected item, so native code performs no secon
 slot lookup or slot-lookup error conversion. Hashing remains outside the writer;
 current facts and stamps are checked inside it at the existing validation stage.
 
-The Git `test-support` feature is enabled only by Engine's development dependency.
+Engine enables Git's `test-support` through its development dependency for test
+builds and through its optional feature for candidate Engine library builds.
 Its scoped thread-local observer sits at the actual `OpenedArtifact::read` call,
 without product flags or process-global observer state. Native route tests and a
 deliberate in-writer sensitivity control distinguish observed byte reads from
@@ -142,11 +143,13 @@ Store-only entry points are delegates. Shared direct mutation helpers construct
 only equivalent graph successes and fences; bootstrap and maintenance retain
 their distinct protocols.
 
-Engine's `test-support` feature enables Store's `test-support` and exposes
-`successor_execution` to registered integration cases. Store exposes
-`successor_store` under its own feature. The candidate Store reuses Direct Store
-primitives for success admission, original replay, journaling and commit.
-Its commit and SQLite busy observers are confined to the fixture path.
+Engine's nondefault `test-support` feature forwards `test-support` to Store
+and Git and exposes `successor_execution` to registered integration cases.
+Store exposes `successor_store` under its own feature. Git supplies metadata-only,
+no-follow artifact presence checks for retained candidate items. The candidate
+Store reuses Direct Store primitives for success admission, original replay,
+journaling and commit. Its commit and SQLite busy observers are confined to the
+fixture path.
 [Execution-group process qualification](../implementation-tips/testing.md#execution-group-process-qualification)
 describes how the registered tests use those hooks.
 
