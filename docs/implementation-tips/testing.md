@@ -1566,6 +1566,27 @@ admission and ADOPT-001 selects the public families. Current source/projection
 limits are still directly enforced here. Public v2 dispatch and the existing
 refusal checks remain required.
 
+## Execution group lifecycle checks
+
+Run the Core library namespace `execution_groups::lifecycle::tests` through
+Gaori for the pure FRAME-003 lifecycle. The cases cover tracked activation
+without a goal, individual activation-identity mismatches, optional and
+conditional boundary values, declared replan routes and feedback targets,
+ordinary local rework and skip, and exact closure feedback and guard evidence.
+They exercise the default scores 79 and 80 and an unevaluable optional guard
+source. Separate Core-only fixtures probe boundary defenses after introducing
+a route, missing return policy, or result declaration mismatch that Config
+would reject.
+
+Same-digest activations distinguish scoped receipt bindings, current result
+values, retained earlier values, and base-review ordinals. Blocker cases check
+refusal of omissions, rewritten rows, reused IDs and newly resolved rows, plus
+explicit resolution and retained closure history. Selected refusal cases
+compare the whole state before and after rejection. Creation-budget cases
+exercise activation, distinct-placement and attempt caps. These checks exercise
+the in-memory model. Transactional admission and process recovery belong to the
+GROUP checks.
+
 ## Execution group model value checks
 
 Core's `execution_groups::tests` verifies bounded immutable identities, exact

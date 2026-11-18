@@ -15,8 +15,8 @@ writer's manifest digest; it introduces no predecessor or migration promise.
 Core owns immutable successor authoring values and bounded identity records.
 Config's dedicated `execution_groups` API admits internal base/group definitions,
 checks their interfaces, and produces canonical identities and source/graph
-projections. Pure execution transitions remain a separate obligation;
-constructing or admitting a definition alone performs no execution transition. The public parser, CLI, Store and presets continue using
+projections. Core's internal successor session model applies the pure execution
+transitions specified below. The public parser, CLI, Store and presets use
 Procedure v2. Successor runtime admission is reserved for the atomic product
 cutover. Stores bound to the previous manifest, including v0.2.17, remain with
 their original writer; no predecessor or migration is declared. Tests use
@@ -84,8 +84,8 @@ exist only at or after the base's group-return placement. Guards require a
 required evidence reference with an explicit item selection. An optional source
 item is still eligible under the existing predicate contract; an optional
 evidence reference is not. Missing or unevaluable current values grant no replan
-permission; current-value evaluation belongs to FRAME-003's pure transition rules
-and later runtime composition, not to Config source admission. The default
+permission. Core evaluates these values during the pure transition. Config
+admits the declared sources and predicates. The default
 verdict/stage/score inputs are unconditional, while
 custom eligible guards need no mandatory default score record or native fixed
 threshold.
@@ -96,9 +96,8 @@ return, neither an Action's `next` nor a Decision's ordinary `advance` may escap
 into prefix-side placements, including a shared region leading back to the anchor.
 First prefix Action/Decision arrival at the anchor and the declared anchor-to-return
 boundary edge remain legal. Base manual rework may declare prefix targets other
-than the anchor; graph projections mark
-them as available only before first activation. Enforcing that history-dependent
-condition belongs to the later pure transition owner. Group definitions cannot
+than the anchor; both Core's transitions and Config's graph projections limit
+those targets to the period before the first activation. Group definitions cannot
 declare session-goal assessment; tracked bases retain complete outcome coverage
 and assessment dominance over their terminal paths.
 
@@ -160,6 +159,52 @@ Replan feedback records bind the exact decision attempt and option to a nonblank
 reason (up to 2,000 Unicode scalars), the working-copy basis, and nonblank feedback
 (up to 4,000 scalars). Recorded plan-item value digests require positive revisions;
 revision zero denotes no recorded value in the existing item-slot contract.
+
+## Pure execution lifecycle
+
+Core keeps one active attempt and at most one selected execution. It validates
+cursor, session, and goal-revision fences before transition; a single item edit
+fences the exact scoped attempt and item revision. The caller supplies admitted
+definitions and digests, fresh identities, time, and validated external facts.
+The pure model makes no workspace or persistence calls.
+
+Activation is the design anchor's only successful exit. The anchor must satisfy
+its required items, evidence, blockers, and any declared delegation gate. A
+goal-tracked session must have its current goal defined. Activation binds the
+complete anchor item-set digest and any present selected values with their exact
+slot revisions and digests. An unset optional or inactive conditional selection
+exports no value. Core checks both boundary contracts before starting the group.
+The group's terminal checks the ordered result declarations again before
+completing the execution and entering the declared base return. The shared
+readiness check requires satisfactory values for each item whose matching
+declaration requires it at completion. An optional result or a result with
+inactive conditional requirements exposes no value when its slot is unset. The
+completed group remains selected while the base uses its result.
+
+Current evidence resolves inside the attempt's active scope or through the
+declared plan and selected execution-result ports. A decision can replan only
+through an explicit option whose declared guards hold on current values. A
+permitted base-review decision also needs the authored anchor-return policy.
+Core records the option, exact guard source attempts and item bindings, and
+closure feedback before opening a fresh anchor attempt. Retrying a decision
+increments its scoped entry ordinal. Each group-bound entry retains its exact
+attempt and selected execution, including entries in base review. Base-prefix
+counts have no group binding. Scoped rework stales the revisited path and keeps
+its recorded values. Suffix rework in base retains the selected result.
+
+A blocker starts open and keeps its identity, reason, and creation time.
+Resolution updates that open row at the current cursor. Open and resolved rows
+remain in the attempt history after closure.
+
+Replan and Goal revision abandon a still-running group. Cancellation terminates
+a still-running group. Each preserves an already completed outcome. After the
+first activation, a goal revision replaces the current statement and criteria,
+opens a fresh anchor, and retains the previous goal and immutable activation
+records. Completed-session reactivation requires explicit authority and also
+returns to the anchor.
+Cancelled sessions cannot reactivate. Scoped delegation acceptance binds the
+current declared action and independently validated package digest. Changing an
+item invalidates that attempt's previously accepted package.
 
 ## Bounds and responsibility
 

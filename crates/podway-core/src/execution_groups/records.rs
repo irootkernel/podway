@@ -457,13 +457,45 @@ impl DecisionEntryV1 {
         self.ordinal
     }
 }
+/// Bounded feedback shared by replan, goal revision and reactivation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GroupClosureFeedbackV1 {
+    reason: String,
+    working_copy_basis: CheckResultInputBasisV2,
+    feedback: String,
+}
+
+impl GroupClosureFeedbackV1 {
+    pub fn new(
+        reason: String,
+        working_copy_basis: CheckResultInputBasisV2,
+        feedback: String,
+    ) -> Result<Self, DomainError> {
+        bounded_text(&reason, 2000)?;
+        bounded_text(&feedback, 4000)?;
+        Ok(Self {
+            reason,
+            working_copy_basis,
+            feedback,
+        })
+    }
+
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+    pub fn working_copy_basis(&self) -> &CheckResultInputBasisV2 {
+        &self.working_copy_basis
+    }
+    pub fn feedback(&self) -> &str {
+        &self.feedback
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReplanFeedbackV1 {
     decision: ScopedAttemptV1,
     option: OptionId,
-    reason: String,
-    working_copy_basis: CheckResultInputBasisV2,
-    feedback: String,
+    closure: GroupClosureFeedbackV1,
 }
 impl ReplanFeedbackV1 {
     pub fn new(
@@ -473,14 +505,10 @@ impl ReplanFeedbackV1 {
         working_copy_basis: CheckResultInputBasisV2,
         feedback: String,
     ) -> Result<Self, DomainError> {
-        bounded_text(&reason, 2000)?;
-        bounded_text(&feedback, 4000)?;
         Ok(Self {
             decision,
             option,
-            reason,
-            working_copy_basis,
-            feedback,
+            closure: GroupClosureFeedbackV1::new(reason, working_copy_basis, feedback)?,
         })
     }
     pub fn decision(&self) -> &ScopedAttemptV1 {
@@ -490,12 +518,15 @@ impl ReplanFeedbackV1 {
         &self.option
     }
     pub fn reason(&self) -> &str {
-        &self.reason
+        self.closure.reason()
     }
     pub fn working_copy_basis(&self) -> &CheckResultInputBasisV2 {
-        &self.working_copy_basis
+        self.closure.working_copy_basis()
     }
     pub fn feedback(&self) -> &str {
-        &self.feedback
+        self.closure.feedback()
+    }
+    pub(super) fn into_closure(self) -> GroupClosureFeedbackV1 {
+        self.closure
     }
 }
