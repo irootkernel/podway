@@ -61,7 +61,10 @@ declarations; no materialized condition evaluator or mutable default is added.
 unreleased execution-group layout. The test-support constructor creates fresh
 fixture files with an exact DDL-bound writer identity. The development manifest
 continues to select generation 15 for the public Procedure v2 runtime. The
-candidate declares no predecessor.
+candidate declares no predecessor. Its fixture wrapper records a workspace
+UUID and owning root separately from successor domain state. The workspace
+sequence, operational journal and mutation outcome tables use the Direct
+transaction layout. Command outcomes carry the exact session scope.
 
 An immutable canonical definition is keyed by its digest. Each session retains
 its base, ordered activations, scoped attempt trace, and successive goal
@@ -88,8 +91,10 @@ component schemas describe the separately owned wire contracts. The candidate
 checks retained row ordinals and sizes before decoding record payloads. Its
 2 MiB activation-row limit accounts for the escaped bytes of up to 128
 prior-work rationales with 2,000 scalars each, their retained references, plan
-bindings and closure metadata. Public request and response limits stay with
-the interface contracts. A row checksum provides an integrity check within
+bindings and closure metadata. The group activation issuer still applies
+the existing 1 MiB direct-input bound to canonical request content. The private
+retained-record cap supports SQLite persistence independently of the request
+and response bounds. A row checksum provides an integrity check within
 the existing same-user trust boundary.
 
 ## Workspace and writer identity

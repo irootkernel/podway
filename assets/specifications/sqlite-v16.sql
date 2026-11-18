@@ -2,6 +2,27 @@
 PRAGMA foreign_keys = ON;
 PRAGMA trusted_schema = OFF;
 
+CREATE TABLE workspace_state (
+    singleton                   INTEGER PRIMARY KEY CHECK (singleton = 1),
+    workspace_uuid              TEXT NOT NULL UNIQUE,
+    git_common_fingerprint      TEXT NOT NULL,
+    git_worktree_fingerprint    TEXT NOT NULL,
+    last_validated_root         TEXT NOT NULL,
+    next_workspace_sequence     INTEGER NOT NULL DEFAULT 0 CHECK (next_workspace_sequence >= 0),
+    created_at_ms               INTEGER NOT NULL,
+    updated_at_ms               INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE operational_journal (
+    journal_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    recorded_at_ms      INTEGER NOT NULL,
+    level               TEXT NOT NULL CHECK (level IN ('error', 'warn', 'info', 'debug')),
+    event_name          TEXT NOT NULL,
+    workspace_sequence  INTEGER,
+    summary             TEXT NOT NULL,
+    details_json        TEXT CHECK (details_json IS NULL OR json_valid(details_json))
+) STRICT;
+
 CREATE TABLE writer_contract (
     singleton                 INTEGER PRIMARY KEY CHECK (singleton = 1),
     contract_manifest_digest  TEXT NOT NULL CHECK (
@@ -86,5 +107,27 @@ CREATE TABLE successor_goal_revisions (
     FOREIGN KEY (session_id, source_attempt_id) REFERENCES successor_attempts (session_id, attempt_id),
     FOREIGN KEY (session_id, successor_attempt_id) REFERENCES successor_attempts (session_id, attempt_id)
 ) STRICT;
+
+CREATE TABLE mutation_outcomes (
+    idempotency_key         TEXT PRIMARY KEY CHECK (length(CAST(idempotency_key AS BLOB)) BETWEEN 1 AND 256),
+    request_digest          TEXT NOT NULL CHECK (
+        length(request_digest) = 71 AND substr(request_digest, 1, 7) = 'sha256:'
+        AND substr(request_digest, 8) NOT GLOB '*[^0-9a-f]*'
+    ),
+    command_name            TEXT NOT NULL CHECK (length(command_name) BETWEEN 1 AND 128),
+    workspace_sequence      INTEGER NOT NULL UNIQUE CHECK (workspace_sequence >= 1),
+    scope_kind              TEXT NOT NULL CHECK (scope_kind IN ('workspace', 'session')),
+    scope_session_id        TEXT,
+    response_json           TEXT NOT NULL CHECK (
+        json_valid(response_json) AND length(CAST(response_json AS BLOB)) <= 1048576
+        AND json_extract(response_json, '$.schema') IS 'podway.output/v4'
+    ),
+    recorded_at_ms          INTEGER NOT NULL,
+    CHECK ((scope_kind = 'session' AND scope_session_id IS NOT NULL)
+        OR (scope_kind = 'workspace' AND scope_session_id IS NULL))
+) STRICT;
+
+CREATE INDEX ix_mutation_outcomes_scope
+ON mutation_outcomes(scope_kind, scope_session_id, recorded_at_ms, workspace_sequence);
 
 PRAGMA user_version = 16;

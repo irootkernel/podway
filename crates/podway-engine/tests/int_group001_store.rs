@@ -185,7 +185,7 @@ fn fixture_dir() -> TempDir {
         .unwrap()
 }
 
-fn fixture() -> (ExecutionSessionV3, CandidateSources) {
+pub(super) fn fixture() -> (ExecutionSessionV3, CandidateSources) {
     fixture_with_note("Second retained item", false)
 }
 

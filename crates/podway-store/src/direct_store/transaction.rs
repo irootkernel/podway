@@ -244,16 +244,7 @@ impl<Clock: FnOnce() -> UnixMillis> DirectTransactionV1<'_, '_, Clock> {
     /// The sequence this success will commit, reserved by the IMMEDIATE writer.
     /// It is independent of graph revisions and does not read the command clock.
     pub fn next_workspace_sequence(&self) -> DirectStoreResultV1<u64> {
-        let sequence: i64 = self.transaction.query_row(
-            "SELECT next_workspace_sequence FROM workspace_state WHERE singleton=1",
-            [],
-            |row| row.get(0),
-        )?;
-        sequence
-            .checked_add(1)
-            .filter(|_| sequence >= 0)
-            .and_then(|sequence| u64::try_from(sequence).ok())
-            .ok_or(DirectStoreErrorV1::Unreadable)
+        next_workspace_sequence(self.transaction)
     }
 
     /// The engine calls this only after fences and prepared inputs are revalidated.
@@ -601,14 +592,8 @@ impl DirectStoreV1 {
             }
             .into());
         }
-        if let Some(outcome) = outcome {
-            if outcome.digest != request.digest {
-                return Err(DirectStoreErrorV1::IdempotencyKeyReused.into());
-            }
-            return Ok(DirectMutationResultV1 {
-                outcome,
-                replayed: true,
-            });
+        if let Some(replayed) = replay_outcome(&request, outcome)? {
+            return Ok(replayed);
         }
         let mut context = DirectTransactionV1 {
             transaction: &transaction,
@@ -627,7 +612,7 @@ impl DirectStoreV1 {
         }
         validate_success(&request, &response)?;
         self.boundary(DirectTransactionBoundaryV1::AfterStateBeforeOutcome);
-        let outcome = persist_success(&transaction, &self.layout, &request, response, now)?;
+        let outcome = persist_success(&transaction, self.layout.root(), &request, response, now)?;
         drop(context);
         self.revalidate_files(&lease, &database)?;
         commit(transaction)?;
@@ -713,7 +698,7 @@ impl DirectStoreV1 {
         let response = execute(&mut context)?;
         validate_success(request, &response)?;
         self.boundary(DirectTransactionBoundaryV1::AfterStateBeforeOutcome);
-        let outcome = persist_success(&transaction, &self.layout, request, response, now)?;
+        let outcome = persist_success(&transaction, self.layout.root(), request, response, now)?;
         drop(context);
         lease.revalidate(&self.layout)?;
         // This commit affects only an unpublished private inode. Its failure
@@ -787,7 +772,46 @@ impl Drop for PublishedSidecars {
     }
 }
 
-fn validate_success(
+pub(crate) fn next_workspace_sequence(connection: &Connection) -> DirectStoreResultV1<u64> {
+    let sequence: i64 = connection.query_row(
+        "SELECT next_workspace_sequence FROM workspace_state WHERE singleton=1",
+        [],
+        |row| row.get(0),
+    )?;
+    sequence
+        .checked_add(1)
+        .filter(|_| sequence >= 0)
+        .and_then(|sequence| u64::try_from(sequence).ok())
+        .ok_or(DirectStoreErrorV1::Unreadable)
+}
+
+pub(crate) fn replay_outcome(
+    request: &DirectMutationRequestV1,
+    outcome: Option<DirectRecordedOutcomeV1>,
+) -> DirectStoreResultV1<Option<DirectMutationResultV1>> {
+    let Some(outcome) = outcome else {
+        return Ok(None);
+    };
+    if outcome.digest != request.digest {
+        return Err(DirectStoreErrorV1::IdempotencyKeyReused);
+    }
+    Ok(Some(DirectMutationResultV1 {
+        outcome,
+        replayed: true,
+    }))
+}
+
+#[cfg(feature = "test-support")]
+pub(crate) fn candidate_committed_outcome(
+    outcome: DirectRecordedOutcomeV1,
+) -> DirectMutationResultV1 {
+    DirectMutationResultV1 {
+        outcome,
+        replayed: false,
+    }
+}
+
+pub(crate) fn validate_success(
     request: &DirectMutationRequestV1,
     response: &CanonicalExecutionJsonV1,
 ) -> DirectStoreResultV1<()> {
@@ -847,9 +871,9 @@ fn sqlite_time(now: UnixMillis) -> DirectStoreResultV1<i64> {
     })
 }
 
-fn persist_success(
+pub(crate) fn persist_success(
     transaction: &Transaction<'_>,
-    layout: &super::DirectWorkspaceLayoutV1,
+    root: &crate::ValidatedWorkspaceRootV1,
     request: &DirectMutationRequestV1,
     response: CanonicalExecutionJsonV1,
     now: UnixMillis,
@@ -858,7 +882,7 @@ fn persist_success(
     let sequence: i64 = transaction.query_row(
         "UPDATE workspace_state SET next_workspace_sequence=next_workspace_sequence+1, last_validated_root=?1, updated_at_ms=?2 \
          WHERE singleton=1 AND next_workspace_sequence<9223372036854775807 RETURNING next_workspace_sequence",
-        params![layout.root().as_encoded(), millis], |row| row.get(0))?;
+        params![root.as_encoded(), millis], |row| row.get(0))?;
     let (kind, session) = match &request.scope {
         DirectOutcomeScopeV1::Workspace => ("workspace", None),
         DirectOutcomeScopeV1::Session(session) => ("session", Some(session.as_str())),
@@ -881,7 +905,7 @@ fn persist_success(
     })
 }
 
-pub(super) fn read_outcome(
+pub(crate) fn read_outcome(
     connection: &Connection,
     key: &IdempotencyKeyV1,
 ) -> DirectStoreResultV1<Option<DirectRecordedOutcomeV1>> {
@@ -947,7 +971,7 @@ pub(super) fn read_outcome(
     .transpose()
 }
 
-fn commit(transaction: Transaction<'_>) -> DirectStoreResultV1<()> {
+pub(crate) fn commit(transaction: Transaction<'_>) -> DirectStoreResultV1<()> {
     transaction.commit().map_err(commit_error)
 }
 

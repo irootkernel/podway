@@ -22,6 +22,12 @@ cutover. Stores bound to the previous manifest, including v0.2.17, remain with
 their original writer; no predecessor or migration is declared. Tests use
 isolated fixtures rather than opening the active development workspace.
 
+The candidate Engine invokes Core activation and normal terminal return inside
+the [success-only fixture transaction](../storage/transactions-concurrency-and-idempotency.md#execution-group-candidate-persistence).
+It computes combined current projection and replay bounds before either
+transition reaches persisted state. The typed fixture routes exercise the
+internal execution boundary while product surface selection belongs to ADOPT.
+
 ## Authoring boundaries
 
 The base has exactly one `execution_group` boundary. It identifies its `anchor`

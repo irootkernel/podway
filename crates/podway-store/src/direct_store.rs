@@ -21,6 +21,12 @@ mod predecessor;
 mod transaction;
 
 #[cfg(feature = "test-support")]
+pub(crate) use transaction::{
+    candidate_committed_outcome, commit, next_workspace_sequence, persist_success, read_outcome,
+    replay_outcome, validate_success,
+};
+
+#[cfg(feature = "test-support")]
 pub(crate) fn verify_candidate_schema(
     connection: &rusqlite::Connection,
     ddl: &str,

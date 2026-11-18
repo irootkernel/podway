@@ -92,8 +92,24 @@ existing immutable identity, retained closure, or revision fails the state write
 A committed session revision cannot be replaced by a shorter stale trace.
 A later write preserves a closed attempt's final payload. Its validity may
 change from valid to stale when the Core invalidates the attempt.
-The transactional Engine owns mutation request fencing, workspace sequencing,
-and exact success replay when it connects these operations to the Direct flow.
+The test-support Engine issues group activation and normal terminal return
+against a bound candidate workspace. It prepares the canonical group document
+and checks compatible ports against the immutable base before opening the
+writer. The fixture Store revalidates its identity inside an IMMEDIATE
+transaction and resolves exact session-scoped replay before current cursor
+and plan fences. New transitions require the current scoped attempt, goal and
+activation lineage. Activation also checks the exact design item-set digest
+and the retained references supplied by the caller.
+
+The Engine prepares the successor in memory, then measures the combined base
+and selected-group counters, current guidance, complete success envelope and
+worst-case original-outcome lookup wrapper. An oversized projection leaves
+state and outcomes untouched. Accepted transitions write the closed and new
+attempts, group state, sequence, success response and journal in one transaction.
+The fixture uses the Direct Store's shared exact replay, canonical success,
+outcome retention and commit primitives. The test path binds its owning root
+and workspace UUID independently of the production maintenance and Git
+admission path.
 
 ### Settings and replay qualification
 

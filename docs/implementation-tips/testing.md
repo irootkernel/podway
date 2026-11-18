@@ -1275,10 +1275,11 @@ collection do not reset that clock. A permanent one-second negative fixture
 delays observer reports by six seconds and must reject the late observation;
 it is failure-path coverage, not the required ten-minute qualification.
 
-Store's `test_support` module is disabled in production builds. Standard
-integration Make gates select `podway-store/test-support`; a standalone Store
-`int_suite` invocation must pass `--features test-support`. Engine tests enable
-the same feature only through their development dependency.
+Store's `test_support` module and Engine's successor fixture issuer are
+disabled in production builds. The standard Make integration gates select
+`podway-engine/test-support`, which also enables Store's `test-support`.
+Use `--features test-support` for a standalone Store `int_suite` or an Engine
+`int_suite` run that includes the successor transaction fixtures.
 
 ## Integration settings regression owners
 
@@ -1565,6 +1566,25 @@ These source and projection cases exercise the current source limits. Protocol
 owns successor wire allocation, GROUP-002 owns pre-effect activation and return
 budget admission, and ADOPT-001 selects the public families.
 
+## Execution-group candidate transaction checks
+
+Use the registered Engine suite with its test-support feature:
+
+```sh
+gaori --json run --tag rust --tag unit -- cargo test --locked -p podway-engine --features test-support --test int_suite int_group002_transactions::
+```
+
+The suite drives the typed Engine issuer against owned generation-16 SQLite
+fixtures. It checks one success-only commit for activation and terminal return,
+exact replay after the cursor advances, current plan and retained provenance,
+and unchanged state, sequence and outcomes on failure. Dense admitted
+definitions exercise combined response refusal for both operations and a
+lookup-only headroom refusal for activation.
+A Store-level control writes state inside the fixture transaction and verifies
+rollback when the shared success validator rejects its envelope. Multi-process
+contention, response loss and forced termination belong to the integrated
+process qualification.
+
 ## Execution-group candidate persistence checks
 
 Run `int_group001_store` through the Engine's registered `int_suite`. It uses
@@ -1581,8 +1601,9 @@ retained scoped delegation and typed item values, and cancellation. It proves
 that candidate storage admits a full set of escaped prior-work rationales and
 checks writer identity, ordered rows and byte bounds before decoding.
 The production generation-15 classifier refuses the candidate fixture before
-opening SQLite. The later process-level suite owns the actual application
-transaction and response-loss scenarios.
+opening SQLite. The candidate transaction suite above covers activation and
+terminal return through the Engine. The later process-level suite owns response
+loss and process interruption.
 
 ## Execution group integration checks
 

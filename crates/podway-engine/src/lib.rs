@@ -17,5 +17,8 @@ pub mod direct_workspace;
 pub mod execution;
 pub mod integration_settings;
 pub mod native_execution;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod successor_execution;
 pub mod v2_read_service;
 pub mod workspace;

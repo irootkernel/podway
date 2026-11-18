@@ -88,3 +88,7 @@ mod int_integ003_settings;
 
 #[path = "int_group001_store.rs"]
 mod int_group001_store;
+
+#[cfg(feature = "test-support")]
+#[path = "int_group002_transactions.rs"]
+mod int_group002_transactions;

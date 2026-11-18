@@ -2,6 +2,8 @@
 //! Transaction callers own commit and success-only outcome publication.
 
 mod records;
+mod transaction;
+pub use transaction::*;
 
 use crate::StoreErrorV1;
 use podway_core::execution_groups::*;
@@ -36,6 +38,7 @@ pub enum CandidateStoreError {
     Sql(rusqlite::Error),
     Io(std::io::Error),
     Item(StoreErrorV1),
+    Direct(crate::direct_store::DirectStoreErrorV1),
     Domain(DomainError),
     Corrupt(&'static str),
 }
@@ -48,6 +51,11 @@ impl From<rusqlite::Error> for CandidateStoreError {
 impl From<std::io::Error> for CandidateStoreError {
     fn from(error: std::io::Error) -> Self {
         Self::Io(error)
+    }
+}
+impl From<crate::direct_store::DirectStoreErrorV1> for CandidateStoreError {
+    fn from(error: crate::direct_store::DirectStoreErrorV1) -> Self {
+        Self::Direct(error)
     }
 }
 impl From<StoreErrorV1> for CandidateStoreError {

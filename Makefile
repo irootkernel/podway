@@ -138,7 +138,7 @@ preset-tool-test: preset-validator
 
 test-rust:
 	$(RUST_GATE_ENV) cargo test --workspace --lib --bins \
-		--test 'arch_*' --test 'int_*' --features podway-store/test-support --locked -- \
+		--test 'arch_*' --test 'int_*' --features podway-engine/test-support,podway-store/test-support --locked -- \
 		--test-threads=$(TEST_THREADS)
 
 test-unit:
@@ -147,7 +147,7 @@ test-unit:
 
 test-int:
 	$(RUST_TOOLCHAIN_ENV) "$(PYTHON)" tools/verify_test_layout.py --check
-	$(RUST_GATE_ENV) cargo test --workspace --test 'int_*' --features podway-store/test-support --locked -- \
+	$(RUST_GATE_ENV) cargo test --workspace --test 'int_*' --features podway-engine/test-support,podway-store/test-support --locked -- \
 		--test-threads=$(TEST_THREADS)
 
 contract-verifier-test:
