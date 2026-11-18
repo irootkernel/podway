@@ -291,11 +291,31 @@ impl ExecutionSessionV3 {
 
     pub fn current_goal_outcome(&self) -> Option<GoalOutcome> {
         let current = self.goal_revision()?;
+        // Terminal readback follows the execution that was selected at session closure.
+        let execution = self.selected().or_else(|| {
+            self.executions.last().filter(|execution| {
+                execution.closure().is_some_and(|closure| {
+                    matches!(
+                        (self.lifecycle, closure.cause),
+                        (
+                            SessionLifecycle::Completed,
+                            SelectionClosureCauseV1::Completion
+                        ) | (SessionLifecycle::Cancelled, SelectionClosureCauseV1::Cancel)
+                    )
+                })
+            })
+        })?;
+        if execution.outcome() != GroupExecutionOutcomeV1::Completed {
+            return None;
+        }
         self.current_base
             .values()
             .filter_map(|&index| {
-                let (revision, outcome) = self.attempts[index].decision.as_ref()?.goal_assessment?;
-                (revision == current).then_some((index, outcome))
+                let attempt = &self.attempts[index];
+                let entry = attempt.selected_decision_entry()?;
+                let (revision, outcome) = attempt.decision.as_ref()?.goal_assessment?;
+                (revision == current && entry.selected_group() == execution.identity().execution())
+                    .then_some((index, outcome))
             })
             .max_by_key(|(index, _)| *index)
             .map(|(_, outcome)| outcome)

@@ -185,6 +185,12 @@ declaration requires it at completion. An optional result or a result with
 inactive conditional requirements exposes no value when its slot is unset. The
 completed group remains selected while the base uses its result.
 
+Formal completion of a tracked session requires a current Goal assessment
+bound to the selected completed execution and the current Goal revision.
+Supplemental prefix outcomes remain in attempt history. After terminal closure,
+readback uses an eligible assessment from the execution that closed with the
+session. Cancellation retains its lifecycle and the prior assessment record.
+
 Current evidence resolves inside the attempt's active scope or through the
 declared plan and selected execution-result ports. A decision can replan only
 through an explicit option whose declared guards hold on current values. A

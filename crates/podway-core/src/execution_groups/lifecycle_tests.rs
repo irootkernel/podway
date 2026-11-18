@@ -202,6 +202,31 @@ fn decision(
     )
 }
 
+fn goal_assessment(name: &str, next: &str) -> (NodeDefinitionV3, PlacementV3) {
+    let mappings = [
+        ("achieved", GoalOutcome::Achieved),
+        ("not-achieved", GoalOutcome::NotAchieved),
+        ("superseded", GoalOutcome::Superseded),
+    ];
+    decision(
+        name,
+        mappings
+            .iter()
+            .map(|(id, _)| (*id, DecisionRouteV3::Advance(node(next))))
+            .collect(),
+        Some(
+            AssessmentContractV2::new(
+                mappings
+                    .into_iter()
+                    .map(|(id, outcome)| AssessmentOutcomeMappingV2::new(option(id), outcome))
+                    .collect(),
+            )
+            .unwrap(),
+        ),
+        None,
+    )
+}
+
 fn fixture_base(tracked: bool, delegated: bool) -> ProcedureDefinitionV3 {
     let delegation = delegated.then(|| {
         DelegationDeclarationV1::new(
@@ -240,30 +265,7 @@ fn fixture_base(tracked: bool, delegated: bool) -> ProcedureDefinitionV3 {
         ),
     ];
     if tracked {
-        let mappings = [
-            ("achieved", GoalOutcome::Achieved),
-            ("not-achieved", GoalOutcome::NotAchieved),
-            ("superseded", GoalOutcome::Superseded),
-        ];
-        pairs.push(decision(
-            "goal",
-            mappings
-                .iter()
-                .map(|(name, _)| (*name, DecisionRouteV3::Advance(node("final"))))
-                .collect(),
-            Some(
-                AssessmentContractV2::new(
-                    mappings
-                        .into_iter()
-                        .map(|(name, outcome)| {
-                            AssessmentOutcomeMappingV2::new(option(name), outcome)
-                        })
-                        .collect(),
-                )
-                .unwrap(),
-            ),
-            None,
-        ));
+        pairs.push(goal_assessment("goal", "final"));
     }
     pairs.push(action("final", None, vec![], vec![], None));
     let (definitions, nodes) = pairs.into_iter().unzip();
@@ -979,6 +981,199 @@ fn completed_group_return_base_retry_and_replan_keep_exact_history() {
         GroupExecutionOutcomeV1::Completed
     );
     assert!(session.selected().is_none());
+}
+
+// Core defends the formal terminal even when a direct typed caller supplies a route
+// that the Config admission checks reject.
+fn start_with_supplemental_prefix_assessment() -> ExecutionSessionV3 {
+    let base = fixture_base(true, false);
+    let (prefix, prefix_placement) = goal_assessment("prefix-goal", "prefix");
+    let (review, review_placement) = decision(
+        "review",
+        vec![
+            ("pass", DecisionRouteV3::Advance(node("goal"))),
+            ("bypass", DecisionRouteV3::Advance(node("final"))),
+            ("redo", DecisionRouteV3::Rework(node("review-work"))),
+            ("redesign", DecisionRouteV3::Replan),
+        ],
+        None,
+        Some(EvidenceSourceV3::ExecutionResult),
+    );
+    let definitions = base
+        .definitions()
+        .iter()
+        .filter(|v| v.id().as_str() != "review")
+        .cloned()
+        .chain([prefix, review])
+        .collect();
+    let nodes = base
+        .graph()
+        .nodes()
+        .iter()
+        .filter(|v| v.id().as_str() != "review")
+        .cloned()
+        .chain([prefix_placement, review_placement])
+        .collect();
+    let base = ProcedureDefinitionV3::new(
+        base.header().clone(),
+        definitions,
+        TopologyV3::new(
+            node("prefix-goal"),
+            nodes,
+            base.graph().manual_rework().to_vec(),
+        )
+        .unwrap(),
+        base.goal_tracking(),
+        base.boundary().clone(),
+    )
+    .unwrap();
+    let mut session = start_base(base);
+    session
+        .define_goal(&session.fence(), goal("Current work"), NOW)
+        .unwrap();
+    session
+        .decide(
+            &session.fence(),
+            option("achieved"),
+            reason(),
+            Some(GoalOutcome::Achieved),
+            attempt(2),
+            NOW,
+        )
+        .unwrap();
+    session
+        .complete(&session.fence(), Some(attempt(3)), NOW)
+        .unwrap();
+    session
+}
+
+fn assert_prefix_outcome_does_not_complete(session: &mut ExecutionSessionV3) {
+    let unchanged = session.clone();
+    assert_eq!(
+        session.complete(&session.fence(), None, NOW),
+        Err(invalid(
+            "session terminal requires the current completed group and any required goal assessment",
+        ))
+    );
+    assert_eq!(session, &unchanged);
+    assert_eq!(session.current_goal_outcome(), None);
+    let prefix = session.history_attempt(&attempt(1)).unwrap();
+    assert!(prefix.selected_decision_entry().is_none());
+    assert_eq!(prefix.validity(), AttemptValidityV2::Valid);
+    assert_eq!(
+        prefix.decision().unwrap().goal_assessment,
+        Some((GoalRevisionNumberV2::FIRST, GoalOutcome::Achieved))
+    );
+}
+
+#[test]
+fn frame_audit_core_refuses_terminal_with_only_prefix_goal_assessment() {
+    let mut session = start_with_supplemental_prefix_assessment();
+    ready_design(&mut session);
+    launch(&mut session, 1, 4, vec![]);
+    reach_review(&mut session, 5);
+    session
+        .decide(
+            &session.fence(),
+            option("bypass"),
+            reason(),
+            None,
+            attempt(9),
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(
+        session.selected().unwrap().outcome(),
+        GroupExecutionOutcomeV1::Completed
+    );
+    assert_prefix_outcome_does_not_complete(&mut session);
+}
+
+#[test]
+fn frame_audit_core_requires_fresh_group_assessment_after_same_goal_replan() {
+    let mut session = start_with_supplemental_prefix_assessment();
+    let current_goal = session.current_goal().unwrap().clone();
+    ready_design(&mut session);
+    launch(&mut session, 1, 4, vec![]);
+    reach_review(&mut session, 5);
+    session
+        .replan(&session.fence(), feedback(&session), attempt(9), NOW)
+        .unwrap();
+    let prior_group = session.group_history()[0].clone();
+    ready_design(&mut session);
+    launch(&mut session, 2, 10, vec![prior(1, None)]);
+    reach_review(&mut session, 11);
+    assert_eq!(
+        session.fence().goal_revision,
+        Some(GoalRevisionNumberV2::FIRST)
+    );
+    assert_eq!(session.current_goal(), Some(&current_goal));
+    assert_eq!(session.group_history()[0], prior_group);
+    assert_eq!(
+        session.selected().unwrap().identity().execution(),
+        &group_id(2)
+    );
+
+    let mut without = session.clone();
+    without
+        .decide(
+            &without.fence(),
+            option("bypass"),
+            reason(),
+            None,
+            attempt(15),
+            NOW,
+        )
+        .unwrap();
+    assert_prefix_outcome_does_not_complete(&mut without);
+
+    session
+        .decide(
+            &session.fence(),
+            option("pass"),
+            reason(),
+            None,
+            attempt(15),
+            NOW,
+        )
+        .unwrap();
+    session
+        .decide(
+            &session.fence(),
+            option("not-achieved"),
+            reason(),
+            Some(GoalOutcome::NotAchieved),
+            attempt(16),
+            NOW,
+        )
+        .unwrap();
+    let assessed = session
+        .history_attempt(&attempt(15))
+        .unwrap()
+        .selected_decision_entry()
+        .unwrap();
+    assert_eq!(assessed.selected_group(), &group_id(2));
+    assert_eq!(
+        session.current_goal_outcome(),
+        Some(GoalOutcome::NotAchieved)
+    );
+
+    let mut cancelled = session.clone();
+    cancelled.cancel(&cancelled.fence(), reason(), NOW).unwrap();
+    assert_eq!(cancelled.lifecycle(), SessionLifecycle::Cancelled);
+    assert_eq!(
+        cancelled.current_goal_outcome(),
+        Some(GoalOutcome::NotAchieved)
+    );
+
+    session.complete(&session.fence(), None, NOW).unwrap();
+    assert_eq!(session.lifecycle(), SessionLifecycle::Completed);
+    assert!(session.selected().is_none());
+    assert_eq!(
+        session.current_goal_outcome(),
+        Some(GoalOutcome::NotAchieved)
+    );
+    assert_eq!(session.group_history()[0], prior_group);
 }
 
 #[test]

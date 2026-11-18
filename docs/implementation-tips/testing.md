@@ -1601,9 +1601,13 @@ values, retained earlier values, and base-review ordinals. Blocker cases check
 refusal of omissions, rewritten rows, reused IDs and newly resolved rows, plus
 explicit resolution and retained closure history. Selected refusal cases
 compare the whole state before and after rejection. Creation-budget cases
-exercise activation, distinct-placement and attempt caps. These checks exercise
-the in-memory model. Transactional admission and process recovery belong to the
-GROUP checks.
+exercise activation, distinct-placement and attempt caps. Core's terminal controls
+exercise an artificial typed bypass that Config would reject. They refuse
+completion with only a prefix assessment after the first group and after
+same-goal replacement. A fresh assessment bound to the selected replacement
+permits completion and remains readable after the selection closes. These
+checks exercise the in-memory model. Transactional admission and process
+recovery belong to the GROUP checks.
 
 ## Execution group model value checks
 
