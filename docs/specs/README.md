@@ -23,8 +23,8 @@ its in-process Direct Engine as one product and are grouped by concern:
 
 - [Execution groups](domain/execution-groups.md): internal successor source and
   graph admission, canonical identities and projections, exact item interfaces,
-  immutable identity and bounded caller records; public Procedure v2 admission
-  remains unchanged.
+  immutable identity, bounded caller records and pure session lifecycle transitions.
+  Public admission uses Procedure v2.
 
 ## Supervised delegation
 

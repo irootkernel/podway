@@ -105,9 +105,9 @@ perform no external lookup or execution.
 
 ### Internal successor model values
 
-Core's `execution_groups` module owns immutable successor authoring values and
-activation/provenance/assessment/scope records. It reuses typed item, guard, goal
-and delegation declaration contracts. Config's dedicated `execution_groups` API
+Core's `execution_groups` module owns immutable successor authoring values,
+activation, provenance, assessment and scope records, and pure session lifecycle transitions.
+It reuses typed item, guard, goal and delegation declaration contracts. Config's dedicated `execution_groups` API
 owns internal closed-reference/port admission, graph invariants, exact interface
 comparison, canonical definition identities and source/format/graph projections.
 It shares bounded graph algorithms and V2 item/metadata/predicate helpers without
