@@ -83,6 +83,18 @@ request. The caller's expected workspace UUID is still checked against the
 actual Store before replay, so a wrong workspace cannot recover another Store's
 success.
 
+### Execution-group candidate persistence
+
+The [candidate Store](sqlite-model.md#execution-group-candidate-store) loads
+and writes retained execution rows inside a caller-owned SQLite transaction.
+Definitions and goal-revision records accept exact duplicates. A conflict in an
+existing immutable identity, retained closure, or revision fails the state write.
+A committed session revision cannot be replaced by a shorter stale trace.
+A later write preserves a closed attempt's final payload. Its validity may
+change from valid to stale when the Core invalidates the attempt.
+The transactional Engine owns mutation request fencing, workspace sequencing,
+and exact success replay when it connects these operations to the Direct flow.
+
 ### Settings and replay qualification
 
 Integration permission is outside canonical request, Procedure/session and

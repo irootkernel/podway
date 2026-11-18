@@ -85,3 +85,6 @@ mod int_guide010_generation2_error_details;
 mod int_integ002_settings;
 #[path = "int_integ003_settings.rs"]
 mod int_integ003_settings;
+
+#[path = "int_group001_store.rs"]
+mod int_group001_store;

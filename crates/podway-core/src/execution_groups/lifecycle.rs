@@ -12,6 +12,10 @@ use crate::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+#[path = "retained.rs"]
+mod retained;
+pub use retained::*;
+
 #[cfg(test)]
 #[path = "lifecycle_tests.rs"]
 mod tests;
@@ -616,9 +620,7 @@ impl ExecutionSessionV3 {
                 .count(),
             MAX_OPEN_BLOCKERS_V2,
         )?;
-        blockers.sort_by(|left, right| {
-            (left.created_at(), left.blocker_id()).cmp(&(right.created_at(), right.blocker_id()))
-        });
+        blockers.sort_by(|left, right| blocker_order(left).cmp(&blocker_order(right)));
         self.attempts
             .last_mut()
             .expect("an admitted current attempt exists")
@@ -1582,6 +1584,10 @@ impl ExecutionSessionV3 {
         self.revision = revision;
         self.updated_at = now;
     }
+}
+
+fn blocker_order(blocker: &BlockerStateV2) -> (UnixMillis, &crate::BlockerId) {
+    (blocker.created_at(), blocker.blocker_id())
 }
 
 fn stale_attempt(expected: &ScopedAttemptV1, actual: Option<&GroupAttemptStateV1>) -> DomainError {

@@ -55,6 +55,43 @@ use `(attempt_id, reference_ordinal)` so separate references may select differen
 items from the same source placement. Typed conditions remain immutable snapshot
 declarations; no materialized condition evaluator or mutable default is added.
 
+## Execution-group candidate Store
+
+[Generation 16](../../../assets/specifications/sqlite-v16.sql) is the canonical
+unreleased execution-group layout. The test-support constructor creates fresh
+fixture files with an exact DDL-bound writer identity. The development manifest
+continues to select generation 15 for the public Procedure v2 runtime. The
+candidate declares no predecessor.
+
+An immutable canonical definition is keyed by its digest. Each session retains
+its base, ordered activations, scoped attempt trace, and successive goal
+revisions. A group activation carries its exact design attempt, plan item
+bindings, predecessor, prior-work references, outcome and selection closure.
+Attempt rows retain final item slots and revisions, blockers, decisions,
+timestamps, and scoped delegation metadata. Repeated
+activation can reuse definition bytes while keeping separate execution IDs and
+attempt histories.
+
+SQLite enforces composite session and activation relationships. On cold read,
+the Store verifies schema and writer identity, canonical bytes, row checksums,
+scope relationships, and item value digests. The definition-admitter callback
+must fully validate the supplied canonical bytes and return the corresponding
+typed definition. The candidate integration harness supplies Config's successor
+parser and validator. Core reconstructs the cursor and decision counts using
+the original transitions and final item states. The retained trace must match
+the recovered outcomes, closures, guards, and historical references. Blocker
+IDs are unique across the trace and each attempt orders its blockers by
+creation time and ID.
+
+The generation-16 record encodings are private Store codecs. The successor
+component schemas describe the separately owned wire contracts. The candidate
+checks retained row ordinals and sizes before decoding record payloads. Its
+2 MiB activation-row limit accounts for the escaped bytes of up to 128
+prior-work rationales with 2,000 scalars each, their retained references, plan
+bindings and closure metadata. Public request and response limits stay with
+the interface contracts. A row checksum provides an integrity check within
+the existing same-user trust boundary.
+
 ## Workspace and writer identity
 
 `workspace_state` holds the worktree-local UUID, role-tagged canonical Git common

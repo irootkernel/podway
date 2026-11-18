@@ -76,14 +76,14 @@ fn blocker_state_text(value: BlockerState) -> &'static str {
     }
 }
 
-fn encode_item_value_v2(value: &RecordedItemValueV2) -> Result<String, StoreErrorV1> {
+pub(crate) fn encode_item_value_v2(value: &RecordedItemValueV2) -> Result<String, StoreErrorV1> {
     canonicalize_json_v1(
         &item_value_json_v2(value).map_err(|error| StoreErrorV1::InvalidStateV1(error.into()))?,
     )
     .map_err(|_| corrupt(StoreRecordKindV1::Item))
 }
 
-fn decode_item_value_v2(
+pub(crate) fn decode_item_value_v2(
     encoded: &str,
     expected: ItemTypeV1,
 ) -> Result<RecordedItemValueV2, StoreErrorV1> {

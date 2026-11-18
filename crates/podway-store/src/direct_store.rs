@@ -20,6 +20,14 @@ mod markers;
 mod predecessor;
 mod transaction;
 
+#[cfg(feature = "test-support")]
+pub(crate) fn verify_candidate_schema(
+    connection: &rusqlite::Connection,
+    ddl: &str,
+) -> DirectStoreResultV1<()> {
+    connection::verify_declared_schema(connection, ddl)
+}
+
 pub use classification::{
     DirectStoreClassificationV1, classify_direct_store_v1, require_destructive_generation_v1,
 };

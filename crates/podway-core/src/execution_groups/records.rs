@@ -34,7 +34,8 @@ impl From<GroupExecutionIdV1> for String {
         value.0.into_inner()
     }
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ExecutionScopeV1 {
     Base,
     Group {
@@ -42,7 +43,8 @@ pub enum ExecutionScopeV1 {
         definition_digest: Sha256Digest,
     },
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ScopedAttemptV1 {
     session: SessionId,
     base_digest: Sha256Digest,
@@ -83,7 +85,8 @@ impl ScopedAttemptV1 {
     }
 }
 /// Delegation packages/receipts bind this whole value, not just a local node or definition digest.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ScopedDelegationBindingV1 {
     target: ScopedAttemptV1,
     package_digest: Sha256Digest,
@@ -174,14 +177,16 @@ impl PlanBindingV1 {
         &self.items
     }
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum PriorWorkChoiceV1 {
     Retain,
     Revalidate,
     Modify,
     Revert,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HistoricalItemV1 {
     attempt: AttemptId,
     item: ItemId,
@@ -206,7 +211,8 @@ impl HistoricalItemV1 {
     }
 }
 /// A retained whole attempt or an exact final item slot; neither is current evidence.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum HistoricalReferenceV1 {
     Attempt(AttemptId),
     Item(HistoricalItemV1),
@@ -337,14 +343,16 @@ impl ActivationIdentityV1 {
         &self.prior_work
     }
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum GroupExecutionOutcomeV1 {
     Running,
     Completed,
     Abandoned,
     TerminatedByCancel,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum SelectionClosureCauseV1 {
     Replan,
     GoalRevision,

@@ -1565,6 +1565,25 @@ These source and projection cases exercise the current source limits. Protocol
 owns successor wire allocation, GROUP-002 owns pre-effect activation and return
 budget admission, and ADOPT-001 selects the public families.
 
+## Execution-group candidate persistence checks
+
+Run `int_group001_store` through the Engine's registered `int_suite`. It uses
+Config-admitted canonical definitions and isolated generation-16 fixture files
+adapted to the [candidate Store layout](../specs/storage/sqlite-model.md#execution-group-candidate-store).
+The checks compare the complete Core state across cold reopen, proceed from the
+restored cursor, and retain completed and abandoned group state through goal
+revision and reactivation. Tampering cases cover definition and item digests,
+cross-activation identity, immutable row conflicts and stale snapshot writes.
+Additional cases preserve blocker creation order and ID ties across reopen,
+reject blocker IDs repeated across attempts, and refuse a higher-revision
+branch that changes earlier closed work. The suite reopens a guarded replan,
+retained scoped delegation and typed item values, and cancellation. It proves
+that candidate storage admits a full set of escaped prior-work rationales and
+checks writer identity, ordered rows and byte bounds before decoding.
+The production generation-15 classifier refuses the candidate fixture before
+opening SQLite. The later process-level suite owns the actual application
+transaction and response-loss scenarios.
+
 ## Execution group integration checks
 
 FRAME-004's registered case
