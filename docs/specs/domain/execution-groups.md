@@ -22,8 +22,7 @@ cutover. Stores bound to the previous manifest, including v0.2.17, remain with
 their original writer; no predecessor or migration is declared. Tests use
 isolated fixtures rather than opening the active development workspace.
 
-The candidate Engine invokes Core activation, normal terminal return and guarded
-replan inside
+The candidate Engine invokes Core lifecycle, item and delegation mutations inside
 the [success-only fixture transaction](../storage/transactions-concurrency-and-idempotency.md#execution-group-candidate-persistence).
 It computes current projection and replay bounds before persisting a transition.
 Replan commits the completed Decision and its exact guard evidence, the
@@ -129,8 +128,8 @@ owns wire-derived delegation-package sizing and placement-local next/static,
 read-back, preview, token and envelope allocations, for a single scope as well
 as combined base/group responses. Those checks require the successor wire
 families; Config source admission proves neither package nor guidance readiness.
-The candidate Engine bounds activation, return and replan responses before
-persisting them. ADOPT-001 owns public family and cutover selection. Existing
+The candidate Engine bounds its private mutation responses before persisting
+them. ADOPT-001 owns public family and cutover selection. Existing
 per-document, item, reference and source/projection caps remain in force.
 Session-creation budgets
 remain with their original transition/runtime owners.
@@ -178,9 +177,21 @@ revision zero denotes no recorded value in the existing item-slot contract.
 
 Core keeps one active attempt and at most one selected execution. It validates
 cursor, session, and goal-revision fences before transition; a single item edit
-fences the exact scoped attempt and item revision. The caller supplies admitted
+fences the exact scoped attempt and item revision. An atomic batch additionally
+checks the cursor revision and validates every distinct slot before updating
+the session revision once for any changes. Identical values and empty clears
+preserve the corresponding slot data and revisions. When every slot stays
+unchanged, the session revision stays the same. The caller supplies admitted
 definitions and digests, fresh identities, time, and validated external facts.
 The pure model makes no workspace or persistence calls.
+
+Candidate Engine requests independently fence workspace and selected execution.
+The selected-execution fence still applies when the active attempt is a Base
+review. A current observation carries the exact cursor and selected execution,
+current guidance and item revisions, the current or upcoming Decision ordinal,
+and remaining activation and attempt counts. Item changes, reads, original
+outcome lookup and exact replay preserve that ordinal. A distinct activation
+of the same definition starts its own Decision count.
 
 Activation is the design anchor's only successful exit. The anchor must satisfy
 its required items, evidence, blockers, and any declared delegation gate. A
@@ -223,8 +234,11 @@ opens a fresh anchor, and retains the previous goal and immutable activation
 records. Completed-session reactivation requires explicit authority and also
 returns to the anchor.
 Cancelled sessions cannot reactivate. Scoped delegation acceptance binds the
-current declared action and independently validated package digest. Changing an
-item invalidates that attempt's previously accepted package.
+current declared action, exact target and independently validated package
+digest. An actual item change or initial goal definition clears the live
+acceptance for that attempt. An unchanged write preserves it. A fresh request
+to accept an already accepted current action is rejected, while exact replay
+recovers the original success.
 
 ## Bounds and responsibility
 

@@ -7,12 +7,12 @@ use super::{
 };
 use crate::direct_store::{
     DirectMutationRequestV1, DirectMutationResultV1, DirectOutcomeScopeV1, DirectRecordedOutcomeV1,
-    candidate_committed_outcome, commit, next_workspace_sequence, persist_success, read_outcome,
-    replay_outcome, validate_success,
+    DirectStoreErrorV1, candidate_committed_outcome, commit, next_workspace_sequence,
+    persist_success, read_outcome, replay_outcome, validate_success,
 };
 use crate::{CanonicalExecutionJsonV1, IdempotencyKeyV1, ValidatedWorkspaceRootV1};
 use podway_core::execution_groups::ExecutionSessionV3;
-use podway_core::{SessionId, UnixMillis, WorkspaceId};
+use podway_core::{DomainError, SessionId, UnixMillis, WorkspaceId};
 use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior, params};
 use std::path::Path;
 
@@ -81,18 +81,50 @@ impl CandidateExecutionStore {
         session: &SessionId,
         admit: impl Fn(&str) -> Result<CandidateDefinition>,
     ) -> Result<(ExecutionSessionV3, CandidateSources)> {
+        let expected_workspace = self.workspace.clone();
+        let (state, sources, _) = self.current_snapshot(&expected_workspace, session, admit)?;
+        Ok((state, sources))
+    }
+
+    /// Obtain the current admitted state and committed sequence from the same read snapshot.
+    pub fn current_snapshot(
+        &mut self,
+        workspace: &WorkspaceId,
+        session: &SessionId,
+        admit: impl Fn(&str) -> Result<CandidateDefinition>,
+    ) -> Result<(ExecutionSessionV3, CandidateSources, u64)> {
+        self.require_workspace(workspace)?;
         let transaction = self.connection.transaction()?;
         admit_writer(&transaction)?;
-        verify_binding(&transaction, &self.root, &self.workspace)?;
-        load_candidate_execution(&transaction, session, admit)
+        verify_binding(&transaction, &self.root, workspace)?;
+        let (state, sources) = load_requested_session(&transaction, session, admit)?;
+        let sequence: i64 = transaction.query_row(
+            "SELECT next_workspace_sequence FROM workspace_state WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )?;
+        let sequence = u64::try_from(sequence)
+            .map_err(|_| corrupt("candidate workspace sequence is negative"))?;
+        Ok((state, sources, sequence))
     }
 
     /// Outcome readback is a verification handle for this fixture; the public CLI route
     /// continues to use its existing v15 Store.
     pub fn outcome(&self, key: &IdempotencyKeyV1) -> Result<Option<DirectRecordedOutcomeV1>> {
-        admit_writer(&self.connection)?;
-        verify_binding(&self.connection, &self.root, &self.workspace)?;
-        Ok(read_outcome(&self.connection, key)?)
+        self.lookup_outcome(&self.workspace, key)
+    }
+
+    /// Recover the original success by workspace and key independently of any live cursor.
+    pub fn lookup_outcome(
+        &self,
+        workspace: &WorkspaceId,
+        key: &IdempotencyKeyV1,
+    ) -> Result<Option<DirectRecordedOutcomeV1>> {
+        self.require_workspace(workspace)?;
+        let transaction = self.connection.unchecked_transaction()?;
+        admit_writer(&transaction)?;
+        verify_binding(&transaction, &self.root, workspace)?;
+        Ok(read_outcome(&transaction, key)?)
     }
 
     pub fn mutate<E: From<CandidateStoreError>>(
@@ -106,9 +138,7 @@ impl CandidateExecutionStore {
         let DirectOutcomeScopeV1::Session(session) = request.scope() else {
             return Err(corrupt("candidate mutation requires session outcome scope").into());
         };
-        if workspace != &self.workspace {
-            return Err(corrupt("candidate workspace identity differs").into());
-        }
+        self.require_workspace(workspace)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -132,6 +162,7 @@ impl CandidateExecutionStore {
         let success = execute(&CandidateExecutionTransaction {
             transaction: &transaction,
             root: &self.root,
+            workspace,
             session,
         })?;
         validate_success(request, &success.response).map_err(CandidateStoreError::from)?;
@@ -145,6 +176,17 @@ impl CandidateExecutionStore {
         .map_err(CandidateStoreError::from)?;
         commit(transaction).map_err(CandidateStoreError::from)?;
         Ok(candidate_committed_outcome(outcome))
+    }
+
+    fn require_workspace(&self, workspace: &WorkspaceId) -> Result<()> {
+        if workspace != &self.workspace {
+            return Err(DirectStoreErrorV1::ExpectedWorkspaceUuidMismatch {
+                expected: workspace.clone(),
+                actual: self.workspace.clone(),
+            }
+            .into());
+        }
+        Ok(())
     }
 }
 
@@ -176,7 +218,7 @@ fn verify_binding(
     if bounded_text(row, 0, 36)? != workspace.as_str()
         || bounded_text(row, 1, 8_256)? != root.as_encoded()
     {
-        return Err(corrupt("candidate workspace identity differs"));
+        return Err(corrupt("candidate persisted workspace binding differs"));
     }
     Ok(())
 }
@@ -184,6 +226,7 @@ fn verify_binding(
 pub struct CandidateExecutionTransaction<'transaction, 'connection> {
     transaction: &'transaction Transaction<'connection>,
     root: &'transaction ValidatedWorkspaceRootV1,
+    workspace: &'transaction WorkspaceId,
     session: &'transaction SessionId,
 }
 
@@ -192,7 +235,7 @@ impl CandidateExecutionTransaction<'_, '_> {
         &self,
         admit: impl Fn(&str) -> Result<CandidateDefinition>,
     ) -> Result<(ExecutionSessionV3, CandidateSources)> {
-        load_candidate_execution(self.transaction, self.session, admit)
+        load_requested_session(self.transaction, self.session, admit)
     }
 
     pub fn persist(&self, state: &ExecutionSessionV3, sources: &CandidateSources) -> Result<()> {
@@ -211,6 +254,30 @@ impl CandidateExecutionTransaction<'_, '_> {
     pub fn root(&self) -> &ValidatedWorkspaceRootV1 {
         self.root
     }
+
+    pub fn workspace(&self) -> &WorkspaceId {
+        self.workspace
+    }
+}
+
+fn load_requested_session(
+    transaction: &Transaction<'_>,
+    session: &SessionId,
+    admit: impl Fn(&str) -> Result<CandidateDefinition>,
+) -> Result<(ExecutionSessionV3, CandidateSources)> {
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM successor_sessions WHERE session_id = ?1)",
+        [session.as_str()],
+        |row| row.get(0),
+    )?;
+    if !present {
+        return Err(DomainError::SessionIdentityMismatch {
+            expected: session.clone(),
+            actual: None,
+        }
+        .into());
+    }
+    load_candidate_execution(transaction, session, admit)
 }
 
 pub struct CandidateSuccess {

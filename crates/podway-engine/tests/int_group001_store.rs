@@ -319,9 +319,16 @@ fn fixture_with_prior_work(
             .collect(),
         4,
     );
-    record(&mut state, "note", note, Revision::ZERO);
     if extra_edit {
+        record(
+            &mut state,
+            "note",
+            "Intermediate alternate note",
+            Revision::ZERO,
+        );
         record(&mut state, "note", note, Revision::new(1));
+    } else {
+        record(&mut state, "note", note, Revision::ZERO);
     }
     state
         .complete(&state.fence(), Some(attempt(5)), time)
@@ -398,7 +405,7 @@ fn persist(connection: &mut Connection, state: &ExecutionSessionV3, sources: &Ca
     transaction.commit().unwrap();
 }
 
-fn alter_record(
+pub(super) fn alter_record(
     connection: &Connection,
     selection: &str,
     update: &str,
@@ -584,13 +591,14 @@ fn a_conflicting_row_or_stale_session_cannot_report_a_persisted_success() {
     )
     .unwrap();
     let mut shorter = stale.clone();
-    for revision in 0..=state.fence().revision.get() {
-        record(
-            &mut shorter,
-            "plan",
-            "Alternate history",
-            Revision::new(revision),
-        );
+    let last_revision = state.fence().revision.get();
+    for revision in 0..=last_revision {
+        let value = if revision == last_revision {
+            "Alternate history".to_owned()
+        } else {
+            format!("Alternate history draft {revision}")
+        };
+        record(&mut shorter, "plan", &value, Revision::new(revision));
     }
     assert!(shorter.fence().revision > state.fence().revision);
     let variants = [

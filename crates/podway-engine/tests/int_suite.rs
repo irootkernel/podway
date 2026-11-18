@@ -96,3 +96,7 @@ mod int_group002_transactions;
 #[cfg(feature = "test-support")]
 #[path = "int_group003_replan.rs"]
 mod int_group003_replan;
+
+#[cfg(feature = "test-support")]
+#[path = "int_group004_fences.rs"]
+mod int_group004_fences;

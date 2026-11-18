@@ -1575,6 +1575,7 @@ test-support feature:
 ```sh
 gaori --json run --tag rust --tag unit -- cargo test --locked -p podway-engine --features test-support --test int_suite int_group002_transactions::
 gaori --json run --tag rust --tag unit -- cargo test --locked -p podway-engine --features test-support --test int_suite int_group003_replan::
+gaori --json run --tag rust --tag unit -- cargo test --locked -p podway-engine --features test-support --test int_suite int_group004_fences::
 ```
 
 The suites drive the typed Engine issuer against owned generation-16 SQLite
@@ -1598,6 +1599,30 @@ anchor guidance with maximum-length escaped feedback exercises pre-effect
 response refusal. A fixture-only SQLite sequence collision rejects outcome
 insertion after the state write, and cold reopen checks rollback before a
 successful retry.
+
+The fence and recovery suite submits independently prepared writes to separate
+items across a Store reconnect, rejects a sequential write with a stale
+same-item revision, and checks atomic record-many against both session and item
+revisions. Invalid batch cases cover empty, excessive count, missing item,
+wrong type, and the direct input byte limit. A registered Engine test calls
+Core directly to admit the exact aggregate content limit and reject one extra
+scalar. Same-value sets, empty clears and entirely unchanged batches preserve
+retained row bytes and the current acceptance, while a mixed batch updates only
+differing slots.
+A rehashed low session
+revision fails cold admission even with valid final item slots. The suite also
+exercises current-only evidence and counter reads, original-key recovery and
+exact replay after the cursor advances. Same-definition replacement checks
+required and stale prior-work dispositions, an old plan, a prior scoped attempt,
+and a stale delegation binding against a valid current cursor. The delegated
+base anchor also requires renewed acceptance after a plan edit. Tracked cases
+exercise the selected activation fence at Base review, rejected crossed prefix
+rework, goal revision for running and completed selections, reactivation, and
+cancellation after group completion. The suite exercises declared skip and
+group-local decide, observation and response bounds, duplicate acceptance,
+and current blocker resolution, continued completion and rejection of a late
+resolve.
+
 Multi-process contention, response loss and forced termination belong to the
 integrated process qualification.
 
@@ -1617,9 +1642,10 @@ retained scoped delegation and typed item values, and cancellation. It proves
 that candidate storage admits a full set of escaped prior-work rationales and
 checks writer identity, ordered rows and byte bounds before decoding.
 The production generation-15 classifier refuses the candidate fixture before
-opening SQLite. The candidate transaction checks above cover activation,
-terminal return and guarded replan through the Engine. The later process-level
-suite owns response loss and process interruption.
+opening SQLite. The [candidate transaction checks](#execution-group-candidate-transaction-checks)
+cover activation, terminal return, guarded replan, scoped cursor and item
+writes, delegation, and blocker transitions through the Engine. The later
+process-level suite owns contention, response loss and process interruption.
 
 ## Execution group integration checks
 

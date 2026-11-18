@@ -599,7 +599,16 @@ fn activation_enforces_exact_order_current_plan_goal_and_delegation() {
         .accept_delegation(&session.fence(), binding.clone(), &digest("c"), NOW)
         .unwrap();
     let old_identity = activation(&session, 1, vec![]);
-    set(&mut session, "approval", RecordedItemValueV2::confirm());
+    set(
+        &mut session,
+        "detail-mode",
+        RecordedItemValueV2::choice("on").unwrap(),
+    );
+    set(
+        &mut session,
+        "detail-mode",
+        RecordedItemValueV2::choice("off").unwrap(),
+    );
     assert!(
         session
             .activate(
@@ -708,6 +717,11 @@ fn conditional_plan_and_complete_anchor_digest_are_checked_before_effects() {
         &recorded_items_digest_v2(&entire).unwrap()
     );
     let stale = activation(&session, 1, vec![]);
+    set(
+        &mut session,
+        "detail",
+        RecordedItemValueV2::text("temporary plan edit").unwrap(),
+    );
     set(
         &mut session,
         "detail",

@@ -62,7 +62,7 @@ fn decision_placement(id: &str, target: &str, mut source: Value) -> Value {
     })
 }
 
-fn local_decision_group(score_required: bool) -> Value {
+pub(super) fn local_decision_group(score_required: bool) -> Value {
     let mut group = group_document();
     let source = json!({"scope":"local","node":"work"});
     group["node_definitions"]["work"]["items"] = assessment_items(score_required);

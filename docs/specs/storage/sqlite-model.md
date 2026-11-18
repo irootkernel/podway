@@ -89,6 +89,13 @@ the recovered outcomes, closures, guards, and historical references. Blocker
 IDs are unique across the trace and each attempt orders its blockers by
 creation time and ID.
 
+Cold admission checks the stored session revision against the cursor
+transitions and the minimum possible item writes in the retained trace. One
+atomic batch can increment several distinct slots in one attempt within one
+session revision. The highest slot revision in each attempt therefore supplies
+that attempt's write lower bound. Final slots preserve exact item revisions
+without retaining the membership of each historical batch.
+
 The generation-16 record encodings are private Store codecs. The successor
 component schemas describe the separately owned wire contracts. The candidate
 checks retained row ordinals and sizes before decoding record payloads. Its

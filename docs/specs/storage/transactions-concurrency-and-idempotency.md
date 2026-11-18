@@ -92,14 +92,33 @@ existing immutable identity, retained closure, or revision fails the state write
 A committed session revision cannot be replaced by a shorter stale trace.
 A later write preserves a closed attempt's final payload. Its validity may
 change from valid to stale when the Core invalidates the attempt.
-The test-support Engine issues group activation, normal terminal return and
-guarded replan against a bound candidate workspace. Activation prepares the
+The test-support Engine issues successor mutations against a bound candidate
+workspace. Activation prepares the
 canonical group document and checks compatible ports against the immutable
 base before opening the writer. The fixture Store revalidates its identity in
-an IMMEDIATE transaction and resolves exact session-scoped replay before current cursor
-and plan fences. New transitions require the current scoped attempt, goal and
-activation lineage. Activation also checks the exact design item-set digest
-and the retained references supplied by the caller.
+an IMMEDIATE transaction and resolves exact session-scoped replay before live
+mutation fences. Cursor and selection changes require the current session
+revision, applicable goal revision, exact scoped attempt and selected
+activation. A base review keeps its Base scope and still fences the selected
+group. Activation also checks the exact design item-set digest, latest
+predecessor and caller-supplied retained work references.
+Caller workspace mismatch and a missing requested session have their own
+identity failures. Persisted binding and child-record failures retain their
+storage classifications. Cursor failures distinguish the scoped attempt,
+applicable goal revision, selected activation and session revision.
+
+A single item write fences the workspace, selected activation, exact scoped
+session and attempt, and that item's revision. Independently prepared writes
+to distinct items can both succeed across a session revision change. A second
+write with the same old slot revision returns an item revision conflict.
+Record-many additionally fences the session revision, checks duplicate IDs
+before slot revisions, and validates every slot before publishing any change.
+A changed batch advances the
+session revision once and updates only the differing slots. One stale item
+rejects the whole batch with an item revision conflict after the session fence
+passes. Recording the same value or clearing an empty slot
+preserves its retained data and acceptance. An entirely unchanged request still
+commits one `changed=false` success and workspace sequence.
 
 Replan verifies the current ordinary Decision, its declared option and the
 current recorded values of the required selected evidence references. The
@@ -119,6 +138,22 @@ The fixture uses the Direct Store's shared exact replay, canonical success,
 outcome retention and commit primitives. The test path binds its owning root
 and workspace UUID independently of the production maintenance and Git
 admission path.
+
+Current reads load the workspace sequence and state from one read transaction.
+Evidence lookup and delegation package preparation use the current fenced
+attempt and its declared source references. Acceptance recomputes the package
+binding in the writer from the current scope, admitted definition, goal and
+selected values. Actual item changes and initial goal definition clear the live
+acceptance on that attempt. A new execution of the same definition requires
+its own binding. A new request for an already accepted current action is
+rejected. Exact replay returns the original acceptance success.
+
+Workspace-bound original-key lookup returns the retained session-scoped
+success independently of the live cursor. Exact replay returns the original
+response, including its original observation and sequence where recorded.
+After reconnect or cursor advance, a fresh operation uses the live observation
+and its applicable fences. Reads and replays do not create attempts or advance
+decision-entry counts.
 
 ### Settings and replay qualification
 

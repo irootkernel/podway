@@ -5,10 +5,11 @@ use super::*;
 use crate::{
     ActionOutcomeV2, AttemptId, AttemptLifecycle, AttemptValidityV2, BlockerState, BlockerStateV2,
     BoundUnitV2, ConditionStateV2, GoalDefinitionV2, GoalOutcome, GoalRevisionNumberV2,
-    GoalStatementV2, GraphNodeId, ItemId, ItemSlotStateV2, MAX_ATTEMPT_CONTENT_SCALARS_V2,
-    MAX_OPEN_BLOCKERS_V2, OptionId, ReasonV2, RecordedItemSetV2, RecordedItemV2,
-    RecordedItemValueV2, Revision, SessionId, SessionLifecycle, Sha256Digest, UnixMillis,
-    recorded_content_scalars_v2, recorded_items_digest_v2, recorded_value_digest_v2,
+    GoalStatementV2, GraphMutationErrorV2, GraphNodeId, ItemId, ItemSlotStateV2,
+    MAX_ACTIVE_ITEM_MUTATIONS_V2, MAX_ATTEMPT_CONTENT_SCALARS_V2, MAX_OPEN_BLOCKERS_V2, OptionId,
+    ReasonV2, RecordedItemSetV2, RecordedItemV2, RecordedItemValueV2, Revision, SessionId,
+    SessionLifecycle, Sha256Digest, UnixMillis, recorded_content_scalars_v2,
+    recorded_items_digest_v2, recorded_value_digest_v2,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -27,6 +28,38 @@ pub struct ExecutionCursorFenceV1 {
     pub revision: Revision,
     pub attempt: Option<ScopedAttemptV1>,
     pub goal_revision: Option<GoalRevisionNumberV2>,
+}
+
+/// Goal presence is part of the successor cursor, including before the first goal is defined.
+#[derive(Debug)]
+pub enum ExecutionCursorMismatchV1 {
+    Domain(DomainError),
+    MissingAttempt {
+        actual: AttemptId,
+    },
+    GoalRevision {
+        expected: Option<GoalRevisionNumberV2>,
+        actual: Option<GoalRevisionNumberV2>,
+    },
+}
+
+impl ExecutionCursorMismatchV1 {
+    fn into_domain(self) -> DomainError {
+        match self {
+            Self::Domain(error) => error,
+            Self::MissingAttempt { .. } => {
+                invalid("cursor fence unexpectedly omits a current attempt")
+            }
+            Self::GoalRevision { .. } => invalid("current goal revision changed"),
+        }
+    }
+}
+
+/// One exact item revision and replacement value in a scoped write. None clears the slot.
+pub struct GroupItemWriteV1 {
+    pub item: ItemId,
+    pub expected_revision: Revision,
+    pub value: Option<RecordedItemValueV2>,
 }
 
 /// One exact current value used to admit a Decision option.
@@ -248,6 +281,10 @@ impl ExecutionSessionV3 {
             .filter(|attempt| attempt.lifecycle == AttemptLifecycle::Active)
     }
 
+    pub fn current_placement(&self) -> Option<&PlacementV3> {
+        self.current_parts().ok().map(|(_, placement, _)| placement)
+    }
+
     pub fn attempt_history(&self) -> &[GroupAttemptStateV1] {
         &self.attempts
     }
@@ -341,6 +378,10 @@ impl ExecutionSessionV3 {
             ));
         }
         self.initial_goal = Some(goal);
+        self.attempts
+            .last_mut()
+            .expect("goal definition has an active attempt")
+            .delegation = None;
         self.update(revision, now);
         Ok(())
     }
@@ -492,64 +533,121 @@ impl ExecutionSessionV3 {
         value: Option<RecordedItemValueV2>,
         now: UnixMillis,
     ) -> Result<Revision, DomainError> {
-        self.check_time(now)?;
-        let (attempt, _, items) = self.current_parts()?;
-        if &attempt.target != target {
-            return Err(stale_attempt(target, Some(attempt)));
+        let write = GroupItemWriteV1 {
+            item: item.clone(),
+            expected_revision,
+            value,
+        };
+        if self.write_items(target, [write], now)? {
+            expected_revision.checked_next()
+        } else {
+            Ok(expected_revision)
         }
-        let index = items
-            .iter()
-            .position(|declaration| declaration.id() == item)
-            .ok_or_else(|| DomainError::ItemNotFound {
-                item_id: item.clone(),
-            })?;
-        let current = &attempt.slots[index];
-        if current.revision() != expected_revision {
-            return Err(DomainError::PreconditionFailed {
-                expected: expected_revision,
-                actual: current.revision(),
+    }
+
+    /// Prepare all slots against the same cursor before publishing a single session revision.
+    pub fn record_many(
+        &mut self,
+        fence: &ExecutionCursorFenceV1,
+        mut writes: Vec<GroupItemWriteV1>,
+        now: UnixMillis,
+    ) -> Result<bool, GraphMutationErrorV2> {
+        self.verify_cursor(fence)
+            .map_err(ExecutionCursorMismatchV1::into_domain)?;
+        let target = fence
+            .attempt
+            .as_ref()
+            .ok_or_else(|| invalid("record-many requires a current attempt"))?;
+        if writes.is_empty() {
+            return Err(GraphMutationErrorV2::ItemMutationBatchEmpty);
+        }
+        if writes.len() > MAX_ACTIVE_ITEM_MUTATIONS_V2 {
+            return Err(GraphMutationErrorV2::TooManyItemMutations {
+                maximum: MAX_ACTIVE_ITEM_MUTATIONS_V2 as u32,
             });
         }
-        if value
-            .as_ref()
-            .is_some_and(|value| !items[index].admits_recorded_value(value))
-        {
-            return Err(invalid(
-                "recorded value does not match its item declaration",
-            ));
+        writes.sort_by(|left, right| left.item.cmp(&right.item));
+        if let Some(duplicate) = writes.windows(2).find(|pair| pair[0].item == pair[1].item) {
+            return Err(GraphMutationErrorV2::DuplicateItemMutation {
+                item_id: duplicate[0].item.clone(),
+            });
+        }
+        Ok(self.write_items(target, writes, now)?)
+    }
+
+    fn write_items(
+        &mut self,
+        target: &ScopedAttemptV1,
+        writes: impl IntoIterator<Item = GroupItemWriteV1>,
+        now: UnixMillis,
+    ) -> Result<bool, DomainError> {
+        self.check_time(now)?;
+        self.verify_attempt(target)?;
+        let (attempt, _, items) = self.current_parts()?;
+        let mut replacements = BTreeMap::new();
+        for write in writes {
+            let index = items
+                .iter()
+                .position(|declaration| declaration.id() == &write.item)
+                .ok_or_else(|| DomainError::ItemNotFound {
+                    item_id: write.item.clone(),
+                })?;
+            let current = &attempt.slots[index];
+            if current.revision() != write.expected_revision {
+                return Err(DomainError::PreconditionFailed {
+                    expected: write.expected_revision,
+                    actual: current.revision(),
+                });
+            }
+            if write
+                .value
+                .as_ref()
+                .is_some_and(|value| !items[index].admits_recorded_value(value))
+            {
+                return Err(invalid(
+                    "recorded value does not match its item declaration",
+                ));
+            }
+            if current.value() == write.value.as_ref() {
+                continue;
+            }
+            let slot = ItemSlotStateV2::new(
+                target.attempt().clone(),
+                write.item,
+                items[index].item_type(),
+                write.expected_revision.checked_next()?,
+                write.value,
+                current.created_at(),
+                now,
+            )
+            .map_err(|e| invalid(e.reason()))?;
+            replacements.insert(index, slot);
+        }
+        if replacements.is_empty() {
+            return Ok(false);
         }
         let scalars = recorded_content_scalars_v2(
             attempt
                 .slots
                 .iter()
                 .enumerate()
-                .filter_map(|(i, slot)| (i != index).then(|| slot.value()).flatten())
-                .chain(value.as_ref()),
+                .filter_map(|(index, slot)| replacements.get(&index).unwrap_or(slot).value()),
         );
         if scalars > MAX_ATTEMPT_CONTENT_SCALARS_V2 {
             return Err(crate::attempt_content_bound_error_v2(scalars));
         }
-        let next_item_revision = expected_revision.checked_next()?;
         let revision = self.revision.checked_next()?;
-        let slot = ItemSlotStateV2::new(
-            target.attempt().clone(),
-            item.clone(),
-            items[index].item_type(),
-            next_item_revision,
-            value,
-            current.created_at(),
-            now,
-        )
-        .map_err(|e| invalid(e.reason()))?;
         let attempt = self
             .attempts
             .last_mut()
             .expect("an admitted current attempt exists");
-        attempt.slots[index] = slot;
+        for (index, slot) in replacements {
+            attempt.slots[index] = slot;
+        }
         // Any change to recorded outputs invalidates the acceptance bound to the prior package.
         attempt.delegation = None;
         self.update(revision, now);
-        Ok(next_item_revision)
+        Ok(true)
     }
 
     /// Admit a monotone blocker successor for the exact cursor.
@@ -1071,8 +1169,48 @@ impl ExecutionSessionV3 {
         Some((&evidenced.target, slot))
     }
 
+    /// The source attempt currently selected through a declared reference. Item admission still
+    /// uses `current_evidence`, including the port's item selection and final value.
+    pub fn current_evidence_source(
+        &self,
+        source: &EvidenceSourceV3,
+    ) -> Option<&GroupAttemptStateV1> {
+        let (attempt, placement, _) = self.current_parts().ok()?;
+        placement
+            .evidence()
+            .iter()
+            .any(|reference| reference.source() == source)
+            .then_some(())?;
+        self.evidence_source(attempt.target.scope(), source)
+    }
+
     pub fn next_decision_entry(&self, node: &GraphNodeId) -> Option<u64> {
         let scope = self.active_attempt()?.target.scope();
+        self.next_decision_entry_for(scope, node)
+    }
+
+    /// The counter relevant before an Action enters its declared next Decision.
+    pub fn upcoming_decision_entry(&self) -> Option<u64> {
+        let (attempt, placement, _) = self.current_parts().ok()?;
+        let PlacementKindV3::Action { outcome, .. } = placement.kind() else {
+            return None;
+        };
+        let scope = attempt.target.scope();
+        if scope == &ExecutionScopeV1::Base && placement.id() == self.base.boundary().anchor() {
+            return None;
+        }
+        match outcome {
+            ActionOutcomeV2::Next(node) => self.next_decision_entry_for(scope, node),
+            ActionOutcomeV2::Terminal if matches!(scope, ExecutionScopeV1::Group { .. }) => self
+                .next_decision_entry_for(
+                    &ExecutionScopeV1::Base,
+                    self.base.boundary().success_return(),
+                ),
+            ActionOutcomeV2::Terminal => None,
+        }
+    }
+
+    fn next_decision_entry_for(&self, scope: &ExecutionScopeV1, node: &GraphNodeId) -> Option<u64> {
         let (graph, _) = self.definition_for(scope, None).ok()?;
         matches!(
             placement(graph, node).ok()?.kind(),
@@ -1096,29 +1234,57 @@ impl ExecutionSessionV3 {
         now: UnixMillis,
     ) -> Result<Revision, DomainError> {
         self.check_time(now)?;
+        self.verify_cursor(fence)
+            .map_err(ExecutionCursorMismatchV1::into_domain)?;
+        self.revision.checked_next()
+    }
+
+    /// Match the live cursor before preparing effects or advancing its revision.
+    pub fn verify_cursor(
+        &self,
+        fence: &ExecutionCursorFenceV1,
+    ) -> Result<(), ExecutionCursorMismatchV1> {
         if fence.session != self.session {
-            return Err(DomainError::SessionIdentityMismatch {
-                expected: fence.session.clone(),
-                actual: Some(self.session.clone()),
+            return Err(ExecutionCursorMismatchV1::Domain(
+                DomainError::SessionIdentityMismatch {
+                    expected: fence.session.clone(),
+                    actual: Some(self.session.clone()),
+                },
+            ));
+        }
+        if let Some(expected) = &fence.attempt {
+            self.verify_attempt(expected)
+                .map_err(ExecutionCursorMismatchV1::Domain)?;
+        } else if let Some(actual) = self.active_attempt() {
+            return Err(ExecutionCursorMismatchV1::MissingAttempt {
+                actual: actual.target().attempt().clone(),
             });
         }
-        let actual = self.active_attempt();
-        if fence.attempt.as_ref() != actual.map(|attempt| &attempt.target) {
-            return Err(match &fence.attempt {
-                Some(expected) => stale_attempt(expected, actual),
-                None => invalid("cursor fence unexpectedly omits a current attempt"),
+        let actual_goal = self.goal_revision();
+        if fence.goal_revision != actual_goal {
+            return Err(ExecutionCursorMismatchV1::GoalRevision {
+                expected: fence.goal_revision,
+                actual: actual_goal,
             });
-        }
-        if fence.goal_revision != self.goal_revision() {
-            return Err(invalid("current goal revision changed"));
         }
         if fence.revision != self.revision {
-            return Err(DomainError::PreconditionFailed {
-                expected: fence.revision,
-                actual: self.revision,
-            });
+            return Err(ExecutionCursorMismatchV1::Domain(
+                DomainError::PreconditionFailed {
+                    expected: fence.revision,
+                    actual: self.revision,
+                },
+            ));
         }
-        self.revision.checked_next()
+        Ok(())
+    }
+
+    /// Match the full scoped attempt for the single-slot write exception.
+    pub fn verify_attempt(&self, expected: &ScopedAttemptV1) -> Result<(), DomainError> {
+        let actual = self.active_attempt();
+        if actual.map(GroupAttemptStateV1::target) != Some(expected) {
+            return Err(stale_attempt(expected, actual));
+        }
+        Ok(())
     }
 
     fn current_parts(

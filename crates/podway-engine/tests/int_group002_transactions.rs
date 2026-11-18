@@ -12,8 +12,8 @@ use podway_core::{
 };
 use podway_engine::direct_execution::{DirectIdSourceV1, NativeDirectIdSourceV1};
 use podway_engine::successor_execution::{
-    GroupActivationRequest, SuccessorExecutionError, SuccessorMutationRequest, activate_group,
-    return_from_group,
+    GroupActivationRequest, SuccessorCursor, SuccessorExecutionError, SuccessorMutationRequest,
+    activate_group, return_from_group,
 };
 use podway_protocol::RequestIdV1;
 use podway_store::direct_store::{
@@ -145,7 +145,7 @@ impl Fixture {
         Self::with_state(&state, &sources)
     }
 
-    fn with_state(state: &ExecutionSessionV3, sources: &CandidateSources) -> Self {
+    pub(super) fn with_state(state: &ExecutionSessionV3, sources: &CandidateSources) -> Self {
         let owner = tempfile::Builder::new()
             .prefix("podway-group002-")
             .tempdir_in(std::fs::canonicalize("/tmp").unwrap())
@@ -235,7 +235,7 @@ pub(super) fn mutation(
         key: IdempotencyKeyV1::new(key).unwrap(),
         request_id: RequestIdV1::new(NativeDirectIdSourceV1.next_session_id().into_inner())
             .unwrap(),
-        cursor: state.fence(),
+        cursor: SuccessorCursor::from_state(state),
     }
 }
 
@@ -483,7 +483,8 @@ fn insufficient_plan_return_output_and_stale_identity_do_not_publish_success() {
     fixture.compare_rejected(&ready, "ports", (0, 0, 0));
 
     let mut wrong_scope = activation(&fixture.workspace, &ready.0, &group, "workspace");
-    wrong_scope.mutation.workspace = NativeDirectIdSourceV1.next_workspace_id();
+    let foreign_workspace = NativeDirectIdSourceV1.next_workspace_id();
+    wrong_scope.mutation.workspace = foreign_workspace.clone();
     assert!(matches!(
         activate_group(
             &mut fixture.store,
@@ -491,9 +492,9 @@ fn insufficient_plan_return_output_and_stale_identity_do_not_publish_success() {
             || panic!("workspace refusal reads no clock"),
             &NativeDirectIdSourceV1
         ),
-        Err(SuccessorExecutionError::Store(
-            CandidateStoreError::Corrupt("candidate workspace identity differs")
-        ))
+        Err(SuccessorExecutionError::Store(CandidateStoreError::Direct(
+            DirectStoreErrorV1::ExpectedWorkspaceUuidMismatch { expected, actual }
+        ))) if expected == foreign_workspace && actual == fixture.workspace
     ));
     fixture.compare_rejected(&ready, "workspace", (0, 0, 0));
 
@@ -504,9 +505,8 @@ fn insufficient_plan_return_output_and_stale_identity_do_not_publish_success() {
             || panic!("stale command reads no clock"),
             &NativeDirectIdSourceV1
         ),
-        Err(SuccessorExecutionError::Invalid(
-            "candidate cursor fence differs"
-        ))
+        Err(SuccessorExecutionError::Domain(DomainError::PreconditionFailed { expected, actual }))
+            if expected == empty.0.fence().revision && actual == ready.0.fence().revision
     ));
     fixture.compare_rejected(&ready, "stale", (0, 0, 0));
     activate_group(

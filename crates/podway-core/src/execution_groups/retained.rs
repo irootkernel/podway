@@ -138,7 +138,7 @@ impl ExecutionSessionV3 {
                 .as_ref()
                 .map(|closure| (closure.source.attempt(), closure))
         }))?;
-        let mut minimum_item_edits = 0_u64;
+        let mut minimum_item_writes = 0_u64;
         let mut blocker_ids = BTreeSet::new();
         for (index, attempt) in attempts.iter().enumerate() {
             if attempt
@@ -156,15 +156,17 @@ impl ExecutionSessionV3 {
             let id = attempt.target.attempt();
             let goal_change = revisions.get(id).copied();
             let closure = closures.get(id).copied();
-            minimum_item_edits =
-                attempt
-                    .slots
-                    .iter()
-                    .try_fold(minimum_item_edits, |sum, slot| {
-                        sum.checked_add(slot.revision().get()).ok_or_else(|| {
-                            invalid("retained item revisions exceed session revision range")
-                        })
-                    })?;
+            // A single batch can advance several distinct slots in this attempt, but it can
+            // advance each one only once and cannot touch another attempt.
+            let attempt_writes = attempt
+                .slots
+                .iter()
+                .map(|slot| slot.revision().get())
+                .max()
+                .unwrap_or(0);
+            minimum_item_writes = minimum_item_writes
+                .checked_add(attempt_writes)
+                .ok_or_else(|| invalid("retained item revisions exceed session revision range"))?;
             state.admit_retained_values(attempt, updated_at)?;
             if let Some(change) = goal_change {
                 // Reactivation follows successful termination, even though the new anchor is
@@ -289,7 +291,7 @@ impl ExecutionSessionV3 {
             || state
                 .revision
                 .get()
-                .checked_add(minimum_item_edits)
+                .checked_add(minimum_item_writes)
                 .is_none_or(|minimum| minimum > revision.get())
             || state.goal_revisions != goal_revisions
             || state.definitions != definitions
