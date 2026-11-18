@@ -200,6 +200,12 @@ fn admit(definition: &SuccessorDefinition) -> Result<(), ConfigError> {
                             edges += 1;
                         }
                         DecisionRouteV3::Replan => {
+                            if decision.metadata().assessment().is_some() {
+                                return Err(invalid(
+                                    "graph.nodes.routes",
+                                    "session-goal assessment cannot use a replan route",
+                                ));
+                            }
                             if decision.guards(option).is_none() {
                                 return Err(invalid(
                                     "graph.nodes.routes",
@@ -421,11 +427,14 @@ fn admit(definition: &SuccessorDefinition) -> Result<(), ConfigError> {
             }
         }
     }
-    if goal {
+    if let Some((_, returned)) = base_indices
+        && goal
+    {
         let assessments = topology
             .nodes()
             .iter()
             .enumerate()
+            .filter(|(i, _)| graph.dominates(&dominators, returned, *i))
             .filter_map(|(i, p)| match lookup(definition, p.definition()).ok()? {
                 NodeDefinitionV3::Decision(v) if v.metadata().assessment().is_some() => Some(i),
                 _ => None,
@@ -438,7 +447,7 @@ fn admit(definition: &SuccessorDefinition) -> Result<(), ConfigError> {
         }) {
             return Err(invalid(
                 "assessment",
-                "session-goal assessment must dominate each base terminal",
+                "each base terminal requires a dominating session-goal assessment at or after group return",
             ));
         }
     }

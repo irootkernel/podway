@@ -1520,7 +1520,11 @@ header bounds, interface equality and declaration order, required references
 versus optional source items, custom and default-style guards, selected ports,
 group-only success exits, session-goal assessment ownership, anchor/return
 dominance, ordinary and explicit boundary exits, local rework and conditional
-prefix manual targets. Mixed replan/ordinary cycles remain rejection cases.
+prefix manual targets. The tracked-base audit cases reject a replan route on a
+session-goal assessment, prefix-only assessments, and a branch bypassing the
+post-return assessment. They admit a supplemental prefix assessment alongside
+a qualifying suffix assessment, and an assessment at the return placement
+itself. Mixed replan/ordinary cycles remain rejection cases.
 The source/format/graph checks preserve array order, normalize authoring maps,
 retain supported YAML comments and prove prompt changes still change definition
 digests. Explicit replan graph edges never acquire a synthetic local target.

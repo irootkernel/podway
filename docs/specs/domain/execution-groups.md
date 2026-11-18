@@ -75,8 +75,10 @@ fail admission. Anchor and return dominate every actual base terminal. A group
 has exactly one actual success-terminal Action. Every placement is reachable and
 has a finite actual terminal or explicit replan exit; ordinary forward cycles
 remain forbidden, including at decisions that also offer replan. Replan-only
-branches are legal boundary exits and never count as successful base completion.
-All ordinary edges still undergo reference, reachability and cycle analysis.
+branches are legal boundary exits on ordinary Decisions. Only a terminal path
+can count as successful base completion. A Decision declaring session-goal
+assessment cannot offer a replan route. All ordinary edges still undergo
+reference, reachability and cycle analysis.
 
 Required local evidence strictly dominates its consumer and cannot come from a
 skippable action. Plan ports exist only inside a group; execution-result ports
@@ -97,9 +99,11 @@ into prefix-side placements, including a shared region leading back to the ancho
 First prefix Action/Decision arrival at the anchor and the declared anchor-to-return
 boundary edge remain legal. Base manual rework may declare prefix targets other
 than the anchor; both Core's transitions and Config's graph projections limit
-those targets to the period before the first activation. Group definitions cannot
-declare session-goal assessment; tracked bases retain complete outcome coverage
-and assessment dominance over their terminal paths.
+those targets to the period before the first activation. Session-goal
+assessment belongs to a tracked base, with complete option and outcome coverage.
+Every tracked base terminal must be dominated by an assessment at or after the
+declared group return. A base may also record a supplemental assessment before
+the return when its terminal paths meet this requirement.
 
 Canonical bytes derive from admitted typed values with defaults materialized.
 Author-ordered arrays retain their order; authoring-map key order normalizes

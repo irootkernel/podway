@@ -451,8 +451,7 @@ fn frame002_settlement_regression_selected_plan_cannot_reverse_controller_order(
     reject_controller(&value);
 }
 
-#[test]
-fn frame002_goal_assessment_belongs_to_base_with_complete_coverage_and_dominance() {
+fn tracked_base() -> Value {
     let mut value = base();
     value["goal_tracking"] = json!(true);
     let mut goal = decision(
@@ -465,6 +464,12 @@ fn frame002_goal_assessment_belongs_to_base_with_complete_coverage_and_dominance
     value["node_definitions"]["goal"] = goal;
     value["graph"]["nodes"][2]["routes"]["success"]["to"] = json!("goal");
     value["graph"]["nodes"].as_array_mut().unwrap().push(json!({"id":"goal","use":"goal","routes":{"achieved":{"effect":"advance","to":"finish"},"not-achieved":{"effect":"advance","to":"finish"},"superseded":{"effect":"advance","to":"finish"}}}));
+    value
+}
+
+#[test]
+fn frame002_goal_assessment_belongs_to_base_with_complete_coverage_and_dominance() {
+    let mut value = tracked_base();
     schema_accepts(&accept(&value));
     let mut missing = value.clone();
     missing["node_definitions"]["goal"]["options"]
@@ -479,9 +484,98 @@ fn frame002_goal_assessment_belongs_to_base_with_complete_coverage_and_dominance
         .unwrap()
         .push(json!({"id":"bypass","label":"Bypass"}));
     bypass["graph"]["nodes"][2]["routes"]["bypass"] = json!({"effect":"advance","to":"finish"});
-    reject(&bypass, "assessment must dominate");
+    reject_field(
+        &bypass,
+        "assessment",
+        "each base terminal requires a dominating session-goal assessment at or after group return",
+    );
     value.as_object_mut().unwrap().remove("goal_tracking");
     reject(&value, "goal_tracking");
+}
+
+#[test]
+fn frame_audit_config_rejects_replan_on_session_goal_assessment() {
+    let mut value = tracked_base();
+    value["execution_group"]["replan_decisions"] = json!(["review", "goal"]);
+    value["graph"]["nodes"][4]["evidence_from"] =
+        json!([{"scope": "execution_result", "items": ["verdict"]}]);
+    value["node_definitions"]["goal"]["options"][1]["guards"] = json!([{
+        "evidence": {"scope": "execution_result", "item": "verdict"},
+        "equals": "failure"
+    }]);
+    // Full outcome coverage, policy membership and the guard already pass. The ordinary
+    // guarded replan on review remains available.
+    schema_accepts(&accept(&value));
+    value["graph"]["nodes"][4]["routes"]["not-achieved"] = json!({"effect": "replan"});
+    reject_field(
+        &value,
+        "graph.nodes.routes",
+        "session-goal assessment cannot use a replan route",
+    );
+}
+
+fn tracked_base_with_prefix_assessment() -> Value {
+    let mut prefix_and_suffix = tracked_base();
+    let mut prefix_goal = prefix_and_suffix["graph"]["nodes"][4].clone();
+    prefix_goal["id"] = json!("prefix-goal");
+    for route in prefix_goal["routes"].as_object_mut().unwrap().values_mut() {
+        route["to"] = json!("prefix");
+    }
+    prefix_and_suffix["graph"]["entry"] = json!("prefix-goal");
+    prefix_and_suffix["graph"]["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(prefix_goal);
+    prefix_and_suffix
+}
+
+#[test]
+fn frame_audit_config_prefix_assessment_cannot_qualify_completion() {
+    let mut prefix_only = tracked_base_with_prefix_assessment();
+    schema_accepts(&accept(&prefix_only));
+    prefix_only["graph"]["nodes"][2]["routes"]["success"]["to"] = json!("finish");
+    prefix_only["graph"]["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .remove(4);
+    reject_field(
+        &prefix_only,
+        "assessment",
+        "each base terminal requires a dominating session-goal assessment at or after group return",
+    );
+}
+
+#[test]
+fn frame_audit_config_rejects_one_branch_that_bypasses_the_post_return_assessment() {
+    let mut prefix_and_suffix = tracked_base_with_prefix_assessment();
+    schema_accepts(&accept(&prefix_and_suffix));
+    prefix_and_suffix["node_definitions"]["review"]["options"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id": "bypass", "label": "Bypass"}));
+    prefix_and_suffix["graph"]["nodes"][2]["routes"]["bypass"] =
+        json!({"effect": "advance", "to": "finish"});
+    reject_field(
+        &prefix_and_suffix,
+        "assessment",
+        "each base terminal requires a dominating session-goal assessment at or after group return",
+    );
+}
+
+#[test]
+fn frame_audit_config_allows_goal_assessment_at_group_return() {
+    let mut value = tracked_base();
+    value["execution_group"]["success_return"] = json!("goal");
+    value["graph"]["nodes"][1]["next"] = json!("goal");
+    value["graph"]["nodes"][2]["routes"]["success"]["to"] = json!("finish");
+    for route in value["graph"]["nodes"][4]["routes"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        route["to"] = json!("review");
+    }
+    schema_accepts(&accept(&value));
 }
 
 #[derive(Clone)]
