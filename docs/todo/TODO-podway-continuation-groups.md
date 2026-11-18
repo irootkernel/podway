@@ -700,11 +700,34 @@ Use these evidence practices in each execution plan:
   assessment retains its exact target, required criterion rows, verdict,
   applicability and evidence gaps, with full inline inputs where required.
 
+For TRACE and ADOPT, also plan these review and closeout practices:
+
+- **Collect Herdr child reports with the first completed result.** When the
+  selected route uses Herdr, ask the main reviewer to include each required
+  child's complete report or a native report reference the Coordinator can
+  read. Verify receipt against the same operation and exact review target.
+  Recover any missing report from the original operation before considering
+  another review.
+- **Select the documentation-only closeout path at plan time.** Use one
+  independent closeout assessment only when the selected Procedure and
+  installed Aquarium handler explicitly support it and the installed Podway
+  writer is compatible. Otherwise, plan the currently supported closeout path.
+  Apply the shorter path after successful internal Epic Validation when the
+  exact diff is limited to the Epic's documentation closeout. For ADOPT, the
+  selected path must cover any last-consumer dossier retirement in that diff,
+  subject to Section 7's reference and approval rules. The assessment verifies
+  that the completed Validation still applies, the exact diff is in scope, and
+  the focused documentation and Git integrity checks passed. Carry the
+  evidence forward in the same candidate index. If the candidate changes
+  outside that scope, reassess the affected requirements through the applicable
+  verification and review path. Keep final owner acceptance and the exact
+  closeout commit as separate steps.
+
 | Epic | Evidence to bind to the exact candidate |
 | --- | --- |
 | GROUP | Bind Store and Engine lifecycle evidence to the source and fixtures used. Retain real-process contention, interruption and cold-reopen receipts for GROUP-005, including exact scope of the full development gate. |
-| TRACE | Bind paging, history, provenance and read-only behavior to the exact current or archived state used in verification. Preserve the distinction between historical records returned by a query and evidence eligible for the active assessment. |
-| ADOPT | Recheck the installed workflow writer and Procedure contract before execution. Keep its workspace separate from the isolated exact successor CLI fixtures. Bind cutover, old-Store refusal and native qualification receipts to their respective CLI and source identities. |
+| TRACE | Bind paging, history, provenance and read-only behavior to the exact current or archived state used in verification. Preserve the distinction between historical records returned by a query and evidence eligible for the active assessment. Complete the retention, deletion and development checks before applying the documentation-only closeout rule. |
+| ADOPT | Recheck the installed workflow writer and Procedure contract before execution. Keep its workspace separate from the isolated exact successor CLI fixtures. Bind cutover, old-Store refusal and native qualification receipts to their respective CLI and source identities. Complete the actual CLI, cutover, refusal and recovery checks and the development gate before applying the documentation-only closeout rule. |
 
 Retain the handler's independent assessments, correction and evidence routing,
 required development gates and separate final user acceptance.

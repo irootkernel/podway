@@ -64,18 +64,18 @@ Target release: `v0.2.18` (planning only).
 
 ## GROUP — Transactional Group Lifecycle
 
-Dependencies: Completed FRAME. Status: In Progress.
+Dependencies: Completed FRAME. Status: Completed.
 Execution owner: `aquarium:epic-handler` when explicitly invoked.
-Detailed SOT: [Execution-group continuation](../todo/TODO-podway-continuation-groups.md).
+Canonical Outcomes: [candidate Store](../specs/storage/sqlite-model.md#execution-group-candidate-store), [candidate transactions and replay](../specs/storage/transactions-concurrency-and-idempotency.md#execution-group-candidate-persistence) and [process qualification](../implementation-tips/testing.md#execution-group-process-qualification).
 Target release: `v0.2.18` (planning only).
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `GROUP-001` | Persist execution group identity and history | Completed | Store immutable definitions, runs, activation lineage, planning bindings and independently admitted attempts. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
-| `GROUP-002` | Activate and return atomically | Completed | Activate only from the satisfied anchor and return normal group completion to the declared base successor. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
-| `GROUP-003` | Replan without losing completed work | Completed | Admit only declared failed decisions with current score/guards; atomically record choice, preserve old work and create the fresh planning attempt. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
-| `GROUP-004` | Fence requests and recover original outcomes | Completed | Bind all affected mutations to exact group/attempt identity; preserve replay and response-loss recovery. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
-| `GROUP-005` | Qualify lifecycle concurrency and recovery | Completed | Verify contention, process interruption, cold reconstruction and rollback; complete the development gate. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `GROUP-001` | Persist execution group identity and history | Completed | Store immutable definitions, runs, activation lineage, planning bindings and independently admitted attempts. | [Candidate Store retention](../specs/storage/sqlite-model.md#execution-group-candidate-store) |
+| `GROUP-002` | Activate and return atomically | Completed | Activate only from the satisfied anchor and return normal group completion to the declared base successor. | [Activation and return](../specs/storage/transactions-concurrency-and-idempotency.md#execution-group-candidate-persistence) |
+| `GROUP-003` | Replan without losing completed work | Completed | Admit only declared failed decisions with current score/guards; atomically record choice, preserve old work and create the fresh planning attempt. | [Guarded replan checks](../implementation-tips/testing.md#execution-group-candidate-transaction-checks) |
+| `GROUP-004` | Fence requests and recover original outcomes | Completed | Bind all affected mutations to exact group/attempt identity; preserve replay and response-loss recovery. | [Exact fences and replay](../specs/storage/transactions-concurrency-and-idempotency.md#execution-group-candidate-persistence) |
+| `GROUP-005` | Qualify lifecycle concurrency and recovery | Completed | Verify contention, process interruption, cold reconstruction and rollback; complete the development gate. | [Process qualification](../implementation-tips/testing.md#execution-group-process-qualification) |
 
 ## TRACE — Retained Execution History
 
