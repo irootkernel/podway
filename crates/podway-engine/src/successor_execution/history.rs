@@ -5,6 +5,9 @@ use podway_core::{ItemTypeV1, recorded_value_digest_v2};
 use podway_protocol::MAX_DIRECT_OUTPUT_BYTES_V1;
 pub use podway_store::successor_store::CandidateSessionLocation;
 
+mod detail;
+pub use detail::*;
+
 const GROUPS_SCHEMA: &str = "podway.successor-group-list-fixture-result/v1";
 const GROUP_SCHEMA: &str = "podway.successor-group-show-fixture-result/v1";
 const GOAL_REVISIONS_SCHEMA: &str = "podway.successor-goal-revision-history-fixture-result/v1";

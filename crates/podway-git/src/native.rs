@@ -2304,6 +2304,43 @@ pub(crate) fn inspect_containment(
     Ok(ContainmentSnapshot { podway, runtime })
 }
 
+#[cfg(feature = "test-support")]
+pub(crate) fn observe_candidate_artifact_presence(
+    root: &Path,
+    relative: &Path,
+) -> Result<crate::LocalPathPresenceV1, GitResolverErrorV1> {
+    use crate::LocalPathPresenceV1;
+
+    let operation = GitReadOperationV1::OpenLocalArtifact;
+    let problem = GitRepresentationProblemV1::NonRegularArtifact;
+    let names = relative
+        .components()
+        .map(|component| match component {
+            Component::Normal(name) => Ok(name),
+            _ => Err(GitResolverErrorV1::Representation {
+                problem: problem.clone(),
+            }),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let (last, parents) = names
+        .split_last()
+        .ok_or_else(|| GitResolverErrorV1::Representation {
+            problem: problem.clone(),
+        })?;
+    let mut parent = open_absolute_directory(root, operation.clone(), problem.clone())?;
+    for name in parents {
+        if entry_stat_if_exists(&parent, name, operation.clone())?.is_none() {
+            return Ok(LocalPathPresenceV1::Missing);
+        }
+        parent = open_directory_at(&parent, name, operation.clone(), problem.clone())?;
+    }
+    match entry_stat_if_exists(&parent, last, operation)? {
+        None => Ok(LocalPathPresenceV1::Missing),
+        Some(stat) if file_type(&stat) == FileType::RegularFile => Ok(LocalPathPresenceV1::Present),
+        Some(_) => Err(GitResolverErrorV1::Representation { problem }),
+    }
+}
+
 pub(crate) fn open_artifact_beneath(
     root: &OpenedDirectory,
     artifact: &Path,

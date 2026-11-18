@@ -339,6 +339,15 @@ impl SuccessorGraphProjection {
 pub fn project_successor_graph(
     value: &ValidatedSuccessorDefinition,
 ) -> Result<SuccessorGraphProjection, ConfigError> {
+    let projection = project_retained_successor_graph(value)?;
+    bound(projection.projection())?;
+    Ok(projection)
+}
+
+/// Build the exact canonical DAG of an admitted definition for a bounded paged consumer.
+pub fn project_retained_successor_graph(
+    value: &ValidatedSuccessorDefinition,
+) -> Result<SuccessorGraphProjection, ConfigError> {
     use crate::procedure_v2_graph::GraphIndex;
     use serde_json::json;
     let definition = &value.definition;
@@ -377,7 +386,6 @@ pub fn project_successor_graph(
         document["execution_group"] = json!({"anchor":base.boundary().anchor().as_str(),"success_return":base.boundary().success_return().as_str()});
     }
     let projection = crate::canonical_json_from_serializable(&document)?;
-    bound(projection.as_str())?;
     let digest = digest(projection.as_bytes())?;
     Ok(SuccessorGraphProjection { projection, digest })
 }

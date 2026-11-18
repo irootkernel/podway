@@ -132,6 +132,39 @@ Current snapshots and fresh mutations reject archived sessions. Exact mutation
 replay remains available through the existing outcome path. Public archive
 cutover and destructive lifecycle qualification have separate roadmap owners.
 
+### Candidate DAG, attempt and item history
+
+An exact base definition digest or group execution ID with its definition
+digest selects a historical DAG. The Config projection uses the admitted
+bytes retained in SQLite. Canonical DAG pages reconstruct the entire
+projection and its digest, including graphs larger than the unpaged
+authoring response limit. Two executions of one definition remain distinct
+selectors.
+
+The same scope selects attempt summaries in original trace order. Each row
+includes its absolute trace sequence, lifecycle and validity, timestamps,
+retained decision or outcome facts, declared item identities and revisions,
+and the retained blocker count. Blocker pages select the exact scoped attempt
+and give each record's identity, state, reason and timestamps in retained order.
+Resolved records remain pageable when the total exceeds the open-blocker limit.
+Item reads additionally require the exact scoped attempt and item.
+They expose the retained item revision and value digest, with a declared
+unrecorded slot distinguishable from a recorded empty value.
+
+Text and canonical DAG pages advance by Unicode scalars; list pages advance
+by whole entries. Other typed values return as one complete record. Each
+page reports its logical offset, size, exact total and continuation. Encoded
+data fits within 256 KiB and the complete candidate response within 320 KiB.
+Continuation identity includes the query, owning session and revision, and
+the selected scope and exact definition, projection or value identifiers.
+
+An artifact page returns its original location, digest, byte length and
+media type. Local availability uses a no-follow metadata observation beneath
+the fixture root. A missing path is distinguishable from an unverified path.
+Unsafe, inaccessible and opaque external locations are unverified. This
+observation reads metadata only and does not certify content. Missing bytes
+never invalidate the retained reference.
+
 The generation-16 record encodings are private Store codecs. The successor
 component schemas describe the separately owned wire contracts. The candidate
 checks retained row ordinals and sizes before decoding record payloads. Its

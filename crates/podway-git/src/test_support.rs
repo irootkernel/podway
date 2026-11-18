@@ -3,6 +3,15 @@
 
 use std::{cell::RefCell, path::Path, rc::Rc};
 
+/// Observe an artifact from its candidate fixture root without reading file data or following
+/// symlinks. A missing path component is distinguishable from an inaccessible or unsafe path.
+pub fn observe_candidate_artifact_presence(
+    root: &Path,
+    relative: &Path,
+) -> Result<crate::LocalPathPresenceV1, crate::GitResolverErrorV1> {
+    crate::native::observe_candidate_artifact_presence(root, relative)
+}
+
 type ArtifactReadObserver = Rc<dyn Fn(&Path, usize)>;
 
 thread_local! {

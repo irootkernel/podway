@@ -108,3 +108,7 @@ mod int_group005_processes;
 #[cfg(feature = "test-support")]
 #[path = "int_trace001_history.rs"]
 mod int_trace001_history;
+
+#[cfg(feature = "test-support")]
+#[path = "int_trace002_history.rs"]
+mod int_trace002_history;

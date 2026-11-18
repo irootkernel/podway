@@ -8,7 +8,7 @@ publish = false
 autotests = false
 
 [features]
-test-support = ["podway-store/test-support"]
+test-support = ["podway-git/test-support", "podway-store/test-support"]
 
 [dependencies]
 podway-core = { path = "../podway-core" }

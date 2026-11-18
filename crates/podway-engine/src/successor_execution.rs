@@ -59,6 +59,9 @@ pub enum SuccessorExecutionError {
     InvalidHistoryPageToken,
     StaleHistoryPageToken,
     HistoryGroupNotFound,
+    HistoryDefinitionMismatch,
+    HistoryAttemptNotFound,
+    HistoryItemNotFound,
     ResponseBudget,
     OutcomeLookupBudget,
 }

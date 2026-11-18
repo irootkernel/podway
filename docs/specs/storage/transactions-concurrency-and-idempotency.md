@@ -160,6 +160,11 @@ Candidate history queries select one exact current or archived session in a
 read transaction. Group, Decision and goal-revision lineage use that admitted
 snapshot and revision-bound continuations. They leave current evidence and
 mutation state unchanged.
+Historical graphs, trace attempts, scoped blockers and item reads use the same
+admission and bind their narrower definition, attempt or value identity.
+The read transaction ends after acquiring stored state. An artifact page
+then observes availability without changing SQLite or making that value
+eligible for the current attempt.
 
 Workspace-bound original-key lookup returns the retained session-scoped
 success independently of the live cursor. Exact replay returns the original

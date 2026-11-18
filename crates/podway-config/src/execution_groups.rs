@@ -10,7 +10,7 @@ mod validate;
 pub use parse::parse_successor_document;
 pub use projection::{
     FormattedSuccessorDefinition, SuccessorGraphProjection, format_successor_definition,
-    project_successor_graph, project_successor_source,
+    project_retained_successor_graph, project_successor_graph, project_successor_source,
 };
 pub use validate::{validate_group_interface, validate_successor_definition};
 

@@ -1703,6 +1703,26 @@ The feature-enabled Engine library case
 checks the exact encoded response limit and one byte above it with a
 continuation. TRACE-004 owns full process and destructive lifecycle checks.
 
+## Candidate retrospective DAG and value checks
+
+Run the registered Engine cases against the isolated candidate Store:
+
+```sh
+gaori --json run --tag rust --tag unit -- cargo test --locked -p podway-engine --features test-support --test int_suite int_trace002_history::
+```
+
+The DAG case admits a 1,024-placement graph with a projection larger than
+the unpaged authoring limit, rejoins every canonical page and checks the
+original graph digest and edge count. The rework case compares stale and
+fresh attempts, verifies the original item revision and delegation binding,
+and reads 65 retained blockers across two pages before and after archive.
+The replacement case exercises ordered attempts, complete typed check results,
+empty and unset slots, and maximal text and list values that include escaped
+and mixed-width scalars. It distinguishes present, missing and unverified
+artifact paths, including missing or unsafe parent directories. The cases
+check scoped selector and continuation refusals and compare logical SQLite
+rows, including the mutation ledger, before and after history reads.
+
 ## Execution-group candidate persistence checks
 
 Run `int_group001_store` through the Engine's registered `int_suite`. It uses

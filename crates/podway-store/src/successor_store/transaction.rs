@@ -56,6 +56,10 @@ pub struct CandidateExecutionStore {
 }
 
 impl CandidateExecutionStore {
+    pub fn workspace_root(&self) -> &ValidatedWorkspaceRootV1 {
+        &self.root
+    }
+
     /// Installs the initial admitted test state without publishing a command outcome.
     pub fn create_fixture(
         path: &Path,

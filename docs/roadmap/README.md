@@ -87,7 +87,7 @@ Target release: `v0.2.18` (planning only).
 | id | title | status | goal | references |
 |---|---|---|---|---|
 | `TRACE-001` | Query planning and activation lineage | Completed | Expose bounded paging of groups, decision entry counts, assessment/CO choices and replacement causes. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
-| `TRACE-002` | Inspect historical DAGs and node execution | Planned | Render past graphs and read retained attempt values, results and provenance without making them current. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `TRACE-002` | Inspect historical DAGs and node execution | Completed | Render past graphs and read retained attempt values, results and provenance without making them current. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
 | `TRACE-003` | Link prior work to the new planning basis | Planned | Query and project admitted prior-work judgments and exact historical execution references without inheriting gates. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
 | `TRACE-004` | Qualify history retention and lifecycle | Planned | Verify archive, limits, explicit deletion boundaries and cold reopen; finish the development gate. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
 

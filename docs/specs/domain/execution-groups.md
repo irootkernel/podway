@@ -122,7 +122,10 @@ JSON, YAML and canonical re-admission reach the same semantic identity. Graph
 edges follow option declaration order and expose replan without inventing a
 local target. Projections contain no live selection or attempt state.
 
-Canonical JSON and graph projections retain both scalar and encoded-byte limits.
+Canonical JSON and unpaged authoring projections retain both scalar and
+encoded-byte limits. Historical DAG reads page the same canonical graph
+projection, so an admitted definition remains inspectable beyond the
+unpaged graph response ceiling.
 Formatted source retains the existing scalar-only projection ceiling. Protocol
 owns wire-derived delegation-package sizing and placement-local next/static,
 read-back, preview, token and envelope allocations, for a single scope as well
@@ -133,6 +136,11 @@ them. ADOPT-001 owns public family and cutover selection. Existing
 per-document, item, reference and source/projection caps remain in force.
 Session-creation budgets
 remain with their original transition/runtime owners.
+
+Historical queries bind the exact base or group definition and retained
+attempt rather than resolving a node name at the live cursor. The stored
+slot is authoritative for recorded values and revisions. Historical
+readback grants no current evidence eligibility.
 
 ## Identity and retained assertions
 
