@@ -115,6 +115,23 @@ adding successor documents to the shipped parser dispatch. Store, Engine and CLI
 do not select a successor runtime merely because these values or APIs exist. The [model contract](../specs/domain/execution-groups.md) distinguishes
 internal model availability, manifest enrollment and the later atomic cutover.
 
+### Private execution-group transactions
+
+The feature-gated Engine issues activation, return, replan, current reads and
+scoped mutations against standalone generation-16 fixtures. The candidate Store
+admits and reconstructs the retained state. It uses the Direct Store's outcome
+ledger and commit primitives so the state and exact success commit together.
+The public CLI and writer still select Procedure v2 and generation 15.
+[Candidate Store layout](../specs/storage/sqlite-model.md#execution-group-candidate-store)
+and [transaction behavior](../specs/storage/transactions-concurrency-and-idempotency.md#execution-group-candidate-persistence)
+define the private boundary.
+
+The fixture requests carry no optional caller attribution. The public cutover
+owns how the successor accepts, retains and presents supplied attribution under
+the existing correlation contract.
+[ADR-0044](../architecture-decision-records/0044-versioned-execution-groups.md)
+assigns the atomic public cutover to ADOPT-001.
+
 ### Direct Engine
 
 `podway-engine` composes configuration, core, protocol, Store, Git and presets.

@@ -142,6 +142,14 @@ Store-only entry points are delegates. Shared direct mutation helpers construct
 only equivalent graph successes and fences; bootstrap and maintenance retain
 their distinct protocols.
 
+Engine's `test-support` feature enables Store's `test-support` and exposes
+`successor_execution` to registered integration cases. Store exposes
+`successor_store` under its own feature. The candidate Store reuses Direct Store
+primitives for success admission, original replay, journaling and commit.
+Its commit and SQLite busy observers are confined to the fixture path.
+[Execution-group process qualification](../implementation-tips/testing.md#execution-group-process-qualification)
+describes how the registered tests use those hooks.
+
 CLI's private `command/{grammar,authoring,procedure_files,start,render,preflight}`
 modules separate grammar, authoring, descriptor-safe file operations, start
 interviews/previews, output and fence lookup. Entry keeps shared input validation
