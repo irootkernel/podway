@@ -898,6 +898,15 @@ fn completed_group_return_base_retry_and_replan_keep_exact_history() {
         session.group_history()[0].closure().unwrap().cause,
         SelectionClosureCauseV1::Replan
     );
+    let before_prefix_rework = session.clone();
+    let fence = session.fence();
+    assert_eq!(
+        session.rework(&fence, &node("prefix"), reason(), attempt(11), NOW),
+        Err(invalid(
+            "ordinary base routing cannot cross the execution-group boundary"
+        ))
+    );
+    assert_eq!(session, before_prefix_rework);
     ready_design(&mut session);
     launch(&mut session, 2, 11, vec![prior(1, None)]);
     let current = session.active_attempt().unwrap().target().clone();
