@@ -162,6 +162,9 @@ snapshot and revision-bound continuations. They leave current evidence and
 mutation state unchanged.
 Historical graphs, trace attempts, scoped blockers and item reads use the same
 admission and bind their narrower definition, attempt or value identity.
+Prior-work history uses that snapshot to project the admitted activation
+assertions and their exact source links. It grants no current gate eligibility
+to the cited attempts or values.
 The read transaction ends after acquiring stored state. An artifact page
 then observes availability without changing SQLite or making that value
 eligible for the current attempt.

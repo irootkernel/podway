@@ -165,6 +165,23 @@ Unsafe, inaccessible and opaque external locations are unverified. This
 observation reads metadata only and does not certify content. Missing bytes
 never invalidate the retained reference.
 
+### Candidate prior-work history
+
+A prior-work query selects a retained activation by exact group execution and
+definition digest, in the requested current or archived session. Every page
+identifies that activation's scoped design attempt, immutable plan binding,
+goal revision when tracked, and caller-supplied working-copy basis. Its latest
+predecessor is independent of the disposition sources, which may point to an
+earlier execution.
+
+The first activation has an empty page. Later pages preserve the admitted
+disposition order, choice and rationale. Each row identifies its earlier group
+execution and definition, and adds a scoped attempt or exact item revision and
+value digest when cited. Existing decision, attempt and item queries resolve
+those links. Pages use the shared history row and response bounds.
+Continuations bind the query kind, workspace, exact session ID, session
+location and revision, target group execution, definition digest and offset.
+
 The generation-16 record encodings are private Store codecs. The successor
 component schemas describe the separately owned wire contracts. The candidate
 checks retained row ordinals and sizes before decoding record payloads. Its

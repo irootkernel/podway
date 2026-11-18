@@ -1723,6 +1723,24 @@ artifact paths, including missing or unsafe parent directories. The cases
 check scoped selector and continuation refusals and compare logical SQLite
 rows, including the mutation ledger, before and after history reads.
 
+## Candidate prior-work qualification
+
+Run the registered scenario against the isolated candidate Store:
+
+```sh
+gaori --json run --tag rust --tag unit -- cargo test --locked -p podway-engine --features test-support --test int_suite int_trace003_history::third_plan_pages_exact_first_group_work_without_inheriting_gates -- --exact
+```
+
+The third activation cites a completed first group's output, failed check and
+decision after an empty second group. The case compares the predecessor,
+exact design and plan, working-copy basis, choices and original rationale
+through current and cold archived reads. It pages 128 dispositions, including
+maximum-length rationale,
+and rejects wrong definitions, foreign sources and continuation mismatches.
+Linked history preserves the assessment score, failure evidence, and the
+recorded decision and reason. The retained check remains inspectable while the
+third group requires its own matching check item to pass its current gate.
+
 ## Execution-group candidate persistence checks
 
 Run `int_group001_store` through the Engine's registered `int_suite`. It uses

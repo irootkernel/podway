@@ -63,12 +63,7 @@ pub fn show_successor_group(
 ) -> Result<CanonicalExecutionJsonV1> {
     page.check_limit()?;
     let state = read_state(store, target)?;
-    let (index, group) = state
-        .group_history()
-        .iter()
-        .enumerate()
-        .find(|(_, group)| group.identity().execution() == execution)
-        .ok_or(SuccessorExecutionError::HistoryGroupNotFound)?;
+    let (index, group) = retained_group(&state, execution)?;
     let decisions: Vec<_> = state
         .attempt_history()
         .iter()
@@ -85,11 +80,7 @@ pub fn show_successor_group(
         "base_digest": identity.base_digest(),
         "anchor": identity.anchor(),
         "goal_revision": identity.goal_revision().map(GoalRevisionNumberV2::get),
-        "plan": {
-            "design_attempt": identity.plan().design_attempt(),
-            "item_set_digest": identity.plan().item_set_digest(),
-            "items": identity.plan().items().iter().map(item_binding_json).collect::<Vec<_>>(),
-        },
+        "plan": plan_binding_json(identity.plan()),
         "working_copy_basis": identity.working_copy_basis(),
         "terminal_attempt": group.terminal_attempt(),
         "closure": group.closure().map(closure_json),
@@ -108,6 +99,18 @@ pub fn show_successor_group(
             .into_iter()
             .map(|attempt| decision_row(attempt, &state)),
     )
+}
+
+fn retained_group<'a>(
+    state: &'a ExecutionSessionV3,
+    execution: &GroupExecutionIdV1,
+) -> Result<(usize, &'a GroupExecutionStateV1)> {
+    state
+        .group_history()
+        .iter()
+        .enumerate()
+        .find(|(_, group)| group.identity().execution() == execution)
+        .ok_or(SuccessorExecutionError::HistoryGroupNotFound)
 }
 
 /// Read goal-revision and reactivation lineage, including changes made without a selection.
@@ -176,6 +179,14 @@ fn group_summary(index: usize, group: &GroupExecutionStateV1, decision_count: us
 
 fn item_binding_json(item: &PlanItemBindingV1) -> Value {
     json!({"item": item.item(), "revision": item.revision(), "value_digest": item.value_digest()})
+}
+
+fn plan_binding_json(plan: &PlanBindingV1) -> Value {
+    json!({
+        "design_attempt": plan.design_attempt(),
+        "item_set_digest": plan.item_set_digest(),
+        "items": plan.items().iter().map(item_binding_json).collect::<Vec<_>>(),
+    })
 }
 
 fn decision_row(attempt: &GroupAttemptStateV1, state: &ExecutionSessionV3) -> Result<Value> {

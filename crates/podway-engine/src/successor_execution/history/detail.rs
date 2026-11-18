@@ -14,6 +14,7 @@ use std::path::Path;
 const DAG_SCHEMA: &str = "podway.successor-history-dag-fixture-result/v1";
 const ATTEMPTS_SCHEMA: &str = "podway.successor-history-attempts-fixture-result/v1";
 const BLOCKERS_SCHEMA: &str = "podway.successor-history-blockers-fixture-result/v1";
+const PRIOR_WORK_SCHEMA: &str = "podway.successor-history-prior-work-fixture-result/v1";
 const ITEM_SCHEMA: &str = "podway.successor-history-item-fixture-result/v1";
 
 /// Scope and immutable digest of a retained definition.
@@ -34,11 +35,8 @@ impl SuccessorHistoryDefinition<'_> {
             }
             Self::Base(_) => Err(SuccessorExecutionError::HistoryDefinitionMismatch),
             Self::Group { execution, digest } => {
-                let admitted = state
-                    .group_history()
-                    .iter()
-                    .find(|group| group.identity().execution() == execution)
-                    .ok_or(SuccessorExecutionError::HistoryGroupNotFound)?
+                let admitted = retained_group(state, execution)?
+                    .1
                     .identity()
                     .definition_digest();
                 if digest != admitted {
@@ -54,6 +52,93 @@ impl SuccessorHistoryDefinition<'_> {
             }
         }
     }
+}
+
+/// List the activation-time applicability judgments of one exact retained group.
+pub fn list_successor_prior_work(
+    store: &mut CandidateExecutionStore,
+    target: SuccessorHistorySession<'_>,
+    execution: &GroupExecutionIdV1,
+    definition_digest: &Sha256Digest,
+    page: SuccessorHistoryPage<'_>,
+) -> Result<CanonicalExecutionJsonV1> {
+    page.check_limit()?;
+    let state = read_state(store, target)?;
+    let (index, group) = retained_group(&state, execution)?;
+    let identity = group.identity();
+    if identity.definition_digest() != definition_digest {
+        return Err(SuccessorExecutionError::HistoryDefinitionMismatch);
+    }
+    let design = state
+        .history_attempt(identity.plan().design_attempt())
+        .ok_or(SuccessorExecutionError::HistoryAttemptNotFound)?;
+    let predecessor = identity
+        .predecessor()
+        .map(|execution| retained_group(&state, execution))
+        .transpose()?
+        .map(|(_, group)| group_reference(group.identity()));
+    let detail = json!({
+        "activation_sequence": index + 1,
+        "execution": execution,
+        "definition_digest": definition_digest,
+        "goal_revision": identity.goal_revision().map(GoalRevisionNumberV2::get),
+        "design_attempt": design.target(),
+        "plan": plan_binding_json(identity.plan()),
+        "working_copy_basis": identity.working_copy_basis(),
+        "predecessor": predecessor,
+    });
+    let bounds = HistoryPagination::new(
+        target,
+        &state,
+        page,
+        PRIOR_WORK_SCHEMA,
+        json!([execution, definition_digest]),
+    )?;
+    let prior_work = identity.prior_work();
+    bounds.project(
+        prior_work.len(),
+        Some(detail),
+        prior_work.iter().map(|work| prior_work_row(&state, work)),
+    )
+}
+
+fn group_reference(identity: &ActivationIdentityV1) -> Value {
+    json!({"execution": identity.execution(), "definition_digest": identity.definition_digest()})
+}
+
+fn prior_work_row(state: &ExecutionSessionV3, work: &PriorWorkDispositionV1) -> Result<Value> {
+    let (_, source_group) = retained_group(state, work.group())?;
+    // Snapshot admission has already checked ownership and the immutable value digest.
+    let retained_attempt = |id| {
+        state
+            .history_attempt(id)
+            .ok_or(SuccessorExecutionError::HistoryAttemptNotFound)
+    };
+    let (source_attempt, source_item) = match work.item() {
+        None => (None, None),
+        Some(HistoricalReferenceV1::Attempt(id)) => (Some(retained_attempt(id)?.target()), None),
+        Some(HistoricalReferenceV1::Item(item)) => {
+            let attempt = retained_attempt(item.attempt())?;
+            let slot = attempt
+                .slots()
+                .iter()
+                .find(|slot| slot.item_id() == item.item())
+                .ok_or(SuccessorExecutionError::HistoryItemNotFound)?;
+            let binding = json!({
+                "item": item.item(), "revision": slot.revision(), "value_digest": item.value_digest(),
+            });
+            (Some(attempt.target()), Some(binding))
+        }
+    };
+    Ok(json!({
+        "choice": work.choice(),
+        "rationale": work.rationale(),
+        "source": {
+            "group": group_reference(source_group.identity()),
+            "attempt": source_attempt,
+            "item": source_item,
+        },
+    }))
 }
 
 /// Read the canonical graph projection in Unicode-scalar pages.

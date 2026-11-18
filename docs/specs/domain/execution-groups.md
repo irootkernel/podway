@@ -162,6 +162,12 @@ relevant: G3 can cite G1 after an empty G2. State admission must validate these
 references against retained history and the current plan; values alone cannot
 establish those relationships or verify working-copy truth.
 
+Candidate history exposes each activation's plan and working-copy basis with
+its original disposition order. The latest predecessor and the earlier source
+of each disposition are separate links. A cited attempt or item can be opened
+through its exact historical scope. Reuse still requires current evidence and
+fresh assessment or check items wherever the new group declares them.
+
 Selection is separate from execution outcome (`running`, `completed`,
 `abandoned`, `terminated_by_cancel`) and closure cause (`replan`, `goal_revision`,
 `reactivation`, `completion`, `cancel`). Assessment records bind exact source
