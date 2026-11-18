@@ -50,17 +50,17 @@ acceptance establishes no code delivery, release or installation authority.
 
 ## FRAME — Execution Group Model
 
-Dependencies: Implemented Core/Config/Direct foundations; Accepted ADR-0044. Status: In Progress.
+Dependencies: Implemented Core/Config/Direct foundations; Accepted ADR-0044. Status: Completed.
 Execution owner: `aquarium:epic-handler` when explicitly invoked.
-Detailed SOT: [Execution-group continuation](../todo/TODO-podway-continuation-groups.md).
+Canonical Outcomes: [execution-group model](../specs/domain/execution-groups.md), [schema assets](../../assets/schemas/README.md) and [integration checks](../implementation-tips/testing.md#execution-group-integration-checks).
 Target release: `v0.2.18` (planning only).
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `FRAME-001` | Establish successor schemas and domain types | Completed | Define base/group ports, immutable identity, declared replan options, assessment records and decision counters. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
-| `FRAME-002` | Validate and project bounded execution groups | Completed | Validate anchors, references, guarded failure/replan routes (reject unguarded custom options), rework and termination; canonicalize, digest and project the graph. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
-| `FRAME-003` | Implement pure group lifecycle rules | Completed | Derive activation, return, decision-only scored replan, entry counts, goal and evidence-currentness transitions. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
-| `FRAME-004` | Qualify the model and finish the Epic | Completed | Verify model failures, architecture and development gate; promote durable model ownership. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `FRAME-001` | Establish successor schemas and domain types | Completed | Define base/group ports, immutable identity, declared replan options, assessment records and decision counters. | [Successor schemas and identity](../specs/domain/execution-groups.md#identity-and-retained-assertions) |
+| `FRAME-002` | Validate and project bounded execution groups | Completed | Validate anchors, references, guarded failure/replan routes (reject unguarded custom options), rework and termination; canonicalize, digest and project the graph. | [Internal source admission and projections](../specs/domain/execution-groups.md#internal-source-admission-and-projections) |
+| `FRAME-003` | Implement pure group lifecycle rules | Completed | Derive activation, return, decision-only scored replan, entry counts, goal and evidence-currentness transitions. | [Pure execution lifecycle](../specs/domain/execution-groups.md#pure-execution-lifecycle) |
+| `FRAME-004` | Qualify the model and finish the Epic | Completed | Verify model failures, architecture and development gate; promote durable model ownership. | [Execution group integration checks](../implementation-tips/testing.md#execution-group-integration-checks) |
 
 ## GROUP — Transactional Group Lifecycle
 

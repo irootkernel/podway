@@ -667,6 +667,48 @@ Do not defer current correctness or an Epic's due checks to a later Epic.
 Intermediate completion is not release readiness. Consumer source adoption and
 publication do not become implicit Tasks of this Podway program.
 
+### 6.1 Execution Procedures and evidence for GROUP, TRACE and ADOPT
+
+Use `aquarium:epic-handler` for each named Epic. Preselect the repository's
+[Aquarium Goal](../../.podway/procedures/aquarium-goal-v2.yaml) for member work,
+pre-validation corrections when needed, and final closeout. Preselect
+[Aquarium Validation](../../.podway/procedures/aquarium-validation-v2.yaml) for
+the whole-Epic audit and its corrections. At plan time, confirm both definitions
+fit the installed handler and Podway writer and the Epic's current requirements.
+Record the selected versions and digests in the execution plan before starting a
+session. If a definition no longer fits, resolve the mismatch under the
+handler's Procedure selection rules before execution. Apply this section to the
+remaining three Epics within the Task order and ownership in Section 6.
+
+Use these evidence practices in each execution plan:
+
+- **Resolve criterion citations before submission.** Use the active attempt's
+  fresh `observe` result. For a source-node citation, use that node's first
+  declared reference when it resolves to a valid source attempt on the current
+  trace. Cite an item directly only when the current attempt holds its recorded
+  value. Retain original historical evidence in the applicable assessment
+  artifact. Use the current advertised fences and leave admission to Podway.
+- **Record applicability once per candidate.** Use the existing candidate-evidence
+  index to bind the original check and review targets, current commit or staged
+  tree, exact changed scope, and the basis and limits for reused evidence. Record
+  focused check receipts and affected obligations that need rechecking. Later
+  assessments and the commit handoff may reference that same index after verifying
+  its identity and applicability to their own checkpoints.
+- **Reference shared assessment inputs where supported.** Retain the complete
+  original assignment and immutable inputs once, with accessible artifact paths
+  and digests. Reuse those references when the report contract permits it. Each
+  assessment retains its exact target, required criterion rows, verdict,
+  applicability and evidence gaps, with full inline inputs where required.
+
+| Epic | Evidence to bind to the exact candidate |
+| --- | --- |
+| GROUP | Bind Store and Engine lifecycle evidence to the source and fixtures used. Retain real-process contention, interruption and cold-reopen receipts for GROUP-005, including exact scope of the full development gate. |
+| TRACE | Bind paging, history, provenance and read-only behavior to the exact current or archived state used in verification. Preserve the distinction between historical records returned by a query and evidence eligible for the active assessment. |
+| ADOPT | Recheck the installed workflow writer and Procedure contract before execution. Keep its workspace separate from the isolated exact successor CLI fixtures. Bind cutover, old-Store refusal and native qualification receipts to their respective CLI and source identities. |
+
+Retain the handler's independent assessments, correction and evidence routing,
+required development gates and separate final user acceptance.
+
 ## 7. Verification, release acceptance and dossier closeout
 
 Use focused exact registered tests first, narrow Make targets during
