@@ -86,7 +86,9 @@ fn admit(text: &str) -> std::result::Result<ValidatedSuccessorDefinition, Candid
     .map_err(rejected)
 }
 
-fn definition(text: &str) -> std::result::Result<CandidateDefinition, CandidateStoreError> {
+pub(super) fn definition(
+    text: &str,
+) -> std::result::Result<CandidateDefinition, CandidateStoreError> {
     let valid = admit(text)?;
     assert_eq!(valid.canonical_json().as_str(), text);
     Ok(match valid.definition() {
@@ -108,6 +110,34 @@ fn set_text(state: &mut ExecutionSessionV3, item: &str, revision: Revision, valu
         .unwrap();
 }
 
+pub(super) fn initial_state(
+    base: &Value,
+    plan_ready: bool,
+) -> (ExecutionSessionV3, CandidateSources) {
+    let admitted = canonical(base);
+    let CandidateDefinition::Base(base) = definition(admitted.canonical_json().as_str()).unwrap()
+    else {
+        panic!("test document must be a base");
+    };
+    let mut state = ExecutionSessionV3::begin(
+        NativeDirectIdSourceV1.next_session_id(),
+        base,
+        admitted.digest().clone(),
+        None,
+        NativeDirectIdSourceV1.next_attempt_id(),
+        TIME,
+    )
+    .unwrap();
+    if plan_ready {
+        set_text(&mut state, "plan", Revision::ZERO, "Prepare a report.");
+    }
+    let sources = CandidateSources::from([(
+        admitted.digest().clone(),
+        admitted.canonical_json().as_str().to_owned(),
+    )]);
+    (state, sources)
+}
+
 pub(super) struct Fixture {
     _root: TempDir,
     root: ValidatedWorkspaceRootV1,
@@ -119,29 +149,7 @@ pub(super) struct Fixture {
 
 impl Fixture {
     pub(super) fn new(base: &Value, plan_ready: bool) -> Self {
-        let session = NativeDirectIdSourceV1.next_session_id();
-        let admitted = canonical(base);
-        let CandidateDefinition::Base(base) =
-            definition(admitted.canonical_json().as_str()).unwrap()
-        else {
-            panic!("test document must be a base");
-        };
-        let mut state = ExecutionSessionV3::begin(
-            session.clone(),
-            base,
-            admitted.digest().clone(),
-            None,
-            NativeDirectIdSourceV1.next_attempt_id(),
-            TIME,
-        )
-        .unwrap();
-        if plan_ready {
-            set_text(&mut state, "plan", Revision::ZERO, "Prepare a report.");
-        }
-        let sources = CandidateSources::from([(
-            admitted.digest().clone(),
-            admitted.canonical_json().as_str().to_owned(),
-        )]);
+        let (state, sources) = initial_state(base, plan_ready);
         Self::with_state(&state, &sources)
     }
 

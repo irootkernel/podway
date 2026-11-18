@@ -1325,7 +1325,7 @@ fn goal_revision_closes_a_selected_completed_execution_with_its_terminal_record(
     );
 }
 
-fn tracked_base() -> Value {
+pub(super) fn tracked_base() -> Value {
     let mut base = base_document();
     base["goal_tracking"] = json!(true);
     base["node_definitions"]["prefix"] = action("Prefix");

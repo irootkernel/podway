@@ -155,6 +155,12 @@ After reconnect or cursor advance, a fresh operation uses the live observation
 and its applicable fences. Reads and replays do not create attempts or advance
 decision-entry counts.
 
+The [candidate process qualification](../../implementation-tips/testing.md#execution-group-process-qualification)
+uses the same transaction to observe actual writer contention, interrupt
+tentative writes before COMMIT and interrupt delivery after confirmed COMMIT.
+Fresh processes validate the retained cursor, attempts, selection and ledger
+before retry or original-outcome recovery.
+
 ### Settings and replay qualification
 
 Integration permission is outside canonical request, Procedure/session and

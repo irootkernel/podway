@@ -1623,8 +1623,53 @@ group-local decide, observation and response bounds, duplicate acceptance,
 and current blocker resolution, continued completion and rejection of a late
 resolve.
 
-Multi-process contention, response loss and forced termination belong to the
-integrated process qualification.
+The [process qualification](#execution-group-process-qualification) exercises
+contention, response loss and forced termination with this same Engine and
+Store.
+
+## Execution-group process qualification
+
+Run the registered successor process suite with its exact child mode and
+captured scenario evidence:
+
+```sh
+gaori --json run --tag rust --tag unit -- cargo test --locked -p podway-engine --features test-support --test int_suite int_group005_processes:: -- --nocapture
+```
+
+The parent starts its current `int_suite` executable with an exact child test
+filter and an explicit fixture request. Each child opens its own generation-16
+Store connection in an owned, standalone Git fixture. The ordinary child test
+returns immediately without that request. The parent reports the executable
+digest, database generation, writer identity and canonical DDL digest.
+
+Contender connections report readiness before the first writer acquires its
+lock. A contender then reports the SQLite busy callback from the actual
+`BEGIN IMMEDIATE` while the first child is parked. The parent releases the
+writer after observing that contention. The matrix checks different-key and
+same-key activation, activation against a late anchor report, both orderings
+of replan against a group report, independent writes to separate items, and a
+same-slot stale loser. A bounded watchdog diagnoses missing barriers or child
+responses.
+
+The Store test-support observer parks after tentative state, sequence, outcome
+and journal writes before COMMIT, and after confirmed COMMIT before the result
+returns to Engine. The pre-COMMIT cases exercise SIGKILL and controlled process
+exit. A fresh process sees the prior state and no outcome, then the same key
+commits once on retry. The post-COMMIT case kills the parked process before its
+reply file exists. A fresh process recovers the exact success, compares its
+response digest and original response ID, then checks lookup and replay after
+later work. The readback compares retained row fields and ledger counts. The
+parent reaps each child and verifies removal of its owned fixture.
+
+The suite also verifies replan from a Base review of a completed group,
+same- and different-definition replacements, distinct working-copy bases,
+first-to-third execution provenance, goal revision and explicit reactivation,
+cancellation after group completion, and combined guidance/counter refusal.
+The maintained v2 controls are
+`int_group001_store::production_v2_store_classifies_candidate_generation_without_opening_it`
+and `int_v2dfc006_runtime_ports::v2run004_production_retry_is_clean_durable_replayable_and_re_resolves_evidence`.
+Public successor admission, paged history, and released binary qualification
+have their own later gates.
 
 ## Execution-group candidate persistence checks
 

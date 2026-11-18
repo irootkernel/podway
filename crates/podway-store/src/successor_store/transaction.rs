@@ -15,6 +15,19 @@ use podway_core::execution_groups::ExecutionSessionV3;
 use podway_core::{DomainError, SessionId, UnixMillis, WorkspaceId};
 use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior, params};
 use std::path::Path;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+
+/// The exact publication points available only on a test-support successor fixture.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CandidateCommitBoundary {
+    AfterLedgerBeforeCommit,
+    AfterCommitBeforeReturn,
+}
+
+type CommitObserver = dyn Fn(CandidateCommitBoundary, &DirectRecordedOutcomeV1) + Send;
 
 /// Owns only a local, explicitly constructed v16 fixture. Product Direct Store admission is
 /// independent. Test callers provide the canonical owning root and exact fixture workspace UUID.
@@ -22,6 +35,8 @@ pub struct CandidateExecutionStore {
     connection: Connection,
     root: ValidatedWorkspaceRootV1,
     workspace: WorkspaceId,
+    commit_observer: Option<Box<CommitObserver>>,
+    beginning_writer: Option<Arc<AtomicBool>>,
 }
 
 impl CandidateExecutionStore {
@@ -55,6 +70,8 @@ impl CandidateExecutionStore {
             connection,
             root,
             workspace,
+            commit_observer: None,
+            beginning_writer: None,
         })
     }
 
@@ -73,7 +90,32 @@ impl CandidateExecutionStore {
             connection,
             root,
             workspace,
+            commit_observer: None,
+            beginning_writer: None,
         })
+    }
+
+    /// Install a scoped fixture callback without changing product transaction paths.
+    pub fn observe_commit(
+        &mut self,
+        observer: impl Fn(CandidateCommitBoundary, &DirectRecordedOutcomeV1) + Send + 'static,
+    ) {
+        self.commit_observer = Some(Box::new(observer));
+    }
+
+    /// Observe SQLite lock contention. The flag distinguishes the actual IMMEDIATE begin from
+    /// reads or any later SQL statement on this same fixture connection.
+    pub fn observe_writer_busy(
+        &mut self,
+        mut observer: impl FnMut(bool, i32) -> bool + Send + 'static,
+    ) -> Result<()> {
+        let beginning = Arc::new(AtomicBool::new(false));
+        let observed = Arc::clone(&beginning);
+        self.connection.busy_handler(Some(move |attempts| {
+            observer(observed.load(Ordering::Relaxed), attempts)
+        }))?;
+        self.beginning_writer = Some(beginning);
+        Ok(())
     }
 
     pub fn snapshot(
@@ -139,10 +181,16 @@ impl CandidateExecutionStore {
             return Err(corrupt("candidate mutation requires session outcome scope").into());
         };
         self.require_workspace(workspace)?;
-        let transaction = self
+        if let Some(beginning) = &self.beginning_writer {
+            beginning.store(true, Ordering::Relaxed);
+        }
+        let begin = self
             .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(CandidateStoreError::from)?;
+            .transaction_with_behavior(TransactionBehavior::Immediate);
+        if let Some(beginning) = &self.beginning_writer {
+            beginning.store(false, Ordering::Relaxed);
+        }
+        let transaction = begin.map_err(CandidateStoreError::from)?;
         admit_writer(&transaction)?;
         verify_binding(&transaction, &self.root, workspace)?;
         let stored =
@@ -174,7 +222,13 @@ impl CandidateExecutionStore {
             success.now,
         )
         .map_err(CandidateStoreError::from)?;
+        if let Some(observer) = &self.commit_observer {
+            observer(CandidateCommitBoundary::AfterLedgerBeforeCommit, &outcome);
+        }
         commit(transaction).map_err(CandidateStoreError::from)?;
+        if let Some(observer) = &self.commit_observer {
+            observer(CandidateCommitBoundary::AfterCommitBeforeReturn, &outcome);
+        }
         Ok(candidate_committed_outcome(outcome))
     }
 

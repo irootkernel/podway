@@ -100,3 +100,7 @@ mod int_group003_replan;
 #[cfg(feature = "test-support")]
 #[path = "int_group004_fences.rs"]
 mod int_group004_fences;
+
+#[cfg(feature = "test-support")]
+#[path = "int_group005_processes.rs"]
+mod int_group005_processes;

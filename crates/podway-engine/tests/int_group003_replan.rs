@@ -75,7 +75,7 @@ pub(super) fn local_decision_group(score_required: bool) -> Value {
     group
 }
 
-fn completed_group_documents() -> (Value, Value) {
+pub(super) fn completed_group_documents() -> (Value, Value) {
     let mut base = base_document();
     let source = json!({"scope":"execution_result"});
     base["node_definitions"]["review"] = decision_definition(&source);
