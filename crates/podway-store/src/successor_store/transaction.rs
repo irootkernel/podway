@@ -34,6 +34,14 @@ pub enum CandidateSessionLocation {
     Archived,
 }
 
+/// Scope of an explicitly destructive test fixture request.
+pub struct CandidateFixtureSession<'a> {
+    pub workspace: &'a WorkspaceId,
+    pub session: &'a SessionId,
+    pub location: CandidateSessionLocation,
+    pub revision: Revision,
+}
+
 impl CandidateSessionLocation {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -71,20 +79,7 @@ impl CandidateExecutionStore {
         verify_fixture_path(path, &root)?;
         let mut connection = create_candidate_fixture(path)?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let millis = i64::try_from(initial.updated_at().get())
-            .map_err(|_| corrupt("candidate fixture clock is outside SQLite range"))?;
-        // These fixture values are not production Git fingerprints; the exact workspace UUID
-        // and owning root are checked before candidate mutation or replay.
-        transaction.execute(
-            "INSERT INTO workspace_state VALUES (1, ?1, ?2, ?2, ?3, 0, ?4, ?4)",
-            params![
-                workspace.as_str(),
-                initial.base_digest().as_str(),
-                root.as_encoded(),
-                millis,
-            ],
-        )?;
-        persist_candidate_execution(&transaction, initial, sources)?;
+        initialize_fixture(&transaction, &root, &workspace, initial, sources)?;
         transaction.commit()?;
         Ok(Self {
             connection,
@@ -193,12 +188,7 @@ impl CandidateExecutionStore {
         expected: Revision,
         admit: impl Fn(&str) -> Result<CandidateDefinition>,
     ) -> Result<()> {
-        self.require_workspace(workspace)?;
-        let transaction = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        admit_writer(&transaction)?;
-        verify_binding(&transaction, &self.root, workspace)?;
+        let transaction = self.fixture_write(workspace)?;
         let (state, _) = load_requested_session(
             &transaction,
             session,
@@ -218,6 +208,111 @@ impl CandidateExecutionStore {
         )?;
         transaction.commit()?;
         Ok(())
+    }
+
+    /// Fill an empty current slot after archival or removal, without restoring retained state.
+    pub fn install_fixture_session(
+        &mut self,
+        workspace: &WorkspaceId,
+        initial: &ExecutionSessionV3,
+        sources: &CandidateSources,
+    ) -> Result<()> {
+        require_initial_fixture_session(initial)?;
+        let transaction = self.fixture_write(workspace)?;
+        let occupied: bool = transaction.query_row(
+            "SELECT EXISTS (SELECT 1 FROM successor_sessions WHERE archived = 0 OR session_id = ?1)
+             OR EXISTS (SELECT 1 FROM mutation_outcomes WHERE scope_kind = 'session' AND scope_session_id = ?1)",
+            [initial.fence().session.as_str()],
+            |row| row.get(0),
+        )?;
+        if occupied {
+            return Err(DomainError::InvalidState {
+                reason: "candidate current slot or retained installation identity is already present",
+            }.into());
+        }
+        persist_candidate_execution(&transaction, initial, sources)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Purge an archived fixture session or reset a terminal current fixture session.
+    pub fn remove_fixture_session(
+        &mut self,
+        target: CandidateFixtureSession<'_>,
+        admit: impl Fn(&str) -> Result<CandidateDefinition>,
+    ) -> Result<()> {
+        let transaction = self.fixture_write(target.workspace)?;
+        let state = fixture_session(&transaction, &target, admit)?;
+        if !terminal_session(&state) {
+            return Err(DomainError::InvalidState {
+                reason: "candidate session removal requires a terminal session",
+            }
+            .into());
+        }
+        transaction.execute(
+            "DELETE FROM successor_sessions WHERE session_id = ?1",
+            [target.session.as_str()],
+        )?;
+        if target.location == CandidateSessionLocation::Current {
+            transaction.execute(
+                "DELETE FROM mutation_outcomes WHERE scope_kind = 'session' AND scope_session_id = ?1",
+                [target.session.as_str()],
+            )?;
+        }
+        transaction.execute(
+            "DELETE FROM successor_definitions WHERE
+             NOT EXISTS (SELECT 1 FROM successor_sessions WHERE base_digest = digest)
+             AND NOT EXISTS (SELECT 1 FROM successor_activations WHERE definition_digest = digest)",
+            [],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Replace the entire isolated fixture runtime with a new workspace and initial session.
+    pub fn reset_fixture_workspace(
+        &mut self,
+        target: CandidateFixtureSession<'_>,
+        replacement: WorkspaceId,
+        initial: &ExecutionSessionV3,
+        sources: &CandidateSources,
+        admit: impl Fn(&str) -> Result<CandidateDefinition>,
+    ) -> Result<()> {
+        require_initial_fixture_session(initial)?;
+        if target.location != CandidateSessionLocation::Current
+            || &replacement == target.workspace
+            || &initial.fence().session == target.session
+        {
+            return Err(DomainError::InvalidState {
+                reason: "candidate workspace reset requires a current target and fresh identities",
+            }
+            .into());
+        }
+        let root = self.root.clone();
+        let transaction = self.fixture_write(target.workspace)?;
+        fixture_session(&transaction, &target, admit)?;
+        transaction.execute_batch(
+            "DELETE FROM successor_sessions;
+             DELETE FROM successor_definitions;
+             DELETE FROM mutation_outcomes;
+             DELETE FROM operational_journal;
+             DELETE FROM sqlite_sequence WHERE name = 'operational_journal';
+             DELETE FROM workspace_state;",
+        )?;
+        initialize_fixture(&transaction, &root, &replacement, initial, sources)?;
+        transaction.commit()?;
+        self.workspace = replacement;
+        Ok(())
+    }
+
+    fn fixture_write(&mut self, workspace: &WorkspaceId) -> Result<Transaction<'_>> {
+        self.require_workspace(workspace)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        admit_writer(&transaction)?;
+        verify_binding(&transaction, &self.root, workspace)?;
+        Ok(transaction)
     }
 
     /// Outcome readback is a verification handle for this fixture; the public CLI route
@@ -313,6 +408,57 @@ impl CandidateExecutionStore {
         }
         Ok(())
     }
+}
+
+fn initialize_fixture(
+    transaction: &Transaction<'_>,
+    root: &ValidatedWorkspaceRootV1,
+    workspace: &WorkspaceId,
+    initial: &ExecutionSessionV3,
+    sources: &CandidateSources,
+) -> Result<()> {
+    let millis = i64::try_from(initial.updated_at().get())
+        .map_err(|_| corrupt("candidate fixture clock is outside SQLite range"))?;
+    // Candidate binding uses exact workspace/root identity and fixture-only Git fingerprints.
+    transaction.execute(
+        "INSERT INTO workspace_state VALUES (1, ?1, ?2, ?2, ?3, 0, ?4, ?4)",
+        params![
+            workspace.as_str(),
+            initial.base_digest().as_str(),
+            root.as_encoded(),
+            millis
+        ],
+    )?;
+    persist_candidate_execution(transaction, initial, sources)
+}
+
+fn require_initial_fixture_session(initial: &ExecutionSessionV3) -> Result<()> {
+    if initial.lifecycle() != SessionLifecycle::Running
+        || initial.attempt_history().len() != 1
+        || !initial.group_history().is_empty()
+    {
+        return Err(corrupt(
+            "candidate installation requires an initial running session",
+        ));
+    }
+    Ok(())
+}
+
+fn fixture_session(
+    transaction: &Transaction<'_>,
+    target: &CandidateFixtureSession<'_>,
+    admit: impl Fn(&str) -> Result<CandidateDefinition>,
+) -> Result<ExecutionSessionV3> {
+    let (state, _) = load_requested_session(transaction, target.session, target.location, admit)?;
+    let actual = state.fence().revision;
+    if actual != target.revision {
+        return Err(DomainError::PreconditionFailed {
+            expected: target.revision,
+            actual,
+        }
+        .into());
+    }
+    Ok(state)
 }
 
 fn verify_fixture_path(path: &Path, root: &ValidatedWorkspaceRootV1) -> Result<()> {

@@ -7,15 +7,17 @@ use podway_core::{
     AttemptId, CheckResultInputBasisV2, CriterionId, DomainError, GoalCriterionV2,
     GoalDefinitionV2, GoalOutcome, GoalRevisionNumberV2, GoalStatementV2, GraphMutationErrorV2,
     GraphNodeId, ItemId, OptionId, ReasonV2, RecordedItemValueV2, Revision, SessionId,
-    Sha256Digest, WorkspaceId,
+    Sha256Digest, UnixMillis, WorkspaceId,
 };
 use podway_engine::direct_execution::{DirectIdSourceV1, NativeDirectIdSourceV1};
 use podway_engine::successor_execution::*;
 use podway_protocol::RequestIdV1;
 use podway_store::direct_store::{
-    DirectMutationResultV1, DirectOutcomeScopeV1, DirectRecordedOutcomeV1,
+    DirectMutationResultV1, DirectOutcomeScopeV1, DirectRecordedOutcomeV1, DirectStoreErrorV1,
 };
-use podway_store::successor_store::{CandidateCommitBoundary, CandidateExecutionStore};
+use podway_store::successor_store::{
+    CandidateCommitBoundary, CandidateExecutionStore, CandidateFixtureSession, CandidateStoreError,
+};
 use podway_store::{IdempotencyKeyV1, ValidatedWorkspaceRootV1};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -185,6 +187,7 @@ pub(super) struct Call {
     pub key: String,
     pub response_id: String,
     pub working_copy_digest: Sha256Digest,
+    pub now: UnixMillis,
     pub action: Action,
 }
 
@@ -195,6 +198,7 @@ impl Call {
             key: key.into(),
             response_id: NativeDirectIdSourceV1.next_session_id().into_inner(),
             working_copy_digest: probe.working_copy_digest.clone(),
+            now: probe.now,
             action,
         }
     }
@@ -210,7 +214,77 @@ impl Call {
 #[derive(Debug, Deserialize, Serialize)]
 enum Operation {
     Read(Vec<String>),
+    Inspect(Vec<String>),
+    History(Box<HistoryRequest>),
+    Lifecycle(Box<Lifecycle>),
+    Grow {
+        document: Box<Value>,
+        digest: Sha256Digest,
+        count: u8,
+    },
     Mutation(Box<Call>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(super) enum Location {
+    Current,
+    Archived,
+}
+
+impl From<Location> for CandidateSessionLocation {
+    fn from(value: Location) -> Self {
+        match value {
+            Location::Current => Self::Current,
+            Location::Archived => Self::Archived,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(super) struct Target {
+    pub workspace: WorkspaceId,
+    pub session: SessionId,
+    pub location: Location,
+    pub revision: Revision,
+}
+
+impl Target {
+    fn scope(&self) -> CandidateFixtureSession<'_> {
+        CandidateFixtureSession {
+            workspace: &self.workspace,
+            session: &self.session,
+            location: self.location.into(),
+            revision: self.revision,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(super) enum HistoryQuery {
+    Groups,
+    Group(GroupExecutionIdV1),
+    GoalRevisions,
+    Dag(Option<GroupExecutionIdV1>, Sha256Digest),
+    Attempts(Option<GroupExecutionIdV1>, Sha256Digest),
+    Blockers(ScopedAttemptV1),
+    Item(ScopedAttemptV1, ItemId),
+    PriorWork(GroupExecutionIdV1, Sha256Digest),
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(super) struct HistoryRequest {
+    pub target: Target,
+    pub query: HistoryQuery,
+    pub limit: usize,
+    pub continuation: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(super) enum Lifecycle {
+    Archive(Target),
+    Remove(Target),
+    Install(Value, Option<SessionId>),
+    Reset(Target, Value),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -281,6 +355,16 @@ pub(super) enum Refusal {
     },
     ResponseBudget,
     OutcomeLookupBudget,
+    Bound {
+        field: String,
+        actual: u64,
+        maximum: u64,
+    },
+    Workspace,
+    MissingSession,
+    ArchivedSession,
+    ArchivePhase,
+    StaleHistoryToken,
     Domain(String),
     Unexpected(String),
 }
@@ -288,6 +372,36 @@ pub(super) enum Refusal {
 impl From<SuccessorExecutionError> for Refusal {
     fn from(error: SuccessorExecutionError) -> Self {
         match error {
+            SuccessorExecutionError::Store(CandidateStoreError::Domain(error)) => {
+                Self::from(SuccessorExecutionError::Domain(error))
+            }
+            SuccessorExecutionError::Store(CandidateStoreError::Direct(
+                DirectStoreErrorV1::ExpectedWorkspaceUuidMismatch { .. },
+            )) => Self::Workspace,
+            SuccessorExecutionError::Domain(DomainError::SessionIdentityMismatch { .. }) => {
+                Self::MissingSession
+            }
+            SuccessorExecutionError::Domain(DomainError::BoundExceeded {
+                field,
+                actual,
+                maximum,
+                ..
+            }) => Self::Bound {
+                field: field.into(),
+                actual,
+                maximum,
+            },
+            SuccessorExecutionError::Store(CandidateStoreError::ArchiveRequiresTerminalSession) => {
+                Self::ArchivePhase
+            }
+            SuccessorExecutionError::Store(CandidateStoreError::ArchiveRevisionMismatch {
+                expected,
+                actual,
+            }) => Self::Revision { expected, actual },
+            SuccessorExecutionError::Store(CandidateStoreError::ArchivedSession) => {
+                Self::ArchivedSession
+            }
+            SuccessorExecutionError::StaleHistoryPageToken => Self::StaleHistoryToken,
             SuccessorExecutionError::Domain(DomainError::PreconditionFailed {
                 expected,
                 actual,
@@ -316,6 +430,7 @@ impl From<SuccessorExecutionError> for Refusal {
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub(super) struct Probe {
     pub cursor: Cursor,
+    pub now: UnixMillis,
     pub plan: Option<Plan>,
     pub groups: Vec<Value>,
     pub attempts: Vec<Value>,
@@ -328,11 +443,31 @@ pub(super) struct Probe {
     pub outcomes: BTreeMap<String, Option<Outcome>>,
 }
 
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
+pub(super) struct Inspection {
+    pub ledger: (u64, u64, u64),
+    pub fingerprint: Sha256Digest,
+    /// Definitions, sessions, activations, attempts, and retained goal revisions.
+    pub retained: (u64, u64, u64, u64, u64),
+    pub first_journal_sequence: Option<u64>,
+    pub outcomes: BTreeMap<String, Option<Outcome>>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub(super) enum Reply {
-    Success { replayed: bool, outcome: Outcome },
+    Success {
+        replayed: bool,
+        outcome: Outcome,
+    },
     Rejected(Refusal),
     Read(Box<Probe>),
+    Inspection(Box<Inspection>),
+    History(String),
+    Lifecycle,
+    Installed {
+        workspace: WorkspaceId,
+        session: SessionId,
+    },
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -382,6 +517,7 @@ fn execute(
         key: id,
         response_id,
         working_copy_digest,
+        now,
         action,
     } = call;
     let request = SuccessorMutationRequest {
@@ -426,7 +562,7 @@ fn execute(
                     })
                     .collect(),
             },
-            || TIME,
+            || now,
             ids,
         ),
         Action::Record(edit) => record_successor_item(
@@ -439,15 +575,15 @@ fn execute(
                 selected_group: cursor.selected,
             },
             edit.into_write(),
-            || TIME,
+            || now,
         ),
         Action::Batch(edits) => record_successor_many(
             store,
             request,
             edits.into_iter().map(Edit::into_write).collect(),
-            || TIME,
+            || now,
         ),
-        Action::Return => return_from_group(store, request, || TIME, ids),
+        Action::Return => return_from_group(store, request, || now, ids),
         Action::Replan => {
             let feedback = ReplanFeedbackV1::new(
                 cursor.attempt.as_ref().unwrap().clone(),
@@ -457,7 +593,7 @@ fn execute(
                 "Preserve the previous group work.".into(),
             )
             .unwrap();
-            replan_group(store, request, feedback, || TIME, ids)
+            replan_group(store, request, feedback, || now, ids)
         }
         action => {
             let operation = match action {
@@ -485,8 +621,256 @@ fn execute(
                 Action::Cancel => SuccessorCursorMutation::Cancel(reason()),
                 _ => unreachable!("other child actions have a dedicated typed issuer"),
             };
-            issue_cursor_mutation(store, request, operation, || TIME, ids)
+            issue_cursor_mutation(store, request, operation, || now, ids)
         }
+    }
+}
+
+fn history(store: &mut CandidateExecutionStore, request: HistoryRequest) -> Reply {
+    let target = SuccessorHistorySession {
+        workspace: &request.target.workspace,
+        session: &request.target.session,
+        location: request.target.location.into(),
+    };
+    let page = SuccessorHistoryPage {
+        limit: request.limit,
+        continuation: request.continuation.as_deref(),
+    };
+    let definition = |execution, digest| match execution {
+        None => SuccessorHistoryDefinition::Base(digest),
+        Some(execution) => SuccessorHistoryDefinition::Group { execution, digest },
+    };
+    let result = match &request.query {
+        HistoryQuery::Groups => list_successor_groups(store, target, page),
+        HistoryQuery::Group(execution) => show_successor_group(store, target, execution, page),
+        HistoryQuery::GoalRevisions => list_successor_goal_revisions(store, target, page),
+        HistoryQuery::Dag(execution, digest) => read_successor_history_dag(
+            store,
+            target,
+            definition(execution.as_ref(), digest),
+            page.continuation,
+        ),
+        HistoryQuery::Attempts(execution, digest) => list_successor_history_attempts(
+            store,
+            target,
+            definition(execution.as_ref(), digest),
+            page,
+        ),
+        HistoryQuery::Blockers(attempt) => {
+            list_successor_history_blockers(store, target, attempt, page)
+        }
+        HistoryQuery::Item(attempt, item) => {
+            read_successor_history_item(store, target, attempt, item, page.continuation)
+        }
+        HistoryQuery::PriorWork(execution, digest) => {
+            list_successor_prior_work(store, target, execution, digest, page)
+        }
+    };
+    match result {
+        Ok(response) => Reply::History(response.as_str().into()),
+        Err(error) => Reply::Rejected(error.into()),
+    }
+}
+
+fn lifecycle(
+    store: &mut CandidateExecutionStore,
+    workspace: &WorkspaceId,
+    operation: Lifecycle,
+) -> Reply {
+    let result = match operation {
+        Lifecycle::Archive(target) if target.location == Location::Current => store
+            .archive_fixture_session(
+                &target.workspace,
+                &target.session,
+                target.revision,
+                definition,
+            ),
+        Lifecycle::Archive(_) => return Reply::Rejected(Refusal::ArchivePhase),
+        Lifecycle::Remove(target) => store.remove_fixture_session(target.scope(), definition),
+        Lifecycle::Install(base, session) => {
+            let (mut initial, sources) = initial_state(&base, true);
+            if let Some(session) = session {
+                initial = ExecutionSessionV3::begin(
+                    session,
+                    initial.base_definition().clone(),
+                    initial.base_digest().clone(),
+                    None,
+                    NativeDirectIdSourceV1.next_attempt_id(),
+                    TIME,
+                )
+                .unwrap();
+            }
+            return match store.install_fixture_session(workspace, &initial, &sources) {
+                Ok(()) => Reply::Installed {
+                    workspace: workspace.clone(),
+                    session: initial.fence().session,
+                },
+                Err(error) => Reply::Rejected(SuccessorExecutionError::from(error).into()),
+            };
+        }
+        Lifecycle::Reset(target, base) => {
+            let (initial, sources) = initial_state(&base, true);
+            let replacement = NativeDirectIdSourceV1.next_workspace_id();
+            return match store.reset_fixture_workspace(
+                target.scope(),
+                replacement.clone(),
+                &initial,
+                &sources,
+                definition,
+            ) {
+                Ok(()) => Reply::Installed {
+                    workspace: replacement,
+                    session: initial.fence().session,
+                },
+                Err(error) => Reply::Rejected(SuccessorExecutionError::from(error).into()),
+            };
+        }
+    };
+    match result {
+        Ok(()) => Reply::Lifecycle,
+        Err(error) => Reply::Rejected(SuccessorExecutionError::from(error).into()),
+    }
+}
+
+fn grow(
+    store: &mut CandidateExecutionStore,
+    workspace: &WorkspaceId,
+    session: &SessionId,
+    db: &Path,
+    document: &Value,
+    definition_digest: Sha256Digest,
+    count: u8,
+) -> Result<(), SuccessorExecutionError> {
+    assert!((1..=8).contains(&count));
+    let working_copy_digest = digest(&fs::read(db.parent().unwrap().join("work.txt")).unwrap());
+    let issue = |store: &mut CandidateExecutionStore, key: String, action| {
+        let state = store.current_snapshot(workspace, session, definition)?.0;
+        execute(
+            store,
+            workspace.clone(),
+            session,
+            Call {
+                cursor: Cursor::from_state(&state),
+                key,
+                action,
+                now: state.updated_at(),
+                working_copy_digest: working_copy_digest.clone(),
+                response_id: NativeDirectIdSourceV1.next_session_id().into_inner(),
+            },
+        )
+        .map(|_| ())
+    };
+    for _ in 0..count {
+        let state = store.current_snapshot(workspace, session, definition)?.0;
+        let ordinal = state.group_history().len() + 1;
+        let first = state
+            .group_history()
+            .first()
+            .unwrap()
+            .identity()
+            .execution()
+            .clone();
+        let predecessor = state
+            .group_history()
+            .last()
+            .unwrap()
+            .identity()
+            .execution()
+            .clone();
+        let plan = Plan::from_binding(&state.plan_binding()?);
+        issue(
+            store,
+            format!("grow-{ordinal}-activate"),
+            Action::Activate {
+                document: document.clone(),
+                digest: definition_digest.clone(),
+                plan,
+                predecessor: Some(predecessor),
+                prior_work: vec![PriorWork {
+                    execution: first,
+                    item: None,
+                }],
+            },
+        )?;
+        let edits = [
+            ("verdict", ItemValue::Choice("failure".into())),
+            ("stage", ItemValue::Choice("scored".into())),
+            ("score", ItemValue::Number(80)),
+        ]
+        .into_iter()
+        .map(|(item, value)| Edit {
+            item: item.into(),
+            expected: 0,
+            value,
+        })
+        .collect();
+        issue(
+            store,
+            format!("grow-{ordinal}-assess"),
+            Action::Batch(edits),
+        )?;
+        issue(store, format!("grow-{ordinal}-complete"), Action::Complete)?;
+        issue(store, format!("grow-{ordinal}-replan"), Action::Replan)?;
+        issue(
+            store,
+            format!("grow-{ordinal}-plan"),
+            Action::Record(Edit {
+                item: "plan".into(),
+                expected: 0,
+                value: ItemValue::Text(format!("Plan after group {ordinal}")),
+            }),
+        )?;
+    }
+    Ok(())
+}
+
+fn outcomes(
+    store: &CandidateExecutionStore,
+    workspace: &WorkspaceId,
+    keys: Vec<String>,
+) -> BTreeMap<String, Option<Outcome>> {
+    keys.into_iter()
+        .map(|value| {
+            let result = lookup_successor_outcome(store, workspace, &key(&value))
+                .unwrap()
+                .as_ref()
+                .map(Outcome::new);
+            (value, result)
+        })
+        .collect()
+}
+
+fn inspect(
+    store: &CandidateExecutionStore,
+    workspace: &WorkspaceId,
+    db: &Path,
+    keys: Vec<String>,
+) -> Inspection {
+    let (ledger, fingerprint) = audit(db);
+    let connection = Connection::open_with_flags(
+        db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .unwrap();
+    let retained = connection.query_row(
+        "SELECT (SELECT count(*) FROM successor_definitions), (SELECT count(*) FROM successor_sessions),
+                (SELECT count(*) FROM successor_activations), (SELECT count(*) FROM successor_attempts),
+                (SELECT count(*) FROM successor_goal_revisions)",
+        [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+    ).unwrap();
+    let first_journal_sequence = connection
+        .query_row(
+            "SELECT min(workspace_sequence) FROM operational_journal",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    Inspection {
+        ledger,
+        fingerprint,
+        retained,
+        first_journal_sequence,
+        outcomes: outcomes(store, workspace, keys),
     }
 }
 
@@ -534,20 +918,12 @@ fn read_probe(
         "revision": revision.revision.get(), "source": revision.source, "successor": revision.successor,
         "predecessor": revision.predecessor, "cause": revision.closure.cause,
     })).collect();
-    let outcomes = keys
-        .into_iter()
-        .map(|value| {
-            let result = lookup_successor_outcome(store, workspace, &key(&value))
-                .unwrap()
-                .as_ref()
-                .map(Outcome::new);
-            (value, result)
-        })
-        .collect();
+    let outcomes = outcomes(store, workspace, keys);
     let (ledger, fingerprint) = audit(db);
     assert_eq!(ledger.0, sequence);
     Probe {
         cursor,
+        now: state.updated_at(),
         plan: state.plan_binding().ok().as_ref().map(Plan::from_binding),
         groups,
         attempts,
@@ -579,7 +955,7 @@ fn audit(db: &Path) -> ((u64, u64, u64), Sha256Digest) {
         "SELECT json_array(workspace_uuid,git_common_fingerprint,git_worktree_fingerprint,last_validated_root,next_workspace_sequence,created_at_ms,updated_at_ms) FROM workspace_state",
         "SELECT json_array(contract_manifest_digest,generation_id,recorded_at_ms) FROM writer_contract",
         "SELECT json_array(digest,kind,document) FROM successor_definitions ORDER BY digest",
-        "SELECT json_array(session_id,base_digest,record_json,record_digest) FROM successor_sessions ORDER BY session_id",
+        "SELECT json_array(session_id,base_digest,record_json,record_digest,archived) FROM successor_sessions ORDER BY session_id",
         "SELECT json_array(session_id,ordinal,execution_id,definition_digest,design_attempt_id,predecessor_id,record_json,record_digest) FROM successor_activations ORDER BY session_id,ordinal",
         "SELECT json_array(session_id,ordinal,attempt_id,execution_id,definition_digest,record_json,record_digest) FROM successor_attempts ORDER BY session_id,ordinal",
         "SELECT json_array(session_id,ordinal,source_attempt_id,successor_attempt_id,record_json,record_digest) FROM successor_goal_revisions ORDER BY session_id,ordinal",
@@ -726,6 +1102,21 @@ fn engine_child() {
         Operation::Read(keys) => Reply::Read(Box::new(read_probe(
             &mut store, &workspace, &session, &db, keys,
         ))),
+        Operation::Inspect(keys) => {
+            Reply::Inspection(Box::new(inspect(&store, &workspace, &db, keys)))
+        }
+        Operation::History(request) => history(&mut store, *request),
+        Operation::Lifecycle(request) => lifecycle(&mut store, &workspace, *request),
+        Operation::Grow {
+            document,
+            digest,
+            count,
+        } => match grow(
+            &mut store, &workspace, &session, &db, &document, digest, count,
+        ) {
+            Ok(()) => Reply::Lifecycle,
+            Err(error) => Reply::Rejected(error.into()),
+        },
         Operation::Mutation(call) => match execute(&mut store, workspace, &session, *call) {
             Ok(result) => Reply::Success {
                 replayed: result.replayed(),
@@ -842,6 +1233,10 @@ impl Fixture {
         let input = dir.join("request.json");
         let key = match &operation {
             Operation::Read(_) => "read".into(),
+            Operation::Inspect(_) => "inspect".into(),
+            Operation::History(_) => "history".into(),
+            Operation::Lifecycle(_) => "fixture-lifecycle".into(),
+            Operation::Grow { .. } => "grow-activations".into(),
             Operation::Mutation(call) => call.key.clone(),
         };
         write_json(
@@ -889,15 +1284,71 @@ impl Fixture {
     }
 
     pub fn read(&mut self, keys: &[&str]) -> Probe {
-        let child = self.child(
-            Operation::Read(keys.iter().map(|key| (*key).into()).collect()),
-            Mode::Normal,
-        );
-        child.start();
-        let Reply::Read(probe) = child.finish() else {
+        let Reply::Read(probe) = self.request(Operation::Read(
+            keys.iter().map(|key| (*key).into()).collect(),
+        )) else {
             panic!("child did not read fixture")
         };
         *probe
+    }
+
+    fn request(&mut self, operation: Operation) -> Reply {
+        let child = self.child(operation, Mode::Normal);
+        child.start();
+        child.finish()
+    }
+
+    pub fn target(&self, location: Location, revision: Revision) -> Target {
+        Target {
+            workspace: self.workspace.clone(),
+            session: self.session.clone(),
+            location,
+            revision,
+        }
+    }
+
+    pub fn history(&mut self, request: HistoryRequest) -> Reply {
+        self.request(Operation::History(Box::new(request)))
+    }
+
+    pub fn inspect(&mut self, keys: &[&str]) -> Inspection {
+        let Reply::Inspection(inspection) = self.request(Operation::Inspect(
+            keys.iter().map(|key| (*key).into()).collect(),
+        )) else {
+            panic!("child did not inspect fixture")
+        };
+        *inspection
+    }
+
+    pub fn lifecycle(&mut self, request: Lifecycle) -> Reply {
+        let reply = self.request(Operation::Lifecycle(Box::new(request)));
+        if let Reply::Installed { workspace, session } = &reply {
+            self.workspace = workspace.clone();
+            self.session = session.clone();
+        }
+        reply
+    }
+
+    pub fn grow(&mut self, document: &Value, digest: &Sha256Digest, count: u8) {
+        let result = self.request(Operation::Grow {
+            document: Box::new(document.clone()),
+            digest: digest.clone(),
+            count,
+        });
+        assert!(
+            matches!(result, Reply::Lifecycle),
+            "activation growth refused: {result:?}"
+        );
+    }
+
+    pub fn persistent_bytes(&self) -> (Vec<u8>, Option<Vec<u8>>) {
+        let db = fs::read(self.root().join(STORE)).unwrap();
+        let wal = match fs::read(self.root().join(format!("{STORE}-wal"))) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => panic!("could not read fixture WAL: {error}"),
+        };
+        (db, wal)
     }
 
     pub fn finish(self) {
@@ -1073,6 +1524,19 @@ impl OwnedChild {
             Reply::Read(probe) => println!(
                 "GROUP-005 reaped read pid={} ledger={:?} fingerprint={}",
                 self.pid, probe.ledger, probe.fingerprint
+            ),
+            Reply::Inspection(inspection) => println!(
+                "TRACE-004 reaped inspect pid={} ledger={:?} rows={:?} fingerprint={}",
+                self.pid, inspection.ledger, inspection.retained, inspection.fingerprint
+            ),
+            Reply::History(response) => println!(
+                "TRACE-004 reaped history pid={} response_digest={}",
+                self.pid,
+                digest(response.as_bytes())
+            ),
+            Reply::Lifecycle | Reply::Installed { .. } => println!(
+                "TRACE-004 reaped key={} pid={} fixture_write=true",
+                self.key, self.pid
             ),
         }
         delivery.reply

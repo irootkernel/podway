@@ -129,8 +129,22 @@ use the stored definition and trace, independent of outcome and journal rows.
 The isolated fixture may archive a terminal session at its expected revision.
 Archival marks the stored session without rewriting its retained execution data.
 Current snapshots and fresh mutations reject archived sessions. Exact mutation
-replay remains available through the existing outcome path. Public archive
-cutover and destructive lifecycle qualification have separate roadmap owners.
+replay remains available through the existing outcome path.
+
+Explicit fixture purge deletes the exact archived session and cascades to its
+activation, attempt and goal-revision rows. The original session outcomes remain
+available by key. Explicit fixture reset of the terminal current session also
+deletes that session's outcomes. The session deletion paths remove only
+definitions that have no remaining references. A fresh fixture session can
+fill a vacant current slot and must have a new identity, including relative to
+session outcomes retained after archive purge.
+
+An explicit whole-worktree fixture reset replaces the candidate's logical
+runtime with a fresh workspace and initial session. Prior session records,
+definition references, outcomes and journal rows are removed together.
+Workspace and session fences prevent applying the old identity to the new
+runtime. These fixture operations exercise the retained data boundary. The
+production workspace maintenance protocol owns its filesystem choreography.
 
 ### Candidate DAG, attempt and item history
 

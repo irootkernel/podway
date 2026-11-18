@@ -1741,6 +1741,53 @@ Linked history preserves the assessment score, failure evidence, and the
 recorded decision and reason. The retained check remains inspectable while the
 third group requires its own matching check item to pass its current gate.
 
+## Candidate history retention qualification
+
+Run the registered private Engine child fixtures:
+
+```sh
+gaori --json run --tag rust --tag unit -- cargo test --locked -p podway-engine --features test-support --test int_suite int_group005_processes::trace004:: -- --nocapture
+```
+
+The nested `int_group005_processes::trace004::` filter selects both
+TRACE-004 cases. The broader `int_group005_processes::` filter includes them
+with the GROUP-005 process cases in the same registered `int_suite` target.
+
+The retention case commits real Engine activations and replans through the
+64-group cap. Ordinary later success invokes journal pruning, and original
+key lookup still returns the initial session outcome. Fresh children page
+the retained lineage and compare the original DAG, attempt, item and
+prior-work values across replan, pruning, exhaustion and archive. One-over
+activation changes no logical rows or durable SQLite bytes. Cancellation and
+archival succeed at that cap. The driver identifies its executable, writer
+and DDL, fingerprints logical rows, and reaps its children and owned Git
+fixtures.
+
+The deletion case verifies exact workspace, session, revision and location
+fences. Archive purge removes the selected history, including its goal
+revision and unreferenced definition. It preserves original outcomes and the
+sibling archive's goal history and referenced definitions. Terminal current
+reset also removes its own outcomes. The fixture's whole-worktree reset
+replaces logical SQLite state and workspace identity while preserving Git
+and work files. Rejected destructive requests preserve the checked snapshot.
+The production controls
+`workspace_outcomes_age_and_count_prune_without_pruning_session_history`,
+`delegation_disposition_archive_purge_and_session_reset_obey_retention` and
+`reset_all_replaces_generation_and_replays_before_old_workspace_fences`
+cover workspace-outcome retention, production session deletion and physical
+workspace runtime replacement, respectively.
+
+Core `activation_count_and_attempt_budgets_refuse_without_eviction` covers
+64 activations and 65,536 cumulative attempts, including one-over refusals.
+`exact_cumulative_placement_budget_counts_distinct_definitions` covers 16,384
+cumulative placements and its one-over refusal. Config's
+`frame002_actual_collection_limits_cover_nodes_definitions_ports_routes_and_manual_targets`
+checks the per-group caps of 1,024 placements and eight routes per decision,
+including one-over refusals.
+`frame002_settlement_attainable_edge_composition_is_admitted_and_projected`
+admits and projects the attainable 8,184-edge composition below the separate
+8,192-edge ceiling.
+
 ## Execution-group candidate persistence checks
 
 Run `int_group001_store` through the Engine's registered `int_suite`. It uses

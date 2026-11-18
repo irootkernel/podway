@@ -356,6 +356,16 @@ repair it. Destructive reset remains a separately authorized owner decision.
   except that the newest 200 rows are always retained. Successful mutations prune
   it atomically. Normal summaries contain no item values or artifact paths.
 
+The [candidate history qualification](../../implementation-tips/testing.md#candidate-history-retention-qualification)
+uses ordinary successful Engine writes to prune the operational journal while
+preserving the original session outcomes and the retained execution graph.
+Owned fixtures exercise archive purge and current-session reset. The
+whole-worktree fixture action replaces logical SQLite runtime state and its
+workspace binding. The [production reset-all protocol](#destructive-reset-all-protocol)
+owns physical runtime replacement, durable markers and recovery. Production
+Store coverage also exercises the age and count limits for workspace-scoped
+outcomes.
+
 There is no job retention policy, legacy terminal-receipt decoder or separate
 account-runtime retirement record in the current product. Changes to bounded
 retention require adopted contract work, not unbounded configuration.

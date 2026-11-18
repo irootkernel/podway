@@ -3,6 +3,9 @@
 #[path = "int_group005_driver.rs"]
 mod driver;
 
+#[path = "int_trace004_processes.rs"]
+mod trace004;
+
 use super::int_group002_transactions::{
     add_counter_chain, base_document, canonical, group_document, inflate_current_guidance,
 };

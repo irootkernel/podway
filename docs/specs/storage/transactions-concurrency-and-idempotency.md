@@ -169,6 +169,14 @@ The read transaction ends after acquiring stored state. An artifact page
 then observes availability without changing SQLite or making that value
 eligible for the current attempt.
 
+Explicit candidate fixture deletion rechecks the workspace binding, exact
+session, location and revision in the write transaction. Archive and
+current-session removal require terminal state. The archived purge keeps
+session outcomes. Current-session reset removes only outcomes for that
+session and preserves the workspace ledger sequence and journal. Whole
+fixture reset replaces the workspace binding and clears prior state and
+ledger in the same transaction.
+
 Workspace-bound original-key lookup returns the retained session-scoped
 success independently of the live cursor. Exact replay returns the original
 response, including its original observation and sequence where recorded.
