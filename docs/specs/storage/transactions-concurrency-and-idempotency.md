@@ -92,19 +92,28 @@ existing immutable identity, retained closure, or revision fails the state write
 A committed session revision cannot be replaced by a shorter stale trace.
 A later write preserves a closed attempt's final payload. Its validity may
 change from valid to stale when the Core invalidates the attempt.
-The test-support Engine issues group activation and normal terminal return
-against a bound candidate workspace. It prepares the canonical group document
-and checks compatible ports against the immutable base before opening the
-writer. The fixture Store revalidates its identity inside an IMMEDIATE
-transaction and resolves exact session-scoped replay before current cursor
+The test-support Engine issues group activation, normal terminal return and
+guarded replan against a bound candidate workspace. Activation prepares the
+canonical group document and checks compatible ports against the immutable
+base before opening the writer. The fixture Store revalidates its identity in
+an IMMEDIATE transaction and resolves exact session-scoped replay before current cursor
 and plan fences. New transitions require the current scoped attempt, goal and
 activation lineage. Activation also checks the exact design item-set digest
 and the retained references supplied by the caller.
 
-The Engine prepares the successor in memory, then measures the combined base
-and selected-group counters, current guidance, complete success envelope and
+Replan verifies the current ordinary Decision, its declared option and the
+current recorded values of the required selected evidence references. The
+request carries reason, working-copy basis and feedback. Core derives guard
+matches from recorded item values. The completed Decision retains the exact
+source attempts, item revisions and value digests. The same operation closes
+the selection with feedback, preserves a completed group's terminal record
+or abandons a running group, and opens a fresh base anchor attempt.
+
+The Engine prepares the successor in memory, then measures current counters
+and guidance, the complete success envelope and its
 worst-case original-outcome lookup wrapper. An oversized projection leaves
-state and outcomes untouched. Accepted transitions write the closed and new
+state and outcomes untouched. Replan's current counters cover the base after
+selection closes. Accepted transitions write the closed and new
 attempts, group state, sequence, success response and journal in one transaction.
 The fixture uses the Direct Store's shared exact replay, canonical success,
 outcome retention and commit primitives. The test path binds its owning root

@@ -29,9 +29,9 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-const TIME: UnixMillis = UnixMillis::new(1_700_000_000_000);
+pub(super) const TIME: UnixMillis = UnixMillis::new(1_700_000_000_000);
 
-fn action(title: &str) -> Value {
+pub(super) fn action(title: &str) -> Value {
     json!({ "type": "action", "title": title, "intent": "Perform the declared task." })
 }
 
@@ -39,7 +39,7 @@ fn item(id: &str) -> Value {
     json!({"id":id, "type":"text", "prompt":"Record the value.", "required":true})
 }
 
-fn base_document() -> Value {
+pub(super) fn base_document() -> Value {
     let mut design = action("Design");
     design["items"] = json!([item("plan")]);
     json!({
@@ -57,7 +57,7 @@ fn base_document() -> Value {
     })
 }
 
-fn group_document() -> Value {
+pub(super) fn group_document() -> Value {
     let mut finish = action("Finish");
     finish["items"] = json!([item("report")]);
     json!({
@@ -73,7 +73,7 @@ fn group_document() -> Value {
     })
 }
 
-fn canonical(document: &Value) -> ValidatedSuccessorDefinition {
+pub(super) fn canonical(document: &Value) -> ValidatedSuccessorDefinition {
     admit(&document.to_string()).unwrap()
 }
 
@@ -108,17 +108,17 @@ fn set_text(state: &mut ExecutionSessionV3, item: &str, revision: Revision, valu
         .unwrap();
 }
 
-struct Fixture {
+pub(super) struct Fixture {
     _root: TempDir,
     root: ValidatedWorkspaceRootV1,
-    file: PathBuf,
-    store: CandidateExecutionStore,
-    workspace: WorkspaceId,
-    session: SessionId,
+    pub(super) file: PathBuf,
+    pub(super) store: CandidateExecutionStore,
+    pub(super) workspace: WorkspaceId,
+    pub(super) session: SessionId,
 }
 
 impl Fixture {
-    fn new(base: &Value, plan_ready: bool) -> Self {
+    pub(super) fn new(base: &Value, plan_ready: bool) -> Self {
         let session = NativeDirectIdSourceV1.next_session_id();
         let admitted = canonical(base);
         let CandidateDefinition::Base(base) =
@@ -172,11 +172,11 @@ impl Fixture {
         }
     }
 
-    fn state(&mut self) -> (ExecutionSessionV3, CandidateSources) {
+    pub(super) fn state(&mut self) -> (ExecutionSessionV3, CandidateSources) {
         self.store.snapshot(&self.session, definition).unwrap()
     }
 
-    fn edit_fixture(&self, state: &ExecutionSessionV3, sources: &CandidateSources) {
+    pub(super) fn edit_fixture(&self, state: &ExecutionSessionV3, sources: &CandidateSources) {
         let mut connection = Connection::open(&self.file).unwrap();
         connection
             .execute_batch("PRAGMA foreign_keys = ON")
@@ -186,7 +186,7 @@ impl Fixture {
         transaction.commit().unwrap();
     }
 
-    fn ledger(&self) -> (u64, u64, u64) {
+    pub(super) fn ledger(&self) -> (u64, u64, u64) {
         let connection = Connection::open(&self.file).unwrap();
         connection
             .query_row(
@@ -199,7 +199,7 @@ impl Fixture {
             .unwrap()
     }
 
-    fn reopen(&mut self) {
+    pub(super) fn reopen(&mut self) {
         self.store = CandidateExecutionStore::reopen_fixture(
             &self.file,
             self.root.clone(),
@@ -208,7 +208,7 @@ impl Fixture {
         .unwrap();
     }
 
-    fn compare_rejected(
+    pub(super) fn compare_rejected(
         &mut self,
         before: &(ExecutionSessionV3, CandidateSources),
         key: &str,
@@ -225,7 +225,7 @@ impl Fixture {
     }
 }
 
-fn mutation(
+pub(super) fn mutation(
     workspace: &WorkspaceId,
     state: &ExecutionSessionV3,
     key: &str,
@@ -239,7 +239,7 @@ fn mutation(
     }
 }
 
-fn activation(
+pub(super) fn activation(
     workspace: &WorkspaceId,
     state: &ExecutionSessionV3,
     group: &ValidatedSuccessorDefinition,
@@ -546,7 +546,7 @@ fn insufficient_plan_return_output_and_stale_identity_do_not_publish_success() {
     fixture.compare_rejected(&terminal, "missing-output", (1, 1, 1));
 }
 
-fn inflate_current_guidance(document: &mut Value, definition: &str) {
+pub(super) fn inflate_current_guidance(document: &mut Value, definition: &str) {
     let prompt = format!("A{}", "\u{0001}".repeat(299));
     let help = format!("H{}", "\u{0001}".repeat(999));
     document["node_definitions"][definition]["items"] = Value::Array(
@@ -561,7 +561,7 @@ fn inflate_current_guidance(document: &mut Value, definition: &str) {
     );
 }
 
-fn add_counter_chain(document: &mut Value, from: &str, end: &str, length: usize) {
+pub(super) fn add_counter_chain(document: &mut Value, from: &str, end: &str, length: usize) {
     document["node_definitions"]["bridge"] = action("Bridge");
     let nodes = document["graph"]["nodes"].as_array_mut().unwrap();
     nodes.iter_mut().find(|node| node["id"] == from).unwrap()["next"] = json!("bridge-000");

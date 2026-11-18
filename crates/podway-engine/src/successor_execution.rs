@@ -271,6 +271,94 @@ pub fn return_from_group(
     })
 }
 
+/// Close the current selection through an explicitly guarded ordinary Decision.
+pub fn replan_group(
+    store: &mut CandidateExecutionStore,
+    request: SuccessorMutationRequest,
+    feedback: ReplanFeedbackV1,
+    clock: impl FnOnce() -> UnixMillis,
+    ids: &impl DirectIdSourceV1,
+) -> Result<DirectMutationResultV1> {
+    let exact_request = outcome_request(
+        &request,
+        "group.replan",
+        json!({
+            "decision": feedback.decision(),
+            "option": feedback.option(),
+            "reason": feedback.reason(),
+            "working_copy_basis": feedback.working_copy_basis(),
+            "feedback": feedback.feedback(),
+        }),
+    )?;
+    store.mutate(&request.workspace, &exact_request, |transaction| {
+        let (mut state, sources) = transaction.load(admit_candidate_definition)?;
+        verify_cursor(&state, &request)?;
+        let decision = feedback.decision().clone();
+        let now = clock();
+        state.replan(&request.cursor, feedback, ids.next_attempt_id(), now)?;
+        let active = active_target(&state)?;
+        let (execution, closure, feedback) = state
+            .group_history()
+            .last()
+            .and_then(|execution| {
+                let closure = execution.closure()?;
+                Some((execution, closure, closure.feedback.as_ref()?))
+            })
+            .filter(|(_, closure, _)| closure.source == decision)
+            .ok_or(SuccessorExecutionError::Invalid(
+                "candidate replan did not retain closure feedback",
+            ))?;
+        let record = state
+            .attempt_history()
+            .iter()
+            .rev()
+            .nth(1)
+            .filter(|attempt| attempt.target() == &decision)
+            .and_then(GroupAttemptStateV1::decision)
+            .ok_or(SuccessorExecutionError::Invalid(
+                "candidate replan did not retain the decision",
+            ))?;
+        let result = json!({
+            "schema": "podway.successor-group-replan-fixture-result/v1",
+            "revision_before": request.cursor.revision,
+            "revision": state.fence().revision,
+            "closed_attempt": decision,
+            "active_attempt": active,
+            "execution_id": execution.identity().execution(),
+            "group_outcome": execution.outcome(),
+            "group_terminal_attempt": execution.terminal_attempt(),
+            "decision": {
+                "option": record.option,
+                "reason": record.reason,
+                "guard_values": record.guard_values.iter().map(|guard| json!({
+                    "source": guard.source,
+                    "item": guard.item.item(),
+                    "revision": guard.item.revision(),
+                    "value_digest": guard.item.value_digest(),
+                })).collect::<Vec<_>>(),
+            },
+            "closure": {
+                "cause": closure.cause,
+                "source": closure.source,
+                "at_unix_ms": closure.at.get(),
+                "working_copy_basis": feedback.working_copy_basis(),
+                "feedback": feedback.feedback(),
+            },
+            "counters": combined_counters(&state, None),
+            "guidance": current_guidance(&state, &sources, active)?,
+        });
+        persist_transition(
+            transaction,
+            &request,
+            &exact_request,
+            &state,
+            &sources,
+            result,
+            now,
+        )
+    })
+}
+
 fn verify_cursor(state: &ExecutionSessionV3, request: &SuccessorMutationRequest) -> Result<()> {
     if state.fence() != request.cursor {
         return Err(SuccessorExecutionError::Invalid(
@@ -353,12 +441,7 @@ fn finish_transition(
     closed: &ScopedAttemptV1,
     now: UnixMillis,
 ) -> Result<CandidateSuccess> {
-    let active = state
-        .active_attempt()
-        .ok_or(SuccessorExecutionError::Invalid(
-            "candidate transition did not produce an active successor",
-        ))?
-        .target();
+    let active = active_target(state)?;
     let selected = state.selected().ok_or(SuccessorExecutionError::Invalid(
         "candidate transition did not preserve selection",
     ))?;
@@ -376,13 +459,33 @@ fn finish_transition(
         "execution_id": selected.identity().execution(),
         "group_outcome": selected.outcome(),
         "group_terminal_attempt": selected.terminal_attempt(),
-        "counters": combined_counters(state, group, selected.identity().execution()),
+        "counters": combined_counters(state, Some((group, selected.identity().execution()))),
         "guidance": current_guidance(state, sources, active)?,
     });
-    let result = result
-        .as_object()
-        .expect("boundary result is an object")
-        .clone();
+    persist_transition(transaction, request, identity, state, sources, result, now)
+}
+
+fn active_target(state: &ExecutionSessionV3) -> Result<&ScopedAttemptV1> {
+    state
+        .active_attempt()
+        .map(GroupAttemptStateV1::target)
+        .ok_or(SuccessorExecutionError::Invalid(
+            "candidate transition did not produce an active successor",
+        ))
+}
+
+fn persist_transition(
+    transaction: &CandidateExecutionTransaction<'_, '_>,
+    request: &SuccessorMutationRequest,
+    identity: &DirectMutationRequestV1,
+    state: &ExecutionSessionV3,
+    sources: &CandidateSources,
+    result: Value,
+    now: UnixMillis,
+) -> Result<CandidateSuccess> {
+    let Value::Object(result) = result else {
+        unreachable!("candidate transition results are objects");
+    };
     // The private result is intentionally absent from the public result catalog.
     // Serialize the existing typed output fields without enrolling a new command.
     let mut output = serde_json::to_value(OutputEnvelopeInputV4 {
@@ -418,8 +521,7 @@ fn finish_transition(
 
 fn combined_counters(
     state: &ExecutionSessionV3,
-    group: &ExecutionGroupDefinitionV1,
-    selected: &GroupExecutionIdV1,
+    selection: Option<(&ExecutionGroupDefinitionV1, &GroupExecutionIdV1)>,
 ) -> Vec<Value> {
     let mut base_counts = BTreeMap::new();
     let mut group_counts = BTreeMap::new();
@@ -429,27 +531,33 @@ fn combined_counters(
             ExecutionScopeV1::Base => &mut base_counts,
             ExecutionScopeV1::Group {
                 group_execution_id, ..
-            } if group_execution_id == selected => &mut group_counts,
+            } if selection.is_some_and(|(_, selected)| group_execution_id == selected) => {
+                &mut group_counts
+            }
             ExecutionScopeV1::Group { .. } => continue,
         };
         let (attempts, ordinal) = counts.entry(target.node()).or_insert((0_usize, None));
         *attempts += 1;
-        if attempt
-            .selected_decision_entry()
-            .is_none_or(|entry| entry.selected_group() == selected)
-        {
+        if attempt.selected_decision_entry().is_none_or(|entry| {
+            selection.is_some_and(|(_, selected)| entry.selected_group() == selected)
+        }) {
             *ordinal = attempt.decision_entry();
         }
     }
-    [
-        ("base", state.base_definition().graph(), base_counts),
-        ("group", group.graph(), group_counts),
-    ].into_iter().flat_map(|(scope, graph, counts)| {
-        graph.nodes().iter().map(move |node| {
-            let (attempts, entry) = counts.get(node.id()).copied().unwrap_or_default();
-            json!({"scope": scope, "node": node.id(), "attempt_count": attempts, "decision_entry": entry})
+    let base = ("base", state.base_definition().graph(), base_counts);
+    let group = selection.map(|(group, _)| ("group", group.graph(), group_counts));
+    std::iter::once(base)
+        .chain(group)
+        .flat_map(|(scope, graph, counts)| {
+            graph.nodes().iter().map(move |node| {
+                let (attempts, entry) = counts.get(node.id()).copied().unwrap_or_default();
+                json!({
+                    "scope": scope, "node": node.id(),
+                    "attempt_count": attempts, "decision_entry": entry,
+                })
+            })
         })
-    }).collect()
+        .collect()
 }
 
 fn current_guidance(

@@ -1563,27 +1563,43 @@ defaults exceed the canonical ceiling fail validation. These fixtures inspect
 actual sizes and typed bounds rather than mutating private limits.
 
 These source and projection cases exercise the current source limits. Protocol
-owns successor wire allocation, GROUP-002 owns pre-effect activation and return
-budget admission, and ADOPT-001 selects the public families.
+owns successor wire allocation. GROUP-002 and GROUP-003 verify pre-effect budget
+admission for their candidate boundary operations. ADOPT-001 selects the public
+families.
 
 ## Execution-group candidate transaction checks
 
-Use the registered Engine suite with its test-support feature:
+Select the corresponding module of the registered Engine suite with its
+test-support feature:
 
 ```sh
 gaori --json run --tag rust --tag unit -- cargo test --locked -p podway-engine --features test-support --test int_suite int_group002_transactions::
+gaori --json run --tag rust --tag unit -- cargo test --locked -p podway-engine --features test-support --test int_suite int_group003_replan::
 ```
 
-The suite drives the typed Engine issuer against owned generation-16 SQLite
-fixtures. It checks one success-only commit for activation and terminal return,
+The suites drive the typed Engine issuer against owned generation-16 SQLite
+fixtures. The activation and return suite checks one success-only commit per operation,
 exact replay after the cursor advances, current plan and retained provenance,
 and unchanged state, sequence and outcomes on failure. Dense admitted
 definitions exercise combined response refusal for both operations and a
 lookup-only headroom refusal for activation.
-A Store-level control writes state inside the fixture transaction and verifies
-rollback when the shared success validator rejects its envelope. Multi-process
-contention, response loss and forced termination belong to the integrated
-process qualification.
+A Store-level control verifies rollback when the shared success validator
+rejects the envelope after a state write.
+
+The replan suite exercises a running group's guarded Decision at score 80 and
+an admitted base review of a completed group. It checks exact retained guard
+bindings, old attempt records, the fresh anchor, original response replay
+after reopen and refusal of a key reused with changed feedback. The base-review
+case checks cumulative base attempt counts and clears the closed group's
+decision-entry ordinal from current counters. Negative cases
+exercise an Action, an undeclared option, a forward option, a missing value, an
+unscored or lightweight assessment, a success verdict and score 79. Dense
+anchor guidance with maximum-length escaped feedback exercises pre-effect
+response refusal. A fixture-only SQLite sequence collision rejects outcome
+insertion after the state write, and cold reopen checks rollback before a
+successful retry.
+Multi-process contention, response loss and forced termination belong to the
+integrated process qualification.
 
 ## Execution-group candidate persistence checks
 
@@ -1601,9 +1617,9 @@ retained scoped delegation and typed item values, and cancellation. It proves
 that candidate storage admits a full set of escaped prior-work rationales and
 checks writer identity, ordered rows and byte bounds before decoding.
 The production generation-15 classifier refuses the candidate fixture before
-opening SQLite. The candidate transaction suite above covers activation and
-terminal return through the Engine. The later process-level suite owns response
-loss and process interruption.
+opening SQLite. The candidate transaction checks above cover activation,
+terminal return and guarded replan through the Engine. The later process-level
+suite owns response loss and process interruption.
 
 ## Execution group integration checks
 

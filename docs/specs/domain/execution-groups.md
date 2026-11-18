@@ -22,11 +22,14 @@ cutover. Stores bound to the previous manifest, including v0.2.17, remain with
 their original writer; no predecessor or migration is declared. Tests use
 isolated fixtures rather than opening the active development workspace.
 
-The candidate Engine invokes Core activation and normal terminal return inside
+The candidate Engine invokes Core activation, normal terminal return and guarded
+replan inside
 the [success-only fixture transaction](../storage/transactions-concurrency-and-idempotency.md#execution-group-candidate-persistence).
-It computes combined current projection and replay bounds before either
-transition reaches persisted state. The typed fixture routes exercise the
-internal execution boundary while product surface selection belongs to ADOPT.
+It computes current projection and replay bounds before persisting a transition.
+Replan commits the completed Decision and its exact guard evidence, the
+selection closure, and the fresh base anchor together. The typed fixture routes
+exercise the internal execution boundary while product surface selection belongs
+to ADOPT.
 
 ## Authoring boundaries
 
@@ -126,9 +129,10 @@ owns wire-derived delegation-package sizing and placement-local next/static,
 read-back, preview, token and envelope allocations, for a single scope as well
 as combined base/group responses. Those checks require the successor wire
 families; Config source admission proves neither package nor guidance readiness.
-GROUP-002 owns pre-effect activation/return budget admission, and ADOPT-001 owns
-public family/cutover selection. Existing per-document, item, reference and
-source/projection caps remain in force throughout. Session-creation budgets
+The candidate Engine bounds activation, return and replan responses before
+persisting them. ADOPT-001 owns public family and cutover selection. Existing
+per-document, item, reference and source/projection caps remain in force.
+Session-creation budgets
 remain with their original transition/runtime owners.
 
 ## Identity and retained assertions

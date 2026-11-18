@@ -92,3 +92,7 @@ mod int_group001_store;
 #[cfg(feature = "test-support")]
 #[path = "int_group002_transactions.rs"]
 mod int_group002_transactions;
+
+#[cfg(feature = "test-support")]
+#[path = "int_group003_replan.rs"]
+mod int_group003_replan;

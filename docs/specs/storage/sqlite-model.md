@@ -71,9 +71,12 @@ its base, ordered activations, scoped attempt trace, and successive goal
 revisions. A group activation carries its exact design attempt, plan item
 bindings, predecessor, prior-work references, outcome and selection closure.
 Attempt rows retain final item slots and revisions, blockers, decisions,
-timestamps, and scoped delegation metadata. Repeated
-activation can reuse definition bytes while keeping separate execution IDs and
-attempt histories.
+timestamps, and scoped delegation metadata. A guarded replan retains the
+completed Decision with the selected option and exact source attempt and
+item bindings. Its selection closure names that Decision as the source, and
+the next attempt opens at the base anchor. Completed and partial attempts
+remain in the trace. Repeated activation can reuse definition bytes while
+keeping separate execution IDs and attempt histories.
 
 SQLite enforces composite session and activation relationships. On cold read,
 the Store verifies schema and writer identity, canonical bytes, row checksums,
