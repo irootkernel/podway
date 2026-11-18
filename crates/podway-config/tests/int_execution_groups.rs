@@ -775,6 +775,241 @@ fn frame002_admits_base_group_ports_defaults_and_current_public_refusal() {
     assert!(replan.get("to").is_none());
 }
 #[test]
+fn frame004_admitted_definitions_drive_core_group_lifecycle() {
+    use podway_core::execution_groups::{
+        ActivationIdentityInputV1, ActivationIdentityV1, EvidenceSourceV3, ExecutionScopeV1,
+        ExecutionSessionV3, GroupExecutionIdV1, GroupExecutionOutcomeV1, ReplanFeedbackV1,
+        SelectionClosureCauseV1,
+    };
+    use podway_core::{
+        AttemptId, AttemptLifecycle, CheckResultInputBasisV2, DomainError, ItemId, OptionId,
+        ReasonV2, RecordedItemValueV2, Revision, SessionId, UnixMillis,
+    };
+
+    fn attempt(number: u8) -> AttemptId {
+        AttemptId::new(format!("00000000-0000-4000-8000-{number:012}")).unwrap()
+    }
+
+    fn record(session: &mut ExecutionSessionV3, item: &str, value: RecordedItemValueV2) {
+        let target = session.active_attempt().unwrap().target().clone();
+        session
+            .record_item(
+                &target,
+                &ItemId::new(item).unwrap(),
+                Revision::ZERO,
+                Some(value),
+                UnixMillis::UNIX_EPOCH,
+            )
+            .unwrap();
+    }
+
+    let failure_detail = json!({
+        "id": "detail", "type": "text", "prompt": "Explain the failure",
+        "required": false, "required_when": [{"item": "verdict", "equals": "failure"}],
+    });
+    let mut base_source = base();
+    base_source["execution_group"]["result_items"] = json!([verdict(), failure_detail]);
+    base_source["graph"]["nodes"][2]["evidence_from"][0]["items"] = json!(["verdict", "detail"]);
+    let base_definition = accept(&base_source);
+    let mut group_source = group();
+    group_source["node_definitions"]["finish"]["items"] = json!([verdict(), failure_detail]);
+    let group_definition = accept(&group_source);
+    validate_group_interface(&base_definition, &group_definition).unwrap();
+
+    group_source["version"] = json!("2");
+    let alternate_group = accept(&group_source);
+    validate_group_interface(&base_definition, &alternate_group).unwrap();
+    assert_ne!(alternate_group.digest(), group_definition.digest());
+
+    let SuccessorDefinition::Base(base) = base_definition.definition() else {
+        panic!("expected an admitted base");
+    };
+    let SuccessorDefinition::Group(group) = group_definition.definition() else {
+        panic!("expected an admitted group");
+    };
+    let time = UnixMillis::UNIX_EPOCH;
+    let session_id = SessionId::new("00000000-0000-4000-8000-000000000100").unwrap();
+    let execution_id = GroupExecutionIdV1::new("00000000-0000-4000-8000-000000000200").unwrap();
+    let mut session = ExecutionSessionV3::begin(
+        session_id.clone(),
+        base.clone(),
+        base_definition.digest().clone(),
+        None,
+        attempt(1),
+        time,
+    )
+    .unwrap();
+    session
+        .complete(&session.fence(), Some(attempt(2)), time)
+        .unwrap();
+    record(
+        &mut session,
+        "plan",
+        RecordedItemValueV2::text("Use the admitted plan").unwrap(),
+    );
+    let binding = session.plan_binding().unwrap();
+    let activation = |definition: &ValidatedSuccessorDefinition| {
+        ActivationIdentityV1::new(ActivationIdentityInputV1 {
+            execution: execution_id.clone(),
+            session: session_id.clone(),
+            base_digest: base_definition.digest().clone(),
+            definition_digest: definition.digest().clone(),
+            anchor: base.boundary().anchor().clone(),
+            goal_revision: None,
+            plan: binding.clone(),
+            predecessor: None,
+            working_copy_basis: CheckResultInputBasisV2::new(
+                "Fixture source",
+                base_definition.digest().clone(),
+            )
+            .unwrap(),
+            prior_work: vec![],
+        })
+        .unwrap()
+    };
+
+    let unchanged = session.clone();
+    assert!(matches!(
+        session.activate(
+            &session.fence(),
+            activation(&alternate_group),
+            group.clone(),
+            group_definition.digest(),
+            attempt(3),
+            time,
+        ),
+        Err(DomainError::InvalidState {
+            reason: "activation identity does not bind the exact current design"
+        })
+    ));
+    assert_eq!(session, unchanged);
+    session
+        .activate(
+            &session.fence(),
+            activation(&group_definition),
+            group.clone(),
+            group_definition.digest(),
+            attempt(3),
+            time,
+        )
+        .unwrap();
+    let selected = session.selected().unwrap().identity();
+    assert_eq!(selected.base_digest(), base_definition.digest());
+    assert_eq!(selected.definition_digest(), group_definition.digest());
+    assert_eq!(selected.plan(), &binding);
+    let (source, slot) = session
+        .current_evidence(&EvidenceSourceV3::Plan, &ItemId::new("plan").unwrap())
+        .unwrap();
+    assert_eq!(source.attempt(), &attempt(2));
+    assert_eq!(
+        slot.value().unwrap().as_text(),
+        Some("Use the admitted plan")
+    );
+
+    session
+        .complete(&session.fence(), Some(attempt(4)), time)
+        .unwrap();
+    record(
+        &mut session,
+        "verdict",
+        RecordedItemValueV2::choice("success").unwrap(),
+    );
+    record(
+        &mut session,
+        "stage",
+        RecordedItemValueV2::choice("not-scored").unwrap(),
+    );
+    record(&mut session, "score", RecordedItemValueV2::integer(0));
+    session
+        .complete(&session.fence(), Some(attempt(5)), time)
+        .unwrap();
+    session
+        .decide(
+            &session.fence(),
+            OptionId::new("success").unwrap(),
+            ReasonV2::new("Work finished").unwrap(),
+            None,
+            attempt(6),
+            time,
+        )
+        .unwrap();
+    record(
+        &mut session,
+        "verdict",
+        RecordedItemValueV2::choice("failure").unwrap(),
+    );
+    let unchanged = session.clone();
+    assert_eq!(
+        session.complete(&session.fence(), Some(attempt(7)), time),
+        Err(DomainError::RequiredItemsMissing),
+    );
+    assert_eq!(session, unchanged);
+    record(
+        &mut session,
+        "detail",
+        RecordedItemValueV2::text("Plan requires revision").unwrap(),
+    );
+    session
+        .complete(&session.fence(), Some(attempt(7)), time)
+        .unwrap();
+    let review = session.active_attempt().unwrap().target();
+    assert_eq!(review.scope(), &ExecutionScopeV1::Base);
+    assert_eq!(review.node(), base.boundary().success_return());
+    assert_eq!(
+        session.selected().unwrap().terminal_attempt(),
+        Some(&attempt(6))
+    );
+    let (source, result) = session
+        .current_evidence(
+            &EvidenceSourceV3::ExecutionResult,
+            &ItemId::new("detail").unwrap(),
+        )
+        .unwrap();
+    assert_eq!(source.attempt(), &attempt(6));
+    assert_eq!(
+        result.value().unwrap().as_text(),
+        Some("Plan requires revision")
+    );
+
+    let feedback = ReplanFeedbackV1::new(
+        review.clone(),
+        OptionId::new("replan").unwrap(),
+        "Current result reports failure".into(),
+        session
+            .selected()
+            .unwrap()
+            .identity()
+            .working_copy_basis()
+            .clone(),
+        "Retain the completed execution".into(),
+    )
+    .unwrap();
+    session
+        .replan(&session.fence(), feedback, attempt(8), time)
+        .unwrap();
+    assert_eq!(
+        session.active_attempt().unwrap().target().node(),
+        base.boundary().anchor()
+    );
+    assert!(session.selected().is_none());
+    let closed = &session.group_history()[0];
+    assert_eq!(closed.outcome(), GroupExecutionOutcomeV1::Completed);
+    assert_eq!(
+        closed.closure().unwrap().cause,
+        SelectionClosureCauseV1::Replan
+    );
+    assert_eq!(
+        session
+            .attempt_history()
+            .iter()
+            .find(|row| row.target().attempt() == &attempt(6))
+            .unwrap()
+            .lifecycle(),
+        AttemptLifecycle::Completed,
+    );
+}
+
+#[test]
 fn frame002_rejects_anchor_bypass_kind_skip_and_crossing_routes() {
     let mut bypass = base();
     bypass["node_definitions"]["prefix"] = decision(vec![

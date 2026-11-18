@@ -1557,14 +1557,28 @@ graph/pretty-source/format output caps. Compact declarations whose materialized
 defaults exceed the canonical ceiling fail validation. These fixtures inspect
 actual sizes and typed bounds rather than mutating private limits.
 
-They do not execute selection/activation, current-value guard truth, wire-derived
-delegation-package or placement-local next/read-back/preview/token/envelope sizing
-(even for a single scope), combined base/group guidance budgets, Store/Engine
-mutations, history paging or the atomic product cutover. Protocol owns the
-successor wire allocations; GROUP-002 owns pre-effect activation/return budget
-admission and ADOPT-001 selects the public families. Current source/projection
-limits are still directly enforced here. Public v2 dispatch and the existing
-refusal checks remain required.
+These source and projection cases exercise the current source limits. Protocol
+owns successor wire allocation, GROUP-002 owns pre-effect activation and return
+budget admission, and ADOPT-001 selects the public families.
+
+## Execution group integration checks
+
+FRAME-004's registered case
+`int_execution_groups::frame004_admitted_definitions_drive_core_group_lifecycle`
+passes Config-admitted definitions and their canonical digests into Core. It
+checks an isolated digest mismatch without state change, the current plan port
+after activation, and a conditional terminal result that blocks return until
+recorded. The base review reads that result from the exact completed group.
+The declared replan route returns to the anchor and retains the completed
+execution outcome.
+
+The case uses the existing Config-to-Core dependency. The required development
+gate, `make test` through Gaori `full`, also checks crate direction and public
+Procedure v2 behavior. Config's registered
+`int_procedure_document::frame001_successor_documents_remain_outside_public_v2_admission`
+continues to check public successor-schema refusal. FRAME's integration case
+exercises the in-memory model. Transactional persistence, wire admission,
+history paging and the public cutover have their own verification owners.
 
 ## Execution group lifecycle checks
 
