@@ -30,8 +30,10 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 mod current;
+mod history;
 mod mutations;
 pub use current::*;
+pub use history::*;
 pub use mutations::*;
 
 #[derive(Debug)]
@@ -53,6 +55,10 @@ pub enum SuccessorExecutionError {
     ItemMutation(GraphMutationErrorV2),
     Protocol(ProtocolError),
     Invalid(&'static str),
+    InvalidHistoryPageLimit,
+    InvalidHistoryPageToken,
+    StaleHistoryPageToken,
+    HistoryGroupNotFound,
     ResponseBudget,
     OutcomeLookupBudget,
 }

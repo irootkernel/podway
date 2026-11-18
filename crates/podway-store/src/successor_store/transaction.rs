@@ -12,7 +12,7 @@ use crate::direct_store::{
 };
 use crate::{CanonicalExecutionJsonV1, IdempotencyKeyV1, ValidatedWorkspaceRootV1};
 use podway_core::execution_groups::ExecutionSessionV3;
-use podway_core::{DomainError, SessionId, UnixMillis, WorkspaceId};
+use podway_core::{DomainError, Revision, SessionId, SessionLifecycle, UnixMillis, WorkspaceId};
 use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior, params};
 use std::path::Path;
 use std::sync::{
@@ -25,6 +25,22 @@ use std::sync::{
 pub enum CandidateCommitBoundary {
     AfterLedgerBeforeCommit,
     AfterCommitBeforeReturn,
+}
+
+/// Exact session selection for a candidate history read.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CandidateSessionLocation {
+    Current,
+    Archived,
+}
+
+impl CandidateSessionLocation {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::Archived => "archived",
+        }
+    }
 }
 
 type CommitObserver = dyn Fn(CandidateCommitBoundary, &DirectRecordedOutcomeV1) + Send;
@@ -135,11 +151,25 @@ impl CandidateExecutionStore {
         session: &SessionId,
         admit: impl Fn(&str) -> Result<CandidateDefinition>,
     ) -> Result<(ExecutionSessionV3, CandidateSources, u64)> {
+        self.history_snapshot(workspace, session, CandidateSessionLocation::Current, admit)
+    }
+
+    /// Load one exact retained session and its revision facts from one read transaction.
+    pub fn history_snapshot(
+        &mut self,
+        workspace: &WorkspaceId,
+        session: &SessionId,
+        location: CandidateSessionLocation,
+        admit: impl Fn(&str) -> Result<CandidateDefinition>,
+    ) -> Result<(ExecutionSessionV3, CandidateSources, u64)> {
         self.require_workspace(workspace)?;
         let transaction = self.connection.transaction()?;
         admit_writer(&transaction)?;
         verify_binding(&transaction, &self.root, workspace)?;
-        let (state, sources) = load_requested_session(&transaction, session, admit)?;
+        let (state, sources) = load_requested_session(&transaction, session, location, admit)?;
+        if location == CandidateSessionLocation::Archived && !terminal_session(&state) {
+            return Err(corrupt("archived candidate session is not terminal"));
+        }
         let sequence: i64 = transaction.query_row(
             "SELECT next_workspace_sequence FROM workspace_state WHERE singleton=1",
             [],
@@ -148,6 +178,42 @@ impl CandidateExecutionStore {
         let sequence = u64::try_from(sequence)
             .map_err(|_| corrupt("candidate workspace sequence is negative"))?;
         Ok((state, sources, sequence))
+    }
+
+    /// Archive an admitted terminal session in an isolated fixture. This fixture operation
+    /// freezes session rows without creating a public mutation or an outcome.
+    pub fn archive_fixture_session(
+        &mut self,
+        workspace: &WorkspaceId,
+        session: &SessionId,
+        expected: Revision,
+        admit: impl Fn(&str) -> Result<CandidateDefinition>,
+    ) -> Result<()> {
+        self.require_workspace(workspace)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        admit_writer(&transaction)?;
+        verify_binding(&transaction, &self.root, workspace)?;
+        let (state, _) = load_requested_session(
+            &transaction,
+            session,
+            CandidateSessionLocation::Current,
+            admit,
+        )?;
+        let actual = state.fence().revision;
+        if actual != expected {
+            return Err(CandidateStoreError::ArchiveRevisionMismatch { expected, actual });
+        }
+        if !terminal_session(&state) {
+            return Err(CandidateStoreError::ArchiveRequiresTerminalSession);
+        }
+        transaction.execute(
+            "UPDATE successor_sessions SET archived = 1 WHERE session_id = ?1",
+            [session.as_str()],
+        )?;
+        transaction.commit()?;
+        Ok(())
     }
 
     /// Outcome readback is a verification handle for this fixture; the public CLI route
@@ -207,6 +273,7 @@ impl CandidateExecutionStore {
         if let Some(replay) = replay_outcome(request, stored).map_err(CandidateStoreError::from)? {
             return Ok(replay);
         }
+        require_session_location(&transaction, session, CandidateSessionLocation::Current)?;
         let success = execute(&CandidateExecutionTransaction {
             transaction: &transaction,
             root: &self.root,
@@ -289,7 +356,12 @@ impl CandidateExecutionTransaction<'_, '_> {
         &self,
         admit: impl Fn(&str) -> Result<CandidateDefinition>,
     ) -> Result<(ExecutionSessionV3, CandidateSources)> {
-        load_requested_session(self.transaction, self.session, admit)
+        load_requested_session(
+            self.transaction,
+            self.session,
+            CandidateSessionLocation::Current,
+            admit,
+        )
     }
 
     pub fn persist(&self, state: &ExecutionSessionV3, sources: &CandidateSources) -> Result<()> {
@@ -317,21 +389,46 @@ impl CandidateExecutionTransaction<'_, '_> {
 fn load_requested_session(
     transaction: &Transaction<'_>,
     session: &SessionId,
+    location: CandidateSessionLocation,
     admit: impl Fn(&str) -> Result<CandidateDefinition>,
 ) -> Result<(ExecutionSessionV3, CandidateSources)> {
-    let present: bool = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM successor_sessions WHERE session_id = ?1)",
-        [session.as_str()],
-        |row| row.get(0),
-    )?;
-    if !present {
-        return Err(DomainError::SessionIdentityMismatch {
+    require_session_location(transaction, session, location)?;
+    load_candidate_execution(transaction, session, admit)
+}
+
+fn require_session_location(
+    transaction: &Transaction<'_>,
+    session: &SessionId,
+    location: CandidateSessionLocation,
+) -> Result<()> {
+    use rusqlite::OptionalExtension;
+
+    let archived: Option<bool> = transaction
+        .query_row(
+            "SELECT archived FROM successor_sessions WHERE session_id = ?1",
+            [session.as_str()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match (location, archived) {
+        (CandidateSessionLocation::Current, Some(false))
+        | (CandidateSessionLocation::Archived, Some(true)) => Ok(()),
+        (CandidateSessionLocation::Current, Some(true)) => {
+            Err(CandidateStoreError::ArchivedSession)
+        }
+        _ => Err(DomainError::SessionIdentityMismatch {
             expected: session.clone(),
             actual: None,
         }
-        .into());
+        .into()),
     }
-    load_candidate_execution(transaction, session, admit)
+}
+
+fn terminal_session(state: &ExecutionSessionV3) -> bool {
+    matches!(
+        state.lifecycle(),
+        SessionLifecycle::Completed | SessionLifecycle::Cancelled
+    )
 }
 
 pub struct CandidateSuccess {

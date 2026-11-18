@@ -106,6 +106,10 @@ Caller workspace mismatch and a missing requested session have their own
 identity failures. Persisted binding and child-record failures retain their
 storage classifications. Cursor failures distinguish the scoped attempt,
 applicable goal revision, selected activation and session revision.
+For a candidate session already marked archived, the Store refuses a fresh
+cursor, activation or item mutation after resolving original-key replay.
+The terminal-only archive fixture operation checks the expected session
+revision and freezes the existing session rows without a mutation outcome.
 
 A single item write fences the workspace, selected activation, exact scoped
 session and attempt, and that item's revision. Independently prepared writes
@@ -127,6 +131,10 @@ matches from recorded item values. The completed Decision retains the exact
 source attempts, item revisions and value digests. The same operation closes
 the selection with feedback, preserves a completed group's terminal record
 or abandons a running group, and opens a fresh base anchor attempt.
+Every accepted Decision also retains the source attempt selected for each
+declared evidence reference, independent of which option guards applied.
+Cold replay derives and compares those source identities in their original
+declaration order.
 
 The Engine prepares the successor in memory, then measures current counters
 and guidance, the complete success envelope and its
@@ -147,6 +155,11 @@ selected values. Actual item changes and initial goal definition clear the live
 acceptance on that attempt. A new execution of the same definition requires
 its own binding. A new request for an already accepted current action is
 rejected. Exact replay returns the original acceptance success.
+
+Candidate history queries select one exact current or archived session in a
+read transaction. Group, Decision and goal-revision lineage use that admitted
+snapshot and revision-bound continuations. They leave current evidence and
+mutation state unchanged.
 
 Workspace-bound original-key lookup returns the retained session-scoped
 success independently of the live cursor. Exact replay returns the original

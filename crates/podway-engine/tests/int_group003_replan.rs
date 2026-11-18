@@ -114,7 +114,12 @@ fn record(state: &mut ExecutionSessionV3, id: &str, value: RecordedItemValueV2) 
         .unwrap();
 }
 
-fn assessment(state: &mut ExecutionSessionV3, verdict: &str, stage: &str, score: Option<i64>) {
+pub(super) fn assessment(
+    state: &mut ExecutionSessionV3,
+    verdict: &str,
+    stage: &str,
+    score: Option<i64>,
+) {
     record(
         state,
         "verdict",
@@ -126,7 +131,7 @@ fn assessment(state: &mut ExecutionSessionV3, verdict: &str, stage: &str, score:
     }
 }
 
-fn complete(state: &mut ExecutionSessionV3) {
+pub(super) fn complete(state: &mut ExecutionSessionV3) {
     state
         .complete(
             &state.fence(),
@@ -136,7 +141,7 @@ fn complete(state: &mut ExecutionSessionV3) {
         .unwrap();
 }
 
-fn feedback(state: &ExecutionSessionV3, option: &str) -> ReplanFeedbackV1 {
+pub(super) fn feedback(state: &ExecutionSessionV3, option: &str) -> ReplanFeedbackV1 {
     ReplanFeedbackV1::new(
         state.active_attempt().unwrap().target().clone(),
         OptionId::new(option).unwrap(),

@@ -74,6 +74,8 @@ pub struct GroupDecisionRecordV1 {
     pub option: OptionId,
     pub reason: String,
     pub guard_values: Vec<GroupGuardValueV1>,
+    /// Current source attempts as observed before the Decision took effect, in declaration order.
+    pub evidence_sources: Vec<Option<ScopedAttemptV1>>,
     pub goal_assessment: Option<(GoalRevisionNumberV2, GoalOutcome)>,
 }
 
@@ -886,6 +888,7 @@ impl ExecutionSessionV3 {
         };
         self.require_ready(attempt, placement, items)?;
         let guard_values = self.guard_values(attempt, placement, definition, &option, false)?;
+        let evidence_sources = self.decision_evidence_sources(attempt, placement);
         self.check_ordinary_target(attempt.target.scope(), node, rework)?;
         let invalidation = rework
             .then(|| self.rework_index(attempt.target.scope(), node))
@@ -897,6 +900,7 @@ impl ExecutionSessionV3 {
             option,
             reason: reason.into_inner(),
             guard_values,
+            evidence_sources,
             goal_assessment,
         });
         if let Some(index) = invalidation {
@@ -936,6 +940,7 @@ impl ExecutionSessionV3 {
         self.require_ready(attempt, placement, items)?;
         let guard_values =
             self.guard_values(attempt, placement, definition, feedback.option(), true)?;
+        let evidence_sources = self.decision_evidence_sources(attempt, placement);
         let anchor = self.base.boundary().anchor();
         let invalidate_base = self.rework_index(&ExecutionScopeV1::Base, anchor)?;
         let next = self.prepare_attempt(ExecutionScopeV1::Base, anchor, fresh_anchor, now, None)?;
@@ -945,6 +950,7 @@ impl ExecutionSessionV3 {
             option: feedback.option().clone(),
             reason: feedback.reason().to_owned(),
             guard_values,
+            evidence_sources,
             goal_assessment: None,
         });
         self.invalidate_from(&ExecutionScopeV1::Base, invalidate_base);
@@ -1425,6 +1431,21 @@ impl ExecutionSessionV3 {
         }
     }
 
+    fn decision_evidence_sources(
+        &self,
+        attempt: &GroupAttemptStateV1,
+        placement: &PlacementV3,
+    ) -> Vec<Option<ScopedAttemptV1>> {
+        placement
+            .evidence()
+            .iter()
+            .map(|reference| {
+                self.evidence_source(attempt.target.scope(), reference.source())
+                    .map(|source| source.target.clone())
+            })
+            .collect()
+    }
+
     fn guard_values(
         &self,
         attempt: &GroupAttemptStateV1,
@@ -1682,7 +1703,8 @@ impl ExecutionSessionV3 {
         Ok(())
     }
 
-    fn history_attempt(&self, id: &AttemptId) -> Option<&GroupAttemptStateV1> {
+    /// Inspect a retained attempt by its session-unique ID, regardless of current validity.
+    pub fn history_attempt(&self, id: &AttemptId) -> Option<&GroupAttemptStateV1> {
         self.attempt_ids.get(id).map(|&index| &self.attempts[index])
     }
 

@@ -1,4 +1,5 @@
 -- Unreleased execution-group Store under ADR-0044. No predecessor is declared.
+-- Decision records retain the exact scoped attempt for each declared evidence source.
 PRAGMA foreign_keys = ON;
 PRAGMA trusted_schema = OFF;
 
@@ -51,6 +52,7 @@ CREATE TABLE successor_sessions (
         json_valid(record_json) AND length(CAST(record_json AS BLOB)) <= 1048576
     ),
     record_digest             TEXT NOT NULL,
+    archived                  INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
     FOREIGN KEY (base_digest, base_kind) REFERENCES successor_definitions (digest, kind)
 ) STRICT;
 

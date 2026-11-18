@@ -104,3 +104,7 @@ mod int_group004_fences;
 #[cfg(feature = "test-support")]
 #[path = "int_group005_processes.rs"]
 mod int_group005_processes;
+
+#[cfg(feature = "test-support")]
+#[path = "int_trace001_history.rs"]
+mod int_trace001_history;

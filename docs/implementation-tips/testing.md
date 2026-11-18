@@ -1671,6 +1671,38 @@ and `int_v2dfc006_runtime_ports::v2run004_production_retry_is_clean_durable_repl
 Public successor admission, paged history, and released binary qualification
 have their own later gates.
 
+## Candidate group-lineage qualification
+
+Run the registered history cases against the isolated successor Engine and
+Store:
+
+```sh
+gaori --json run --tag rust --tag unit -- cargo test --locked -p podway-engine --features test-support --test int_suite int_trace001_history::
+```
+
+Append the case name to the module prefix and add `-- --exact` to select
+one case:
+
+- `exact_group_history_survives_replacement_cancellation_and_archive` checks
+  two activations of one definition, both plan bindings, guarded replan,
+  abandoned and pending Decision entries, group-detail continuation and
+  selector refusals. It checks logical Store contents around reads and rejected
+  writes, terminal-only archival without an outcome, and exact replay after
+  archived reopen.
+- `unguarded_choice_retains_its_exact_assessment_across_rework_and_archive`
+  checks two distinct ordinary-choice assessments through rework and reopen.
+  Cold replay refuses the first Decision when its rehashed record instead
+  points at the later valid attempt.
+- `goal_lineage_keeps_closures_and_boundary_decisions_across_reactivation`
+  pages revisions before activation, after replan and after completion.
+  It preserves both group closures and reads the group Decision's Plan
+  confirmation and the base Decision's execution-result and goal assessment.
+
+The feature-enabled Engine library case
+`successor_execution::history::tests::history_page_reserves_response_metadata_before_accepting_rows`
+checks the exact encoded response limit and one byte above it with a
+continuation. TRACE-004 owns full process and destructive lifecycle checks.
+
 ## Execution-group candidate persistence checks
 
 Run `int_group001_store` through the Engine's registered `int_suite`. It uses

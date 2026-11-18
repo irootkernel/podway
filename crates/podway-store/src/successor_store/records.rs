@@ -415,6 +415,7 @@ struct Decision {
     option: OptionId,
     reason: String,
     guard_values: Vec<(ScopedAttemptV1, ItemBinding)>,
+    evidence_sources: Vec<Option<ScopedAttemptV1>>,
     goal_assessment: Option<(u64, String)>,
 }
 impl From<&GroupDecisionRecordV1> for Decision {
@@ -427,6 +428,7 @@ impl From<&GroupDecisionRecordV1> for Decision {
                 .iter()
                 .map(|guard| (guard.source.clone(), (&guard.item).into()))
                 .collect(),
+            evidence_sources: value.evidence_sources.clone(),
             goal_assessment: value
                 .goal_assessment
                 .map(|(revision, outcome)| (revision.get(), outcome.as_str().to_owned())),
@@ -435,6 +437,11 @@ impl From<&GroupDecisionRecordV1> for Decision {
 }
 impl Decision {
     fn admit(self) -> Result<GroupDecisionRecordV1> {
+        if self.evidence_sources.len() > podway_core::MAX_EVIDENCE_REFERENCES_PER_PLACEMENT_V2 {
+            return Err(corrupt(
+                "retained Decision evidence exceeds its source bound",
+            ));
+        }
         Ok(GroupDecisionRecordV1 {
             option: self.option,
             reason: self.reason,
@@ -448,6 +455,7 @@ impl Decision {
                     })
                 })
                 .collect::<Result<_>>()?,
+            evidence_sources: self.evidence_sources,
             goal_assessment: self
                 .goal_assessment
                 .map(|(revision, outcome)| {

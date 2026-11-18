@@ -40,6 +40,12 @@ pub enum CandidateStoreError {
     Item(StoreErrorV1),
     Direct(crate::direct_store::DirectStoreErrorV1),
     Domain(DomainError),
+    ArchivedSession,
+    ArchiveRequiresTerminalSession,
+    ArchiveRevisionMismatch {
+        expected: Revision,
+        actual: Revision,
+    },
     Corrupt(&'static str),
 }
 
@@ -177,6 +183,13 @@ pub fn persist_candidate_execution(
     admit_writer(transaction)?;
     let fence = state.fence();
     let session_id = fence.session.as_str();
+    if transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM successor_sessions WHERE session_id = ?1 AND archived = 1)",
+        [session_id],
+        |row| row.get::<_, bool>(0),
+    )? {
+        return Err(CandidateStoreError::ArchivedSession);
+    }
     let has_trailing_history: bool = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM successor_attempts WHERE session_id = ?1 AND ordinal > ?2)
          OR EXISTS(SELECT 1 FROM successor_activations WHERE session_id = ?1 AND ordinal > ?3)
@@ -223,7 +236,8 @@ pub fn persist_candidate_execution(
         }
     }
     let changed = transaction.execute(
-        "INSERT INTO successor_sessions VALUES (?1, ?2, ?3, ?4) \
+        "INSERT INTO successor_sessions (session_id, base_digest, record_json, record_digest)
+         VALUES (?1, ?2, ?3, ?4) \
          ON CONFLICT (session_id) DO UPDATE SET record_json = excluded.record_json, \
          record_digest = excluded.record_digest WHERE record_digest != excluded.record_digest AND base_digest = excluded.base_digest",
         params![session_id, state.base_digest().as_str(), record, checksum.as_str()],

@@ -213,7 +213,11 @@ readback uses an eligible assessment from the execution that closed with the
 session. Cancellation retains its lifecycle and the prior assessment record.
 
 Current evidence resolves inside the attempt's active scope or through the
-declared plan and selected execution-result ports. A decision can replan only
+declared plan and selected execution-result ports. At selection time, each
+Decision freezes the exact source attempt for each declared evidence reference.
+The retained definition and final item slots identify the evidence values
+even after those attempts become stale. This applies to guarded and unguarded
+options and confers no current evidence eligibility. A decision can replan only
 through an explicit option whose declared guards hold on current values. A
 permitted base-review decision also needs the authored anchor-return policy.
 Core records the option, exact guard source attempts and item bindings, and
@@ -232,7 +236,10 @@ a still-running group. Each preserves an already completed outcome. After the
 first activation, a goal revision replaces the current statement and criteria,
 opens a fresh anchor, and retains the previous goal and immutable activation
 records. Completed-session reactivation requires explicit authority and also
-returns to the anchor.
+returns to the anchor. Goal-revision lineage preserves the prior group,
+old and new attempt identities, closure cause and feedback even if replan or
+completion already closed selection. The earlier group's closure remains part
+of its own record.
 Cancelled sessions cannot reactivate. Scoped delegation acceptance binds the
 current declared action, exact target and independently validated package
 digest. An actual item change or initial goal definition clears the live

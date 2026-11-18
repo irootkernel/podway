@@ -96,6 +96,42 @@ session revision. The highest slot revision in each attempt therefore supplies
 that attempt's write lower bound. Final slots preserve exact item revisions
 without retaining the membership of each historical batch.
 
+### Candidate group lineage reads
+
+The candidate Store selects an exact current or archived session and admits its
+state inside a single read transaction. The Engine lists groups in activation
+order with their definition, design attempt, predecessor, outcome and closure
+cause. Group detail returns the bound plan and working-copy basis, terminal
+attempt, closure feedback and a page of Decision entries in trace order. Each
+entry identifies its scoped attempt, ordinal, recorded option and reason,
+applicable goal assessment and exact guard bindings. The Decision retains
+the scoped attempt for each declared evidence reference at selection time,
+including references used by an unguarded option. Cold replay verifies the
+source list. History reads combine that list with the retained definition and
+immutable item slots, so later rework cannot switch an earlier Decision's
+assessment to a different source. Choice, integer and confirmation values are
+readable alongside their item bindings. Counts include open Decision entries
+and entries abandoned before an option was selected.
+
+Goal-revision history is a separate page in goal-revision order. It exposes the
+exact predecessor group when one exists, closure source and successor
+attempts, cause, timestamp and feedback. It preserves changes made without an
+active selection, including a revision after replan or reactivation after
+completion. The original group's closure remains visible in group detail.
+
+Pages return exact totals, truncation and a continuation when rows remain. A
+page holds up to 64 rows within the direct response byte and depth limits.
+Continuations bind the query kind, workspace, exact session and location,
+session revision, group execution and definition when selected, and offset.
+A different binding returns a stale-token error. Read admission and paging
+use the stored definition and trace, independent of outcome and journal rows.
+
+The isolated fixture may archive a terminal session at its expected revision.
+Archival marks the stored session without rewriting its retained execution data.
+Current snapshots and fresh mutations reject archived sessions. Exact mutation
+replay remains available through the existing outcome path. Public archive
+cutover and destructive lifecycle qualification have separate roadmap owners.
+
 The generation-16 record encodings are private Store codecs. The successor
 component schemas describe the separately owned wire contracts. The candidate
 checks retained row ordinals and sizes before decoding record payloads. Its
