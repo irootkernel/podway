@@ -29,12 +29,13 @@ activation authority.
 
 At task start inspect Git state and the affected authorities. Preserve unrelated
 work. Record the exact baseline for executable comparison, including the real
-current Store generation. The historical V2SDG planning baseline was daemon generation 11; delegation
-receipts and canonical Git identity arrived in generations 12 and 13. The current
-product uses direct generation 15 and declares no predecessor. The
+current Store generation. The historical V2SDG planning baseline was daemon
+generation 11. Delegation receipts and canonical Git identity arrived in
+generations 12 and 13. The current direct writer uses Store generation 16 and
+declares no compatible predecessor. The
 [SQLite model](../specs/storage/sqlite-model.md) owns current compatibility and
-unchanged legacy refusal; the historical generations are rejected test inputs. Do not
-resurrect the obsolete 32-session inactive-retention cap.
+unchanged legacy refusal. Historical generations serve as rejected test inputs.
+Do not resurrect the obsolete 32-session inactive-retention cap.
 
 ## Use established isolated runtimes
 

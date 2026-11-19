@@ -516,9 +516,10 @@ published identifier with another meaning is not permitted.
 
 ## SDG-009: Persistence and isolation
 
-Current Store v15 retains the immutable receipt side table keyed by session and
-attempt, canonical-path workspace identity, and a writer-manifest identity.
-The [SQLite model](../storage/sqlite-model.md) owns DDL and generation behavior.
+Store v16 retains immutable scoped delegation receipts in
+`successor_delegation_receipts`, keyed by session and attempt. Store admission
+binds canonical workspace identity and the current writer manifest. The
+[SQLite model](../storage/sqlite-model.md) owns DDL and generation behavior.
 Receipt persistence must not rewrite unrelated snapshots, items, trace, goals,
 outcomes, or inactive-session values. Keep one receipt per attempt, referential
 integrity, immutable canonical bytes, and one direct transaction for acceptance
