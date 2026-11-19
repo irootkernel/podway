@@ -1,0 +1,576 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:successor-history-records:v1",
+  "title": "Podway Successor History Records v1",
+  "$defs": {
+    "assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "outcome"
+      ],
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "outcome": {
+          "enum": [
+            "achieved",
+            "not_achieved",
+            "superseded"
+          ]
+        }
+      }
+    },
+    "group_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "activation_sequence",
+        "execution",
+        "definition_digest",
+        "design_attempt",
+        "predecessor",
+        "outcome",
+        "closure_cause",
+        "decision_entries_total"
+      ],
+      "properties": {
+        "activation_sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "execution": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "definition_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "design_attempt": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "predecessor": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          ]
+        },
+        "outcome": {
+          "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/outcome"
+        },
+        "closure_cause": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/closure_cause"
+            }
+          ]
+        },
+        "decision_entries_total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65536
+        }
+      }
+    },
+    "closure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cause",
+        "source",
+        "closed_at",
+        "feedback"
+      ],
+      "properties": {
+        "cause": {
+          "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/closure_cause"
+        },
+        "source": {
+          "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+        },
+        "closed_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "feedback": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "reason",
+                "working_copy_basis",
+                "text"
+              ],
+              "properties": {
+                "reason": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "working_copy_basis": {
+                  "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/working_copy_basis"
+                },
+                "text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4000
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "group_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "execution",
+        "definition_digest"
+      ],
+      "properties": {
+        "execution": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "definition_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "attempt_provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt",
+        "lifecycle",
+        "validity",
+        "opened_at",
+        "closed_at",
+        "reason",
+        "decision_entry",
+        "selected_group",
+        "decision",
+        "delegation",
+        "actor"
+      ],
+      "properties": {
+        "attempt": {
+          "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+        },
+        "lifecycle": {
+          "enum": [
+            "active",
+            "completed",
+            "skipped",
+            "abandoned"
+          ]
+        },
+        "validity": {
+          "enum": [
+            "valid",
+            "stale"
+          ]
+        },
+        "opened_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "closed_at": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            }
+          ]
+        },
+        "decision_entry": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 18446744073709551615
+            }
+          ]
+        },
+        "selected_group": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          ]
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "option",
+                "reason",
+                "goal_assessment"
+              ],
+              "properties": {
+                "option": {
+                  "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+                },
+                "reason": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "goal_assessment": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "urn:podway:schema:successor-history-records:v1#/$defs/assessment"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "delegation": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/delegation_binding"
+            }
+          ]
+        },
+        "actor": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "\\S"
+            }
+          ]
+        }
+      }
+    },
+    "item_stamp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "item",
+        "item_type",
+        "revision",
+        "recorded"
+      ],
+      "properties": {
+        "item": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        },
+        "item_type": {
+          "enum": [
+            "confirm",
+            "text",
+            "choice",
+            "integer",
+            "list",
+            "artifact",
+            "check_result"
+          ]
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "recorded": {
+          "type": "boolean"
+        }
+      }
+    },
+    "guard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "binding"
+      ],
+      "properties": {
+        "source": {
+          "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+        },
+        "binding": {
+          "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/plan_item"
+        }
+      }
+    },
+    "decision_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "items"
+      ],
+      "properties": {
+        "source": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+            }
+          ]
+        },
+        "items": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "binding",
+              "scalar"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/plan_item"
+              },
+              "scalar": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "const": true
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": -9223372036854775808,
+                    "maximum": 9223372036854775807
+                  },
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "scalar_item": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "confirm"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "choice"
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "integer"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "location_kind",
+            "location",
+            "digest",
+            "size_bytes",
+            "media_type"
+          ],
+          "properties": {
+            "kind": {
+              "const": "artifact"
+            },
+            "location_kind": {
+              "enum": [
+                "local_path",
+                "external_reference"
+              ]
+            },
+            "location": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "size_bytes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            "media_type": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "operation_id",
+            "operation_digest",
+            "input_basis",
+            "executor",
+            "outcome",
+            "summary",
+            "output_digest"
+          ],
+          "properties": {
+            "kind": {
+              "const": "check_result"
+            },
+            "operation_id": {
+              "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+            },
+            "operation_digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "input_basis": {
+              "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/working_copy_basis"
+            },
+            "executor": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "version"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "version": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                }
+              }
+            },
+            "outcome": {
+              "enum": [
+                "pass",
+                "fail",
+                "inconclusive"
+              ]
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            },
+            "output_digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

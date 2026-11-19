@@ -178,6 +178,292 @@ impl<Clock: FnOnce() -> UnixMillis> DirectTransactionV1<'_, '_, Clock> {
         &self.binding
     }
 
+    pub(crate) fn apply_successor_transition<
+        E: From<crate::successor_store::CandidateStoreError>,
+    >(
+        &mut self,
+        session: &SessionId,
+        verify_progress: Option<&crate::successor_store::SuccessorProgressVerifier<'_>>,
+        apply: impl FnOnce(
+            &crate::successor_store::CandidateExecutionTransaction<'_, '_>,
+            &mut dyn FnMut() -> UnixMillis,
+        ) -> Result<crate::successor_store::CandidateSuccess, E>,
+    ) -> Result<CanonicalExecutionJsonV1, E> {
+        use crate::successor_store::{CandidateExecutionTransaction, CandidateStoreError};
+        super::require_execution_group_schema(&self.binding).map_err(CandidateStoreError::from)?;
+        let transaction = CandidateExecutionTransaction::from_native(
+            self.transaction,
+            &self.root,
+            &self.binding,
+            session,
+            verify_progress,
+        )?;
+        let mut read = || {
+            *self.now.get_or_insert_with(|| {
+                self.clock
+                    .take()
+                    .expect("direct transaction clock is read once")()
+            })
+        };
+        let success = apply(&transaction, &mut read)?;
+        if self.now != Some(success.now) {
+            return Err(CandidateStoreError::from(DirectStoreErrorV1::InvalidInput {
+                reason: "successor outcome has no matching transaction clock",
+            })
+            .into());
+        }
+        self.state_written = true;
+        Ok(success.response)
+    }
+
+    #[doc(hidden)]
+    pub fn successor_state(
+        &self,
+        admit: impl Fn(
+            &str,
+        ) -> Result<
+            crate::successor_store::CandidateDefinition,
+            crate::successor_store::CandidateStoreError,
+        >,
+    ) -> Result<
+        Option<(
+            podway_core::execution_groups::ExecutionSessionV3,
+            crate::successor_store::CandidateSources,
+        )>,
+        crate::successor_store::CandidateStoreError,
+    > {
+        super::require_execution_group_schema(&self.binding)?;
+        crate::successor_store::load_current_execution(self.transaction, admit)
+    }
+
+    #[doc(hidden)]
+    pub fn create_successor_state(
+        &mut self,
+        title: &str,
+        state: &podway_core::execution_groups::ExecutionSessionV3,
+        sources: &crate::successor_store::CandidateSources,
+    ) -> Result<(), crate::successor_store::CandidateStoreError> {
+        use crate::successor_store;
+        use podway_core::SessionLifecycle;
+
+        super::require_execution_group_schema(&self.binding)?;
+        let now = self.require_clock()?;
+        let fence = state.fence();
+        if self.created_session_scope.is_some()
+            || successor_store::current_execution(self.transaction)?.is_some()
+            || fence.revision != Revision::ZERO
+            || state.lifecycle() != SessionLifecycle::Prepared
+            || state.created_at() != now
+        {
+            return Err(DirectStoreErrorV1::InvalidInput {
+                reason: "successor creation requires an empty slot and an initial prepared state",
+            }
+            .into());
+        }
+        successor_store::require_settled_goal_assessments(state)?;
+        successor_store::persist_execution(self.transaction, state, sources)?;
+        successor_store::create_session_metadata(self.transaction, &fence.session, title)?;
+        self.state_written = true;
+        self.created_session_scope = Some(fence.session);
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn write_successor_state(
+        &mut self,
+        expected: Revision,
+        state: &podway_core::execution_groups::ExecutionSessionV3,
+        sources: &crate::successor_store::CandidateSources,
+    ) -> Result<(), crate::successor_store::CandidateStoreError> {
+        use crate::successor_store;
+        use podway_core::DomainError;
+
+        super::require_execution_group_schema(&self.binding)?;
+        self.require_clock()?;
+        if self.state_written {
+            return Err(DirectStoreErrorV1::InvalidInput {
+                reason: "already wrote successor state in this transaction",
+            }
+            .into());
+        }
+        let fence = state.fence();
+        match successor_store::current_execution(self.transaction)? {
+            Some((session, actual)) if session == fence.session => {
+                if expected != actual {
+                    return Err(DomainError::PreconditionFailed { expected, actual }.into());
+                }
+                if fence.revision != expected && fence.revision != expected.checked_next()? {
+                    return Err(DirectStoreErrorV1::InvalidInput {
+                        reason: "successor state must retain or advance the current revision once",
+                    }
+                    .into());
+                }
+            }
+            current => {
+                return Err(DomainError::SessionIdentityMismatch {
+                    expected: fence.session,
+                    actual: current.map(|(id, _)| id),
+                }
+                .into());
+            }
+        }
+        successor_store::require_settled_goal_assessments(state)?;
+        successor_store::verify_receipts(self.transaction, state)?;
+        successor_store::persist_execution(self.transaction, state, sources)?;
+        self.state_written = true;
+        Ok(())
+    }
+
+    pub fn successor_delegation_receipt(
+        &self,
+        state: &podway_core::execution_groups::ExecutionSessionV3,
+        attempt: &podway_core::AttemptId,
+    ) -> Result<
+        Option<podway_core::execution_groups::ScopedDelegationReceiptV1>,
+        crate::successor_store::CandidateStoreError,
+    > {
+        super::require_execution_group_schema(&self.binding)?;
+        crate::successor_store::read_receipt(self.transaction, state, attempt)
+    }
+
+    pub fn accept_successor_delegation(
+        &mut self,
+        expected: Revision,
+        state: &podway_core::execution_groups::ExecutionSessionV3,
+        sources: &crate::successor_store::CandidateSources,
+        receipt: &podway_core::execution_groups::ScopedDelegationReceiptV1,
+    ) -> Result<(), crate::successor_store::CandidateStoreError> {
+        super::require_execution_group_schema(&self.binding)?;
+        let now = self.require_clock()?;
+        crate::successor_store::record_receipt(self.transaction, state, receipt, now)?;
+        self.write_successor_state(expected, state, sources)
+    }
+
+    #[doc(hidden)]
+    pub fn dispose_successor_session(
+        &mut self,
+        disposition: &TerminalDispositionV2,
+    ) -> Result<(), crate::successor_store::CandidateStoreError> {
+        super::require_execution_group_schema(&self.binding)?;
+        crate::successor_store::record_disposition(
+            self.transaction,
+            disposition,
+            self.require_clock()?,
+            None,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn successor_disposition(
+        &self,
+        session: &SessionId,
+        revision: Revision,
+    ) -> Result<Option<TerminalDispositionV2>, crate::successor_store::CandidateStoreError> {
+        super::require_execution_group_schema(&self.binding)?;
+        crate::successor_store::terminal_disposition(self.transaction, session, revision)
+    }
+
+    pub fn successor_metadata(
+        &self,
+        session: &SessionId,
+    ) -> Result<
+        Option<crate::successor_store::SuccessorSessionMetadata>,
+        crate::successor_store::CandidateStoreError,
+    > {
+        super::require_execution_group_schema(&self.binding)?;
+        crate::successor_store::session_metadata(self.transaction, session)
+    }
+
+    pub fn archived_successor_state(
+        &self,
+        session: &SessionId,
+        admit: impl Fn(
+            &str,
+        ) -> Result<
+            crate::successor_store::CandidateDefinition,
+            crate::successor_store::CandidateStoreError,
+        >,
+    ) -> Result<
+        Option<(
+            podway_core::execution_groups::ExecutionSessionV3,
+            crate::successor_store::CandidateSources,
+        )>,
+        crate::successor_store::CandidateStoreError,
+    > {
+        super::require_execution_group_schema(&self.binding)?;
+        crate::successor_store::load_archived_execution(self.transaction, session, admit)
+    }
+
+    pub fn purge_successor_archive(
+        &mut self,
+        session: &SessionId,
+        expected: Revision,
+    ) -> Result<(), crate::successor_store::CandidateStoreError> {
+        super::require_execution_group_schema(&self.binding)?;
+        self.require_clock()?;
+        crate::successor_store::purge_archive(self.transaction, session, expected)
+    }
+
+    #[doc(hidden)]
+    pub fn archive_successor_session(
+        &mut self,
+        session: &SessionId,
+        expected: Revision,
+    ) -> Result<
+        crate::successor_store::SuccessorArchiveMetadata,
+        crate::successor_store::CandidateStoreError,
+    > {
+        super::require_execution_group_schema(&self.binding)?;
+        crate::successor_store::archive_session(
+            self.transaction,
+            session,
+            expected,
+            self.require_clock()?,
+            self.next_workspace_sequence()?,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn delete_successor_session(
+        &mut self,
+        session: &SessionId,
+        expected: Revision,
+    ) -> Result<(), crate::successor_store::CandidateStoreError> {
+        super::require_execution_group_schema(&self.binding)?;
+        self.require_clock()?;
+        crate::successor_store::delete_current_session(self.transaction, session, expected)
+    }
+
+    #[doc(hidden)]
+    pub fn archive_superseded_and_create_successor(
+        &mut self,
+        disposition: &TerminalDispositionV2,
+        title: &str,
+        successor: &podway_core::execution_groups::ExecutionSessionV3,
+        sources: &crate::successor_store::CandidateSources,
+    ) -> Result<(), crate::successor_store::CandidateStoreError> {
+        super::require_execution_group_schema(&self.binding)?;
+        if disposition.kind() != podway_core::TerminalDispositionKindV2::Superseded {
+            return Err(DirectStoreErrorV1::InvalidInput {
+                reason: "expected a superseded disposition",
+            }
+            .into());
+        }
+        let expected = successor.fence().session;
+        let now = self.require_clock()?;
+        crate::successor_store::record_disposition(
+            self.transaction,
+            disposition,
+            now,
+            Some(&expected),
+        )?;
+        self.archive_successor_session(
+            disposition.session_id(),
+            disposition.terminal_session_revision(),
+        )?;
+        self.create_successor_state(title, successor, sources)
+    }
+
     pub fn delegation_receipts(
         &self,
     ) -> DirectStoreResultV1<v2_delegation::DelegationReceiptSnapshotV1> {
@@ -669,8 +955,9 @@ impl DirectStoreV1 {
             &path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
-        connection.execute_batch(super::DIRECT_STORE_DDL_V1)?;
-        configure_connection(&mut connection, false, deadline)?;
+        connection.execute_batch("PRAGMA journal_mode = WAL")?;
+        connection.execute_batch(self.layout.schema.ddl)?;
+        configure_connection(&mut connection, false, deadline, self.layout.schema)?;
         self.boundary(DirectTransactionBoundaryV1::BeforeBegin);
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         self.boundary(DirectTransactionBoundaryV1::AfterBegin);
@@ -1013,6 +1300,90 @@ mod tests {
     use super::*;
 
     #[test]
+    fn execution_group_schema_uses_direct_native_admission_and_replay() {
+        use super::super::{
+            DirectWorkspaceLayoutV1, EXECUTION_GROUP_STORE_GENERATION_V1,
+            MAX_EXECUTION_GROUP_ATTEMPT_ROW_BYTES_V1,
+        };
+        use crate::ValidatedWorkspaceRootV1;
+        use podway_core::canonicalize_json_v1;
+        use rusqlite::limits::Limit;
+        use serde_json::json;
+
+        let temporary = tempfile::Builder::new()
+            .prefix("podway-adopt-native-store-")
+            .tempdir_in(std::fs::canonicalize("/tmp").unwrap())
+            .unwrap();
+        let root = ValidatedWorkspaceRootV1::from_path(temporary.path()).unwrap();
+        let layout = DirectWorkspaceLayoutV1::new(root.clone()).unwrap();
+        let digest = |byte: &str| Sha256Digest::new(format!("sha256:{}", byte.repeat(64))).unwrap();
+        let workspace = WorkspaceId::new("00000000-0000-4000-8000-000000000001").unwrap();
+        let store = DirectStoreV1::new(layout, digest("a"), digest("b"), digest("c"));
+        let older = DirectStoreV1::new(
+            DirectWorkspaceLayoutV1::for_v15_fixture(root).unwrap(),
+            digest("a"),
+            digest("b"),
+            digest("c"),
+        );
+        let deadline = || Instant::now() + std::time::Duration::from_secs(10);
+        let request = DirectMutationRequestV1::new(
+            IdempotencyKeyV1::new("initialize-successor").unwrap(),
+            digest("d"),
+            "workspace.init",
+            "00000000-0000-4000-8000-000000000002",
+            DirectOutcomeScopeV1::Workspace,
+        )
+        .unwrap();
+        let expected_version = EXECUTION_GROUP_STORE_GENERATION_V1;
+        let lease = ExclusiveMaintenanceLeaseV1::acquire(store.layout(), deadline(), true).unwrap();
+        let first = store
+            .bootstrap(
+                &lease,
+                workspace.clone(),
+                "current",
+                &request,
+                deadline(),
+                || UnixMillis::new(1),
+                |transaction| {
+                    assert_eq!(transaction.binding().schema_version(), expected_version);
+                    assert!(
+                        transaction.transaction.limit(Limit::SQLITE_LIMIT_LENGTH)?
+                            > MAX_EXECUTION_GROUP_ATTEMPT_ROW_BYTES_V1 as i32
+                    );
+                    CanonicalExecutionJsonV1::new(canonicalize_json_v1(&json!({
+                    "schema": "podway.output/v4", "request_id": request.response_id(),
+                    "command": request.command(), "generated_at": "1970-01-01T00:00:00.001Z",
+                    "result": {"initialized": true}, "warnings": []
+                })).unwrap()).map_err(|_| DirectStoreErrorV1::Unreadable)
+                },
+            )
+            .unwrap();
+        drop(lease);
+
+        store
+            .read(deadline(), |snapshot| {
+                assert_eq!(snapshot.binding().identity().workspace_uuid(), &workspace);
+                assert_eq!(snapshot.binding().schema_version(), expected_version);
+                assert_eq!(snapshot.committed_sequence()?, 1);
+                Ok(())
+            })
+            .unwrap();
+        let replay = store
+            .mutate(
+                &request,
+                deadline(),
+                || panic!("replay must not read the clock"),
+                |_| panic!("replay must not call the writer"),
+            )
+            .unwrap();
+        assert!(replay.replayed());
+        assert_eq!(first.outcome(), replay.outcome());
+        assert!(
+            matches!(older.read::<()>(deadline(), |_| panic!("older writer must not open v16")), Err(DirectStoreErrorV1::UnsupportedGeneration { generation }) if generation == expected_version)
+        );
+    }
+
+    #[test]
     fn uncertain_outcome_is_only_the_commit_io_error_mapping() {
         let io = || {
             rusqlite::Error::SqliteFailure(
@@ -1060,8 +1431,10 @@ mod tests {
         };
         let deadline = || Instant::now() + std::time::Duration::from_secs(10);
         let direct = DirectStoreV1::new(
-            DirectWorkspaceLayoutV1::new(ValidatedWorkspaceRootV1::from_path(&path).unwrap())
-                .unwrap(),
+            DirectWorkspaceLayoutV1::for_v15_fixture(
+                ValidatedWorkspaceRootV1::from_path(&path).unwrap(),
+            )
+            .unwrap(),
             digest('c'),
             digest('a'),
             digest('b'),

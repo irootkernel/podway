@@ -1,0 +1,302 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:observation-result:v8",
+  "title": "Podway Scoped Observation Result v8",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "workspace",
+    "workspace_sequence",
+    "title",
+    "base",
+    "cursor",
+    "lifecycle",
+    "lifecycle_guidance",
+    "decision_entry",
+    "next_decision_entry",
+    "selection",
+    "counters",
+    "guidance",
+    "goal",
+    "plan",
+    "items",
+    "open_blockers",
+    "delegation",
+    "retained_group_count",
+    "remaining_activations",
+    "remaining_attempts",
+    "mutation_templates"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.observation-result/v8"
+    },
+    "workspace": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "workspace_sequence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "base": {
+      "$ref": "urn:podway:schema:observation-result:v7#/$defs/base"
+    },
+    "cursor": {
+      "$ref": "urn:podway:schema:observation-result:v7#/$defs/cursor"
+    },
+    "lifecycle": {
+      "$ref": "urn:podway:schema:observation-result:v7#/$defs/lifecycle"
+    },
+    "lifecycle_guidance": {
+      "$ref": "urn:podway:schema:observation-result:v7#/$defs/lifecycleGuidance"
+    },
+    "decision_entry": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "next_decision_entry": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "selection": {
+      "anyOf": [
+        {
+          "$ref": "urn:podway:schema:observation-result:v7#/$defs/selection"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "counters": {
+      "$ref": "urn:podway:schema:observation-result:v7#/$defs/counters"
+    },
+    "guidance": {
+      "anyOf": [
+        {
+          "$ref": "urn:podway:schema:observation-result:v7#/$defs/guidance"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "goal": {
+      "anyOf": [
+        {
+          "$ref": "urn:podway:schema:observation-result:v7#/$defs/goal"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "plan": {
+      "anyOf": [
+        {
+          "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/plan"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "items": {
+      "anyOf": [
+        {
+          "$ref": "urn:podway:schema:observation-result:v7#/$defs/items"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "open_blockers": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "maxItems": 64
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "delegation": {
+      "anyOf": [
+        {
+          "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/delegation_binding"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "retained_group_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 64
+    },
+    "remaining_activations": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 64
+    },
+    "remaining_attempts": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65536
+    },
+    "mutation_templates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "command",
+          "argv",
+          "requires_explicit_authorization",
+          "preconditions",
+          "authority",
+          "idempotency_key_required",
+          "stdin_template"
+        ],
+        "properties": {
+          "command": {
+            "enum": [
+              "session.begin",
+              "session.reset",
+              "session.start_replace",
+              "session.terminal_disposition",
+              "session.archive",
+              "session.start",
+              "session.complete",
+              "session.decide",
+              "group.return",
+              "group.activate",
+              "group.replan",
+              "goal.assess_criteria",
+              "session.block",
+              "session.cancel",
+              "session.retry",
+              "session.skip",
+              "session.unblock",
+              "session.rework",
+              "item.record_many",
+              "goal.define",
+              "goal.assess_criterion",
+              "item.check",
+              "item.uncheck",
+              "item.clear",
+              "item.set",
+              "item.add",
+              "item.remove",
+              "item.attach"
+            ]
+          },
+          "argv": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384
+            },
+            "maxItems": 64,
+            "minItems": 1
+          },
+          "requires_explicit_authorization": {
+            "type": "boolean"
+          },
+          "preconditions": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "session_revision",
+              "attempt",
+              "goal_revision",
+              "selected_group"
+            ],
+            "properties": {
+              "session_revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "attempt": {
+                "anyOf": [
+                  {
+                    "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "goal_revision": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "selected_group": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "authority": {
+            "const": "optimistic_concurrency_only"
+          },
+          "idempotency_key_required": {
+            "const": true
+          },
+          "stdin_template": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 1048576
+          }
+        }
+      },
+      "maxItems": 256
+    }
+  }
+}

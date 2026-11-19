@@ -6,7 +6,8 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Changed
 
-- Re-pin the contract manifest for successor model schemas; Stores bound to the previous manifest, including v0.2.17, require their original writer.
+- Adopt Procedure v3 and explicit execution-group activation, guarded replanning, scoped history and delegation on Store generation 16 with `sw-dev-v3` as the default, retiring the four `*-v2` preset IDs and digests and refusing custom Procedure v2 sources
+  while requiring the original writer for older sessions and a consumer re-pin to the successor manifest, `observe` v7/v8 and the commit-bound observation wrapper v2.
 
 ### Fixed
 

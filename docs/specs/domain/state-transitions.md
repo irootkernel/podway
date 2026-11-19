@@ -4,8 +4,9 @@ The canonical command matrix is
 [`assets/specifications/state-transition-matrix.csv`](../../../assets/specifications/state-transition-matrix.csv).
 The command catalog binds each route to its public result family.
 
-All session mutations require the owning workspace identity and current session
-revision. Running-node mutations additionally fence the active attempt; item
+Session transitions fence the owning workspace and current session revision.
+Running-node mutations additionally fence the active scoped attempt and selected
+group; item
 mutations fence the item revision; goal mutations fence the goal revision where
 applicable. Single-item mutations retain their item-local concurrency exception
 and do not require an unchanged session revision. An atomic multi-item mutation
@@ -22,11 +23,12 @@ input fails. Rejected requests are evaluated again under current state. The
 [transaction contract](../storage/transactions-concurrency-and-idempotency.md)
 owns lookup-first validation and retention.
 
-Supported lifecycle transitions are start, start-replace, begin, complete, skip,
-retry, block, unblock, cancel, terminal disposition, reset, decide, rework, goal
-define/revise/assess-criterion/assess-criteria/assess, and typed item mutations. Graph movement is always derived
-from the admitted Procedure v2 snapshot; callers cannot supply an undeclared edge
-or arbitrary destination.
+Supported lifecycle transitions include start, start-replace, begin, complete,
+skip, retry, block, unblock, cancel, terminal disposition, reset, decide, rework,
+group activate/return/replan, goal definition/revision/criterion assessment and
+typed item mutations. Graph movement follows the admitted base and selected group
+definitions. Group return uses the base's declared successor. A guarded replan
+returns to its declared design anchor and retains earlier execution state.
 
 Start validates and durably snapshots the Procedure, creates a prepared session
 at revision 0, and does not create an attempt or goal revision. Begin is the only
@@ -38,10 +40,12 @@ cursor-bearing or goal-bearing mutation rejects prepared state.
 Conditional required-item evaluation uses the same authoritative item snapshot
 as ordinary satisfaction and completion. A condition cannot be checked before or
 after that snapshot as a separate advisory step. Decision admission validates
-identity and revision fences first, required evidence freshness second, and the
-selected option's typed guards third. Stale evidence therefore retains
-`EVIDENCE_REFERENCE_STALE`; an otherwise unavailable option returns
-`OPTION_GUARD_UNSATISFIED`. Either rejection writes no state.
+identity and revision fences, then required evidence freshness and the selected
+option's typed guards. Stale evidence retains
+`EVIDENCE_REFERENCE_STALE`, and an unmet or unevaluable guard returns
+`OPTION_GUARD_UNSATISFIED`. Undeclared options return `OPTION_NOT_ALLOWED`.
+Sending an explicit replan option through ordinary `decide` returns
+`ROUTE_NOT_ALLOWED` with the required route. These refusals write no state.
 
 Terminal disposition is legal only for a completed or cancelled session and is
 bound to its exact current terminal revision. Completed-session reactivation

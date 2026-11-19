@@ -99,7 +99,7 @@
     },
     {
       "code": "CRITERION_CITATION_INVALID",
-      "details_schema": "podway.v2-runtime-error-details/v2",
+      "details_schema": "podway.scoped-criterion-citation-invalid-details/v1",
       "exit_code": 1,
       "retryable": false,
       "summary": "A criterion citation does not name resolved attempt state."
@@ -314,8 +314,8 @@
       "code": "LEGACY_RUNTIME_STATE_UNSUPPORTED",
       "exit_code": 5,
       "retryable": false,
-      "details_schema": "podway.legacy-runtime-state-unsupported-details/v1",
-      "summary": "Daemon-era state requires explicitly confirmed reset-all."
+      "details_schema": "podway.legacy-runtime-state-unsupported-details/v2",
+      "summary": "Older workspace state requires an explicitly confirmed reset before initializing a current Store."
     },
     {
       "code": "LIST_VALUE_DUPLICATE",
@@ -404,6 +404,7 @@
     },
     {
       "code": "PROCEDURE_INVALID",
+      "details_schema": "podway.procedure-source-error-details/v1",
       "exit_code": 1,
       "retryable": false,
       "summary": "Procedure is invalid."
@@ -416,6 +417,7 @@
     },
     {
       "code": "PROCEDURE_SCHEMA_UNSUPPORTED",
+      "details_schema": "podway.procedure-source-error-details/v1",
       "exit_code": 1,
       "retryable": false,
       "summary": "Procedure schema is unsupported."
@@ -630,7 +632,7 @@
     },
     {
       "code": "WORKSPACE_SCHEMA_UNSUPPORTED",
-      "details_schema": "podway.workspace-schema-unsupported-details/v1",
+      "details_schema": "podway.workspace-schema-unsupported-details/v2",
       "exit_code": 5,
       "retryable": false,
       "summary": "The Store generation is newer than this Podway supports."
@@ -654,6 +656,66 @@
       "exit_code": 5,
       "retryable": false,
       "summary": "The worktree no longer exists."
+    },
+    {
+      "code": "GROUP_DEFINITION_MISMATCH",
+      "exit_code": 4,
+      "retryable": true,
+      "summary": "The supplied or retained group definition does not match the expected digest."
+    },
+    {
+      "code": "GROUP_EXECUTION_NOT_FOUND",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The requested execution group was not retained in the session."
+    },
+    {
+      "code": "GROUP_SELECTION_STALE",
+      "exit_code": 4,
+      "retryable": true,
+      "summary": "The selected execution group changed."
+    },
+    {
+      "code": "HISTORY_PAGE_TOKEN_STALE",
+      "exit_code": 4,
+      "retryable": true,
+      "summary": "The history page token no longer binds this request or snapshot."
+    },
+    {
+      "code": "OUTCOME_LOOKUP_BUDGET_EXCEEDED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The result cannot fit in a durable outcome lookup. Reduce the requested response or execution scope."
+    },
+    {
+      "code": "RESPONSE_BUDGET_EXCEEDED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The requested result exceeds its response budget. Reduce the requested response or execution scope."
+    },
+    {
+      "code": "SESSION_TERMINAL_DISPOSITION_ALREADY_RECORDED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The current terminal revision already has a disposition."
+    },
+    {
+      "code": "GROUP_ACTIVATION_NOT_ALLOWED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "Group activation requires the current unselected base anchor and valid prior work."
+    },
+    {
+      "code": "GROUP_RETURN_NOT_ALLOWED",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "Group return requires the selected running group at its terminal action."
+    },
+    {
+      "code": "GROUP_PLAN_STALE",
+      "exit_code": 4,
+      "retryable": true,
+      "summary": "The group activation plan or predecessor differs from the current design."
     }
   ]
 }

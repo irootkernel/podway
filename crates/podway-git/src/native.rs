@@ -2304,8 +2304,8 @@ pub(crate) fn inspect_containment(
     Ok(ContainmentSnapshot { podway, runtime })
 }
 
-#[cfg(feature = "test-support")]
-pub(crate) fn observe_candidate_artifact_presence(
+/// Observe existence without reading the artifact or following symlinks.
+pub fn observe_local_artifact_presence_v1(
     root: &Path,
     relative: &Path,
 ) -> Result<crate::LocalPathPresenceV1, GitResolverErrorV1> {

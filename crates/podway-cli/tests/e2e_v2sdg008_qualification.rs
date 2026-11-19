@@ -31,7 +31,7 @@ fn supervised_delegation_preserves_documented_example_hosts_and_recovery() {
     assert_eq!(evidence["runtime_cleanup"], true);
     assert_eq!(
         evidence["example"]["source"],
-        "docs/examples/procedures/supervised-review-v2.yaml"
+        "docs/examples/procedures/supervised-review-v3.yaml"
     );
     assert!(
         evidence["example"]["procedure_digest"]

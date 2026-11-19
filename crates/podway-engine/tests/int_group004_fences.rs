@@ -50,6 +50,7 @@ fn request(
     name: &str,
 ) -> SuccessorMutationRequest {
     SuccessorMutationRequest {
+        response: podway_engine::successor_execution::SuccessorMutationResponseV1::Fixture,
         workspace: fixture.workspace.clone(),
         key: key(name),
         request_id: request_id(),
@@ -63,6 +64,7 @@ fn item_request(
     name: &str,
 ) -> SuccessorItemRequest {
     SuccessorItemRequest {
+        response: podway_engine::successor_execution::SuccessorMutationResponseV1::Fixture,
         workspace: fixture.workspace.clone(),
         key: key(name),
         request_id: request_id(),
@@ -816,7 +818,7 @@ fn independent_item_writes_and_atomic_batch_preserve_exact_old_success_on_reconn
             || panic!("foreign session must be rejected before transition"),
             &NativeDirectIdSourceV1
         ),
-        Err(SuccessorExecutionError::Store(CandidateStoreError::Domain(DomainError::SessionIdentityMismatch { expected, actual: None })))
+        Err(SuccessorExecutionError::Domain(DomainError::SessionIdentityMismatch { expected, actual: None }))
             if expected == unexpected_session
     ));
     fixture.compare_rejected(&latest_state, "foreign-session", (5, 5, 5));
@@ -1080,37 +1082,43 @@ fn retry_counter_replay_and_same_digest_replacement_keep_current_and_retained_ev
     };
 
     let missing = activation(&fixture.workspace, &before.0, &definition, "missing-work");
-    checked_reason(
+    assert!(matches!(
         activate_group(
             &mut fixture.store,
             missing,
-            || TIME,
+            || panic!("prior-work shape refusal precedes the clock"),
             &NativeDirectIdSourceV1,
-        )
-        .unwrap_err(),
-        "activation history requires one to 128 prior-work dispositions after the first group",
-    );
+        ),
+        Err(SuccessorExecutionError::GroupActivationPriorWorkInvalid(
+            DomainError::InvalidState {
+                reason: "activation history requires one to 128 prior-work dispositions after the first group",
+            },
+        ))
+    ));
     fixture.compare_rejected(&before, "missing-work", counts);
     let mut stale = activation(&fixture.workspace, &before.0, &definition, "stale-work");
     stale.prior_work = vec![work(base)];
-    checked_reason(
-        activate_group(&mut fixture.store, stale, || TIME, &NativeDirectIdSourceV1).unwrap_err(),
-        "prior work value digest differs from retained history",
-    );
+    assert!(matches!(
+        activate_group(&mut fixture.store, stale, || TIME, &NativeDirectIdSourceV1),
+        Err(SuccessorExecutionError::GroupActivationPriorWorkInvalid(
+            DomainError::InvalidState {
+                reason: "prior work value digest differs from retained history",
+            },
+        ))
+    ));
     fixture.compare_rejected(&before, "stale-work", counts);
     let mut stale_plan = activation(&fixture.workspace, &before.0, &definition, "old-plan");
     stale_plan.prior_work = vec![work(score.item.value_digest().clone())];
     stale_plan.plan = original_plan;
-    checked_reason(
+    assert!(matches!(
         activate_group(
             &mut fixture.store,
             stale_plan,
             || TIME,
             &NativeDirectIdSourceV1,
-        )
-        .unwrap_err(),
-        "activation identity does not bind the exact current design",
-    );
+        ),
+        Err(SuccessorExecutionError::GroupPlanStale)
+    ));
     fixture.compare_rejected(&before, "old-plan", counts);
 
     activate(
@@ -1436,16 +1444,17 @@ fn base_review_fences_goal_closure_reactivation_and_completed_group_cancellation
     let before = fixture.state();
     let counts = fixture.ledger();
     let no_goal = activation(&fixture.workspace, &before.0, &canonical(&group), "no-goal");
-    checked_reason(
+    assert!(matches!(
         activate_group(
             &mut fixture.store,
             no_goal,
             || TIME,
             &NativeDirectIdSourceV1,
-        )
-        .unwrap_err(),
-        "activation requires an unselected ready anchor with its current goal",
-    );
+        ),
+        Err(SuccessorExecutionError::ItemMutation(
+            GraphMutationErrorV2::SessionGoalMissing
+        ))
+    ));
     fixture.compare_rejected(&before, "no-goal", counts);
     at(
         &mut fixture,
@@ -1460,17 +1469,18 @@ fn base_review_fences_goal_closure_reactivation_and_completed_group_cancellation
     let basis = before.0.base_digest().clone();
 
     let wrong_target = request(&fixture, &first, "wrong-goal-target");
-    checked_reason(
+    assert!(matches!(
         issue_cursor_mutation(
             &mut fixture.store,
             wrong_target,
             revise("Wrong target", "prefix", false, &basis),
             || TIME,
             &NativeDirectIdSourceV1,
-        )
-        .unwrap_err(),
-        "this goal revision must create a fresh design-anchor attempt",
-    );
+        ),
+        Err(SuccessorExecutionError::ItemMutation(
+            GraphMutationErrorV2::GoalRevisionTargetNotAllowed { target_graph_node_id }
+        )) if target_graph_node_id.as_str() == "prefix"
+    ));
     fixture.compare_rejected(&before, "wrong-goal-target", counts);
     let mut stale_goal = request(&fixture, &first, "missing-goal-fence");
     stale_goal.cursor.execution.goal_revision = None;
@@ -1588,7 +1598,7 @@ fn base_review_fences_goal_closure_reactivation_and_completed_group_cancellation
             if expected == group_first && actual == group_second));
     fixture.compare_rejected(&before, "crossed-group", counts);
     let prefix = request(&fixture, &review, "late-prefix");
-    checked_reason(
+    assert!(matches!(
         issue_cursor_mutation(
             &mut fixture.store,
             prefix,
@@ -1596,12 +1606,13 @@ fn base_review_fences_goal_closure_reactivation_and_completed_group_cancellation
                 target: GraphNodeId::new("prefix").unwrap(),
                 reason: reason("Cross the activation boundary"),
             },
-            || TIME,
+            || panic!("rejected manual rework must not read the clock"),
             &NativeDirectIdSourceV1,
-        )
-        .unwrap_err(),
-        "ordinary base routing cannot cross the execution-group boundary",
-    );
+        ),
+        Err(SuccessorExecutionError::ItemMutation(
+            GraphMutationErrorV2::ManualReworkTargetNotAllowed { target_graph_node_id },
+        )) if target_graph_node_id.as_str() == "prefix"
+    ));
     fixture.compare_rejected(&before, "late-prefix", counts);
 
     at(
@@ -1629,17 +1640,18 @@ fn base_review_fences_goal_closure_reactivation_and_completed_group_cancellation
         SelectionClosureCauseV1::Completion
     );
     let no_reactivate = request(&fixture, &complete, "no-reactivation");
-    checked_reason(
+    assert!(matches!(
         issue_cursor_mutation(
             &mut fixture.store,
             no_reactivate,
             revise("Third goal", "design", false, &basis),
             || TIME,
             &NativeDirectIdSourceV1,
-        )
-        .unwrap_err(),
-        "goal revision requires a running session or explicit completed-session reactivation",
-    );
+        ),
+        Err(SuccessorExecutionError::ItemMutation(
+            GraphMutationErrorV2::ReactivationFlagRequired
+        ))
+    ));
     fixture.compare_rejected(&before, "no-reactivation", counts);
     at(
         &mut fixture,

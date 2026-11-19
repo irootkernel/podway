@@ -1,0 +1,221 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:successor-group-show-result:v1",
+  "title": "Podway Execution Group Read Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "workspace",
+    "session",
+    "session_location",
+    "session_revision",
+    "truncated",
+    "next_page_token",
+    "group",
+    "total",
+    "rows"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.successor-group-show-result/v1"
+    },
+    "workspace": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "session": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "session_location": {
+      "enum": [
+        "current",
+        "archived"
+      ]
+    },
+    "session_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "next_page_token": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}:[0-9a-f]{16}$"
+        }
+      ]
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "summary",
+        "base_digest",
+        "anchor",
+        "goal_revision",
+        "plan",
+        "working_copy_basis",
+        "terminal_attempt",
+        "closure"
+      ],
+      "properties": {
+        "summary": {
+          "$ref": "urn:podway:schema:successor-history-records:v1#/$defs/group_summary"
+        },
+        "base_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "anchor": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        },
+        "goal_revision": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 18446744073709551615
+            }
+          ]
+        },
+        "plan": {
+          "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/plan"
+        },
+        "working_copy_basis": {
+          "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/working_copy_basis"
+        },
+        "terminal_attempt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          ]
+        },
+        "closure": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "urn:podway:schema:successor-history-records:v1#/$defs/closure"
+            }
+          ]
+        }
+      }
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65536
+    },
+    "rows": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "attempt",
+          "entry_ordinal",
+          "choice",
+          "reason",
+          "assessment",
+          "guard_bindings",
+          "goal_assessment",
+          "actor"
+        ],
+        "properties": {
+          "attempt": {
+            "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+          },
+          "entry_ordinal": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 18446744073709551615
+              }
+            ]
+          },
+          "choice": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              }
+            ]
+          },
+          "assessment": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "$ref": "urn:podway:schema:successor-history-records:v1#/$defs/decision_evidence"
+            }
+          },
+          "guard_bindings": {
+            "type": "array",
+            "maxItems": 128,
+            "items": {
+              "$ref": "urn:podway:schema:successor-history-records:v1#/$defs/guard"
+            }
+          },
+          "goal_assessment": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "urn:podway:schema:successor-history-records:v1#/$defs/assessment"
+              }
+            ]
+          },
+          "actor": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "\\S"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

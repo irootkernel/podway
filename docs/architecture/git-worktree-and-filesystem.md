@@ -71,7 +71,7 @@ they do not protect against root or malicious same-user modification.
 
 ## Workspace identity
 
-Generation-15 Store binding contains the generated workspace UUID, Git common
+The generation-16 Store binding contains the generated workspace UUID, Git common
 and worktree-administration fingerprints, and last validated canonical root.
 The fingerprints retain ADR-0036's role-tagged hashes of lossless canonical path
 bytes. Device/inode/type/birth-time evidence detects replacement during a request;
@@ -159,7 +159,7 @@ SQLite/domain checks must not be described as a Git-index audit it does not perf
 schema: podway.workspace/v1
 procedure_paths:
   - .podway/procedures
-default_preset: sw-dev-v2
+default_preset: sw-dev-v3
 ui:
   show_stage_in_prompt: false
 ```

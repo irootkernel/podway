@@ -2,7 +2,7 @@
 
 ## Session states
 
-A Procedure v2 session is `prepared`, `running`, `completed`, or `cancelled`.
+A Procedure v3 session is `prepared`, `running`, `completed`, or `cancelled`.
 Absence means that the workspace has no current session and is not a lifecycle
 state.
 
@@ -20,8 +20,9 @@ fails closed for prepared state.
 sequence 1 at the immutable Procedure entry placement, and optionally creates
 and binds initial goal revision 1. A running session has exactly one active
 graph-node attempt, and the active attempt is the last trace member. Completion
-or a decision follows only an edge declared by the immutable Procedure. Reaching
-a terminal placement completes the session after its node-specific gates pass.
+or a decision follows the admitted definition. Explicit activation enters the
+selected group. Completing its terminal action returns the declared outputs to
+the base successor. The base terminal completes the session after its gates pass.
 
 Completed and cancelled sessions have no active attempt. The last valid attempt
 of a completed session is completed or skipped. The last attempt of a cancelled
@@ -35,8 +36,8 @@ cancelled because it contains no execution.
 attempt on the same node. `block` and `unblock` also apply to either active node
 type. `rework --to <node>` targets only a declared manual-rework placement
 with a valid attempt on the current trace. It creates a new target attempt and
-applies the Procedure's explicit evidence invalidation rules; node identity and
-trace membership remain authoritative throughout the transition.
+applies the current scope's evidence invalidation rules. Guarded `group replan`
+preserves the closed execution and opens a new base design attempt.
 
 Action completion is forbidden while required items are missing, blockers are
 open, referenced evidence is unresolved, or required goal conditions are
@@ -45,7 +46,7 @@ policy is met. Decisions accept only declared options and route effects. On an
 active `goal_assessment` node, `goal assess-criterion` (single) and
 `goal assess-criteria --stdin` (atomic batch of 1 to 16 unique criteria) record
 current-attempt criterion assessments without moving the cursor before final
-`goal assess` records the goal decision and follows its declared route. Goal
+`decide` records the goal decision and follows its declared route. Goal
 revision follows its own revision fence and may reactivate a completed
 goal-tracked session only through the explicitly authorized command path.
 

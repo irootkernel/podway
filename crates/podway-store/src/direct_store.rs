@@ -20,10 +20,11 @@ mod markers;
 mod predecessor;
 mod transaction;
 
+pub(crate) use transaction::next_workspace_sequence;
 #[cfg(feature = "test-support")]
 pub(crate) use transaction::{
-    candidate_committed_outcome, commit, next_workspace_sequence, persist_success, read_outcome,
-    replay_outcome, validate_success,
+    candidate_committed_outcome, commit, persist_success, read_outcome, replay_outcome,
+    validate_success,
 };
 
 #[cfg(feature = "test-support")]
@@ -51,8 +52,34 @@ pub use transaction::{
     DirectRecordedOutcomeV1, DirectTransactionBoundaryV1, DirectTransactionV1,
 };
 
-pub const DIRECT_SCHEMA_GENERATION_V1: u32 = 15;
-pub const DIRECT_STORE_DDL_V1: &str = include_str!("../../../assets/specifications/sqlite-v15.sql");
+pub const DIRECT_SCHEMA_GENERATION_V1: u32 = 16;
+pub const DIRECT_STORE_DDL_V1: &str = include_str!("../../../assets/specifications/sqlite-v16.sql");
+pub(crate) const LEGACY_DIRECT_SCHEMA_GENERATION_V1: u32 = 15;
+#[cfg(any(test, feature = "test-support"))]
+const LEGACY_DIRECT_STORE_DDL: &str = include_str!("../../../assets/specifications/sqlite-v15.sql");
+pub(crate) const EXECUTION_GROUP_STORE_GENERATION_V1: u32 = DIRECT_SCHEMA_GENERATION_V1;
+pub(crate) const EXECUTION_GROUP_STORE_DDL_V1: &str = DIRECT_STORE_DDL_V1;
+pub(crate) const MAX_EXECUTION_GROUP_ATTEMPT_ROW_BYTES_V1: usize = 150_994_944;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct DirectStoreSchema {
+    generation: u32,
+    ddl: &'static str,
+    max_payload_bytes: usize,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+const WORKFLOW_STORE_SCHEMA: DirectStoreSchema = DirectStoreSchema {
+    generation: LEGACY_DIRECT_SCHEMA_GENERATION_V1,
+    ddl: LEGACY_DIRECT_STORE_DDL,
+    max_payload_bytes: 1_048_576,
+};
+
+const EXECUTION_GROUP_STORE_SCHEMA: DirectStoreSchema = DirectStoreSchema {
+    generation: EXECUTION_GROUP_STORE_GENERATION_V1,
+    ddl: EXECUTION_GROUP_STORE_DDL_V1,
+    max_payload_bytes: MAX_EXECUTION_GROUP_ATTEMPT_ROW_BYTES_V1,
+};
 pub const LEGACY_RUNTIME_MARKERS_V1: [&str; 3] = [
     "reset.marker",
     "workspace-removal.marker",
@@ -154,14 +181,37 @@ impl From<rusqlite::Error> for DirectStoreErrorV1 {
 
 pub type DirectStoreResultV1<T> = Result<T, DirectStoreErrorV1>;
 
+fn require_execution_group_schema(binding: &crate::WorkspaceBindingV1) -> DirectStoreResultV1<()> {
+    if binding.schema_version() != EXECUTION_GROUP_STORE_GENERATION_V1 {
+        return Err(DirectStoreErrorV1::UnsupportedGeneration {
+            generation: binding.schema_version(),
+        });
+    }
+    Ok(())
+}
+
 /// Fixed worktree-local paths. The resolver supplies an absolute, lossless root.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectWorkspaceLayoutV1 {
     root: ValidatedWorkspaceRootV1,
+    schema: DirectStoreSchema,
 }
 
 impl DirectWorkspaceLayoutV1 {
     pub fn new(root: ValidatedWorkspaceRootV1) -> DirectStoreResultV1<Self> {
+        Self::with_schema(root, EXECUTION_GROUP_STORE_SCHEMA)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn for_v15_fixture(root: ValidatedWorkspaceRootV1) -> DirectStoreResultV1<Self> {
+        Self::with_schema(root, WORKFLOW_STORE_SCHEMA)
+    }
+
+    fn with_schema(
+        root: ValidatedWorkspaceRootV1,
+        schema: DirectStoreSchema,
+    ) -> DirectStoreResultV1<Self> {
         if !root.to_path_buf().is_absolute()
             || root.unix_bytes().len() > 4096
             || root.unix_bytes().contains(&0)
@@ -170,7 +220,7 @@ impl DirectWorkspaceLayoutV1 {
                 reason: "worktree root must be absolute",
             });
         }
-        Ok(Self { root })
+        Ok(Self { root, schema })
     }
 
     pub fn root(&self) -> &ValidatedWorkspaceRootV1 {

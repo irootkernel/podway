@@ -8,9 +8,12 @@ use std::{
 use nix::fcntl::OFlag;
 
 use super::{
-    DIRECT_SCHEMA_GENERATION_V1, DirectStoreErrorV1, DirectStoreResultV1, DirectWorkspaceLayoutV1,
-    LEGACY_PODWAY_MARKER_V1, LEGACY_RUNTIME_MARKERS_V1,
+    DirectStoreErrorV1, DirectStoreResultV1, DirectWorkspaceLayoutV1, LEGACY_PODWAY_MARKER_V1,
+    LEGACY_RUNTIME_MARKERS_V1,
 };
+
+#[cfg(test)]
+use super::DIRECT_SCHEMA_GENERATION_V1;
 
 const SQLITE_HEADER_BYTES: usize = 100;
 const SQLITE_MAGIC: &[u8; 16] = b"SQLite format 3\0";
@@ -85,7 +88,7 @@ fn require_destructive_generation_at_inspection(
             let mut header = [0; SQLITE_HEADER_BYTES];
             if read_prefix(file, &mut header)? == SQLITE_HEADER_BYTES
                 && &header[..16] == SQLITE_MAGIC
-                && be_u32(&header[60..64]) > DIRECT_SCHEMA_GENERATION_V1
+                && be_u32(&header[60..64]) > layout.schema.generation
             {
                 directories.revalidate(layout)?;
                 if !super::maintenance::same_file(file, &path)? {
@@ -185,6 +188,7 @@ pub(super) fn classify_unmarked_store_v1(
 fn classify_database_store_v1(
     layout: &DirectWorkspaceLayoutV1,
 ) -> DirectStoreResultV1<DirectStoreClassificationV1> {
+    let supported = layout.schema.generation;
     let mut file = match open_read_nofollow(&layout.database()) {
         Ok(file) => Some(file),
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
@@ -198,11 +202,14 @@ fn classify_database_store_v1(
     let main_generation = (length == SQLITE_HEADER_BYTES && &header[..16] == SQLITE_MAGIC)
         .then(|| be_u32(&header[60..64]));
     // A known unsupported main file must still refuse when its WAL is unreadable.
-    if let Some(generation) = main_generation.filter(|value| *value > DIRECT_SCHEMA_GENERATION_V1) {
+    if let Some(generation) = main_generation.filter(|value| *value > supported) {
         return Ok(DirectStoreClassificationV1::Newer { generation });
     }
     // Even a nonzero main generation can precede a newer committed page-one WAL image.
-    let Some(generation) = committed_wal_generation(&layout.wal())?.or(main_generation) else {
+    let Some(generation) =
+        committed_wal_generation_with_limit(&layout.wal(), MAX_CLASSIFIED_WAL_BYTES, supported)?
+            .or(main_generation)
+    else {
         return Ok(
             if file.is_none() && !path_exists(&layout.wal())? && !path_exists(&layout.shm())? {
                 DirectStoreClassificationV1::Missing
@@ -211,18 +218,16 @@ fn classify_database_store_v1(
             },
         );
     };
-    if file.is_none() && generation <= DIRECT_SCHEMA_GENERATION_V1 {
+    if file.is_none() && generation <= supported {
         return Ok(DirectStoreClassificationV1::Unrecognized);
     }
     Ok(match generation {
-        DIRECT_SCHEMA_GENERATION_V1 => DirectStoreClassificationV1::Current,
+        generation if generation == supported => DirectStoreClassificationV1::Current,
         0 => DirectStoreClassificationV1::Unrecognized,
-        generation if generation < DIRECT_SCHEMA_GENERATION_V1 => {
-            DirectStoreClassificationV1::Legacy {
-                generation: Some(generation),
-                marker: None,
-            }
-        }
+        generation if generation < supported => DirectStoreClassificationV1::Legacy {
+            generation: Some(generation),
+            marker: None,
+        },
         generation => DirectStoreClassificationV1::Newer { generation },
     })
 }
@@ -269,13 +274,15 @@ fn be_u32(bytes: &[u8]) -> u32 {
     u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
 }
 
+#[cfg(test)]
 fn committed_wal_generation(path: &Path) -> DirectStoreResultV1<Option<u32>> {
-    committed_wal_generation_with_limit(path, MAX_CLASSIFIED_WAL_BYTES)
+    committed_wal_generation_with_limit(path, MAX_CLASSIFIED_WAL_BYTES, DIRECT_SCHEMA_GENERATION_V1)
 }
 
 fn committed_wal_generation_with_limit(
     path: &Path,
     limit: u64,
+    supported: u32,
 ) -> DirectStoreResultV1<Option<u32>> {
     let file = match open_read_nofollow(path) {
         Ok(file) => file,
@@ -332,7 +339,7 @@ fn committed_wal_generation_with_limit(
             let generation = generation.ok_or(DirectStoreErrorV1::Unreadable)?;
             // A validated committed unsupported image is sufficient to refuse;
             // neither a huge tail nor a later downgrade grants an older writer authority.
-            if generation > DIRECT_SCHEMA_GENERATION_V1 {
+            if generation > supported {
                 return Ok(Some(generation));
             }
             committed_generation = Some(generation);
@@ -573,7 +580,11 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            committed_wal_generation_with_limit(&layout.wal(), first_frame),
+            committed_wal_generation_with_limit(
+                &layout.wal(),
+                first_frame,
+                DIRECT_SCHEMA_GENERATION_V1
+            ),
             Err(DirectStoreErrorV1::Unreadable)
         ));
         assert_eq!(

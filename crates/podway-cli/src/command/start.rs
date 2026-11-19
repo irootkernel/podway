@@ -5,18 +5,13 @@ use std::{
     path::Path,
 };
 
-use podway_config::{
-    AuthoringContext, ParsedProcedure, ProcedureDocumentFormat, parse_procedure_document,
-    validate_procedure_v2, vet_procedure_v2,
-};
-use podway_core::{PROCEDURE_SCHEMA_V2, Sha256Digest};
-use podway_presets::catalog_v2;
+use podway_core::Sha256Digest;
 use serde_json::{Value, json};
 
 use super::{
-    Cli, Command, ExistingSessionPolicy, LocalFailure, RunResult, StartArgs,
-    StartTerminalDisposition, StatusPreflight, local_result_v2, preset_failure,
-    procedure_config_failure, procedure_format, read_worktree_procedure, workspace_target,
+    Cli, Command, ExistingSessionPolicy, LocalFailure, RunResult, StartTerminalDisposition,
+    StatusPreflight, invalid_v2_value, local_result_v2, procedure_config_failure, procedure_format,
+    read_worktree_procedure, workspace_target,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -264,111 +259,82 @@ fn prompt_start_text(label: &str) -> Result<Option<String>, LocalFailure> {
     Ok(Some(input.trim_end_matches(['\r', '\n']).to_owned()))
 }
 
-pub(super) fn execute_start_dry_run(cli: &Cli) -> Result<RunResult, LocalFailure> {
+/// Preview the same v3 base and default group used by native start. The
+/// unfenced preview neither initializes nor opens a Store.
+pub(super) fn preview(cli: &Cli) -> Result<RunResult, LocalFailure> {
+    use podway_config::execution_groups::{
+        SuccessorDefinition, parse_successor_document, validate_successor_definition,
+    };
+
     let Command::Start(args) = &cli.command else {
         return Err(LocalFailure::request_invalid(
             "dry-run requires session start",
         ));
     };
-    if let Some(preset_name) = &args.preset {
-        let preset = catalog_v2().lookup(preset_name).ok_or_else(|| {
-            LocalFailure::preset_not_found("unknown preset").with_command("session.start")
+    let command = "session.start";
+    let (admitted, default_group_digest) = if let Some(name) = &args.preset {
+        let preset = podway_presets::lookup_v3(name)
+            .ok_or_else(|| LocalFailure::preset_not_found("unknown Procedure v3 preset"))?;
+        let admitted = validate_successor_definition(
+            parse_successor_document(
+                preset.base_yaml.as_bytes(),
+                podway_config::ProcedureDocumentFormat::Yaml,
+            )
+            .map_err(procedure_config_failure)?,
+        )
+        .map_err(procedure_config_failure)?;
+        (admitted, Some(preset.group_digest))
+    } else {
+        let path = args
+            .procedure
+            .as_deref()
+            .ok_or_else(|| LocalFailure::request_invalid("start requires a preset or procedure"))?;
+        let worktree = workspace_target(cli.worktree.clone())?;
+        let procedure = Path::new(path);
+        let source = read_worktree_procedure(&worktree, procedure)?;
+        let admitted = validate_successor_definition(
+            parse_successor_document(&source, procedure_format(procedure))
+                .map_err(procedure_config_failure)?,
+        )
+        .map_err(procedure_config_failure)?;
+        let expected = args.expect_procedure_digest.as_deref().ok_or_else(|| {
+            LocalFailure::digest_confirmation_required(admitted.digest(), command)
         })?;
-        let admitted = preset
-            .validate()
-            .map_err(|error| preset_failure(error).with_command("session.start"))?;
-        let command = cli
-            .command
-            .direct_route()
-            .ok_or_else(|| LocalFailure::request_invalid("invalid start command"))?;
-        let result = json!({
-            "schema": "podway.session-start-result/v4",
-            "procedure_schema": PROCEDURE_SCHEMA_V2,
-            "procedure_digest": admitted.digest().as_str(),
-            "dry_run": true,
-            "goal_tracking": admitted.parsed().goal_tracking().is_some(),
-            "session_state": "prepared",
-            "goal_defined": false,
-            "active_attempt": Value::Null,
-            "goal_revision": Value::Null,
-        })
-        .as_object()
-        .cloned()
-        .expect("v2 preset dry-run result is an object");
-        let text = format!(
-            "dry run: entry graph node {}",
-            admitted.parsed().graph().entry()
-        );
-        return Ok(local_result_v2(command, result, text, 0));
-    }
-
-    let procedure = args
-        .procedure
-        .as_deref()
-        .ok_or_else(|| LocalFailure::request_invalid("start requires a preset or procedure"))?;
-    let root = workspace_target(cli.worktree.clone())?;
-    let bytes = read_worktree_procedure(&root, Path::new(procedure))
-        .map_err(|failure| failure.with_command("session.start"))?;
-    let format = procedure_format(Path::new(procedure));
-    execute_start_dry_run_v2(cli, args, procedure, &bytes, format)
-}
-
-fn execute_start_dry_run_v2(
-    cli: &Cli,
-    args: &StartArgs,
-    procedure: &str,
-    bytes: &[u8],
-    format: ProcedureDocumentFormat,
-) -> Result<RunResult, LocalFailure> {
-    let source = std::str::from_utf8(bytes).map_err(|_| {
-        LocalFailure::procedure_invalid("procedure file is not UTF-8").with_command("session.start")
-    })?;
-    let ParsedProcedure::V2(parsed) = parse_procedure_document(bytes, format)
-        .map_err(|error| procedure_config_failure(error).with_command("session.start"))?;
-    let validated = validate_procedure_v2(parsed)
-        .map_err(|error| procedure_config_failure(error).with_command("session.start"))?;
-    let context = AuthoringContext::new(procedure, source, format);
-    if !vet_procedure_v2(&validated, &context).is_empty() {
-        return Err(
-            LocalFailure::procedure_invalid("Procedure v2 graph vetting failed")
-                .with_command("session.start"),
-        );
-    }
-    let expected = args.expect_procedure_digest.as_deref().ok_or_else(|| {
-        LocalFailure::digest_confirmation_required(validated.digest(), "session.start")
-    })?;
-    let expected = Sha256Digest::new(expected.to_owned()).map_err(|_| {
-        LocalFailure::request_invalid("expected procedure digest must be sha256:<lowercase-hex>")
-            .with_command("session.start")
-    })?;
-    if validated.digest() != &expected {
-        return Err(LocalFailure::procedure_digest_mismatch(
-            &expected,
-            validated.digest(),
-            "session.start",
+        let expected = Sha256Digest::new(expected).map_err(invalid_v2_value)?;
+        if admitted.digest() != &expected {
+            return Err(LocalFailure::procedure_digest_mismatch(
+                &expected,
+                admitted.digest(),
+                command,
+            ));
+        }
+        (admitted, None)
+    };
+    let SuccessorDefinition::Base(base) = admitted.definition() else {
+        return Err(LocalFailure::procedure_invalid(
+            "start requires a base Procedure v3",
         ));
-    }
-    let command = cli
-        .command
-        .direct_route()
-        .ok_or_else(|| LocalFailure::request_invalid("invalid start command"))?;
-    let result = json!({
-        "schema": "podway.session-start-result/v4",
-        "procedure_schema": PROCEDURE_SCHEMA_V2,
-        "procedure_digest": validated.digest().as_str(),
+    };
+    let Value::Object(result) = json!({
+        "schema": "podway.successor-session-start-result/v1",
+        "operation": command,
+        "procedure_schema": "podway.procedure/v3",
+        "procedure_digest": admitted.digest(),
+        "default_group_digest": default_group_digest,
         "dry_run": true,
-        "goal_tracking": validated.parsed().goal_tracking().is_some(),
         "session_state": "prepared",
+        "goal_tracking": base.goal_tracking().is_some(),
         "goal_defined": false,
-        "active_attempt": Value::Null,
-        "goal_revision": Value::Null,
-    })
-    .as_object()
-    .cloned()
-    .expect("custom v2 dry-run result is an object");
-    let text = format!(
-        "dry run: entry graph node {}",
-        validated.parsed().graph().entry()
-    );
-    Ok(local_result_v2(command, result, text, 0))
+        "active_attempt": null,
+        "goal_revision": null,
+        "entry_graph_node_id": base.graph().entry(),
+    }) else {
+        unreachable!("start preview is an object");
+    };
+    Ok(local_result_v2(
+        command,
+        result,
+        format!("dry run: entry graph node {}", base.graph().entry()),
+        0,
+    ))
 }

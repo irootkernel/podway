@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:scoped-group-replan-required-details:v1",
+  "title": "Podway Scoped Group Replan Required Details",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "decision",
+    "option",
+    "command",
+    "argv",
+    "input_schema"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.scoped-group-replan-required-details/v1"
+    },
+    "decision": {
+      "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+    },
+    "option": {
+      "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+    },
+    "command": {
+      "const": "group.replan"
+    },
+    "argv": {
+      "const": [
+        "podway",
+        "--json",
+        "group",
+        "replan",
+        "--stdin"
+      ]
+    },
+    "input_schema": {
+      "const": "podway.group-replan-input/v1"
+    }
+  }
+}

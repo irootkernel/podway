@@ -12,21 +12,25 @@ use podway_core::{
 };
 use podway_engine::direct_execution::{DirectIdSourceV1, NativeDirectIdSourceV1};
 use podway_engine::successor_execution::{
-    GroupActivationRequest, SuccessorCursor, SuccessorExecutionError, SuccessorMutationRequest,
-    activate_group, return_from_group,
+    GroupActivationRequest, SuccessorCursor, SuccessorCursorMutation, SuccessorExecutionError,
+    SuccessorHistoryPage, SuccessorHistorySession, SuccessorItemRequest, SuccessorMutationRequest,
+    activate_group, issue_cursor_mutation, list_successor_groups, lookup_successor_outcome,
+    observe_successor, record_successor_item, return_from_group,
 };
 use podway_protocol::RequestIdV1;
 use podway_store::direct_store::{
-    DirectMutationRequestV1, DirectOutcomeScopeV1, DirectStoreErrorV1,
+    DirectMutationRequestV1, DirectOutcomeScopeV1, DirectStoreErrorV1, DirectStoreV1,
+    DirectWorkspaceLayoutV1, ExclusiveMaintenanceLeaseV1,
 };
 use podway_store::successor_store::{
-    CandidateDefinition, CandidateExecutionStore, CandidateSources, CandidateStoreError,
-    CandidateSuccess, persist_candidate_execution,
+    CandidateDefinition, CandidateExecutionStore, CandidateSessionLocation, CandidateSources,
+    CandidateStoreError, CandidateSuccess, NativeSuccessorStore, persist_candidate_execution,
 };
 use podway_store::{CanonicalExecutionJsonV1, IdempotencyKeyV1, ValidatedWorkspaceRootV1};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 pub(super) const TIME: UnixMillis = UnixMillis::new(1_700_000_000_000);
@@ -239,6 +243,7 @@ pub(super) fn mutation(
     key: &str,
 ) -> SuccessorMutationRequest {
     SuccessorMutationRequest {
+        response: podway_engine::successor_execution::SuccessorMutationResponseV1::Fixture,
         workspace: workspace.clone(),
         key: IdempotencyKeyV1::new(key).unwrap(),
         request_id: RequestIdV1::new(NativeDirectIdSourceV1.next_session_id().into_inner())
@@ -291,6 +296,362 @@ fn advance_fixture_to_terminal(
     }
     fixture.edit_fixture(&state, &sources);
     (state, sources)
+}
+
+#[test]
+fn begin_from_a_cold_prepared_session_keeps_one_original_success() {
+    let canonical = canonical(&base_document());
+    let canonical_source = canonical.canonical_json().as_str();
+    let CandidateDefinition::Base(base) = definition(canonical_source).unwrap() else {
+        panic!("expected a base Procedure");
+    };
+    let sources = CandidateSources::from([(canonical.digest().clone(), canonical_source.into())]);
+    let state = ExecutionSessionV3::prepared(
+        NativeDirectIdSourceV1.next_session_id(),
+        base,
+        canonical.digest().clone(),
+        TIME,
+    );
+    let mut fixture = Fixture::with_state(&state, &sources);
+    fixture.reopen();
+    let prepared = fixture.state();
+    assert_eq!(prepared.0, state);
+    assert!(prepared.0.active_attempt().is_none());
+    let competing = ExecutionSessionV3::prepared(
+        NativeDirectIdSourceV1.next_session_id(),
+        state.base_definition().clone(),
+        state.base_digest().clone(),
+        TIME,
+    );
+    let mut unchecked_writer = Connection::open(&fixture.file).unwrap();
+    unchecked_writer
+        .execute_batch("PRAGMA foreign_keys = ON")
+        .unwrap();
+    let transaction = unchecked_writer.transaction().unwrap();
+    assert!(persist_candidate_execution(&transaction, &competing, &sources).is_err());
+    transaction.rollback().unwrap();
+    drop(unchecked_writer);
+    assert_eq!(fixture.state(), prepared);
+
+    let key = "begin-prepared";
+    let first = issue_cursor_mutation(
+        &mut fixture.store,
+        mutation(&fixture.workspace, &state, key),
+        SuccessorCursorMutation::Begin(None),
+        || UnixMillis::new(TIME.get() + 1),
+        &NativeDirectIdSourceV1,
+    )
+    .unwrap();
+    fixture.reopen();
+    let running = fixture.state();
+    assert_eq!(running.0.lifecycle(), SessionLifecycle::Running);
+    assert_eq!(running.0.fence().revision, Revision::new(1));
+    assert_eq!(running.0.created_at(), TIME);
+    assert_eq!(running.0.updated_at(), UnixMillis::new(TIME.get() + 1));
+    assert_eq!(running.0.attempt_history().len(), 1);
+    assert_eq!(
+        running.0.active_attempt().unwrap().target().node().as_str(),
+        "design"
+    );
+    assert_eq!(fixture.ledger(), (1, 1, 1));
+
+    let replay = issue_cursor_mutation(
+        &mut fixture.store,
+        mutation(&fixture.workspace, &state, key),
+        SuccessorCursorMutation::Begin(None),
+        || panic!("exact replay must not read the clock"),
+        &NativeDirectIdSourceV1,
+    )
+    .unwrap();
+    assert!(replay.replayed());
+    assert_eq!(first.outcome(), replay.outcome());
+
+    assert!(
+        issue_cursor_mutation(
+            &mut fixture.store,
+            mutation(&fixture.workspace, &state, "stale-begin"),
+            SuccessorCursorMutation::Begin(None),
+            || panic!("stale begin must not read the clock"),
+            &NativeDirectIdSourceV1,
+        )
+        .is_err()
+    );
+    fixture.compare_rejected(&running, "stale-begin", (1, 1, 1));
+}
+
+#[test]
+fn native_direct_transactions_publish_and_reopen_successor_state() {
+    let directory = tempfile::Builder::new()
+        .prefix("podway-adopt-direct-session-")
+        .tempdir_in(std::fs::canonicalize("/tmp").unwrap())
+        .unwrap();
+    let root = ValidatedWorkspaceRootV1::from_path(directory.path()).unwrap();
+    let layout = DirectWorkspaceLayoutV1::new(root).unwrap();
+    let base = canonical(&base_document());
+    let digest = base.digest().clone();
+    let source = base.canonical_json().as_str();
+    let CandidateDefinition::Base(procedure) = definition(source).unwrap() else {
+        panic!("expected a base Procedure");
+    };
+    let sources = CandidateSources::from([(digest.clone(), source.into())]);
+    let id = NativeDirectIdSourceV1.next_session_id();
+    let workspace = NativeDirectIdSourceV1.next_workspace_id();
+    let prepared = ExecutionSessionV3::prepared(id.clone(), procedure, digest.clone(), TIME);
+    let store = DirectStoreV1::new(layout, digest.clone(), digest.clone(), digest.clone());
+    let deadline = || Instant::now() + Duration::from_secs(5);
+    let request = |name: &str, scope| {
+        DirectMutationRequestV1::new(
+            IdempotencyKeyV1::new(name).unwrap(),
+            digest.clone(),
+            name,
+            "00000000-0000-4000-8000-000000000002",
+            scope,
+        )
+        .unwrap()
+    };
+    let envelope = |request: &DirectMutationRequestV1| {
+        CanonicalExecutionJsonV1::new(
+        podway_core::canonicalize_json_v1(&json!({
+            "schema": "podway.output/v4", "request_id": request.response_id(),
+            "command": request.command(), "generated_at": "2023-11-14T22:13:20.000Z", "result": {}, "warnings": []
+        })).unwrap()).unwrap()
+    };
+    let read_state = || {
+        store
+            .read_admitting_typed(
+                deadline(),
+                |_| Ok::<_, CandidateStoreError>(()),
+                |(), snapshot| snapshot.successor_state(definition),
+            )
+            .unwrap()
+            .unwrap()
+    };
+    let setup = request("workspace.init", DirectOutcomeScopeV1::Workspace);
+    let lease = ExclusiveMaintenanceLeaseV1::acquire(store.layout(), deadline(), true).unwrap();
+    store
+        .bootstrap(
+            &lease,
+            workspace.clone(),
+            "current",
+            &setup,
+            deadline(),
+            || TIME,
+            |_| Ok(envelope(&setup)),
+        )
+        .unwrap();
+    drop(lease);
+    assert!(read_state().is_none());
+
+    let start = request("session.start", DirectOutcomeScopeV1::Workspace);
+    let first = store
+        .mutate_typed(
+            &start,
+            deadline(),
+            || TIME,
+            |transaction| {
+                assert!(transaction.successor_state(definition)?.is_none());
+                transaction.now();
+                transaction.create_successor_state("Successor task", &prepared, &sources)?;
+                Ok::<_, CandidateStoreError>(envelope(&start))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        first.outcome().scope(),
+        &DirectOutcomeScopeV1::Session(id.clone())
+    );
+    assert_eq!(read_state(), Some((prepared.clone(), sources.clone())));
+
+    let mut native = NativeSuccessorStore::new(&store, deadline(), |_| Ok(()));
+    issue_cursor_mutation(
+        &mut native,
+        mutation(&workspace, &prepared, "begin-native-successor"),
+        SuccessorCursorMutation::Begin(None),
+        || TIME,
+        &NativeDirectIdSourceV1,
+    )
+    .unwrap();
+    let (running, _) = read_state().unwrap();
+    assert_eq!(running.lifecycle(), SessionLifecycle::Running);
+    assert_eq!(running.fence().revision, Revision::new(1));
+    record_successor_item(
+        &mut native,
+        SuccessorItemRequest {
+            response: podway_engine::successor_execution::SuccessorMutationResponseV1::Fixture,
+            workspace: workspace.clone(),
+            key: IdempotencyKeyV1::new("record-native-plan").unwrap(),
+            request_id: RequestIdV1::new(NativeDirectIdSourceV1.next_session_id().into_inner())
+                .unwrap(),
+            target: running.active_attempt().unwrap().target().clone(),
+            selected_group: None,
+        },
+        GroupItemWriteV1 {
+            item: ItemId::new("plan").unwrap(),
+            expected_revision: Revision::ZERO,
+            value: Some(RecordedItemValueV2::text("Prepare a native report.").unwrap()),
+        },
+        || TIME,
+    )
+    .unwrap();
+    let (ready, _) = read_state().unwrap();
+    let group = canonical(&group_document());
+    let activate = || activation(&workspace, &ready, &group, "activate-native-group");
+    let activation_outcome =
+        activate_group(&mut native, activate(), || TIME, &NativeDirectIdSourceV1).unwrap();
+    let (active, _) = read_state().unwrap();
+    assert!(active.selected().is_some());
+    let observed = observe_successor(&mut native, &workspace, &id).unwrap();
+    assert_eq!(observed.cursor, SuccessorCursor::from_state(&active));
+    assert_eq!(
+        observed.workspace_sequence,
+        activation_outcome.outcome().sequence()
+    );
+    let replay = activate_group(
+        &mut native,
+        activate(),
+        || panic!("exact replay must not read clock"),
+        &NativeDirectIdSourceV1,
+    )
+    .unwrap();
+    assert_eq!(replay.outcome(), activation_outcome.outcome());
+
+    let cancel = request("session.cancel", DirectOutcomeScopeV1::Session(id.clone()));
+    store
+        .mutate_typed(
+            &cancel,
+            deadline(),
+            || TIME,
+            |transaction| {
+                let (mut state, retained_sources) =
+                    transaction.successor_state(definition)?.unwrap();
+                let fence = state.fence();
+                state.cancel(
+                    &fence,
+                    podway_core::ReasonV2::new("End the isolated fixture").unwrap(),
+                    transaction.now(),
+                )?;
+                transaction.write_successor_state(fence.revision, &state, &retained_sources)?;
+                Ok::<_, CandidateStoreError>(envelope(&cancel))
+            },
+        )
+        .unwrap();
+    let terminal = read_state().unwrap();
+    assert_eq!(terminal.0.lifecycle(), SessionLifecycle::Cancelled);
+    let terminal_revision = terminal.0.fence().revision;
+    let replace = request("session.start_replace", DirectOutcomeScopeV1::Workspace);
+    assert!(matches!(
+        store
+            .mutate_typed(
+                &replace,
+                deadline(),
+                || TIME,
+                |transaction| {
+                    transaction.now();
+                    transaction.archive_successor_session(&id, terminal_revision)?;
+                    Ok::<_, CandidateStoreError>(envelope(&replace))
+                }
+            )
+            .unwrap_err()
+            .into_error(),
+        CandidateStoreError::Item(podway_store::StoreErrorV1::SessionArchiveNotEligibleV1 {
+            current_terminal_disposition: false,
+            ..
+        })
+    ));
+    assert_eq!(read_state(), Some(terminal.clone()));
+
+    let disposition = request(
+        "session.terminal_disposition",
+        DirectOutcomeScopeV1::Session(id.clone()),
+    );
+    store
+        .mutate_typed(
+            &disposition,
+            deadline(),
+            || TIME,
+            |transaction| {
+                let acknowledgement = podway_core::TerminalDispositionV2::not_required(
+                    id.clone(),
+                    terminal_revision,
+                    "Owned fixture completed",
+                    None,
+                    transaction.now(),
+                )?;
+                transaction.dispose_successor_session(&acknowledgement)?;
+                Ok::<_, CandidateStoreError>(envelope(&disposition))
+            },
+        )
+        .unwrap();
+    let next_id = NativeDirectIdSourceV1.next_session_id();
+    let next = ExecutionSessionV3::prepared(
+        next_id.clone(),
+        prepared.base_definition().clone(),
+        digest,
+        TIME,
+    );
+    let replaced = store
+        .mutate_typed(
+            &replace,
+            deadline(),
+            || TIME,
+            |transaction| {
+                transaction.now();
+                transaction.archive_successor_session(&id, terminal_revision)?;
+                transaction.create_successor_state("Next successor task", &next, &sources)?;
+                Ok::<_, CandidateStoreError>(envelope(&replace))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        replaced.outcome().scope(),
+        &DirectOutcomeScopeV1::Session(next_id)
+    );
+    assert_eq!(read_state(), Some((next, sources)));
+    let old_outcome = lookup_successor_outcome(
+        &native,
+        &workspace,
+        &IdempotencyKeyV1::new("activate-native-group").unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(&old_outcome, activation_outcome.outcome());
+    let groups = list_successor_groups(
+        &mut native,
+        SuccessorHistorySession {
+            workspace: &workspace,
+            session: &id,
+            location: CandidateSessionLocation::Archived,
+        },
+        SuccessorHistoryPage {
+            limit: 1,
+            continuation: None,
+        },
+    )
+    .unwrap();
+    assert!(
+        groups
+            .as_str()
+            .contains(active.selected().unwrap().identity().execution().as_str())
+    );
+    store
+        .read_admitting_typed(
+            deadline(),
+            |_| Ok::<_, CandidateStoreError>(()),
+            |(), snapshot| {
+                assert_eq!(
+                    snapshot.archived_successor_state(&id, definition)?,
+                    Some(terminal)
+                );
+                let metadata = snapshot.successor_metadata(&id)?.unwrap();
+                assert_eq!(metadata.task_title, "Successor task");
+                let archive = metadata.archived.unwrap();
+                assert_eq!(archive.slot, 1);
+                assert_eq!(archive.workspace_sequence, replaced.outcome().sequence());
+                Ok::<_, CandidateStoreError>(())
+            },
+        )
+        .unwrap()
+        .unwrap();
 }
 
 #[test]
@@ -455,9 +816,7 @@ fn insufficient_plan_return_output_and_stale_identity_do_not_publish_success() {
             || TIME,
             &NativeDirectIdSourceV1
         ),
-        Err(SuccessorExecutionError::Domain(
-            DomainError::InvalidState { .. }
-        ))
+        Err(SuccessorExecutionError::GroupPlanStale)
     ));
     fixture.compare_rejected(&ready, "plan", (0, 0, 0));
 
@@ -470,9 +829,7 @@ fn insufficient_plan_return_output_and_stale_identity_do_not_publish_success() {
             || panic!("invalid source reads no clock"),
             &NativeDirectIdSourceV1
         ),
-        Err(SuccessorExecutionError::Invalid(
-            "prepared group definition digest differs"
-        ))
+        Err(SuccessorExecutionError::GroupDefinitionMismatch)
     ));
     fixture.compare_rejected(&ready, "digest", (0, 0, 0));
 
@@ -533,9 +890,7 @@ fn insufficient_plan_return_output_and_stale_identity_do_not_publish_success() {
             || panic!("nonterminal refusal reads no clock"),
             &NativeDirectIdSourceV1
         ),
-        Err(SuccessorExecutionError::Invalid(
-            "candidate return requires the group terminal placement"
-        ))
+        Err(SuccessorExecutionError::GroupReturnNotAllowed)
     ));
     fixture.compare_rejected(&running, "wrong-return", (1, 1, 1));
 
@@ -736,9 +1091,11 @@ fn activation_revalidates_exact_retained_work_and_predecessor() {
             || TIME,
             &NativeDirectIdSourceV1
         ),
-        Err(SuccessorExecutionError::Domain(DomainError::InvalidState {
-            reason: "prior work value digest differs from retained history"
-        }))
+        Err(SuccessorExecutionError::GroupActivationPriorWorkInvalid(
+            DomainError::InvalidState {
+                reason: "prior work value digest differs from retained history"
+            }
+        ))
     ));
     fixture.compare_rejected(&prior_state, "prior-value", (0, 0, 0));
 
@@ -753,9 +1110,7 @@ fn activation_revalidates_exact_retained_work_and_predecessor() {
             || TIME,
             &NativeDirectIdSourceV1
         ),
-        Err(SuccessorExecutionError::Domain(DomainError::InvalidState {
-            reason: "activation identity does not bind the exact current design"
-        }))
+        Err(SuccessorExecutionError::GroupPlanStale)
     ));
     fixture.compare_rejected(&prior_state, "predecessor", (0, 0, 0));
 

@@ -14,7 +14,7 @@ pub struct SuccessorObservation {
 }
 
 pub fn observe_successor(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorReadStore,
     workspace: &WorkspaceId,
     session: &SessionId,
 ) -> Result<SuccessorObservation> {
@@ -30,7 +30,7 @@ pub fn observe_successor(
 }
 
 pub fn lookup_successor_outcome(
-    store: &CandidateExecutionStore,
+    store: &impl SuccessorReadStore,
     workspace: &WorkspaceId,
     key: &IdempotencyKeyV1,
 ) -> Result<Option<DirectRecordedOutcomeV1>> {
@@ -45,7 +45,7 @@ pub struct CurrentItemEvidence {
 }
 
 pub fn read_current_evidence(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorReadStore,
     workspace: &WorkspaceId,
     cursor: &SuccessorCursor,
     source: &EvidenceSourceV3,
@@ -68,7 +68,7 @@ pub fn read_current_evidence(
 
 /// Obtain the private package binding for the requested, current opted-in Action.
 pub fn current_delegation_package(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorReadStore,
     workspace: &WorkspaceId,
     cursor: &SuccessorCursor,
 ) -> Result<ScopedDelegationBindingV1> {
@@ -78,7 +78,7 @@ pub fn current_delegation_package(
 
 /// Read the exact design item-set binding for a fresh activation request.
 pub fn current_plan_binding(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorReadStore,
     workspace: &WorkspaceId,
     cursor: &SuccessorCursor,
 ) -> Result<PlanBindingV1> {
@@ -86,7 +86,7 @@ pub fn current_plan_binding(
 }
 
 fn state_at_cursor(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorReadStore,
     workspace: &WorkspaceId,
     cursor: &SuccessorCursor,
 ) -> Result<ExecutionSessionV3> {
@@ -233,13 +233,38 @@ fn item_bindings<'a>(
 }
 
 pub(super) fn verify_delegated_completion(
-    workspace: &WorkspaceId,
+    transaction: &CandidateExecutionTransaction<'_, '_>,
     state: &ExecutionSessionV3,
 ) -> Result<()> {
+    if transaction.binding().is_some() {
+        if matches!(
+            state.current_placement().map(PlacementV3::kind),
+            Some(PlacementKindV3::Action {
+                delegation: Some(_),
+                ..
+            })
+        ) && let Some(active) = state.active_attempt()
+            && active.delegation().is_none()
+        {
+            // Native admission has already checked each current binding against its immutable
+            // receipt and its accepted item set. A stale attempt retains its receipt for readback.
+            use crate::direct_execution::DirectDelegationFailureV1 as Failure;
+            let failure = if transaction
+                .delegation_receipt(state, active.target().attempt())?
+                .is_some()
+            {
+                Failure::ItemsChanged
+            } else {
+                Failure::ReceiptRequired
+            };
+            return Err(SuccessorExecutionError::Delegation(failure));
+        }
+        return Ok(());
+    }
     if let Some(accepted) = state
         .active_attempt()
         .and_then(GroupAttemptStateV1::delegation)
-        && accepted != &delegation_package(workspace, state)?
+        && accepted != &delegation_package(transaction.workspace(), state)?
     {
         return Err(SuccessorExecutionError::Invalid(
             "candidate delegated acceptance is no longer current",

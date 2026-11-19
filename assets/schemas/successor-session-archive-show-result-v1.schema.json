@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:successor-session-archive-show-result:v1",
+  "title": "Podway Archived Successor Session Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "archive",
+    "disposition",
+    "observation"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.successor-session-archive-show-result/v1"
+    },
+    "archive": {
+      "$ref": "urn:podway:schema:session-archive-list-result:v1#/$defs/archiveSummary"
+    },
+    "disposition": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/terminalDisposition"
+    },
+    "observation": {
+      "$ref": "urn:podway:schema:observation-result:v8"
+    },
+    "attempt_history": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempts",
+        "trace_length",
+        "history_before"
+      ],
+      "properties": {
+        "attempts": {
+          "$ref": "urn:podway:schema:scoped-verbose-status-result:v1#/properties/attempts"
+        },
+        "trace_length": {
+          "$ref": "urn:podway:schema:scoped-verbose-status-result:v1#/properties/trace_length"
+        },
+        "history_before": {
+          "$ref": "urn:podway:schema:scoped-verbose-status-result:v1#/properties/history_before"
+        }
+      }
+    }
+  }
+}

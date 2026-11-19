@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:successor-group-boundary-result:v1",
+  "title": "Podway Successor Execution Group Boundary Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "operation",
+    "revision_before",
+    "revision",
+    "closed_attempt",
+    "active_attempt",
+    "execution_id",
+    "group_outcome",
+    "group_terminal_attempt",
+    "counters",
+    "guidance"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.successor-group-boundary-result/v1"
+    },
+    "operation": {
+      "enum": [
+        "group.activate",
+        "group.return"
+      ]
+    },
+    "revision_before": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "closed_attempt": {
+      "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+    },
+    "active_attempt": {
+      "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+    },
+    "execution_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "group_outcome": {
+      "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/outcome"
+    },
+    "group_terminal_attempt": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "counters": {
+      "$ref": "urn:podway:schema:observation-result:v7#/$defs/counters"
+    },
+    "guidance": {
+      "$ref": "urn:podway:schema:observation-result:v7#/$defs/guidance"
+    }
+  }
+}

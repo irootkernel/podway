@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:procedure-source-error-details:v1",
+  "title": "Podway Procedure Source Error Details v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "expected_schema",
+        "reason",
+        "known_source_schema"
+      ],
+      "properties": {
+        "schema": {
+          "const": "podway.procedure-source-error-details/v1"
+        },
+        "expected_schema": {
+          "const": "podway.procedure/v3"
+        },
+        "reason": {
+          "enum": [
+            "invalid_document",
+            "invalid_definition",
+            "resource_limit",
+            "unsupported_format",
+            "unsupported_schema"
+          ]
+        },
+        "known_source_schema": {
+          "enum": [
+            null,
+            "podway.procedure/v2",
+            "podway.execution-group/v1"
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "reason": {
+            "const": "unsupported_schema"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "known_source_schema": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ]
+}

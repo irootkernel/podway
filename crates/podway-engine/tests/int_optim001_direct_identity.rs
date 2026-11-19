@@ -218,7 +218,7 @@ fn provisioned_store() -> (TempDir, DirectStoreV1) {
     let root =
         ValidatedWorkspaceRootV1::from_unix_bytes(path.as_os_str().as_bytes().to_vec()).unwrap();
     let store = DirectStoreV1::new(
-        DirectWorkspaceLayoutV1::new(root).unwrap(),
+        DirectWorkspaceLayoutV1::for_v15_fixture(root).unwrap(),
         digest(),
         worktree.identity().common_directory_fingerprint().clone(),
         worktree

@@ -3,9 +3,11 @@
 //! The existing item, guard, goal and delegation declaration types are shared values, not a
 //! selection of Procedure v2 semantics. Config owns document admission and graph analysis.
 mod definitions;
+mod delegation;
 mod lifecycle;
 mod records;
 pub use definitions::*;
+pub use delegation::*;
 pub use lifecycle::*;
 pub use records::*;
 

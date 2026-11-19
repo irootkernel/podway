@@ -30,6 +30,16 @@ retirement table records guarantees removed by the direct generation; those IDs
 are never reused for different guarantees. Active portions of mixed requirements
 remain below with their retired clauses identified.
 
+## Scoped execution amendments
+
+For the generation 16 writer, the [scoped Direct contract](json-contract.md#scoped-direct-execution)
+owns the current cursor, observation families and activation, replan, history
+and delegation boundaries. Its v7/v8 selections and v2 observation wrapper
+supersede the previous writer's v5/v6 and v1 wrapper below. Group-aware
+evidence and acceptance use the scoped public schemas. For generation 16, the
+contract selector uses scoped citation-error v1/v2. The original writer's
+Procedure v2 wire shapes remain historical under their original selectors.
+
 ## Direct execution requirements
 
 | ID | Normative requirement |
@@ -45,7 +55,7 @@ remain below with their retired clauses identified.
 | `AUT-DIRECT-009` | `outcome lookup --idempotency-key <key>` MUST be read-only and workspace-scoped, returning either `found=false` or the complete immutable retained success. It MUST NOT replay or submit a mutation, expose a non-terminal job, or retain a failed request. A miss proves absence only within retention. |
 | `AUT-DIRECT-010` | Session outcomes MUST remain until session reset or runtime reset, including after archival and archive purge. Workspace removal destroys all retention. Workspace-scoped outcomes MUST be bounded to 100 entries or 30 days, pruned only on successful writes. Clients MUST account for these boundaries when interpreting a miss. |
 | `AUT-DIRECT-011` | Canonically retired command families and flags MUST fail `COMMAND_RETIRED` before workspace resolution, stdin consumption, or Store access. `job.lookup` identifies `outcome.lookup`; a null replacement means none exists. Unknown syntax retains usage behavior. |
-| `AUT-DIRECT-012` | Normal reads, writes, and replay MUST refuse Store generations 1–13 and daemon-era markers without conversion or deletion. Unsupported legacy workspace configuration MUST fail before Store access. Confirmed reset-all is the explicit destructive recovery for those legacy generations; reads MUST NOT resume it. Every Store admission, including reset and removal, MUST refuse a newer generation without effects and direct the caller to a supporting Podway. |
+| `AUT-DIRECT-012` | The generation 16 writer MUST refuse ordinary reads, writes and replay of Store generations 1–15 and legacy markers without conversion or deletion. Unsupported legacy workspace configuration MUST fail before Store access. Confirmed reset-all is the explicit destructive recovery for those legacy generations. Reads MUST NOT resume it. Every Store admission, including reset and removal, MUST refuse a newer generation without effects and direct the caller to a supporting Podway. |
 | `AUT-DIRECT-013` | The Store MUST bind its writer identity to the manifest digest and refuse unsupported identity before read, mutation, or key replay. Only an explicitly declared direct predecessor may migrate under exclusive maintenance; the initial cutover declares none. Development MUST use matching scratch worktrees. |
 | `AUT-DIRECT-014` | Reset/removal MUST preserve bounded marker recovery, workspace generation fencing, explicit destructive authorization, and original-key exact retry. Reset-all preserves Procedure sources and configuration unrelated to retired legacy mode; it intentionally retires legacy-mode configuration/markers. Removal deletes only `.podway` and preserves Git/user files. A recipe grants no authority. |
 | `AUT-DIRECT-015` | Manifest v2 MUST bind product/version and complete canonical contract/schema/catalog/fixture assets without IPC. Release provenance MUST separately bind the source lockfile bytes. The single CLI's complete output-v4/version-result-v2 identity MUST be validated by the authoritative offline Rust verifier against manifest, native target, source commit, and recomputed build identity. |
@@ -55,15 +65,11 @@ remain below with their retired clauses identified.
 | `AUT-DIRECT-019` | RecoveryRecipe v2 MUST be closed, bounded, and code/boundary-specific. Ordinary recovery MUST remain read-only; legacy reset and exact initialization/reset/removal continuation MUST explicitly require authorization. No recipe may weaken a fence, fabricate a new replay key, or authorize external work. |
 | `AUT-DIRECT-020` | Native qualification MUST bind one packaged release-profile CLI, immutable candidate bytes, independent extraction, exact manifest/catalog/lock/source identity, disabled debug hooks, and bounded process/fixture cleanup. A dirty-source development dry run MUST remain explicitly nonpublishable `development-qualification` with gate `development`; it MUST NOT imply clean distribution or a full/patch release gate. |
 
-The `bug-fix-v2` version `4` reproduction prompt changes the current manifest
-identity. The empty predecessor registry therefore refuses normal reads, writes
-and even original-request replay against a previous-manifest Store with
-`WORKSPACE_CONTRACT_MISMATCH`, regardless of the session's selected preset.
-An immutable admitted snapshot is preserved but cannot bypass writer admission.
-Use fresh isolated candidate fixtures for workflow checks; this feature declares
-no migration or predecessor and authorizes no forced reset or installed update.
-Human `preset explain` reports admitted goal-tracking policy; its JSON result
-retains the existing fields.
+The previous writer's `bug-fix-v2` reproduction prompt update changed its
+manifest identity. The generation 16 writer likewise binds its own manifest.
+A same-generation unsupported manifest returns `WORKSPACE_CONTRACT_MISMATCH`
+before ordinary access or replay. An immutable snapshot needs an admitted
+writer. Use fresh isolated fixtures for development gates.
 
 The [CLI specification](cli-specification.md#worktree-selection-and-deadlines)
 owns duration syntax and prompting. Retired syntax is listed in the
@@ -218,7 +224,7 @@ key for exact success replay; refreshed fences form a different request.
 | `AUT-OBS-008` | In generation 1, a completed or cancelled observation MUST succeed with prepared-aware terminal status, null guidance, no active items, and only a terminal-disposition template when the current terminal revision has no disposition; a disposed terminal state MUST instead offer only eligible reset and replacement templates. Existing `next` terminal behavior remains unchanged. |
 | `AUT-OBS-009` | Observation MUST omit history and compose four bounded allocations within a 1,048,576-byte complete JSON envelope: complete compact status plus running `podway.next-result/v5` or cursor-free prepared `podway.prepared-next-result/v3` guidance share 786,432 bytes. Active items have 131,072 bytes, mutation templates have 65,536 bytes, and 65,536 bytes remain for serialization and the outer envelope. Status and guidance retain the complete graph-wide counters and MUST be measured together. Item and template windows MUST report their exact total and truncation; complete-member or envelope overflow MUST fail closed. |
 | `AUT-OBS-010` | Observation guidance MUST emit evidence metadata only, with no preview data and no page token. Active-item choice constraints MUST expose at most eight choices with the exact choice count and a truncation flag, and template argv elements MUST NOT exceed 4,096 Unicode scalars. |
-| `AUT-OBS-011` | Reducing the observation status member from the standard tier to the compact projection removes `purpose`, `item_values`, and the other standard-only fields from observation. Current progression guidance and active-item mutation information MUST remain self-contained in observation; a consumer that needs the removed fields, or trace history, MUST use `session.status`. |
+| `AUT-OBS-011` | Current progression guidance and active-item mutation information MUST remain self-contained in observation. Generation-16 standard status and next use v7 and contain neither `purpose` nor `item_values`. Verbose status adds bounded trace history. The previous writer's standard status exposed the older fields. |
 | `AUT-OBS-012` | A truncated mutation-template window MUST still carry the first template of every command it would otherwise have offered, so no action named by `allowed_actions` is left without a template. |
 | `AUT-OBS-013` | In generation 2, the prepared observation window MUST offer exactly four lifecycle templates: `session.begin` without explicit authorization, plus `session.reset` and two `session.start_replace` variants (one `--preset`, one `--procedure` with `--expect-procedure-digest`), each of the latter three with explicit authorization (`requires_explicit_authorization` `true`). Every template carries `preconditions` equal to the status session and an argv ending with the current `--if-workspace-uuid`, `--if-session-id` and `--if-session-revision` values followed by `--idempotency-key <idempotency-key>`. |
 | `AUT-OBS-014` | In generation 2, an undisposed completed or cancelled observation MUST offer exactly two `session.terminal_disposition` templates — handed-off with `--summary <summary>` and `--reference <reference>`, and not-required with `--reason <reason>` — neither requiring explicit authorization, both ending with the same fence tail and key placeholder. |
@@ -250,7 +256,7 @@ retain one usable template for every offered command.
 |---|---|
 | `AUT-GEN-001` | A global `--contract-generation <1\|2>` option MUST select the contract generation for one invocation; the default MUST stay 1 until generation 1 is removed. The value MUST be validated after parsing and before local execution or reading stdin; every other value, including an empty value, MUST fail with exit-2 `REQUEST_INVALID` attributed to the parsed route, and retired syntax MUST keep `COMMAND_RETIRED` precedence. Every route MUST accept the option — including the local families, where it has no effect, and a top-level `-h`/`--help` that follows it — and human mode MUST honor the same selection. No environment variable, workspace configuration or stored preference MAY select a generation. |
 | `AUT-GEN-002` | The selection MUST be presentation only: it MUST NOT be part of canonical request identity, idempotency, stored outcomes, exact replay, outcome lookup, Store state or writer identity. |
-| `AUT-GEN-003` | Generation 1 is `deprecated` and generation 2 is `supported` in [`contract-generations.json`](../../../assets/specifications/contract-generations.json); no runtime warning is emitted. Under `--contract-generation 2`, `session.observe` MUST serve `podway.observation-result/v6`, `CRITERION_CITATION_INVALID` MUST serve `podway.criterion-citation-invalid-details/v1` and `WORKSPACE_CONTRACT_MISMATCH` MUST serve `podway.workspace-contract-mismatch-details/v2`, and the default output MUST equal an explicit generation 1. |
+| `AUT-GEN-003` | Generation 1 is `deprecated` and generation 2 is `supported` in [`contract-generations.json`](../../../assets/specifications/contract-generations.json); no runtime warning is emitted. Under `--contract-generation 2`, the generation-16 writer MUST serve `podway.observation-result/v8` for `session.observe`, `podway.scoped-criterion-citation-invalid-details/v2` for `CRITERION_CITATION_INVALID`, and `podway.workspace-contract-mismatch-details/v2` for `WORKSPACE_CONTRACT_MISMATCH`. Omitting the selector MUST produce the same family as explicit generation 1. |
 
 ### Bounded evidence scale and paging (AUT-EVR-001–008)
 
@@ -319,7 +325,7 @@ incremented from a stale observation to construct a subsequent write.
 | `AUT-JSON-003` | Named result and error-detail families MUST carry an unambiguous schema identifier or discriminator; explicitly retained generic JSON-object families keep their compatibility boundary. |
 | `AUT-JSON-004` | A closed v1 object MUST reject unknown fields; adding fields requires a new schema identifier or discriminator version rather than an undocumented additive-field exception. |
 | `AUT-ERR-005` | Recovery recipes MUST derive only from existing public details and preserve code, retryability, and exit class. They MUST NOT copy item values, full requests, environment variables, file contents, credentials, or artifact bytes. Former admission facts are retired. |
-| `AUT-ERR-006` | In generation 2, `CRITERION_CITATION_INVALID` MUST carry `podway.criterion-citation-invalid-details/v1`. The `citable_evidence_source_nodes` (at most eight, unique, declaration order) and `citable_item_ids` (at most 128, unique) MUST be complete under the citation admission rule whenever the code is returned: a source node is citable exactly when its first declared reference resolves and its source attempt is valid on the trace, and an item is citable exactly when the active attempt holds a recorded value for it. A duplicated citation is refused earlier as exit-2 `REQUEST_INVALID` and never reaches admission. Generation 1 keeps `podway.v2-runtime-error-details/v2`. |
+| `AUT-ERR-006` | On the generation-16 writer, `CRITERION_CITATION_INVALID` MUST carry `podway.scoped-criterion-citation-invalid-details/v1` with selector 1 and `podway.scoped-criterion-citation-invalid-details/v2` with selector 2. Selector 2 MUST include `citable_evidence` with up to eight currently resolvable selector/attempt pairs and `citable_item_ids` with up to 128 currently recorded item IDs. These lists use the same current evidence and item admission rules as criterion assessment. |
 | `AUT-ERR-007` | In generation 2, `WORKSPACE_CONTRACT_MISMATCH` MUST carry `podway.workspace-contract-mismatch-details/v2` whose `actual_product_version` equals the release of the stored writer manifest digest in `RELEASED_CONTRACT_MANIFESTS_V1`, or null when the stored digest is absent from this binary's table of released contract manifests; its recovery reason MUST name the original writer and the confirmed unfenced reset within 256 characters. Generation 1 keeps `podway.workspace-contract-mismatch-details/v1`. |
 | `AUT-REL-001` | Podway MUST publish and support only native thin-arm64 `aarch64-apple-darwin` artifacts built and verified on an untranslated arm64 macOS host. |
 

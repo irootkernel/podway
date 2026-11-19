@@ -271,7 +271,7 @@ pub enum DirectItemCommandV1 {
 }
 
 impl DirectItemCommandV1 {
-    fn item_id(&self) -> &podway_core::ItemId {
+    pub(crate) fn item_id(&self) -> &podway_core::ItemId {
         match self {
             Self::Check(input) => &input.item_id,
             Self::Uncheck(input) => &input.item_id,

@@ -160,7 +160,7 @@ def adapter_contract() -> dict[str, Any]:
         or len(route_inventory) != len(set(route_inventory))
     ):
         fail("command route catalog contains invalid or duplicate commands")
-    if len(route_inventory) != 59 or any(
+    if any(
         route.get("availability") != "executable"
         or route.get("execution") not in {"local", "direct"}
         for route in routes
@@ -257,7 +257,7 @@ def adapter_contract() -> dict[str, Any]:
             "output_schema": "podway.output/v4",
             "error_schema": "podway.error/v2",
             "recovery_recipe_schema": "podway.recovery-recipe/v2",
-            "store_schema": "spec/sqlite-v15.sql",
+            "store_schema": "spec/sqlite-v16.sql",
             "retired_command_table": "spec/retired-commands-v1.json",
             "consumer_adoption": "requires-separate-Aquarium-and-Dolgorae-work",
             "version_identity": {
@@ -287,18 +287,11 @@ def adapter_contract() -> dict[str, Any]:
             "lifecycle_transition": "completed-to-running",
             "notices": [
                 {
-                    "command": "session.rework",
-                    "input_flag": None,
-                    "result_pointer": "/result/reactivated",
-                    "result_schema": "podway.rework-result/v2",
-                    "trigger_value": True,
-                },
-                {
                     "command": "goal.revise",
                     "input_flag": "--reactivate",
-                    "result_pointer": "/result/reactivated",
-                    "result_schema": "podway.goal-revision-result/v2",
-                    "trigger_value": True,
+                    "result_pointer": "/result/lifecycle",
+                    "result_schema": "podway.successor-cursor-mutation-result/v1",
+                    "trigger_value": "running",
                 },
             ],
         },

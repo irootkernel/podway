@@ -366,6 +366,8 @@ pub(super) enum Refusal {
     ArchivedSession,
     ArchivePhase,
     StaleHistoryToken,
+    GoalMissing,
+    ReactivationFlagRequired,
     Domain(String),
     Unexpected(String),
 }
@@ -418,6 +420,12 @@ impl From<SuccessorExecutionError> for Refusal {
             SuccessorExecutionError::SelectedActivationMismatch { expected, actual } => {
                 Self::Selection { expected, actual }
             }
+            SuccessorExecutionError::ItemMutation(GraphMutationErrorV2::SessionGoalMissing) => {
+                Self::GoalMissing
+            }
+            SuccessorExecutionError::ItemMutation(
+                GraphMutationErrorV2::ReactivationFlagRequired,
+            ) => Self::ReactivationFlagRequired,
             SuccessorExecutionError::ResponseBudget => Self::ResponseBudget,
             SuccessorExecutionError::OutcomeLookupBudget => Self::OutcomeLookupBudget,
             SuccessorExecutionError::Domain(DomainError::InvalidState { reason }) => {
@@ -523,6 +531,7 @@ fn execute(
     } = call;
     let request = SuccessorMutationRequest {
         workspace,
+        response: podway_engine::successor_execution::SuccessorMutationResponseV1::Fixture,
         key: key(&id),
         request_id: RequestIdV1::new(response_id).unwrap(),
         cursor: cursor.fence(session),
@@ -569,6 +578,7 @@ fn execute(
         Action::Record(edit) => record_successor_item(
             store,
             SuccessorItemRequest {
+                response: podway_engine::successor_execution::SuccessorMutationResponseV1::Fixture,
                 workspace: request.workspace,
                 key: request.key,
                 request_id: request.request_id,

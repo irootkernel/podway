@@ -1,0 +1,170 @@
+schema: podway.procedure/v3
+id: bug-fix-v3
+version: "1"
+name: Bug Fix v3
+purpose: Correct a defect with fresh structurally bound verification and guarded review evidence.
+description: The middle reference Procedure for a reproduced defect, typed verification, guarded rework, and goal-directed closeout.
+goal_tracking: true
+node_definitions:
+  reproduction:
+    type: action
+    title: Reproduce the defect
+    intent: Establish the observed behavior, expected behavior, and regression boundary before diagnosis.
+    instructions:
+      - "Accountable role: Coordinator. Use the current selected evidence and record the declared outputs against that basis."
+      - Reproduce the defect or record why reproduction is not currently possible.
+      - Record the behavior and regression check in English.
+      - Report actual negative or incomplete results in the declared output fields. If a required result cannot be supplied, record a blocker with the missing facts.
+      - Select a validated group proposal only after recording the planning basis. Activate it explicitly; when revising a plan, reconcile retained work and current evidence before activating a fresh group.
+    items:
+      - id: reproduction-status
+        type: choice
+        prompt: Record whether the defect was reproduced.
+        required: true
+        choices:
+          - reproduced
+          - not-reproduced
+      - id: observed-behavior
+        type: text
+        prompt: Record the observed behavior or reproduction limitation in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: expected-behavior
+        type: text
+        prompt: Record the expected behavior in English.
+        required: true
+        min_length: 1
+        max_length: 2000
+        multiline: true
+      - id: regression-check
+        type: text
+        prompt: Record the regression commands actually run and their observed results in English, preserving exact commands verbatim. If they could not be run, record why.
+        required: true
+        min_length: 1
+        max_length: 2000
+        multiline: true
+  assess-goal:
+    type: decision
+    title: Assess the session goal
+    objective: Determine whether fresh reproduction, verification, and review evidence supports the bug-fix goal.
+    prompt: What is the outcome of the current session goal?
+    evidence_guidance:
+      - Assess every criterion against the selected fresh evidence and decision records.
+      - "Coordinator: assess every current criterion using the admitted group's selected terminal outputs."
+      - Use an actual negative criterion where the evidence establishes a failure. Block if required proof remains unavailable.
+    items:
+      - id: assessment-note
+        type: text
+        prompt: Record observations supporting the criterion assessments in English.
+        required: false
+        min_length: 0
+        max_length: 2000
+        multiline: true
+    options:
+      - id: achieved
+        label: Goal achieved
+        criteria: Fresh criterion assessments support the corrected behavior.
+      - id: not-achieved
+        label: Goal not achieved
+        criteria: Fresh evidence does not support the corrected behavior.
+      - id: superseded
+        label: Goal superseded
+        criteria: The current bug-fix goal revision is no longer desired.
+    reason:
+      required: true
+      prompt: Explain the outcome using criterion assessments and evidence in English.
+    assessment:
+      target: session_goal
+      outcomes:
+        achieved: achieved
+        not-achieved: not_achieved
+        superseded: superseded
+  closeout:
+    type: action
+    title: Record the closeout
+    intent: Record the terminal outcome for the assessed bug-fix goal.
+    instructions:
+      - "Accountable role: Coordinator. Use the current selected evidence and record the declared outputs against that basis."
+      - Report actual negative or incomplete results in the declared output fields. If a required result cannot be supplied, record a blocker with the missing facts.
+    items:
+      - id: closeout-note
+        type: text
+        prompt: Record the final closeout in English.
+        required: true
+        min_length: 1
+        max_length: 2000
+        multiline: true
+graph:
+  entry: reproduce
+  nodes:
+    - id: reproduce
+      use: reproduction
+      next: assess-goal
+    - id: assess-goal
+      use: assess-goal
+      evidence_from:
+        - scope: local
+          node: reproduce
+          required: true
+          items:
+            - observed-behavior
+            - expected-behavior
+            - regression-check
+        - scope: execution_result
+          required: true
+          items:
+            - verification-result
+            - review-summary
+            - unresolved-valid-findings
+      routes:
+        achieved:
+          to: closeout
+          effect: advance
+        not-achieved:
+          to: closeout
+          effect: advance
+        superseded:
+          to: closeout
+          effect: advance
+    - id: closeout
+      use: closeout
+      evidence_from:
+        - scope: local
+          node: assess-goal
+          required: true
+      terminal: true
+execution_group:
+  anchor: reproduce
+  success_return: assess-goal
+  plan_inputs:
+    - reproduction-status
+    - observed-behavior
+    - expected-behavior
+    - regression-check
+  result_items:
+    - id: verification-result
+      type: check_result
+      prompt: Record the caller-supplied result for bug-fix-verification; Podway does not execute or attest the operation.
+      help: The declared operation is "Run the declared regression check and the repository-authoritative surrounding verification for the current bug fix in the recorded input basis." The matching digest identifies only this abstract slot contract and does not prove that any operation ran.
+      required: true
+      operation_id: bug-fix-verification
+      operation_digest: sha256:01122b6057efcfa3f22c453aa48fb647ccba9f7db437dd44473a9f32a854a979
+      accepted_outcomes:
+        - pass
+        - fail
+        - inconclusive
+    - id: review-summary
+      type: text
+      prompt: Summarize the review result in English.
+      required: true
+      min_length: 1
+      max_length: 4000
+      multiline: true
+    - id: unresolved-valid-findings
+      type: integer
+      prompt: Record the number of unresolved valid findings.
+      required: true
+      minimum: 0
+  replan_decisions: []

@@ -281,6 +281,16 @@ pub(super) fn render_human_error_direct(
             write_text_line(stderr, format_args!("hint: {line}"))?;
         }
     }
+    if error["code"] == "ROUTE_NOT_ALLOWED"
+        && error["details"]["schema"] == "podway.scoped-group-replan-required-details/v1"
+    {
+        write_text_line(
+            stderr,
+            format_args!(
+                "hint: Use podway group replan --stdin with the current scoped cursor, selected option and replan feedback."
+            ),
+        )?;
+    }
     if error["code"] == "CRITERION_CITATION_INVALID" {
         for line in criterion_citation_hint_lines(&error["details"]) {
             write_text_line(stderr, format_args!("hint: {line}"))?;
@@ -383,10 +393,39 @@ fn workspace_contract_mismatch_hint_lines(details: &Value) -> Vec<String> {
 /// lines appear only when the details carry the generation-2 lists, so
 /// generation-1 stderr stays the single admission-rule line.
 fn criterion_citation_hint_lines(details: &Value) -> Vec<String> {
-    let mut lines = vec![
-        "cite only resolved guidance.references[] sources and recorded items of the decision attempt, each once, at most four citations"
-            .to_owned(),
-    ];
+    let scoped = matches!(
+        details["schema"].as_str(),
+        Some(
+            "podway.scoped-criterion-citation-invalid-details/v1"
+                | "podway.scoped-criterion-citation-invalid-details/v2"
+        )
+    );
+    let hint = if scoped {
+        "cite only resolved guidance.evidence[] sources and recorded items of the current decision attempt, each once, at most four citations"
+    } else {
+        "cite only resolved guidance.evidence sources and recorded items of the decision attempt, each once, at most four citations"
+    };
+    let mut lines = vec![hint.to_owned()];
+    if let Some(sources) = details.get("citable_evidence").and_then(Value::as_array) {
+        let names = sources
+            .iter()
+            .filter_map(|source| {
+                let selector = &source["selector"];
+                match selector["kind"].as_str()? {
+                    "local" => selector["node"].as_str(),
+                    "plan" => Some("@plan"),
+                    "execution_result" => Some("@execution-result"),
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>();
+        let names = if names.is_empty() {
+            "(none)".to_owned()
+        } else {
+            names.join(", ")
+        };
+        lines.push(format!("citable evidence selectors: {names}"));
+    }
     for (field, label) in [
         (
             "citable_evidence_source_nodes",
@@ -698,18 +737,6 @@ pub(super) fn render_authoring_diagnostics(
         ));
     }
     text
-}
-
-pub(super) fn render_preview_text_value(value: &str) -> String {
-    let mut rendered = String::with_capacity(value.len());
-    for character in value.chars() {
-        if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') {
-            rendered.extend(character.escape_default());
-        } else {
-            rendered.push(character);
-        }
-    }
-    rendered
 }
 
 /// Renders a structured preview suggestion as copyable POSIX shell source for human output.

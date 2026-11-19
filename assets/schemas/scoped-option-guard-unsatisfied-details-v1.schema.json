@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:scoped-option-guard-unsatisfied-details:v1",
+  "title": "Podway Scoped Option Guard Unsatisfied Details v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "decision",
+    "option",
+    "state",
+    "predicates"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.scoped-option-guard-unsatisfied-details/v1"
+    },
+    "decision": {
+      "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+    },
+    "option": {
+      "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+    },
+    "state": {
+      "enum": [
+        "unmet",
+        "unevaluable"
+      ]
+    },
+    "predicates": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "item",
+          "state"
+        ],
+        "properties": {
+          "source": {
+            "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+          },
+          "item": {
+            "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+          },
+          "state": {
+            "enum": [
+              "met",
+              "unmet",
+              "unevaluable"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

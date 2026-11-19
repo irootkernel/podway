@@ -1,0 +1,543 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:successor-authoring-result:v1",
+  "title": "Podway Successor Authoring Result v1",
+  "type": "object",
+  "required": [
+    "schema"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.successor-authoring-result/v1"
+    }
+  },
+  "unevaluatedProperties": false,
+  "oneOf": [
+    {
+      "required": [
+        "operation",
+        "file",
+        "diagnostics",
+        "diagnostics_truncated",
+        "diagnostics_total",
+        "valid"
+      ],
+      "properties": {
+        "operation": {
+          "enum": [
+            "procedure.validate",
+            "procedure.vet",
+            "procedure.lint",
+            "procedure.check",
+            "procedure.format",
+            "procedure.preview",
+            "procedure.graph"
+          ]
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:podway:schema:successor-authoring-diagnostic:v1"
+          },
+          "maxItems": 256,
+          "minItems": 1
+        },
+        "diagnostics_truncated": {
+          "type": "boolean"
+        },
+        "diagnostics_total": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "valid": {
+          "const": false
+        },
+        "document_schema": {
+          "enum": [
+            "podway.procedure/v3",
+            "podway.execution-group/v1"
+          ]
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "dependentRequired": {
+        "digest": [
+          "document_schema"
+        ],
+        "document_schema": [
+          "digest"
+        ]
+      }
+    },
+    {
+      "required": [
+        "operation",
+        "file",
+        "valid",
+        "document_schema",
+        "digest"
+      ],
+      "properties": {
+        "operation": {
+          "enum": [
+            "procedure.validate",
+            "procedure.vet",
+            "procedure.lint",
+            "procedure.check"
+          ]
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        },
+        "valid": {
+          "const": true
+        },
+        "document_schema": {
+          "enum": [
+            "podway.procedure/v3",
+            "podway.execution-group/v1"
+          ]
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/$defs/warningReport"
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "enum": [
+                  "procedure.validate",
+                  "procedure.vet"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "diagnostics_total": {
+                "const": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "required": [
+        "operation",
+        "file",
+        "document_schema",
+        "digest",
+        "canonical_json"
+      ],
+      "properties": {
+        "operation": {
+          "const": "procedure.show"
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        },
+        "document_schema": {
+          "enum": [
+            "podway.procedure/v3",
+            "podway.execution-group/v1"
+          ]
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "canonical_json": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576
+        }
+      }
+    },
+    {
+      "required": [
+        "operation",
+        "file",
+        "document_schema",
+        "digest",
+        "document",
+        "mode",
+        "changed"
+      ],
+      "properties": {
+        "operation": {
+          "const": "procedure.format"
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        },
+        "document_schema": {
+          "enum": [
+            "podway.procedure/v3",
+            "podway.execution-group/v1"
+          ]
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "document": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576
+        },
+        "mode": {
+          "enum": [
+            "stdout",
+            "check",
+            "write"
+          ]
+        },
+        "changed": {
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "required": [
+        "operation",
+        "document_schema",
+        "digest",
+        "document",
+        "template"
+      ],
+      "properties": {
+        "operation": {
+          "const": "procedure.scaffold"
+        },
+        "document_schema": {
+          "enum": [
+            "podway.procedure/v3",
+            "podway.execution-group/v1"
+          ]
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "document": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576
+        },
+        "template": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        }
+      }
+    },
+    {
+      "required": [
+        "operation",
+        "file",
+        "document_schema",
+        "digest",
+        "format",
+        "projection",
+        "projection_digest"
+      ],
+      "properties": {
+        "operation": {
+          "const": "procedure.graph"
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        },
+        "document_schema": {
+          "enum": [
+            "podway.procedure/v3",
+            "podway.execution-group/v1"
+          ]
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "format": {
+          "enum": [
+            "json",
+            "mermaid",
+            "dot",
+            "puml"
+          ]
+        },
+        "projection": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576
+        },
+        "projection_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    {
+      "required": [
+        "operation",
+        "file",
+        "document_schema",
+        "digest",
+        "document_id",
+        "document_version",
+        "purpose",
+        "graph",
+        "mermaid",
+        "admissible",
+        "checks"
+      ],
+      "properties": {
+        "operation": {
+          "const": "procedure.preview"
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        },
+        "document_schema": {
+          "enum": [
+            "podway.procedure/v3",
+            "podway.execution-group/v1"
+          ]
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "document_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "document_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "graph": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576
+        },
+        "mermaid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576
+        },
+        "start_argv": {
+          "type": "array",
+          "minItems": 8,
+          "maxItems": 8,
+          "prefixItems": [
+            {
+              "const": "podway"
+            },
+            {
+              "const": "start"
+            },
+            {
+              "const": "--procedure"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384
+            },
+            {
+              "const": "--expect-procedure-digest"
+            },
+            {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            {
+              "const": "--task"
+            },
+            {
+              "const": "<task>"
+            }
+          ],
+          "items": false
+        },
+        "admissible": {
+          "const": true
+        },
+        "checks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "validate",
+            "vet",
+            "lint"
+          ],
+          "properties": {
+            "validate": {
+              "const": true
+            },
+            "vet": {
+              "const": true
+            },
+            "lint": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "document_schema": {
+                "const": "podway.procedure/v3"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "start_argv"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "start_argv"
+              ]
+            }
+          }
+        },
+        {
+          "$ref": "#/$defs/warningReport"
+        },
+        {
+          "if": {
+            "properties": {
+              "diagnostics_total": {
+                "const": 0
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "checks": {
+                "properties": {
+                  "lint": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "checks": {
+                "properties": {
+                  "lint": {
+                    "const": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "$defs": {
+    "warningReport": {
+      "required": [
+        "diagnostics",
+        "diagnostics_truncated",
+        "diagnostics_total"
+      ],
+      "properties": {
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "urn:podway:schema:successor-authoring-diagnostic:v1"
+              },
+              {
+                "properties": {
+                  "severity": {
+                    "const": "warning"
+                  }
+                }
+              }
+            ]
+          },
+          "maxItems": 256
+        },
+        "diagnostics_truncated": {
+          "type": "boolean"
+        },
+        "diagnostics_total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "diagnostics": {
+                "maxItems": 0
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "diagnostics_total": {
+                "const": 0
+              },
+              "diagnostics_truncated": {
+                "const": false
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "diagnostics_total": {
+                "minimum": 1
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -33,13 +33,18 @@ fn prepared_cursor_and_item_mutations_report_session_not_running_without_effects
     fixture.run(&[
         "start",
         "--preset",
-        "small-change-v2",
+        "small-change-v3",
         "--task",
         "prepared errors",
         "--idempotency-key",
         "start",
     ]);
-    let before = fixture.podway_snapshot();
+    let durable = || {
+        let mut snapshot = fixture.podway_snapshot();
+        snapshot.retain(|entry| entry.0 != std::path::Path::new("runtime/state.sqlite3-shm"));
+        snapshot
+    };
+    let before = durable();
     for (command, arguments) in [
         ("session.complete", vec!["complete"]),
         ("session.retry", vec!["retry", "--reason", "repeat"]),
@@ -66,6 +71,12 @@ fn prepared_cursor_and_item_mutations_report_session_not_running_without_effects
                 "inspect",
                 "--reason",
                 "revised",
+                "--basis-description",
+                "fixture",
+                "--basis-digest",
+                "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "--feedback",
+                "Record the actual changed goal basis.",
             ],
         ),
         (
@@ -89,12 +100,12 @@ fn prepared_cursor_and_item_mutations_report_session_not_running_without_effects
         let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(error.as_value()["command"], command);
         assert_eq!(error.as_value()["code"], "SESSION_NOT_RUNNING");
-        fixture.assert_podway_snapshot(&before);
+        assert_eq!(durable(), before);
         assert_eq!(
             fixture.run(&["outcome", "lookup", "--idempotency-key", command])["result"]["found"],
             false
         );
-        fixture.assert_podway_snapshot(&before);
+        assert_eq!(durable(), before);
     }
     for (arguments, code, exit) in [
         (
@@ -160,7 +171,7 @@ fn prepared_cursor_and_item_mutations_report_session_not_running_without_effects
         );
         let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(error.as_value()["code"], code);
-        fixture.assert_podway_snapshot(&before);
+        assert_eq!(durable(), before);
     }
     fixture.run(&["begin", "--idempotency-key", "begin"]);
     fixture.run(&[
@@ -179,7 +190,7 @@ fn v2dfc017_oversize_record_and_set_stdin_refuse_without_runtime_effects() {
     fixture.run(&[
         "start",
         "--preset",
-        "sw-dev-v2",
+        "sw-dev-v3",
         "--task",
         "stdin bounds",
         "--idempotency-key",
@@ -911,7 +922,7 @@ fn corrupt_current_data_pages(fixture: &Fixture) {
         .query_row("PRAGMA page_size", [], |row| row.get(0))
         .unwrap();
     let pages = connection.prepare(
-        "SELECT rootpage FROM sqlite_schema WHERE tbl_name IN ('mutation_outcomes','v2_task_sessions') AND rootpage > 0",
+        "SELECT rootpage FROM sqlite_schema WHERE tbl_name IN ('mutation_outcomes','successor_sessions') AND rootpage > 0",
     ).unwrap().query_map([], |row| row.get::<_, u64>(0)).unwrap()
         .collect::<Result<Vec<_>, _>>().unwrap();
     drop(connection);
@@ -1204,7 +1215,7 @@ fn v2dfc015_newer_generations_refuse_every_store_admission_without_new_files() {
                     vec![
                         "start",
                         "--preset",
-                        "small-change-v2",
+                        "small-change-v3",
                         "--task",
                         "refuse",
                         "--idempotency-key",
@@ -1239,7 +1250,7 @@ fn v2dfc015_newer_generations_refuse_every_store_admission_without_new_files() {
                     );
                     assert_eq!(
                         error["details"]["schema"],
-                        "podway.workspace-schema-unsupported-details/v1"
+                        "podway.workspace-schema-unsupported-details/v2"
                     );
                     assert_eq!(error["details"]["store_schema_version"], generation);
                     assert_eq!(error["details"]["supported_store_schema_version"], current);
@@ -1304,7 +1315,7 @@ fn v2dfc012_zero_budget_executes_idle_reads_mutations_and_maintenance() {
         "0ms",
         "start",
         "--preset",
-        "small-change-v2",
+        "small-change-v3",
         "--task",
         "zero budget",
         "--idempotency-key",
@@ -1353,7 +1364,7 @@ fn v2dfc012_start_interview_after_six_seconds_continues_without_changes() {
     fixture.run(&[
         "start",
         "--preset",
-        "small-change-v2",
+        "small-change-v3",
         "--task",
         "original",
         "--idempotency-key",
@@ -1367,7 +1378,7 @@ fn v2dfc012_start_interview_after_six_seconds_continues_without_changes() {
         "{rendered}"
     );
     assert!(
-        rendered.contains(before["result"]["session"]["id"].as_str().unwrap()),
+        rendered.contains(before["result"]["cursor"]["session"].as_str().unwrap()),
         "{rendered}"
     );
     assert_eq!(fixture.run(&["status"])["result"], before["result"]);
@@ -1666,521 +1677,108 @@ fn incompatible_writer_identity_refuses_concurrent_reads_mutations_and_old_repla
 
 #[test]
 fn delegation_stdin_acceptance_receipt_and_completion_preserve_the_real_attempt() {
-    let fixture = Fixture::new();
-    fixture.run(&["init", "--idempotency-key", "init"]);
-    fs::write(
-        fixture.0.join("delegated.yaml"),
-        include_str!("../../../tests/fixtures/v2/procedures/delegated-native-routes.yaml"),
-    )
-    .unwrap();
-    let preview = fixture.run(&["procedure", "preview", "delegated.yaml"]);
-    fixture.run(&[
-        "start",
-        "--procedure",
-        "delegated.yaml",
-        "--expect-procedure-digest",
-        preview["result"]["procedure_digest"].as_str().unwrap(),
-        "--task",
-        "delegated flow",
-        "--idempotency-key",
-        "start",
-    ]);
-    fixture.run(&["begin", "--idempotency-key", "begin"]);
-    let package = fixture.run(&["delegation", "package"]);
-    assert_eq!(
-        package["result"]["schema"],
-        "podway.delegation-package-result/v1"
-    );
-    fixture.run(&["check", "done", "--idempotency-key", "check"]);
-    let before = fixture.run(&["status"]);
-    let status = &before["result"];
-    let session = status["session"]["id"].as_str().unwrap();
-    let attempt = status["current"]["attempt"]["attempt_id"].as_str().unwrap();
-    let workspace = before["workspace"]["uuid"].as_str().unwrap();
-    let explicit_package = fixture.run(&[
-        "delegation",
-        "package",
-        "--if-workspace-uuid",
-        workspace,
-        "--if-session-id",
-        session,
-    ]);
-    let mut current_package = package["result"].clone();
-    current_package["session_revision"] = status["session"]["revision"].clone();
-    assert_eq!(explicit_package["result"], current_package);
-    assert_eq!(explicit_package["result"]["session_id"], session);
-    let receipt_args = [
-        "delegation",
-        "receipt",
-        "--session",
-        session,
-        "--attempt",
-        attempt,
-    ];
-    let missing = fixture.output(&receipt_args);
-    assert_eq!(
-        serde_json::from_slice::<ErrorEnvelopeV2>(&missing.stdout)
-            .unwrap()
-            .as_value()["code"],
-        "DELEGATION_RECEIPT_REQUIRED"
-    );
-    let missing = fixture.output(&["complete", "--idempotency-key", "missing-receipt"]);
-    assert_eq!(
-        serde_json::from_slice::<ErrorEnvelopeV2>(&missing.stdout)
-            .unwrap()
-            .as_value()["code"],
-        "DELEGATION_RECEIPT_REQUIRED"
-    );
-    assert_eq!(fixture.run(&["status"])["result"], before["result"]);
-    let digest = |letter: char| format!("sha256:{}", letter.to_string().repeat(64));
-    let input = json!({"schema":"podway.delegation-accept-input/v1",
-        "workspace_uuid":before["workspace"]["uuid"],"session_id":session,
-        "session_revision":status["session"]["revision"],"attempt_id":attempt,"idempotency_key":"accept",
-        "package_digest":package["result"]["package_digest"],"execution":{"binding_ref":"local-specialist",
-            "adapter_id":"fixture","adapter_version":"1","primary_host":"external","scope_kind":"test",
-            "scope_ref":"scope-1","supervisor_ref":"supervisor-1","worker_ref":"worker-1","task_ref":"task-1",
-            "role_ref":"reviewer","role_snapshot_digest":digest('a'),"agent_configuration_digest":digest('b'),
-            "accepted_task_digest":digest('c')},"rounds_used":3,"result_digest":digest('d'),
-        "summary":"The final result was reviewed.","worker_disposition":"idle","accepted":true});
-    let mut invalid = input.clone();
-    invalid["idempotency_key"] = json!("wrong-role");
-    invalid["execution"]["role_ref"] = json!("other-role");
-    let output = fixture.output_with_stdin(
-        &["delegation", "accept", "--stdin"],
-        &serde_json::to_vec(&invalid).unwrap(),
-    );
-    assert!(!output.status.success(), "{output:?}");
-    let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(error.as_value()["code"], "DELEGATION_BINDING_MISMATCH");
-    assert_eq!(error.as_value()["details"]["reason"], "role_mismatch");
-    assert_eq!(fixture.run(&["status"])["result"], before["result"]);
-    assert_eq!(
-        fixture.run(&["outcome", "lookup", "--idempotency-key", "wrong-role"])["result"]["found"],
-        false
-    );
-    let bytes = serde_json::to_vec(&input).unwrap();
-    for (body, code) in [
-        (vec![b' '; 32 * 1024 + 1], "REQUEST_TOO_LARGE"),
-        (vec![b'x'; 32 * 1024], "REQUEST_INVALID"),
-        (b"not-json".to_vec(), "REQUEST_INVALID"),
-    ] {
-        let output = fixture.output_with_stdin(&["delegation", "accept", "--stdin"], &body);
-        assert_eq!(output.status.code(), Some(2), "{output:?}");
-        assert_eq!(
-            serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
-                .unwrap()
-                .as_value()["code"],
-            code
-        );
-    }
-    let mut missing_summary = input.clone();
-    missing_summary.as_object_mut().unwrap().remove("summary");
-    let mut invalid_bodies = vec![missing_summary];
-    for field in ["session_revision", "rounds_used"] {
-        let mut invalid = input.clone();
-        invalid[field] = json!(1.0);
-        invalid_bodies.push(invalid);
-    }
-    for invalid in invalid_bodies {
-        let output = fixture.output_with_stdin(
-            &["delegation", "accept", "--stdin"],
-            &serde_json::to_vec(&invalid).unwrap(),
-        );
-        assert_eq!(output.status.code(), Some(2), "{output:?}");
-        assert_eq!(
-            serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
-                .unwrap()
-                .as_value()["code"],
-            "REQUEST_INVALID"
-        );
-    }
-    let output = fixture.output_with_stdin(
-        &[
-            "--if-session-id",
-            session,
-            "delegation",
-            "accept",
-            "--stdin",
-        ],
-        &bytes,
-    );
-    assert_eq!(output.status.code(), Some(2), "{output:?}");
-    assert_eq!(
-        serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
-            .unwrap()
-            .as_value()["code"],
-        "REQUEST_INVALID"
-    );
-    assert_eq!(fixture.run(&["status"])["result"], before["result"]);
-    assert_eq!(
-        fixture.run(&["outcome", "lookup", "--idempotency-key", "accept"])["result"]["found"],
-        false
-    );
-    let bytes = serde_json::to_vec(&input).unwrap();
-    // READS-004: the fresh-key race body is frozen here, before the first
-    // successful acceptance child runs. That child is the confirmed
-    // competing edit; the frozen body keeps the original document fences.
-    let mut raced = input.clone();
-    raced["idempotency_key"] = json!("reads004-counted-accept-race");
-    let raced_bytes = serde_json::to_vec(&raced).unwrap();
-    let output = output_with_stdin_counted(&fixture, &["delegation", "accept", "--stdin"], &bytes);
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
-    assert_read004_counters(&output, (0, 0));
-    let original = serde_json::from_slice::<OutputEnvelopeV4>(&output.stdout)
-        .unwrap()
-        .into_value();
-    assert_eq!(original["command"], "delegation.accept");
-    assert_eq!(
-        original["result"]["schema"],
-        "podway.delegation-accept-result/v2"
-    );
-    let output = output_with_stdin_counted(&fixture, &["delegation", "accept", "--stdin"], &bytes);
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
-    assert_read004_counters(&output, (0, 0));
-    assert_eq!(
-        serde_json::from_slice::<OutputEnvelopeV4>(&output.stdout)
-            .unwrap()
-            .into_value(),
-        original
-    );
-    // READS-004: the debug-only process-local counters prove that stdin-owned
-    // delegation acceptance performs no facts preflight and no Standard-status
-    // dispatch — on the first application, the replay, and the pre-frozen
-    // fresh-key body losing to its own session fence after the confirmed
-    // acceptance edit above. The same selected binary child carries behavior
-    // in every configuration; counter assertions apply only to the
-    // instrumented debug harness.
-    let post_competitor = fixture.run(&["status"]);
-    let output =
-        output_with_stdin_counted(&fixture, &["delegation", "accept", "--stdin"], &raced_bytes);
-    assert_eq!(output.status.code(), Some(4), "{output:?}");
-    assert_read004_counters(&output, (0, 0));
-    let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(error.as_value()["code"], "SESSION_REVISION_CONFLICT");
-    assert_eq!(
-        error.as_value()["details"]["expected_revision"],
-        input["session_revision"]
-    );
-    assert_eq!(
-        error.as_value()["details"]["current_revision"],
-        post_competitor["result"]["session"]["revision"]
-    );
-    assert_eq!(
-        fixture.run(&["status"])["result"],
-        post_competitor["result"]
-    );
-    assert_eq!(
-        fixture.run(&[
-            "outcome",
-            "lookup",
-            "--idempotency-key",
-            "reads004-counted-accept-race"
-        ])["result"]["found"],
-        false
-    );
-    let receipt = fixture.run(&receipt_args);
-    assert_eq!(receipt["command"], "delegation.receipt");
-    assert_eq!(receipt["result"]["applicability"], "accepted");
-    assert_eq!(receipt["result"]["reason"], "current_receipt");
-    let explicit_receipt = fixture.run(&[
-        "delegation",
-        "receipt",
-        "--session",
-        session,
-        "--attempt",
-        attempt,
-        "--if-workspace-uuid",
-        workspace,
-    ]);
-    assert_eq!(explicit_receipt["result"], receipt["result"]);
-    assert_eq!(
-        receipt["result"]["receipt"]["execution"],
-        input["execution"]
-    );
-    for field in [
-        "package_digest",
-        "rounds_used",
-        "result_digest",
-        "summary",
-        "worker_disposition",
-    ] {
-        assert_eq!(receipt["result"]["receipt"][field], input[field], "{field}");
-    }
-    let output = fixture.output(&[
-        "--if-session-id",
-        session,
-        "delegation",
-        "receipt",
-        "--session",
-        session,
-        "--attempt",
-        attempt,
-    ]);
-    assert_eq!(output.status.code(), Some(2));
-    assert_eq!(
-        serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
-            .unwrap()
-            .as_value()["code"],
-        "REQUEST_INVALID"
-    );
-    let completed = fixture.run(&["complete", "--idempotency-key", "complete"]);
-    assert_eq!(completed["result"]["session_state"], "completed");
-    let historical = fixture.run(&receipt_args);
-    assert_eq!(historical["result"]["applicability"], "historical");
-    assert_eq!(historical["result"]["reason"], "historical_attempt");
-    assert_eq!(
-        historical["result"]["receipt"],
-        receipt["result"]["receipt"]
-    );
-    assert_eq!(
-        fixture.run(&["outcome", "lookup", "--idempotency-key", "accept"])["result"]["outcome"]["response"],
-        original
-    );
+    super::e2e_adopt001_scoped_cli::assert_scoped_delegation_replay();
 }
 
 #[test]
 fn goal_begin_define_assess_decide_and_completed_revision_preserve_fences_and_replay() {
-    for (initial_goal, explicit_revision) in [(true, false), (false, true)] {
-        let fixture = Fixture::new();
-        fixture.run(&["init", "--idempotency-key", "init"]);
-        fs::write(
-            fixture.0.join("goal.yaml"),
-            include_str!("../../../tests/fixtures/v2/procedures/goal-outcomes.yaml").replace(
-                "    options:\n",
-                concat!(
-                    "    items:\n",
-                    "      - id: assessment-note\n",
-                    "        type: text\n",
-                    "        prompt: Record local criterion evidence.\n",
-                    "        required: false\n",
-                    "        max_length: 100\n",
-                    "    options:\n",
-                ),
-            ),
-        )
-        .unwrap();
-        let preview = fixture.run(&["procedure", "preview", "goal.yaml"]);
-        let prepared = fixture.run(&[
-            "start",
-            "--procedure",
-            "goal.yaml",
-            "--expect-procedure-digest",
-            preview["result"]["procedure_digest"].as_str().unwrap(),
-            "--task",
-            "goal flow",
-            "--idempotency-key",
-            "start",
-        ]);
-        let criteria = [
-            "--goal",
-            "Verify the retained goal.",
-            "--criterion",
-            "correct=The result is correct.",
-            "--criterion",
-            "tested=The result is tested.",
+    for begin_with_goal in [true, false] {
+        let (fixture, before, _) =
+            super::e2e_adopt001_scoped_cli::scoped_criterion_fixture(begin_with_goal);
+        assert_eq!(before["result"]["goal"]["revision"], 1);
+        assert_eq!(before["result"]["goal"]["actor"], "fixture-coordinator");
+        let cursor = before["result"]["cursor"].to_string();
+        let workspace = before["workspace"]["uuid"].as_str().unwrap();
+        let args = [
+            "goal",
+            "assess-criterion",
+            "proof",
+            "--status",
+            "satisfied",
+            "--reason",
+            "The resulting evidence is current.",
+            "--evidence",
+            "@execution-result",
             "--actor",
-            "owner",
-        ];
-        let mut begin = vec!["begin", "--idempotency-key", "begin"];
-        if initial_goal {
-            begin.extend_from_slice(&criteria);
-        }
-        let original_begin = fixture.run(&begin);
-        begin.extend_from_slice(&[
+            "fixture-evaluator",
             "--if-workspace-uuid",
-            prepared["workspace"]["uuid"].as_str().unwrap(),
-            "--if-session-id",
-            prepared["session"]["id"].as_str().unwrap(),
-            "--if-session-revision",
-            "0",
-        ]);
-        assert_eq!(fixture.run(&begin), original_begin);
-        if !initial_goal {
-            let mut define = vec!["goal", "define", "--idempotency-key", "define"];
-            define.extend_from_slice(&criteria);
-            let before_define = fixture.run(&["status"]);
-            let revision = before_define["result"]["session"]["revision"]
-                .as_u64()
-                .unwrap()
-                .to_string();
-            define.extend_from_slice(&[
-                "--if-workspace-uuid",
-                before_define["workspace"]["uuid"].as_str().unwrap(),
-                "--if-session-id",
-                before_define["result"]["session"]["id"].as_str().unwrap(),
-                "--if-session-revision",
-                &revision,
-            ]);
-            let original = fixture.run(&define);
-            assert_eq!(fixture.run(&define), original);
-        }
-        assert_eq!(fixture.run(&["status"])["result"]["goal_revision"], 1);
-        fixture.run(&[
-            "set",
-            "result",
-            "Evidence supports this result.",
+            workspace,
+            "--if-cursor",
+            &cursor,
             "--idempotency-key",
-            "evidence",
-        ]);
-        fixture.run(&["complete", "--idempotency-key", "complete-work"]);
-        fixture.run(&[
-            "set",
-            "assessment-note",
-            "Decision-local evidence.",
-            "--idempotency-key",
-            "assessment-note",
-        ]);
-        let before_assessment = fixture.run(&["status"]);
-        let missing = fixture.output(&[
+            "assess",
+        ];
+        let first = fixture.run(&args);
+        assert_eq!(fixture.run(&args), first);
+        assert_eq!(
+            exact_outcome(&fixture, "assess")["outcome"]["response"],
+            first
+        );
+        let mut stale = args;
+        let key_index = stale.len() - 1;
+        stale[key_index] = "too-late";
+        scoped_error(fixture.output(&stale), "SESSION_REVISION_CONFLICT");
+        assert_eq!(exact_outcome(&fixture, "too-late")["found"], false);
+        let decision = fixture.run(&[
             "decide",
             "--option",
             "achieved",
             "--reason",
-            "Needs criterion results.",
-            "--idempotency-key",
-            "missing-results",
-        ]);
-        assert_eq!(missing.status.code(), Some(1), "{missing:?}");
-        assert_eq!(
-            serde_json::from_slice::<ErrorEnvelopeV2>(&missing.stdout)
-                .unwrap()
-                .as_value()["code"],
-            "CRITERION_RESULT_MISSING"
-        );
-        assert_eq!(
-            fixture.run(&["status"])["result"],
-            before_assessment["result"]
-        );
-        for criterion in ["correct", "tested"] {
-            let assessment = fixture.run(&[
-                "goal",
-                "assess-criterion",
-                criterion,
-                "--status",
-                "satisfied",
-                "--reason",
-                "The retained evidence meets this criterion.",
-                "--evidence",
-                "perform",
-                "--item",
-                "assessment-note",
-                "--actor",
-                "reviewer",
-                "--idempotency-key",
-                criterion,
-            ]);
-            assert_eq!(assessment["result"]["result"]["criterion_id"], criterion);
-            assert_eq!(
-                assessment["result"]["result"]["citations"],
-                json!([
-                    {"reference_graph_node_id":"perform"},
-                    {"local_item_id":"assessment-note"}
-                ])
-            );
-        }
-        let decide = [
-            "decide",
-            "--option",
-            "achieved",
-            "--reason",
-            "Both recorded criteria are satisfied.",
+            "The criterion is satisfied.",
             "--actor",
-            "owner",
+            "fixture-coordinator",
             "--idempotency-key",
-            "decide",
-        ];
-        let original_decide = fixture.run(&decide);
-        assert_eq!(original_decide["result"]["record"]["actor"], "owner");
-        // Original fences are explicit for replay after the cursor has advanced.
-        let old_status = &before_assessment["result"];
-        let revision = original_decide["result"]["record"]["session_revision"]
-            .as_u64()
-            .unwrap()
-            - 1;
-        let revision = revision.to_string();
-        let mut replay = decide.to_vec();
-        replay.extend_from_slice(&[
-            "--if-workspace-uuid",
-            before_assessment["workspace"]["uuid"].as_str().unwrap(),
-            "--if-session-id",
-            old_status["session"]["id"].as_str().unwrap(),
-            "--if-session-revision",
-            &revision,
-            "--if-attempt",
-            old_status["current"]["attempt"]["attempt_id"]
-                .as_str()
-                .unwrap(),
-            "--if-goal-revision",
-            "1",
+            "decision",
+            "--with-observation",
         ]);
-        assert_eq!(fixture.run(&replay), original_decide);
-        fixture.run(&["complete", "--idempotency-key", "finish"]);
-        let terminal = fixture.run(&["status"]);
-        assert_eq!(terminal["result"]["session"]["lifecycle"], "completed");
-        assert!(terminal["result"]["current"].is_null());
-        let mut revise = vec![
+        assert_eq!(
+            decision["result"]["observation"]["goal"]["outcome"],
+            "achieved"
+        );
+        let closed = fixture.run(&[
+            "complete",
+            "--idempotency-key",
+            "close",
+            "--with-observation",
+        ]);
+        assert_eq!(closed["result"]["observation"]["lifecycle"], "completed");
+        let completed = fixture.run(&["--contract-generation", "2", "observe"]);
+        let exact = completed["result"]["cursor"].to_string();
+        let reactivation = [
             "goal",
             "revise",
             "--goal",
-            "Revise the retained goal.",
+            "Check the next result.",
             "--criterion",
-            "correct=The revised result is correct.",
-            "--criterion",
-            "tested=The revised result is tested.",
+            "retest=The result is fresh.",
             "--rework-to",
-            "perform",
+            "plan",
             "--reason",
-            "The required outcome changed.",
+            "A fresh result is required.",
             "--reactivate",
+            "--basis-description",
+            "Owned fixture state.",
+            "--basis-digest",
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "--feedback",
+            "Preserve the earlier result as history.",
             "--actor",
-            "owner",
+            "fixture-coordinator",
+            "--if-cursor",
+            &exact,
+            "--if-workspace-uuid",
+            workspace,
             "--idempotency-key",
-            "revise",
+            "reactivate",
         ];
-        let terminal_revision = terminal["result"]["session"]["revision"]
-            .as_u64()
-            .unwrap()
-            .to_string();
-        if explicit_revision {
-            revise.extend_from_slice(&[
-                "--if-workspace-uuid",
-                terminal["workspace"]["uuid"].as_str().unwrap(),
-                "--if-session-id",
-                terminal["result"]["session"]["id"].as_str().unwrap(),
-                "--if-session-revision",
-                &terminal_revision,
-                "--if-goal-revision",
-                "1",
-            ]);
-        }
-        let original = fixture.run(&revise);
-        assert_eq!(original["result"]["actor"], "owner");
-        let active = fixture.run(&["status"]);
-        assert_eq!(active["result"]["goal_revision"], 2);
-        assert_eq!(active["result"]["session"]["lifecycle"], "running");
-        assert_eq!(
-            active["result"]["current"]["node"]["graph_node_id"],
-            "perform"
-        );
-        if !explicit_revision {
-            revise.extend_from_slice(&[
-                "--if-workspace-uuid",
-                terminal["workspace"]["uuid"].as_str().unwrap(),
-                "--if-session-id",
-                terminal["result"]["session"]["id"].as_str().unwrap(),
-                "--if-session-revision",
-                &terminal_revision,
-                "--if-goal-revision",
-                "1",
-            ]);
-        }
-        assert_eq!(fixture.run(&revise), original);
-        assert_eq!(fixture.run(&["status"])["result"], active["result"]);
-        let history = fixture.run(&["status", "--verbose"]);
-        let old_goal = &history["result"]["stale_goal_revision_history"]["entries"][0];
-        assert_eq!(old_goal["revision"], 1);
-        assert_eq!(old_goal["actor"], "owner");
-        assert_eq!(old_goal["statement"], "Verify the retained goal.");
+        let first = fixture.run(&reactivation);
+        assert_eq!(fixture.run(&reactivation), first);
+        assert_eq!(first["result"]["cursor"]["attempt"]["node"], "plan");
+        assert_eq!(first["result"]["cursor"]["goal_revision"], 2);
+        assert_eq!(first["result"]["cursor"]["selected_group"], Value::Null);
+        let current = fixture.run(&["observe"]);
+        assert_eq!(current["result"]["lifecycle"], "running");
+        assert_eq!(current["result"]["retained_group_count"], 1);
     }
 }
 
@@ -2188,397 +1786,276 @@ fn goal_begin_define_assess_decide_and_completed_revision_preserve_fences_and_re
 fn calls003_documented_check_result_decodes_and_records_with_observed_fences() {
     use sha2::{Digest, Sha256};
 
-    let document = include_str!("../../../docs/examples/v2-workflow.md");
-    let example = document
-        .split("At the `bug-fix-v2` `verify` node")
-        .nth(1)
-        .unwrap()
-        .split("```json\n")
-        .nth(1)
-        .unwrap()
-        .split("```")
-        .next()
-        .unwrap();
-    let decoded = podway_protocol::decode_item_record_many_input_v1(example.as_bytes()).unwrap();
-    let mut input = serde_json::to_value(decoded).unwrap();
-    assert_eq!(input, serde_json::from_str::<Value>(example).unwrap());
-
     let fixture = Fixture::new();
-    let init = fixture.run(&["init", "--idempotency-key", "calls003-init"]);
-    assert_eq!(init["result"]["revision"], 0);
-    assert_eq!(init["workspace"]["latest_workspace_sequence"], 1);
+    fixture.run(&["init", "--idempotency-key", "init"]);
     fixture.run(&[
         "start",
         "--preset",
-        "bug-fix-v2",
+        "bug-fix-v3",
         "--task",
-        "Documented check record",
+        "Qualify typed check recording",
         "--idempotency-key",
-        "calls003-start",
+        "start",
     ]);
-    fixture.run(&["begin", "--idempotency-key", "calls003-begin"]);
+    fixture.run(&[
+        "begin",
+        "--goal",
+        "Record typed check evidence.",
+        "--criterion",
+        "typed=The result remains scoped.",
+        "--idempotency-key",
+        "begin",
+    ]);
     for (item, value) in [
         ("reproduction-status", "reproduced"),
-        (
-            "observed-behavior",
-            "The fixture reproduces the documented recording path.",
-        ),
+        ("observed-behavior", "A deterministic regression fixture."),
         (
             "expected-behavior",
-            "Recording retains observed fences and caller digests.",
+            "Observe a recorded, scoped check result.",
         ),
-        ("regression-check", "Check the canonical bug-fix Procedure."),
-    ] {
-        let set = fixture.run(&["set", item, value, "--idempotency-key", item]);
-        let fresh = fixture.run(&["observe"]);
-        let slot = fresh["result"]["active_items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|entry| entry["item_id"] == item)
-            .unwrap();
-        assert_eq!(slot["revision"], 1);
-        assert_eq!(
-            set["result"]["revision"],
-            fresh["result"]["status"]["session"]["revision"]
-        );
-        assert_ne!(set["result"]["revision"], slot["revision"]);
-    }
-    fixture.run(&["complete", "--idempotency-key", "calls003-reproduced"]);
-    for (item, value) in [
-        (
-            "cause",
-            "The documented shape needs complete nested values.",
-        ),
-        ("affected-boundary", "CLI record guidance"),
+        ("regression-check", "Run the fixture authoring check."),
     ] {
         fixture.run(&["set", item, value, "--idempotency-key", item]);
     }
-    fixture.run(&["complete", "--idempotency-key", "calls003-diagnosed"]);
+    let plan = fixture.run(&["--contract-generation", "2", "observe"]);
+    let mut activate = scoped_template(&plan, "group.activate", "activate");
+    activate["working_copy_basis"] = json!({
+        "descriptor":"Owned typed-check fixture",
+        "digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    });
+    scoped_result(fixture.output_with_stdin(
+        &["group", "activate", "--stdin"],
+        activate.to_string().as_bytes(),
+    ));
+    for (item, value) in [
+        (
+            "cause",
+            "The owned fixture formerly omitted the declared type.",
+        ),
+        ("affected-boundary", "The fixture scope."),
+    ] {
+        fixture.run(&["set", item, value, "--idempotency-key", item]);
+    }
+    fixture.run(&["complete", "--idempotency-key", "diagnosis"]);
     fixture.run(&[
         "set",
         "fix-summary",
-        "Clarified recording guidance.",
+        "Supply the declared type.",
         "--idempotency-key",
-        "calls003-fix",
+        "fix",
     ]);
     fixture.run(&[
         "add",
         "changed-boundaries",
-        "CLI guidance",
+        "Fixture inputs",
         "--idempotency-key",
-        "calls003-boundary",
+        "boundary",
     ]);
-    fixture.run(&["complete", "--idempotency-key", "calls003-implemented"]);
+    fixture.run(&["complete", "--idempotency-key", "implementation"]);
 
-    let before = fixture.run(&["--contract-generation", "2", "observe"]);
-    assert_eq!(
-        before["result"]["status"]["current"]["node"]["graph_node_id"],
-        "verify"
+    let source = fixture.0.join("fixture-check.yaml");
+    fs::write(
+        &source,
+        include_bytes!("../../../assets/presets/bug-fix-v3.yaml"),
+    )
+    .unwrap();
+    fixture.run(&["procedure", "format", "fixture-check.yaml", "--write"]);
+    let input_digest = format!("sha256:{:x}", Sha256::digest(fs::read(&source).unwrap()));
+    let checked = fixture.output(&["procedure", "check", "fixture-check.yaml"]);
+    assert!(
+        checked.status.success() && checked.stderr.is_empty(),
+        "{checked:?}"
     );
-    let generation_one = fixture.run(&["--contract-generation", "1", "observe"]);
-    let mut normalized = generation_one["result"].clone();
-    assert_eq!(normalized["schema"], "podway.observation-result/v5");
-    assert_eq!(before["result"]["schema"], "podway.observation-result/v6");
-    normalized["schema"] = before["result"]["schema"].clone();
-    assert_eq!(normalized, before["result"]);
-    let template = before["result"]["mutation_templates"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["command"] == "item.record_many")
-        .unwrap();
-    let observed: Value =
-        serde_json::from_str(template["stdin_template"].as_str().unwrap()).unwrap();
-    for field in [
-        "workspace_uuid",
-        "session_id",
-        "session_revision",
-        "attempt_id",
-    ] {
-        input[field] = observed[field].clone();
-    }
-    input["operations"][0]["expected_item_revision"] =
-        observed["operations"][0]["expected_item_revision"].clone();
-    for field in ["operation_id", "operation_digest"] {
-        assert_eq!(
-            input["operations"][0]["record"][field],
-            observed["operations"][0]["record"][field]
-        );
-    }
-    let basis = include_bytes!("../../../assets/presets/bug-fix-v2.yaml");
-    fs::write(fixture.0.join("check-input.yaml"), basis).unwrap();
-    let check = fixture.raw_output(&["--json", "procedure", "check", "check-input.yaml"]);
-    assert!(check.status.success(), "{check:?}");
-    assert!(check.stderr.is_empty());
-    fs::write(fixture.0.join("check-output.json"), &check.stdout).unwrap();
-    let retained = fs::read(fixture.0.join("check-output.json")).unwrap();
-    let digest = format!("sha256:{:x}", Sha256::digest(&retained));
-    input["operations"][0]["record"]["input_basis"]["digest"] =
-        json!(format!("sha256:{:x}", Sha256::digest(basis)));
-    input["operations"][0]["record"]["executor"] =
-        json!({"name":"podway procedure check", "version":env!("CARGO_PKG_VERSION")});
-    input["operations"][0]["record"]["output_digest"] = json!(digest);
-    let bytes = serde_json::to_vec(&input).unwrap();
-    podway_protocol::decode_item_record_many_input_v1(&bytes).unwrap();
-    let output =
-        fixture.output_with_stdin(&["--contract-generation", "2", "record", "--stdin"], &bytes);
-    assert!(output.status.success(), "{output:?}");
-    let response = serde_json::from_slice::<OutputEnvelopeV4>(&output.stdout)
-        .unwrap()
-        .into_value();
-    assert_eq!(response["command"], "item.record_many");
-    assert_eq!(response["result"]["items"][0]["item_revision"], 1);
-    assert_eq!(
-        response["result"]["revision"].as_u64().unwrap(),
-        before["result"]["status"]["session"]["revision"]
-            .as_u64()
-            .unwrap()
-            + 1
-    );
-    let after = fixture.run(&["--contract-generation", "2", "observe"]);
-    let slot = &after["result"]["active_items"][0];
-    assert_eq!(slot["revision"], 1);
-    assert_eq!(slot["value"]["output_digest"], digest);
-    assert!(slot["satisfied"].as_bool().unwrap());
-    assert_eq!(
-        fixture.run(&[
-            "outcome",
-            "lookup",
-            "--idempotency-key",
-            "bug-42-record-verification"
-        ])["result"]["outcome"]["response"],
-        response
-    );
-    let replay =
-        fixture.output_with_stdin(&["--contract-generation", "2", "record", "--stdin"], &bytes);
-    assert_eq!(
-        serde_json::from_slice::<Value>(&replay.stdout).unwrap(),
-        response
-    );
-    assert_eq!(
-        fixture.run(&["--contract-generation", "2", "observe"])["result"],
-        after["result"]
-    );
-    assert_eq!(
-        fixture.run(&["workspace", "show"])["workspace"]["latest_workspace_sequence"],
-        after["workspace"]["latest_workspace_sequence"]
-    );
+    let output_digest = format!("sha256:{:x}", Sha256::digest(&checked.stdout));
 
-    let mut no_op = input.clone();
-    no_op["idempotency_key"] = json!("calls003-no-op");
-    no_op["session_revision"] = after["result"]["status"]["session"]["revision"].clone();
-    no_op["operations"][0]["expected_item_revision"] = slot["revision"].clone();
-    let no_op_output =
-        fixture.output_with_stdin(&["record", "--stdin"], &serde_json::to_vec(&no_op).unwrap());
-    assert!(no_op_output.status.success(), "{no_op_output:?}");
-    let no_op_response: Value = serde_json::from_slice(&no_op_output.stdout).unwrap();
-    assert_eq!(no_op_response["result"]["changed"], false);
+    let observed = fixture.run(&["--contract-generation", "2", "observe"]);
+    assert_eq!(observed["result"]["cursor"]["attempt"]["node"], "verify");
+    let declaration = &observed["result"]["guidance"]["definition"]["items"][0];
+    assert_eq!(declaration["id"], "verification-result");
+    let mut record = scoped_template(&observed, "item.record_many", "check-result");
+    record["operations"] = json!([{
+        "item_id":"verification-result","expected_item_revision":0,"record":{
+            "type":"check_result",
+            "operation_id":declaration["operation_id"],
+            "operation_digest":declaration["operation_digest"],
+            "input_basis":{"descriptor":"Canonical owned Procedure file","digest":input_digest},
+            "executor":{"name":"podway procedure check","version":env!("CARGO_PKG_VERSION")},
+            "outcome":"pass","summary":"The owned canonical fixture passed its authoring check.",
+            "output_digest":output_digest,
+        }
+    }]);
+    let bytes = serde_json::to_vec(&record).unwrap();
+    podway_protocol::decode_scoped_item_record_many_input_v1(&bytes).unwrap();
+    let flags = &["record", "--stdin", "--with-observation"];
+    let accepted = scoped_result(fixture.output_with_stdin(flags, &bytes));
+    assert_eq!(accepted["result"]["observation"]["guidance"]["ready"], true);
+    assert_eq!(accepted["result"]["observation"]["items"][0]["revision"], 1);
     assert_eq!(
-        no_op_response["result"]["revision"],
-        after["result"]["status"]["session"]["revision"]
+        scoped_result(fixture.output_with_stdin(flags, &bytes)),
+        accepted
     );
-    let no_op_after = fixture.run(&["--contract-generation", "2", "observe"]);
-    assert_eq!(no_op_after["result"], after["result"]);
     assert_eq!(
-        no_op_after["workspace"]["latest_workspace_sequence"]
-            .as_u64()
-            .unwrap(),
-        after["workspace"]["latest_workspace_sequence"]
-            .as_u64()
-            .unwrap()
-            + 1
+        exact_outcome(&fixture, "check-result")["outcome"]["response"],
+        accepted
     );
-
-    // Captured by the focused --nocapture proof run; normal gates capture passing test output.
-    println!(
-        "calls003_documented_input={}",
-        String::from_utf8(bytes).unwrap()
-    );
-    println!(
-        "calls003_retained_check_output={}",
-        serde_json::to_string(&retained).unwrap()
-    );
-    println!("calls003_record_response={response}");
+    fixture.run(&["complete", "--idempotency-key", "checked"]);
 }
 
-#[test]
-fn record_stdin_preserves_identity_applies_one_atomic_batch_and_replays_without_preflight() {
+fn valid_test_stderr(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes).is_ok_and(|text| {
+        text.lines().all(|line| {
+            let mut fields = line.split(':');
+            let count = match fields.next() {
+                Some("podway-test-preflight-count") => 2,
+                Some("podway-test-graph-hint-count") => 3,
+                _ => return false,
+            };
+            let values: Vec<_> = fields.collect();
+            values.len() == count && values.iter().all(|value| value.parse::<u64>().is_ok())
+        })
+    })
+}
+
+fn scoped_result(output: std::process::Output) -> Value {
+    assert!(
+        output.status.success() && valid_test_stderr(&output.stderr),
+        "{output:?}"
+    );
+    serde_json::from_slice::<OutputEnvelopeV4>(&output.stdout)
+        .unwrap()
+        .into_value()
+}
+
+fn scoped_error(output: std::process::Output, code: &str) -> Value {
+    assert!(
+        !output.status.success() && valid_test_stderr(&output.stderr),
+        "{output:?}"
+    );
+    let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(error.as_value()["code"], code, "{}", error.as_value());
+    error.into_value()
+}
+
+fn exact_record_fixture() -> (Fixture, Value) {
     let fixture = Fixture::new();
     fixture.run(&["init", "--idempotency-key", "init"]);
-    fs::write(fixture.0.join("batch.yaml"), concat!(
-        "schema: podway.procedure/v2\nid: batch\nversion: '1'\nname: Atomic batch\npurpose: Record typed values atomically.\n",
-        "node_definitions:\n  work:\n    type: action\n    title: Work\n    intent: Record the batch.\n",
-        "    items:\n      - id: alpha\n        type: integer\n        prompt: Record a number.\n        required: false\n",
-        "      - id: zeta\n        type: text\n        prompt: Record text.\n        required: false\n",
-        "graph:\n  entry: work\n  nodes:\n    - id: work\n      use: work\n      terminal: true\n"
-    )).unwrap();
-    let preview = fixture.run(&["procedure", "preview", "batch.yaml"]);
-    let digest = preview["result"]["procedure_digest"].as_str().unwrap();
+    let collect = json!({"type":"action","title":"Record values","intent":"Retain scoped inputs.","items":[
+        {"id":"note","type":"text","prompt":"Record the note.","required":true},
+        {"id":"evidence","type":"text","prompt":"Record the evidence.","required":false},
+        {"id":"count","type":"integer","prompt":"Record the count.","required":true}
+    ]});
+    let close = json!({"type":"action","title":"Close","intent":"Finish the fixture."});
+    let base = json!({
+        "schema":"podway.procedure/v3","id":"record-control","version":"1",
+        "name":"Record control","purpose":"Verify fenced atomic recording.",
+        "node_definitions":{"collect":collect,"finish":close},
+        "graph":{"entry":"anchor","nodes":[
+            {"id":"anchor","use":"collect","next":"finish"},
+            {"id":"finish","use":"finish","terminal":true}
+        ]},
+        "execution_group":{"anchor":"anchor","success_return":"finish","plan_inputs":["note","count"],"result_items":[],"replan_decisions":[]}
+    });
+    fs::write(fixture.0.join("record-control.json"), base.to_string()).unwrap();
+    let digest = fixture.run(&["procedure", "preview", "record-control.json"]);
     fixture.run(&[
         "start",
         "--procedure",
-        "batch.yaml",
+        "record-control.json",
         "--expect-procedure-digest",
-        digest,
+        digest["result"]["digest"].as_str().unwrap(),
         "--task",
-        "batch identity",
+        "Scoped record control",
         "--idempotency-key",
         "start",
     ]);
     fixture.run(&["begin", "--idempotency-key", "begin"]);
-    fixture.run(&[
-        "set",
-        "zeta",
-        "clear this text",
-        "--idempotency-key",
-        "seed-zeta",
-    ]);
-    let before = fixture.run(&["status"]);
-    let status = &before["result"];
-    let zeta = status["items"]
+    let observed = fixture.run(&["--contract-generation", "2", "observe"]);
+    (fixture, observed)
+}
+
+fn scoped_template(state: &Value, command: &str, key: &str) -> Value {
+    let template = state["result"]["mutation_templates"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|item| item["item_id"] == "zeta")
+        .find(|value| value["command"] == command)
         .unwrap();
-    let input = json!({
-        "schema":"podway.item-record-many-input/v1",
-        "workspace_uuid":before["workspace"]["uuid"],
-        "session_id":status["session"]["id"],
-        "session_revision":status["session"]["revision"],
-        "attempt_id":status["current"]["attempt"]["attempt_id"],
-        "idempotency_key":"record-batch",
-        "operations":[
-            {"item_id":"zeta","expected_item_revision":zeta["revision"],"clear":true},
-            {"item_id":"alpha","expected_item_revision":0,"record":{"type":"integer","value":42}}
-        ]
-    });
-    let bytes = serde_json::to_vec(&input).unwrap();
-    // READS-004: the fresh-key race body is frozen here, before the first
-    // successful batch child runs. That child is the confirmed competing
-    // edit; the frozen body keeps the original document fences unchanged.
-    let mut raced = input.clone();
-    raced["idempotency_key"] = json!("reads004-counted-record-race");
-    let raced_bytes = serde_json::to_vec(&raced).unwrap();
-    let output = output_with_stdin_counted(&fixture, &["record", "--stdin"], &bytes);
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
-    assert_read004_counters(&output, (0, 0));
-    let response = serde_json::from_slice::<OutputEnvelopeV4>(&output.stdout)
-        .unwrap()
-        .into_value();
-    assert_eq!(response["command"], "item.record_many");
-    assert_eq!(response["result"]["items"][0]["item_id"], "alpha");
-    assert_eq!(response["result"]["items"][1]["item_id"], "zeta");
-    let replay = output_with_stdin_counted(&fixture, &["record", "--stdin"], &bytes);
-    assert_eq!(replay.status.code(), Some(0), "{replay:?}");
-    assert_read004_counters(&replay, (0, 0));
-    assert_eq!(
-        serde_json::from_slice::<OutputEnvelopeV4>(&replay.stdout)
-            .unwrap()
-            .into_value(),
-        response
-    );
-    let after = fixture.run(&["status"]);
-    let observed = fixture.run(&["observe"]);
-    let items = observed["result"]["active_items"].as_array().unwrap();
-    let alpha = items
-        .iter()
-        .find(|item| item["item_id"] == "alpha")
-        .unwrap();
-    let zeta = items.iter().find(|item| item["item_id"] == "zeta").unwrap();
-    assert_eq!(alpha["value"], 42);
-    assert_eq!(alpha["revision"], 1);
-    assert_eq!(zeta["value"], Value::Null);
-    assert_eq!(zeta["revision"], 2);
-    assert_eq!(
-        after["result"]["session"]["revision"].as_u64().unwrap(),
-        status["session"]["revision"].as_u64().unwrap() + 1
-    );
-    assert_eq!(
-        fixture.run(&["outcome", "lookup", "--idempotency-key", "record-batch"])["result"]["outcome"]
-            ["response"],
-        response
-    );
-    let mut stale = input;
-    stale["idempotency_key"] = json!("rejected-batch");
-    let output = output_with_stdin_counted(
-        &fixture,
-        &["record", "--stdin"],
-        &serde_json::to_vec(&stale).unwrap(),
-    );
-    assert_eq!(output.status.code(), Some(4), "{output:?}");
-    assert_read004_counters(&output, (0, 0));
-    let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(error.as_value()["code"], "SESSION_REVISION_CONFLICT");
-    assert_eq!(fixture.run(&["status"])["result"], after["result"]);
-    assert_eq!(
-        fixture.run(&["outcome", "lookup", "--idempotency-key", "rejected-batch"])["result"]["found"],
-        false
-    );
-    stale["idempotency_key"] = json!("rejected-item-fence");
-    stale["session_revision"] = after["result"]["session"]["revision"].clone();
-    stale["operations"] = json!([
-        {"item_id":"alpha","expected_item_revision":1,"record":{"type":"integer","value":43}},
-        {"item_id":"zeta","expected_item_revision":0,"clear":true}
-    ]);
-    let output = output_with_stdin_counted(
-        &fixture,
-        &["record", "--stdin"],
-        &serde_json::to_vec(&stale).unwrap(),
-    );
-    assert_eq!(output.status.code(), Some(4), "{output:?}");
-    assert_read004_counters(&output, (0, 0));
-    let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(error.as_value()["code"], "ITEM_REVISION_CONFLICT");
-    assert_eq!(fixture.run(&["observe"])["result"], observed["result"]);
-    assert_eq!(
-        fixture.run(&[
-            "outcome",
-            "lookup",
-            "--idempotency-key",
-            "rejected-item-fence"
-        ])["result"]["found"],
-        false
-    );
-    // READS-004: the pre-frozen fresh-key body loses to its own original
-    // document fences against the confirmed competing batch, with exact
-    // fence details, no outcome, and the post-competitor state unchanged.
-    let output = output_with_stdin_counted(&fixture, &["record", "--stdin"], &raced_bytes);
-    assert_eq!(output.status.code(), Some(4), "{output:?}");
-    assert_read004_counters(&output, (0, 0));
-    let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(error.as_value()["code"], "SESSION_REVISION_CONFLICT");
-    assert_eq!(
-        error.as_value()["details"]["expected_revision"],
-        status["session"]["revision"]
-    );
-    assert_eq!(
-        error.as_value()["details"]["current_revision"],
-        after["result"]["session"]["revision"]
-    );
-    assert_eq!(fixture.run(&["status"])["result"], after["result"]);
-    assert_eq!(
-        fixture.run(&[
-            "outcome",
-            "lookup",
-            "--idempotency-key",
-            "reads004-counted-record-race"
-        ])["result"]["found"],
-        false
-    );
+    let mut input: Value =
+        serde_json::from_str(template["stdin_template"].as_str().unwrap()).unwrap();
+    input["context"]["idempotency_key"] = json!(key);
+    input
 }
 
-/// READS-004 candidate instrumentation check. The private token makes an
-/// instrumented debug child report its process-local preflight counters; a
-/// genuinely uninstrumented release-profile candidate must emit nothing. The
-/// release run context marks its selected candidate explicitly
-/// (`PODWAY_READS004_UNINSTRUMENTED_CANDIDATE`), because an external
-/// candidate may itself be a debug build; unmarked external selections
-/// assert behavior only. In the instrumented debug harness the same test
-/// proves the counters are genuine: an automatic fence preflight reports
-/// facts=1/status=0 and an explicit status read reports facts=0/status=1,
-/// so the zero observations in the stdin races cannot be vacuous.
+fn exact_outcome(fixture: &Fixture, key: &str) -> Value {
+    fixture.run(&["outcome", "lookup", "--idempotency-key", key])["result"].clone()
+}
+
+#[test]
+fn record_stdin_preserves_identity_applies_one_atomic_batch_and_replays_without_preflight() {
+    let (fixture, observe) = exact_record_fixture();
+    let mut input = scoped_template(&observe, "item.record_many", "batch");
+    input["operations"] = json!([
+        {"item_id":"note","expected_item_revision":0,"record":{"type":"text","value":"Retain the note."}},
+        {"item_id":"count","expected_item_revision":0,"record":{"type":"integer","value":4}},
+    ]);
+    let bytes = serde_json::to_vec(&input).unwrap();
+    podway_protocol::decode_scoped_item_record_many_input_v1(&bytes).unwrap();
+
+    let arguments = &["record", "--stdin", "--with-observation"];
+    let output = output_with_stdin_counted(&fixture, arguments, &bytes);
+    assert_read004_counters(&output, (0, 0));
+    let accepted = scoped_result(output);
+    let after = &accepted["result"]["observation"];
+    assert_eq!(after["cursor"]["session_revision"], 2);
+    assert_eq!(
+        after["cursor"]["attempt"],
+        observe["result"]["cursor"]["attempt"]
+    );
+    assert_eq!(
+        after["items"],
+        json!([
+            {"item":"note","recorded":true,"revision":1},
+            {"item":"evidence","recorded":false,"revision":0},
+            {"item":"count","recorded":true,"revision":1}
+        ])
+    );
+    assert_eq!(
+        exact_outcome(&fixture, "batch")["outcome"]["response"],
+        accepted
+    );
+
+    fixture.run(&[
+        "set",
+        "evidence",
+        "Independent write",
+        "--idempotency-key",
+        "independent",
+    ]);
+    let replay = output_with_stdin_counted(&fixture, arguments, &bytes);
+    assert_read004_counters(&replay, (0, 0));
+    assert_eq!(scoped_result(replay), accepted);
+    let before = fixture.run(&["observe"]);
+    let mut reused = input.clone();
+    reused["operations"][0]["record"]["value"] = json!("A different request.");
+    scoped_error(
+        fixture.output_with_stdin(arguments, reused.to_string().as_bytes()),
+        "IDEMPOTENCY_KEY_REUSED",
+    );
+
+    let live = fixture.run(&["--contract-generation", "2", "observe"]);
+    let mut invalid = scoped_template(&live, "item.record_many", "late-invalid");
+    invalid["operations"] = json!([
+        {"item_id":"note","expected_item_revision":1,"record":{"type":"text","value":"Must roll back."}},
+        {"item_id":"count","expected_item_revision":99,"record":{"type":"integer","value":5}}
+    ]);
+    scoped_error(
+        fixture.output_with_stdin(arguments, invalid.to_string().as_bytes()),
+        "ITEM_REVISION_CONFLICT",
+    );
+    assert_eq!(fixture.run(&["observe"])["result"], before["result"]);
+    assert_eq!(exact_outcome(&fixture, "late-invalid")["found"], false);
+}
+
 #[test]
 fn reads004_candidate_reports_no_preflight_counters_when_uninstrumented() {
     let fixture = Fixture::new();
@@ -2593,7 +2070,7 @@ fn reads004_candidate_reports_no_preflight_counters_when_uninstrumented() {
         fixture.run(&[
             "start",
             "--preset",
-            "small-change-v2",
+            "small-change-v3",
             "--task",
             "counter control",
             "--idempotency-key",
@@ -2750,7 +2227,7 @@ fn sigkill_after_commit_before_stdout_preserves_the_original_outcome_and_exact_r
     fixture.run(&[
         "start",
         "--preset",
-        "small-change-v2",
+        "small-change-v3",
         "--task",
         "output boundary",
         "--idempotency-key",
@@ -2759,8 +2236,8 @@ fn sigkill_after_commit_before_stdout_preserves_the_original_outcome_and_exact_r
     fixture.run(&["begin", "--idempotency-key", "begin"]);
     let before = fixture.run(&["status"]);
     let workspace = before["workspace"]["uuid"].as_str().unwrap();
-    let session = before["result"]["session"]["id"].as_str().unwrap();
-    let attempt = before["result"]["current"]["attempt"]["attempt_id"]
+    let session = before["result"]["cursor"]["session"].as_str().unwrap();
+    let attempt = before["result"]["cursor"]["attempt"]["attempt"]
         .as_str()
         .unwrap();
     let arguments = [
@@ -2860,8 +2337,13 @@ fn sigkill_after_commit_before_stdout_preserves_the_original_outcome_and_exact_r
         original["workspace"]["latest_workspace_sequence"]
     );
     assert_eq!(
-        after["result"]["session"]["revision"].as_u64().unwrap(),
-        before["result"]["session"]["revision"].as_u64().unwrap() + 1
+        after["result"]["cursor"]["session_revision"]
+            .as_u64()
+            .unwrap(),
+        before["result"]["cursor"]["session_revision"]
+            .as_u64()
+            .unwrap()
+            + 1
     );
     let mut changed = arguments;
     changed[2] = "a changed request must not replay";
@@ -2961,7 +2443,7 @@ fn an_absent_item_reaches_the_domain_error_without_creating_an_outcome() {
     fixture.run(&[
         "start",
         "--preset",
-        "small-change-v2",
+        "small-change-v3",
         "--task",
         "item lookup",
         "--idempotency-key",
@@ -3148,7 +2630,7 @@ fn a_sqlite_writer_bounds_contention_without_recording_a_failed_outcome() {
     fixture.run(&[
         "start",
         "--preset",
-        "small-change-v2",
+        "small-change-v3",
         "--task",
         "retain this session",
         "--idempotency-key",
@@ -3163,9 +2645,9 @@ fn a_sqlite_writer_bounds_contention_without_recording_a_failed_outcome() {
         "--if-workspace-uuid",
         initialized["workspace"]["uuid"].as_str().unwrap(),
         "--if-session-id",
-        before["result"]["session"]["id"].as_str().unwrap(),
+        before["result"]["cursor"]["session"].as_str().unwrap(),
         "--if-attempt",
-        before["result"]["current"]["attempt"]["attempt_id"]
+        before["result"]["cursor"]["attempt"]["attempt"]
             .as_str()
             .unwrap(),
         "--if-item-revision",
@@ -3206,7 +2688,7 @@ fn a_competing_process_honors_the_deadline_and_attributes_preflight_failure_to_t
     fixture.run(&[
         "start",
         "--preset",
-        "small-change-v2",
+        "small-change-v3",
         "--task",
         "keep this session",
         "--idempotency-key",
@@ -3279,7 +2761,7 @@ fn plain_start_replays_exactly_and_enter_preserves_prepared_running_and_terminal
     let arguments = [
         "start",
         "--preset",
-        "small-change-v2",
+        "small-change-v3",
         "--task",
         "original",
         "--idempotency-key",
@@ -3308,14 +2790,14 @@ fn plain_start_replays_exactly_and_enter_preserves_prepared_running_and_terminal
             _ => {}
         }
         let before = fixture.run(&["status"]);
-        assert_eq!(before["result"]["session"]["lifecycle"], expected);
+        assert_eq!(before["result"]["lifecycle"], expected);
         let rendered = fixture.continue_in_pty();
         assert!(
             rendered.contains("No new session was created"),
             "{rendered}"
         );
         assert!(
-            rendered.contains(before["result"]["session"]["id"].as_str().unwrap()),
+            rendered.contains(before["result"]["cursor"]["session"].as_str().unwrap()),
             "{rendered}"
         );
         assert_eq!(
@@ -3339,7 +2821,7 @@ fn reset_all_resumes_after_sigkill_at_real_durable_boundaries() {
         fixture.run(&[
             "start",
             "--preset",
-            "small-change-v2",
+            "small-change-v3",
             "--task",
             "retire this session",
             "--idempotency-key",
@@ -3423,7 +2905,7 @@ fn retained_commands_commit_replay_lookup_and_reject_stale_fences_in_the_real_bi
     let start = fixture.run(&[
         "start",
         "--preset",
-        "small-change-v2",
+        "small-change-v3",
         "--task",
         "direct CLI",
         "--idempotency-key",
@@ -3435,9 +2917,9 @@ fn retained_commands_commit_replay_lookup_and_reject_stale_fences_in_the_real_bi
         "session.begin"
     );
     let before = fixture.run(&["observe"]);
-    let status = &before["result"]["status"];
-    let session_id = status["session"]["id"].as_str().unwrap();
-    let attempt_id = status["current"]["attempt"]["attempt_id"].as_str().unwrap();
+    let cursor = &before["result"]["cursor"];
+    let session_id = cursor["session"].as_str().unwrap();
+    let attempt_id = cursor["attempt"]["attempt"].as_str().unwrap();
     let workspace_id = init["workspace"]["uuid"].as_str().unwrap();
     let arguments = [
         "set",
@@ -3504,9 +2986,26 @@ fn retained_commands_commit_replay_lookup_and_reject_stale_fences_in_the_real_bi
         false
     );
     fixture.run(&["status", "--compact"]);
-    fixture.run(&["complete", "--idempotency-key", "complete-inspect"]);
+    let flow = fixture.run(&["--contract-generation", "2", "observe"]);
+    let recipes = flow["result"]["mutation_templates"].as_array().unwrap();
+    let recipe = recipes
+        .iter()
+        .find(|value| value["command"] == "group.activate")
+        .unwrap();
+    let mut input: Value =
+        serde_json::from_str(recipe["stdin_template"].as_str().unwrap()).unwrap();
+    input["context"]["idempotency_key"] = json!("activate");
+    input["working_copy_basis"] = json!({
+        "descriptor":"Owned conformance fixture",
+        "digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    });
+    let activated = fixture.output_with_stdin(
+        &["group", "activate", "--stdin"],
+        input.to_string().as_bytes(),
+    );
+    assert!(activated.status.success(), "{activated:?}");
     assert_eq!(
-        fixture.run(&["observe"])["result"]["status"]["current"]["node"]["graph_node_id"],
+        fixture.run(&["observe"])["result"]["cursor"]["attempt"]["node"],
         "implement"
     );
     assert!(!fixture.0.join("podwayd.sock").exists());
@@ -3519,7 +3018,7 @@ fn bound005_completion_keeps_its_best_effort_budget_during_maintenance() {
     fixture.run(&[
         "start",
         "--preset",
-        "small-change-v2",
+        "small-change-v3",
         "--task",
         "Completion budget",
         "--idempotency-key",
@@ -3556,177 +3055,80 @@ fn bound005_completion_keeps_its_best_effort_budget_during_maintenance() {
 #[test]
 fn admit003_real_cli_wires_reuse_and_preserves_previews_key_errors_and_later_invocations() {
     use super::cli_fixture::assert_admit003_hint_counters;
+
     let fixture = Fixture::new();
     fixture.run(&["init", "--idempotency-key", "init"]);
     fixture.run(&[
         "start",
         "--preset",
-        "small-change-v2",
+        "small-change-v3",
         "--task",
-        "context wiring",
+        "Successor invocation",
         "--idempotency-key",
         "start",
     ]);
-    // Begin, single item, cursor, procedure and reset/archive dispatch all use
-    // actual automatic preflight; fresh plain start remains independent.
-    for args in [
-        vec!["begin", "--idempotency-key", "begin"],
-        vec![
-            "set",
-            "scope-summary",
-            "context value",
-            "--idempotency-key",
-            "set",
-        ],
-        vec!["block", "--reason", "hold", "--idempotency-key", "block"],
-        vec!["unblock", "--all", "--idempotency-key", "unblock"],
-        vec!["cancel", "--reason", "close", "--idempotency-key", "cancel"],
-        vec![
-            "disposition",
-            "not-required",
-            "--reason",
-            "no handoff",
-            "--idempotency-key",
-            "disposition",
-        ],
-        vec!["archive", "--idempotency-key", "archive"],
-    ] {
-        let output = output_with_stdin_counted(&fixture, &args, b"");
-        assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
-        let envelope: OutputEnvelopeV4 = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(envelope.as_value()["schema"], "podway.output/v4");
-        if super::cli_fixture::reads004_counter_harness() {
-            assert_eq!(
-                reads004_preflight_counters(&output),
-                Some((1, 0)),
-                "{args:?}"
-            );
-        }
-        assert_admit003_hint_counters(&output, (1, 1, 1));
-    }
-    fixture.run(&[
-        "start",
-        "--preset",
-        "small-change-v2",
-        "--task",
-        "replacement",
-        "--idempotency-key",
-        "start-again",
-    ]);
-    let replace = output_with_stdin_counted(
-        &fixture,
-        &[
-            "start",
-            "--preset",
-            "small-change-v2",
-            "--task",
-            "successor",
-            "--on-existing",
-            "delete",
-            "--idempotency-key",
-            "replace",
-        ],
-        b"",
-    );
-    assert_eq!(replace.status.code(), Some(0), "{replace:?}");
-    assert_read004_counters(&replace, (1, 0));
-    assert_admit003_hint_counters(&replace, (1, 1, 1));
-    let before = fixture.podway_snapshot();
-    let dry_run = output_with_stdin_counted(&fixture, &["reset", "--dry-run"], b"");
-    assert_eq!(dry_run.status.code(), Some(0), "{dry_run:?}");
-    assert_read004_counters(&dry_run, (1, 0));
-    assert_admit003_hint_counters(&dry_run, (1, 0, 0));
-    fixture.assert_podway_snapshot(&before);
-    for args in [
-        vec!["begin"],
-        vec!["begin", "--idempotency-key", ""],
-        vec![
-            "start",
-            "--preset",
-            "small-change-v2",
-            "--task",
-            "bad policy",
-            "--on-existing",
-            "preserve",
-            "--idempotency-key",
-            "bad-policy",
-            "--supersede-reason",
-            "shape-valid policy",
-        ],
-    ] {
-        let rejected = output_with_stdin_counted(&fixture, &args, b"");
-        assert_eq!(rejected.status.code(), Some(2), "{args:?}: {rejected:?}");
-        let error: ErrorEnvelopeV2 = serde_json::from_slice(&rejected.stdout).unwrap();
-        assert_eq!(error.as_value()["code"], "REQUEST_INVALID");
-        if super::cli_fixture::reads004_counter_harness() {
-            assert_eq!(
-                reads004_preflight_counters(&rejected),
-                Some((1, 0)),
-                "{args:?}"
-            );
-        }
-        assert_admit003_hint_counters(&rejected, (1, 0, 0));
-        fixture.assert_podway_snapshot(&before);
-    }
-    let status = output_with_stdin_counted(&fixture, &["status"], b"");
-    assert_eq!(status.status.code(), Some(0));
-    assert_admit003_hint_counters(&status, (0, 0, 0));
-    let malformed = output_with_stdin_counted(&fixture, &["record", "--stdin"], b"not-json");
-    assert_eq!(malformed.status.code(), Some(2));
-    assert_read004_counters(&malformed, (0, 0));
-    assert_admit003_hint_counters(&malformed, (0, 0, 0));
-    fixture.run(&["begin", "--idempotency-key", "last-begin"]);
-    fixture.run(&[
-        "cancel",
-        "--reason",
-        "terminal preview",
-        "--idempotency-key",
-        "terminal-cancel",
-    ]);
-    let before = fixture.podway_snapshot();
-    let preview = output_with_stdin_counted(
-        &fixture,
-        &[
-            "start",
-            "--preset",
-            "small-change-v2",
-            "--task",
-            "terminal",
-            "--on-existing",
-            "delete",
-            "--idempotency-key",
-            "terminal-start",
-        ],
-        b"",
-    );
-    assert_eq!(preview.status.code(), Some(5), "{preview:?}");
-    let error: ErrorEnvelopeV2 = serde_json::from_slice(&preview.stdout).unwrap();
-    assert_eq!(error.as_value()["code"], "SESSION_START_DECISION_REQUIRED");
-    assert_read004_counters(&preview, (1, 0));
-    assert_admit003_hint_counters(&preview, (1, 0, 0));
-    fixture.assert_podway_snapshot(&before);
-    // Plain start first enters writer admission and can change SQLite's SHM
-    // cache. The interactive continue decision must preserve logical state.
-    let before_status = fixture.run(&["status"]);
-    assert!(
-        fixture
-            .continue_in_pty()
-            .contains("No new session was created")
-    );
-    let after_status = fixture.run(&["status"]);
-    assert_eq!(after_status["result"], before_status["result"]);
+    let prepared = fixture.run(&["observe"]);
+    let begin = output_with_stdin_counted(&fixture, &["begin", "--idempotency-key", "begin"], b"");
+    assert_read004_counters(&begin, (1, 0));
+    assert_admit003_hint_counters(&begin, (0, 0, 0));
+    let begun = scoped_result(begin);
     assert_eq!(
-        after_status["workspace"]["latest_workspace_sequence"],
-        before_status["workspace"]["latest_workspace_sequence"]
+        begun["result"]["cursor"]["session"],
+        prepared["result"]["cursor"]["session"]
+    );
+    let cursor = begun["result"]["cursor"].to_string();
+    let workspace = begun["workspace"]["uuid"].as_str().unwrap();
+    let flags = [
+        "set",
+        "scope-summary",
+        "Record the current plan.",
+        "--if-cursor",
+        &cursor,
+        "--if-workspace-uuid",
+        workspace,
+        "--if-item-revision",
+        "0",
+        "--idempotency-key",
+        "scope",
+    ];
+    let direct = output_with_stdin_counted(&fixture, &flags, b"");
+    assert_read004_counters(&direct, (0, 0));
+    let original = scoped_result(direct);
+    let replay = output_with_stdin_counted(&fixture, &flags, b"");
+    assert_read004_counters(&replay, (0, 0));
+    assert_eq!(scoped_result(replay), original);
+
+    let before = fixture.run(&["observe"]);
+    let preview = fixture.run(&["reset", "--dry-run"]);
+    assert_eq!(preview["result"]["dry_run"], true);
+    for args in [
+        &["complete"][..],
+        &["complete", "--idempotency-key", ""][..],
+    ] {
+        let invalid = output_with_stdin_counted(&fixture, args, b"");
+        assert_read004_counters(&invalid, (0, 0));
+        scoped_error(invalid, "REQUEST_INVALID");
+    }
+    assert_eq!(fixture.run(&["observe"])["result"], before["result"]);
+    let later = output_with_stdin_counted(
+        &fixture,
+        &[
+            "block",
+            "--reason",
+            "Retain current state",
+            "--idempotency-key",
+            "block",
+        ],
+        b"",
+    );
+    assert_read004_counters(&later, (1, 0));
+    assert_eq!(scoped_result(later)["result"]["lifecycle"], "running");
+    assert_eq!(
+        exact_outcome(&fixture, "scope")["outcome"]["response"],
+        original
     );
 }
 
-/// GUIDE-004 JSON byte-identity normalization: replaces only per-invocation
-/// volatile values (the random request id and the wall-clock generated_at) in
-/// their exact serialized patterns, so the complete stdout bytes, including
-/// the trailing newline, stay comparable against the frozen pre-change
-/// baselines below. The writer baseline additionally normalizes the
-/// build-dependent expected manifest digest at its call site.
 fn guide004_normalized_error_stdout(stdout: &[u8]) -> String {
     let text = String::from_utf8(stdout.to_vec()).unwrap();
     let envelope: Value = serde_json::from_str(&text).unwrap();
@@ -3746,7 +3148,6 @@ fn guide004_normalized_error_stdout(stdout: &[u8]) -> String {
 /// render.rs edit; only the volatile values above (plus the expected digest)
 /// are normalized. Any other byte change to these envelopes fails the tests.
 const GUIDE004_WRITER_MISMATCH_JSON_BASELINE: &str = "{\"code\":\"WORKSPACE_CONTRACT_MISMATCH\",\"command\":\"session.status\",\"details\":{\"actual_contract_manifest_digest\":\"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"expected_contract_manifest_digest\":\"<expected-digest>\",\"recovery\":{\"action\":\"diagnose_writer\",\"argv\":[\"podway\",\"--json\",\"version\",\"--identity\"],\"command\":\"version\",\"reason\":\"Inspect writer identity. Restore access or use the original writer. To discard invalid state, retire other writers and confirm an unfenced reset --all with a new key; unfenced removal needs a terminal and exact path. Newer generations stay refused.\",\"requires_explicit_authorization\":false},\"schema\":\"podway.workspace-contract-mismatch-details/v1\"},\"exit_code\":5,\"generated_at\":\"<generated-at>\",\"message\":\"The Store writer contract is not supported by this binary.\",\"request_id\":\"<request-id>\",\"retryable\":false,\"schema\":\"podway.error/v2\"}\n";
-const GUIDE004_CRITERION_CITATION_JSON_BASELINE: &str = "{\"code\":\"CRITERION_CITATION_INVALID\",\"command\":\"goal.assess_criterion\",\"details\":{\"citation\":{\"local_item_id\":\"unrecorded-note\"},\"criterion_id\":\"correct\",\"kind\":\"CRITERION_CITATION_INVALID\",\"schema\":\"podway.v2-runtime-error-details/v2\"},\"exit_code\":1,\"generated_at\":\"<generated-at>\",\"message\":\"A criterion citation does not name resolved attempt state.\",\"request_id\":\"<request-id>\",\"retryable\":false,\"schema\":\"podway.error/v2\"}\n";
 
 #[test]
 fn guide004_human_writer_mismatch_hint_names_digests_and_recovery() {
@@ -3811,106 +3212,40 @@ fn guide004_human_writer_mismatch_hint_names_digests_and_recovery() {
 
 #[test]
 fn guide004_human_citation_hint_states_the_admission_rule() {
-    let fixture = Fixture::new();
-    fixture.run(&["init", "--idempotency-key", "init"]);
-    fs::write(
-        fixture.0.join("goal.yaml"),
-        include_str!("../../../tests/fixtures/v2/procedures/goal-outcomes.yaml").replace(
-            "    options:\n",
-            concat!(
-                "    items:\n",
-                "      - id: assessment-note\n",
-                "        type: text\n",
-                "        prompt: Record local criterion evidence.\n",
-                "        required: false\n",
-                "        max_length: 100\n",
-                "    options:\n",
-            ),
-        ),
-    )
-    .unwrap();
-    let preview = fixture.run(&["procedure", "preview", "goal.yaml"]);
-    fixture.run(&[
-        "start",
-        "--procedure",
-        "goal.yaml",
-        "--expect-procedure-digest",
-        preview["result"]["procedure_digest"].as_str().unwrap(),
-        "--task",
-        "guide004 citation hint",
-        "--idempotency-key",
-        "start",
-    ]);
-    let begin = vec![
-        "begin",
-        "--idempotency-key",
-        "begin",
-        "--goal",
-        "Verify the retained goal.",
-        "--criterion",
-        "correct=The result is correct.",
-        "--criterion",
-        "tested=The result is tested.",
-        "--actor",
-        "owner",
-    ];
-    fixture.run(&begin);
-    fixture.run(&[
-        "set",
-        "result",
-        "Evidence supports this result.",
-        "--idempotency-key",
-        "evidence",
-    ]);
-    fixture.run(&["complete", "--idempotency-key", "complete-work"]);
-    fixture.run(&[
-        "set",
-        "assessment-note",
-        "Decision-local evidence.",
-        "--idempotency-key",
-        "assessment-note",
-    ]);
-    let assess = [
+    let (fixture, before, _) = super::e2e_adopt001_scoped_cli::scoped_criterion_fixture(true);
+    let args = [
         "goal",
         "assess-criterion",
-        "correct",
+        "proof",
         "--status",
         "satisfied",
         "--reason",
-        "The cited item has no recorded value.",
+        "Check the scoped hint.",
         "--item",
-        "unrecorded-note",
+        "note",
         "--idempotency-key",
-        "guide004-citation",
+        "reject-hint",
     ];
-
-    // JSON leg first: the complete envelope bytes stay identical to the frozen
-    // pre-change baseline after normalizing only volatile values.
-    let refusal = fixture.output(&assess);
-    assert_eq!(refusal.status.code(), Some(1), "{refusal:?}");
-    assert!(refusal.stderr.is_empty(), "{refusal:?}");
-    let envelope: Value = serde_json::from_slice(&refusal.stdout).unwrap();
-    assert_eq!(envelope["code"], json!("CRITERION_CITATION_INVALID"));
-    assert_eq!(envelope["command"], json!("goal.assess_criterion"));
-    let normalized = guide004_normalized_error_stdout(&refusal.stdout);
-    assert_eq!(normalized, GUIDE004_CRITERION_CITATION_JSON_BASELINE);
-
-    // Human leg: exact stderr = the error line plus the admission-rule hint;
-    // this runtime detail family carries no recovery reason.
-    let human = fixture.raw_output(&assess);
+    let human = fixture.raw_output(&args);
     assert_eq!(human.status.code(), Some(1), "{human:?}");
-    let stderr = String::from_utf8(human.stderr.clone()).unwrap();
-    assert_eq!(
-        stderr,
-        "error: CRITERION_CITATION_INVALID: A criterion citation does not name resolved attempt state.\n\
-         hint: cite only resolved guidance.references[] sources and recorded items of the decision attempt, each once, at most four citations\n"
+    assert!(human.stdout.is_empty());
+    let hint = String::from_utf8(human.stderr).unwrap();
+    assert!(hint.contains("CRITERION_CITATION_INVALID"), "{hint}");
+    assert!(
+        hint.contains("recorded") && hint.contains("source") && hint.contains("four"),
+        "{hint}"
     );
+    let error = scoped_error(fixture.output(&args), "CRITERION_CITATION_INVALID");
+    assert_eq!(
+        error["details"]["decision"],
+        before["result"]["cursor"]["attempt"]
+    );
+    assert_eq!(error["details"]["reason"], "unrecorded_item");
+    assert_eq!(exact_outcome(&fixture, "reject-hint")["found"], false);
 }
 
 const GUIDE010_KNOWN_WRITER_REASON: &str = "Inspect writer identity. Restore access or use the original v0.2.14 writer. To discard invalid state, retire other writers and confirm an unfenced reset --all with a new key; unfenced removal needs a terminal and exact path.";
 const GUIDE010_UNKNOWN_WRITER_REASON: &str = "Inspect writer identity. Restore access or use the original writer matching the stored digest. To discard invalid state, retire other writers and confirm an unfenced reset --all with a new key; unfenced removal needs a terminal and exact path.";
-const GUIDE010_CITATION_RULE_LINE: &str = "hint: cite only resolved guidance.references[] sources and recorded items of the decision attempt, each once, at most four citations\n";
-const GUIDE010_CITATION_ERROR_LINE: &str = "error: CRITERION_CITATION_INVALID: A criterion citation does not name resolved attempt state.\n";
 
 /// GUIDE-010: under generation 2 the writer mismatch maps the stored digest
 /// through the released-manifest table (`v0.2.14` reports `"v0.2.14"`, an
@@ -4030,339 +3365,70 @@ fn guide010_generation2_writer_mismatch_reports_released_and_unknown_writers() {
 /// decision-local `assessment-note` item), driven to the active goal
 /// assessment. `with_evidence` keeps the `perform` evidence reference and
 /// `record_note` records the decision-local item.
-fn guide010_goal_fixture(with_evidence: bool, record_note: bool) -> Fixture {
-    let fixture = Fixture::new();
-    fixture.run(&["init", "--idempotency-key", "init"]);
-    let mut source = include_str!("../../../tests/fixtures/v2/procedures/goal-outcomes.yaml")
-        .replace(
-            "    options:\n",
-            concat!(
-                "    items:\n",
-                "      - id: assessment-note\n",
-                "        type: text\n",
-                "        prompt: Record local criterion evidence.\n",
-                "        required: false\n",
-                "        max_length: 100\n",
-                "    options:\n",
-            ),
-        );
-    if !with_evidence {
-        let evidence = concat!(
-            "      evidence_from:\n",
-            "        - node: perform\n",
-            "          required: true\n",
-            "          items:\n",
-            "            - result\n",
-        );
-        assert!(
-            source.contains(evidence),
-            "the fixture evidence block changed"
-        );
-        source = source.replace(evidence, "");
-    }
-    fs::write(fixture.0.join("goal.yaml"), source).unwrap();
-    let preview = fixture.run(&["procedure", "preview", "goal.yaml"]);
-    fixture.run(&[
-        "start",
-        "--procedure",
-        "goal.yaml",
-        "--expect-procedure-digest",
-        preview["result"]["procedure_digest"].as_str().unwrap(),
-        "--task",
-        "guide010 citation details",
-        "--idempotency-key",
-        "start",
-    ]);
-    fixture.run(&[
-        "begin",
-        "--idempotency-key",
-        "begin",
-        "--goal",
-        "Verify the retained goal.",
-        "--criterion",
-        "correct=The result is correct.",
-        "--criterion",
-        "tested=The result is tested.",
-        "--actor",
-        "owner",
-    ]);
-    fixture.run(&[
-        "set",
-        "result",
-        "Evidence supports this result.",
-        "--idempotency-key",
-        "evidence",
-    ]);
-    fixture.run(&["complete", "--idempotency-key", "complete-work"]);
-    if record_note {
-        fixture.run(&[
-            "set",
-            "assessment-note",
-            "Decision-local evidence.",
-            "--idempotency-key",
-            "assessment-note",
-        ]);
-    }
-    fixture
-}
-
-fn guide010_assess_arguments(item: &str) -> Vec<&str> {
-    vec![
-        "goal",
-        "assess-criterion",
-        "correct",
-        "--status",
-        "satisfied",
-        "--reason",
-        "The cited item has no recorded value.",
-        "--item",
-        item,
-        "--idempotency-key",
-        "guide010-citation",
-    ]
-}
-
 #[test]
 fn calls004_citations_preserve_optional_actor_eligibility_duplicates_and_total_bound() {
-    let fixture = guide010_goal_fixture(true, true);
-    let before = fixture.run(&["observe"]);
-    for (key, status, citations, code) in [
-        (
-            "duplicate-source",
-            "satisfied",
-            vec!["--evidence", "perform", "--evidence", "perform"],
-            "REQUEST_INVALID",
-        ),
-        (
-            "duplicate-item",
-            "satisfied",
-            vec!["--item", "assessment-note", "--item", "assessment-note"],
-            "REQUEST_INVALID",
-        ),
-        (
-            "four-unique-check-eligibility",
-            "satisfied",
-            vec![
-                "--evidence",
-                "perform",
-                "--item",
-                "assessment-note",
-                "--evidence",
-                "other-source",
-                "--item",
-                "other-item",
-            ],
-            "CRITERION_CITATION_INVALID",
-        ),
-        (
-            "too-many",
-            "satisfied",
-            vec![
-                "--evidence",
-                "perform",
-                "--item",
-                "assessment-note",
-                "--evidence",
-                "other-source",
-                "--item",
-                "other-item",
-                "--evidence",
-                "last-source",
-            ],
-            "REQUEST_INVALID",
-        ),
-        (
-            "not-applicable-citation",
-            "not_applicable",
-            vec!["--item", "assessment-note"],
-            "REQUEST_INVALID",
-        ),
-        (
-            "undeclared-source",
-            "satisfied",
-            vec!["--evidence", "not-declared"],
-            "CRITERION_CITATION_INVALID",
-        ),
-        (
-            "unrecorded-item",
-            "satisfied",
-            vec!["--item", "not-recorded"],
-            "CRITERION_CITATION_INVALID",
-        ),
-    ] {
-        let mut args = vec![
-            "goal",
-            "assess-criterion",
-            "correct",
-            "--status",
-            status,
-            "--reason",
-            "Verify citation admission.",
-            "--idempotency-key",
-            key,
-        ];
-        args.extend(citations);
-        let output = fixture.output(&args);
-        assert!(!output.status.success(), "{key}");
-        let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(error.as_value()["code"], code, "{key}");
-        let after = fixture.run(&["observe"]);
-        assert_eq!(after["result"], before["result"]);
-        assert_eq!(
-            after["workspace"]["latest_workspace_sequence"],
-            before["workspace"]["latest_workspace_sequence"]
-        );
-        assert_eq!(
-            fixture.run(&["outcome", "lookup", "--idempotency-key", key])["result"]["found"],
-            false
-        );
-    }
-    let assessed = fixture.run(&[
+    let (fixture, observed, _) = super::e2e_adopt001_scoped_cli::scoped_criterion_fixture(true);
+    let common = [
         "goal",
         "assess-criterion",
-        "correct",
+        "proof",
         "--status",
         "satisfied",
         "--reason",
-        "The resolved source and recorded local item support the criterion.",
+        "Check the scope.",
+        "--idempotency-key",
+        "assessment",
+    ];
+    let mut duplicate = common.to_vec();
+    duplicate.extend([
         "--evidence",
-        "perform",
-        "--item",
-        "assessment-note",
-        "--idempotency-key",
-        "calls004-mixed",
+        "@execution-result",
+        "--evidence",
+        "@execution-result",
     ]);
+    let error = scoped_error(fixture.output(&duplicate), "CRITERION_CITATION_INVALID");
+    assert_eq!(error["details"]["reason"], "duplicate");
+    let mut excessive = common.to_vec();
+    excessive.extend([
+        "--item", "alpha", "--item", "beta", "--item", "gamma", "--item", "delta", "--item",
+        "epsilon",
+    ]);
+    scoped_error(fixture.output(&excessive), "REQUEST_INVALID");
+    assert_eq!(exact_outcome(&fixture, "assessment")["found"], false);
+    let mut unrecorded = common.to_vec();
+    unrecorded.extend(["--item", "note"]);
+    scoped_error(fixture.output(&unrecorded), "CRITERION_CITATION_INVALID");
     assert_eq!(
-        assessed["result"]["result"]["citations"]
-            .as_array()
-            .unwrap()
-            .len(),
-        2
+        fixture.run(&["--contract-generation", "2", "observe"])["result"],
+        observed["result"]
     );
-    assert_eq!(assessed["result"]["result"]["criterion_id"], "correct");
-    let with_actor = fixture.run(&[
-        "goal",
-        "assess-criterion",
-        "tested",
-        "--status",
-        "satisfied",
-        "--reason",
-        "The recorded local item supports the criterion.",
-        "--item",
-        "assessment-note",
-        "--actor",
-        "calls004-reviewer",
+    fixture.run(&[
+        "set",
+        "note",
+        "Retained decision note.",
         "--idempotency-key",
-        "calls004-actor",
+        "note",
     ]);
-    assert_eq!(with_actor["result"]["result"]["criterion_id"], "tested");
+    let mut admitted = common.to_vec();
+    admitted.extend([
+        "--item",
+        "note",
+        "--evidence",
+        "@execution-result",
+        "--actor",
+        "fixture-evaluator",
+    ]);
+    fixture.run(&admitted);
+    assert_eq!(
+        fixture.run(&["observe"])["result"]["goal"]["outcome"],
+        "achieved"
+    );
+    assert_eq!(exact_outcome(&fixture, "assessment")["found"], true);
 }
 
-/// GUIDE-010: under generation 2 the rejected citation carries the citable
-/// lists (populated and empty) with exact human legs; the default and an
-/// explicit generation 1 stay byte-identical to the GUIDE-004 baseline.
 #[test]
 fn guide010_generation2_citation_details_list_citable_sources() {
-    // Populated lists: the resolved `perform` reference and the recorded
-    // decision-local item, exactly the GUIDE-004 scenario.
-    let populated = guide010_goal_fixture(true, true);
-    let assess = guide010_assess_arguments("unrecorded-note");
-    let mut json_arguments = vec!["--json", "--contract-generation", "2"];
-    json_arguments.extend(assess.iter().copied());
-    let refusal = populated.raw_output(&json_arguments);
-    assert_eq!(refusal.status.code(), Some(1), "{refusal:?}");
-    assert!(refusal.stderr.is_empty(), "{refusal:?}");
-    let validated: ErrorEnvelopeV2 = serde_json::from_slice(&refusal.stdout).unwrap();
-    let details = &validated.as_value()["details"];
-    assert_eq!(
-        validated.as_value()["code"],
-        json!("CRITERION_CITATION_INVALID")
-    );
-    assert_eq!(
-        details["schema"],
-        json!("podway.criterion-citation-invalid-details/v1")
-    );
-    assert_eq!(details["criterion_id"], json!("correct"));
-    assert_eq!(
-        details["citation"],
-        json!({"local_item_id": "unrecorded-note"})
-    );
-    assert_eq!(details["citable_evidence_source_nodes"], json!(["perform"]));
-    assert_eq!(details["citable_item_ids"], json!(["assessment-note"]));
-    assert!(details.get("kind").is_none());
-
-    let mut human_arguments = vec!["--contract-generation", "2"];
-    human_arguments.extend(assess.iter().copied());
-    let human = populated.raw_output(&human_arguments);
-    assert_eq!(human.status.code(), Some(1), "{human:?}");
-    let stderr = String::from_utf8(human.stderr.clone()).unwrap();
-    assert_eq!(
-        stderr,
-        format!(
-            "{GUIDE010_CITATION_ERROR_LINE}{GUIDE010_CITATION_RULE_LINE}\
-             hint: citable evidence source nodes: perform\n\
-             hint: citable item ids: assessment-note\n"
-        ),
-        "{stderr}"
-    );
-
-    // Generation 1 unchanged: the default and an explicit generation 1
-    // normalize to the frozen GUIDE-004 envelope, and the human leg is the
-    // single admission-rule line.
-    for prefix in [vec!["--json"], vec!["--json", "--contract-generation", "1"]] {
-        let mut arguments = prefix;
-        arguments.extend(assess.iter().copied());
-        let refusal = populated.raw_output(&arguments);
-        assert_eq!(refusal.status.code(), Some(1), "{refusal:?}");
-        assert_eq!(
-            guide004_normalized_error_stdout(&refusal.stdout),
-            GUIDE004_CRITERION_CITATION_JSON_BASELINE
-        );
-    }
-    let mut generation1 = vec!["--contract-generation", "1"];
-    generation1.extend(assess.iter().copied());
-    let human = populated.raw_output(&generation1);
-    assert_eq!(human.status.code(), Some(1), "{human:?}");
-    assert_eq!(
-        String::from_utf8(human.stderr.clone()).unwrap(),
-        format!("{GUIDE010_CITATION_ERROR_LINE}{GUIDE010_CITATION_RULE_LINE}")
-    );
-
-    // Empty lists: no evidence reference and no recorded decision-local item;
-    // the declared but unrecorded item is the rejected citation.
-    let empty = guide010_goal_fixture(false, false);
-    let assess = guide010_assess_arguments("assessment-note");
-    let mut json_arguments = vec!["--json", "--contract-generation", "2"];
-    json_arguments.extend(assess.iter().copied());
-    let refusal = empty.raw_output(&json_arguments);
-    assert_eq!(refusal.status.code(), Some(1), "{refusal:?}");
-    let validated: ErrorEnvelopeV2 = serde_json::from_slice(&refusal.stdout).unwrap();
-    let details = &validated.as_value()["details"];
-    assert_eq!(
-        details["schema"],
-        json!("podway.criterion-citation-invalid-details/v1")
-    );
-    assert_eq!(
-        details["citation"],
-        json!({"local_item_id": "assessment-note"})
-    );
-    assert_eq!(details["citable_evidence_source_nodes"], json!([]));
-    assert_eq!(details["citable_item_ids"], json!([]));
-
-    let mut human_arguments = vec!["--contract-generation", "2"];
-    human_arguments.extend(assess.iter().copied());
-    let human = empty.raw_output(&human_arguments);
-    assert_eq!(human.status.code(), Some(1), "{human:?}");
-    let stderr = String::from_utf8(human.stderr.clone()).unwrap();
-    assert_eq!(
-        stderr,
-        format!(
-            "{GUIDE010_CITATION_ERROR_LINE}{GUIDE010_CITATION_RULE_LINE}\
-             hint: citable evidence source nodes: (none)\n\
-             hint: citable item ids: (none)\n"
-        ),
-        "{stderr}"
-    );
+    super::e2e_adopt001_scoped_cli::assert_scoped_citation_cases();
 }
 
 #[test]
@@ -4554,7 +3620,7 @@ fn maint003_unforced_active_removal_has_only_a_human_typed_force_hint() {
         fixture.run(&[
             "start",
             "--preset",
-            "small-change-v2",
+            "small-change-v3",
             "--task",
             "retain",
             "--idempotency-key",
@@ -4815,922 +3881,101 @@ fn maint003_native_non_utf8_argument_cannot_select_a_lossy_alias() {
 
 #[test]
 fn agent002_stdin_fenced_mutations_share_conflict_rejection_and_preserve_set_stdin_preflight() {
-    let fixture = Fixture::new();
-    fixture.run(&["init", "--idempotency-key", "init"]);
-    fs::write(
-        fixture.0.join("delegated-record.yaml"),
-        concat!(
-            "schema: podway.procedure/v2\n",
-            "id: delegated-record\n",
-            "version: \"1\"\n",
-            "name: Delegated record and accept\n",
-            "purpose: Verify shared stdin-fenced classification.\n",
-            "node_definitions:\n",
-            "  work:\n",
-            "    type: action\n",
-            "    title: Work\n",
-            "    intent: Record evidence and accept delegation.\n",
-            "    items:\n",
-            "      - id: done\n",
-            "        type: confirm\n",
-            "        prompt: Confirm the final result.\n",
-            "        required: true\n",
-            "      - id: notes\n",
-            "        type: text\n",
-            "        prompt: Record optional notes.\n",
-            "        required: false\n",
-            "graph:\n",
-            "  entry: work\n",
-            "  nodes:\n",
-            "    - id: work\n",
-            "      use: work\n",
-            "      terminal: true\n",
-            "      delegation:\n",
-            "        binding_ref: local-specialist\n",
-            "        role_ref: reviewer\n",
-            "        role_snapshot_digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
-            "        max_rounds: 3\n",
-            "        after_accept: retain\n",
-        ),
-    )
-    .unwrap();
-    let preview = fixture.run(&["procedure", "preview", "delegated-record.yaml"]);
-    fixture.run(&[
-        "start",
-        "--procedure",
-        "delegated-record.yaml",
-        "--expect-procedure-digest",
-        preview["result"]["procedure_digest"].as_str().unwrap(),
-        "--task",
-        "agent002 stdin fences",
-        "--idempotency-key",
-        "start",
+    let (fixture, initial) = exact_record_fixture();
+    let mut input = scoped_template(&initial, "item.record_many", "batch");
+    input["operations"] = json!([
+        {"item_id":"note","expected_item_revision":0,"record":{"type":"text","value":"Retain the note."}}
     ]);
-    fixture.run(&["begin", "--idempotency-key", "begin"]);
-    let package = fixture.run(&["delegation", "package"]);
-    let before = fixture.run(&["status"]);
-    let status = &before["result"];
-    let workspace = before["workspace"]["uuid"].as_str().unwrap();
-    let session = status["session"]["id"].as_str().unwrap();
-    let attempt = status["current"]["attempt"]["attempt_id"].as_str().unwrap();
-    let digest = |letter: char| format!("sha256:{}", letter.to_string().repeat(64));
-
-    let record_input = json!({
-        "schema": "podway.item-record-many-input/v1",
-        "workspace_uuid": workspace,
-        "session_id": session,
-        "session_revision": status["session"]["revision"],
-        "attempt_id": attempt,
-        "idempotency_key": "agent002-record",
-        "operations": [
-            {"item_id": "done", "expected_item_revision": 0, "record": {"type": "confirm", "value": true}},
-            {"item_id": "notes", "expected_item_revision": 0, "record": {"type": "text", "value": "batch"}}
-        ]
-    });
-    let record_bytes = serde_json::to_vec(&record_input).unwrap();
-
-    let accept_input = json!({
-        "schema": "podway.delegation-accept-input/v1",
-        "workspace_uuid": workspace,
-        "session_id": session,
-        "session_revision": status["session"]["revision"],
-        "attempt_id": attempt,
-        "idempotency_key": "agent002-accept",
-        "package_digest": package["result"]["package_digest"],
-        "execution": {
-            "binding_ref": "local-specialist",
-            "adapter_id": "fixture",
-            "adapter_version": "1",
-            "primary_host": "external",
-            "scope_kind": "test",
-            "scope_ref": "scope-1",
-            "supervisor_ref": "supervisor-1",
-            "worker_ref": "worker-1",
-            "task_ref": "task-1",
-            "role_ref": "reviewer",
-            "role_snapshot_digest": digest('a'),
-            "agent_configuration_digest": digest('b'),
-            "accepted_task_digest": digest('c')
-        },
-        "rounds_used": 2,
-        "result_digest": digest('d'),
-        "summary": "Reviewed and accepted.",
-        "worker_disposition": "idle",
-        "accepted": true
-    });
-    let accept_bytes = serde_json::to_vec(&accept_input).unwrap();
-    let snapshot = fixture.podway_snapshot();
-
-    let record_conflict_msg =
-        "record identity, revision, and idempotency fences must come only from stdin";
-    let accept_conflict_msg =
-        "delegation acceptance identity and idempotency must come only from stdin";
-
     for (flag, value) in [
-        ("--idempotency-key", "conflict-key"),
-        ("--if-workspace-uuid", workspace),
-        ("--if-session-id", session),
-        ("--if-session-revision", "1"),
-        ("--if-attempt", attempt),
-        ("--if-item-revision", "0"),
-        ("--if-goal-revision", "1"),
-    ] {
-        for (base_args, body, expected_command, expected_msg) in [
-            (
-                &["record", "--stdin"][..],
-                &record_bytes[..],
-                "item.record_many",
-                record_conflict_msg,
-            ),
-            (
-                &["delegation", "accept", "--stdin"][..],
-                &accept_bytes[..],
-                "delegation.accept",
-                accept_conflict_msg,
-            ),
-        ] {
-            let mut args = base_args.to_vec();
-            args.extend_from_slice(&[flag, value]);
-            let output = output_with_stdin_counted(&fixture, &args, body);
-            assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
-            assert_read004_counters(&output, (0, 0));
-            let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
-                .unwrap()
-                .into_value();
-            assert_eq!(error["code"], "REQUEST_INVALID");
-            assert_eq!(error["command"], expected_command);
-            assert_eq!(error["message"], expected_msg);
-            fixture.assert_podway_snapshot(&snapshot);
-        }
-    }
-
-    for (base_args, body, expected_command, expected_conflict_msg, expected_malformed_msg) in [
         (
-            &["record", "--stdin"][..],
-            &record_bytes[..],
-            "item.record_many",
-            record_conflict_msg,
-            "invalid command payload: expected ident at line 1 column 2",
-        ),
-        (
-            &["delegation", "accept", "--stdin"][..],
-            &accept_bytes[..],
-            "delegation.accept",
-            accept_conflict_msg,
-            "delegation acceptance stdin is not JSON",
-        ),
-    ] {
-        let mut gen_args = vec!["--contract-generation", "3"];
-        gen_args.extend_from_slice(base_args);
-        let output = output_with_stdin_counted(&fixture, &gen_args, b"not-json");
-        assert_eq!(output.status.code(), Some(2), "{gen_args:?}: {output:?}");
-        assert_read004_counters(&output, (0, 0));
-        let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
-            .unwrap()
-            .into_value();
-        assert_eq!(error["code"], "REQUEST_INVALID");
-        assert_eq!(error["command"], expected_command);
-        assert_eq!(error["message"], "--contract-generation accepts 1 or 2");
-        fixture.assert_podway_snapshot(&snapshot);
-
-        let mut malformed_conflict = base_args.to_vec();
-        malformed_conflict.extend_from_slice(&["--idempotency-key", "conflict-key"]);
-        let output = output_with_stdin_counted(&fixture, &malformed_conflict, b"not-json");
-        assert_eq!(
-            output.status.code(),
-            Some(2),
-            "{malformed_conflict:?}: {output:?}"
-        );
-        assert_read004_counters(&output, (0, 0));
-        let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
-            .unwrap()
-            .into_value();
-        assert_eq!(error["code"], "REQUEST_INVALID");
-        assert_eq!(error["command"], expected_command);
-        assert_ne!(error["message"], expected_conflict_msg);
-        assert_eq!(error["message"], expected_malformed_msg);
-        fixture.assert_podway_snapshot(&snapshot);
-
-        let mut conflict_and_yes = base_args.to_vec();
-        conflict_and_yes.extend_from_slice(&["--idempotency-key", "conflict-key", "--yes"]);
-        let output = output_with_stdin_counted(&fixture, &conflict_and_yes, body);
-        assert_eq!(
-            output.status.code(),
-            Some(2),
-            "{conflict_and_yes:?}: {output:?}"
-        );
-        assert_read004_counters(&output, (0, 0));
-        let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
-            .unwrap()
-            .into_value();
-        assert_eq!(error["code"], "REQUEST_INVALID");
-        assert_eq!(error["command"], expected_command);
-        assert_eq!(error["message"], expected_conflict_msg);
-        fixture.assert_podway_snapshot(&snapshot);
-
-        let mut yes_only = base_args.to_vec();
-        yes_only.push("--yes");
-        let output = output_with_stdin_counted(&fixture, &yes_only, body);
-        assert_eq!(output.status.code(), Some(2), "{yes_only:?}: {output:?}");
-        assert_read004_counters(&output, (0, 0));
-        let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
-            .unwrap()
-            .into_value();
-        assert_eq!(error["code"], "REQUEST_INVALID");
-        assert_eq!(error["command"], expected_command);
-        assert_eq!(
-            error["message"],
-            "--yes applies only to destructive commands"
-        );
-        fixture.assert_podway_snapshot(&snapshot);
-    }
-
-    let set_bad_rev = output_with_stdin_counted(
-        &fixture,
-        &[
-            "set",
-            "notes",
-            "--stdin",
-            "--idempotency-key",
-            "set-bad-rev",
-            "--if-session-revision",
-            "1",
-        ],
-        b"ignored",
-    );
-    assert_eq!(set_bad_rev.status.code(), Some(2), "{set_bad_rev:?}");
-    assert_read004_counters(&set_bad_rev, (0, 0));
-    let error = serde_json::from_slice::<ErrorEnvelopeV2>(&set_bad_rev.stdout)
-        .unwrap()
-        .into_value();
-    assert_eq!(error["code"], "REQUEST_INVALID");
-    assert_eq!(error["command"], "item.set");
-    assert_eq!(
-        error["message"],
-        "--if-session-revision does not apply to item commands"
-    );
-    fixture.assert_podway_snapshot(&snapshot);
-
-    let set_preflight = output_with_stdin_counted(
-        &fixture,
-        &[
-            "set",
-            "notes",
-            "--stdin",
-            "--idempotency-key",
-            "set-preflight",
-        ],
-        b"from automatic preflight",
-    );
-    assert_eq!(set_preflight.status.code(), Some(0), "{set_preflight:?}");
-    assert_read004_counters(&set_preflight, (1, 0));
-
-    let set_explicit = output_with_stdin_counted(
-        &fixture,
-        &[
-            "set",
-            "notes",
-            "--stdin",
-            "--idempotency-key",
-            "set-explicit",
             "--if-workspace-uuid",
-            workspace,
-            "--if-session-id",
-            session,
-            "--if-attempt",
-            attempt,
-            "--if-item-revision",
-            "1",
-        ],
-        b"from explicit fences",
-    );
-    assert_eq!(set_explicit.status.code(), Some(0), "{set_explicit:?}");
-    assert_read004_counters(&set_explicit, (0, 0));
-
-    let after_set = fixture.run(&["status"]);
-    let current_rev = after_set["result"]["session"]["revision"].clone();
-    let other_attempt = "00000000-0000-4000-8000-000000000099";
-
-    let stale_record_output =
-        output_with_stdin_counted(&fixture, &["record", "--stdin"], &record_bytes);
+            "00000000-0000-4000-8000-000000000001",
+        ),
+        ("--if-session-id", "00000000-0000-4000-8000-000000000001"),
+        ("--if-session-revision", "1"),
+        ("--if-attempt", "00000000-0000-4000-8000-000000000001"),
+        ("--if-item-revision", "0"),
+        ("--if-cursor", "{}"),
+        ("--idempotency-key", "another-key"),
+    ] {
+        let bytes = input.to_string();
+        let attempt = output_with_stdin_counted(
+            &fixture,
+            &["record", "--stdin", flag, value],
+            bytes.as_bytes(),
+        );
+        assert_read004_counters(&attempt, (0, 0));
+        scoped_error(attempt, "REQUEST_INVALID");
+    }
+    assert_eq!(exact_outcome(&fixture, "batch")["found"], false);
     assert_eq!(
-        stale_record_output.status.code(),
-        Some(4),
-        "{stale_record_output:?}"
+        fixture.run(&["--contract-generation", "2", "observe"])["result"],
+        initial["result"]
     );
-    assert_read004_counters(&stale_record_output, (0, 0));
-    assert_eq!(
-        serde_json::from_slice::<ErrorEnvelopeV2>(&stale_record_output.stdout)
-            .unwrap()
-            .as_value()["code"],
-        "SESSION_REVISION_CONFLICT"
-    );
-
-    let mut wrong_attempt_record = record_input.clone();
-    wrong_attempt_record["idempotency_key"] = json!("agent002-record-wrong-attempt");
-    wrong_attempt_record["session_revision"] = current_rev.clone();
-    wrong_attempt_record["attempt_id"] = json!(other_attempt);
-    let output = output_with_stdin_counted(
+    let set = output_with_stdin_counted(
         &fixture,
-        &["record", "--stdin"],
-        &serde_json::to_vec(&wrong_attempt_record).unwrap(),
+        &["set", "note", "--stdin", "--idempotency-key", "set-note"],
+        b"Current input
+",
     );
-    assert_eq!(output.status.code(), Some(4), "{output:?}");
-    assert_read004_counters(&output, (0, 0));
-    assert_eq!(
-        serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
-            .unwrap()
-            .as_value()["code"],
-        "ATTEMPT_NOT_CURRENT"
-    );
-
-    let mut stale_item_record = record_input.clone();
-    stale_item_record["idempotency_key"] = json!("agent002-record-stale-item");
-    stale_item_record["session_revision"] = current_rev.clone();
-    stale_item_record["operations"][1]["expected_item_revision"] = json!(1);
-    let output = output_with_stdin_counted(
-        &fixture,
-        &["record", "--stdin"],
-        &serde_json::to_vec(&stale_item_record).unwrap(),
-    );
-    assert_eq!(output.status.code(), Some(4), "{output:?}");
-    assert_read004_counters(&output, (0, 0));
-    assert_eq!(
-        serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
-            .unwrap()
-            .as_value()["code"],
-        "ITEM_REVISION_CONFLICT"
-    );
-
-    let mut current_record = record_input.clone();
-    current_record["session_revision"] = current_rev;
-    current_record["operations"][1]["expected_item_revision"] = json!(2);
-    let current_record_bytes = serde_json::to_vec(&current_record).unwrap();
-
-    let record_ok = output_with_stdin_counted(
-        &fixture,
-        &["--contract-generation", "1", "record", "--stdin"],
-        &current_record_bytes,
-    );
-    assert_eq!(record_ok.status.code(), Some(0), "{record_ok:?}");
-    assert_read004_counters(&record_ok, (0, 0));
-    let record_envelope = serde_json::from_slice::<OutputEnvelopeV4>(&record_ok.stdout)
-        .unwrap()
-        .into_value();
-    let after_record = fixture.run(&["status"]);
-
-    let record_replay = output_with_stdin_counted(
-        &fixture,
-        &["--contract-generation", "2", "record", "--stdin"],
-        &current_record_bytes,
-    );
-    assert_eq!(record_replay.status.code(), Some(0), "{record_replay:?}");
-    assert_read004_counters(&record_replay, (0, 0));
-    assert_eq!(
-        serde_json::from_slice::<OutputEnvelopeV4>(&record_replay.stdout)
-            .unwrap()
-            .into_value(),
-        record_envelope
-    );
-    let after_record_replay = fixture.run(&["status"]);
-    assert_eq!(after_record_replay["result"], after_record["result"]);
-    assert_eq!(
-        after_record_replay["workspace"]["latest_workspace_sequence"]
-            .as_u64()
-            .unwrap(),
-        after_record["workspace"]["latest_workspace_sequence"]
-            .as_u64()
-            .unwrap()
-    );
-
-    let mut reused_record = current_record;
-    reused_record["operations"][1]["record"]["value"] = json!("changed batch");
-    let reused_record_out = output_with_stdin_counted(
-        &fixture,
-        &["record", "--stdin"],
-        &serde_json::to_vec(&reused_record).unwrap(),
-    );
-    assert_eq!(
-        reused_record_out.status.code(),
-        Some(2),
-        "{reused_record_out:?}"
-    );
-    assert_read004_counters(&reused_record_out, (0, 0));
-    assert_eq!(
-        serde_json::from_slice::<ErrorEnvelopeV2>(&reused_record_out.stdout)
-            .unwrap()
-            .as_value()["code"],
-        "IDEMPOTENCY_KEY_REUSED"
-    );
-
-    let stale_accept_out = output_with_stdin_counted(
-        &fixture,
-        &["delegation", "accept", "--stdin"],
-        &accept_bytes,
-    );
-    assert_eq!(
-        stale_accept_out.status.code(),
-        Some(4),
-        "{stale_accept_out:?}"
-    );
-    assert_read004_counters(&stale_accept_out, (0, 0));
-    assert_eq!(
-        serde_json::from_slice::<ErrorEnvelopeV2>(&stale_accept_out.stdout)
-            .unwrap()
-            .as_value()["code"],
-        "SESSION_REVISION_CONFLICT"
-    );
-
-    let post_record_rev = after_record["result"]["session"]["revision"].clone();
-    let mut wrong_attempt_accept = accept_input.clone();
-    wrong_attempt_accept["idempotency_key"] = json!("agent002-accept-wrong-attempt");
-    wrong_attempt_accept["session_revision"] = post_record_rev.clone();
-    wrong_attempt_accept["attempt_id"] = json!(other_attempt);
-    let output = output_with_stdin_counted(
-        &fixture,
-        &["delegation", "accept", "--stdin"],
-        &serde_json::to_vec(&wrong_attempt_accept).unwrap(),
-    );
-    assert_eq!(output.status.code(), Some(4), "{output:?}");
-    assert_read004_counters(&output, (0, 0));
-    assert_eq!(
-        serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
-            .unwrap()
-            .as_value()["code"],
-        "ATTEMPT_NOT_CURRENT"
-    );
-
-    let current_package = fixture.run(&["delegation", "package"]);
-    let mut current_accept = accept_input;
-    current_accept["session_revision"] = post_record_rev;
-    current_accept["package_digest"] = current_package["result"]["package_digest"].clone();
-    let current_accept_bytes = serde_json::to_vec(&current_accept).unwrap();
-
-    let accept_ok = output_with_stdin_counted(
-        &fixture,
-        &[
-            "--contract-generation",
-            "2",
-            "delegation",
-            "accept",
-            "--stdin",
-        ],
-        &current_accept_bytes,
-    );
-    assert_eq!(accept_ok.status.code(), Some(0), "{accept_ok:?}");
-    assert_read004_counters(&accept_ok, (0, 0));
-    let accept_envelope = serde_json::from_slice::<OutputEnvelopeV4>(&accept_ok.stdout)
-        .unwrap()
-        .into_value();
-    let after_accept = fixture.run(&["status"]);
-
-    let accept_replay = output_with_stdin_counted(
-        &fixture,
-        &[
-            "--contract-generation",
-            "1",
-            "delegation",
-            "accept",
-            "--stdin",
-        ],
-        &current_accept_bytes,
-    );
-    assert_eq!(accept_replay.status.code(), Some(0), "{accept_replay:?}");
-    assert_read004_counters(&accept_replay, (0, 0));
-    assert_eq!(
-        serde_json::from_slice::<OutputEnvelopeV4>(&accept_replay.stdout)
-            .unwrap()
-            .into_value(),
-        accept_envelope
-    );
-    let after_accept_replay = fixture.run(&["status"]);
-    assert_eq!(after_accept_replay["result"], after_accept["result"]);
-    assert_eq!(
-        after_accept_replay["workspace"]["latest_workspace_sequence"]
-            .as_u64()
-            .unwrap(),
-        after_accept["workspace"]["latest_workspace_sequence"]
-            .as_u64()
-            .unwrap()
-    );
-
-    let mut reused_accept = current_accept;
-    reused_accept["summary"] = json!("Different summary.");
-    let reused_accept_out = output_with_stdin_counted(
-        &fixture,
-        &["delegation", "accept", "--stdin"],
-        &serde_json::to_vec(&reused_accept).unwrap(),
-    );
-    assert_eq!(
-        reused_accept_out.status.code(),
-        Some(2),
-        "{reused_accept_out:?}"
-    );
-    assert_read004_counters(&reused_accept_out, (0, 0));
-    assert_eq!(
-        serde_json::from_slice::<ErrorEnvelopeV2>(&reused_accept_out.stdout)
-            .unwrap()
-            .as_value()["code"],
-        "IDEMPOTENCY_KEY_REUSED"
-    );
+    assert_read004_counters(&set, (1, 0));
+    assert_eq!(scoped_result(set)["result"]["items"][0]["revision"], 1);
+    assert_eq!(exact_outcome(&fixture, "set-note")["found"], true);
+    assert_eq!(exact_outcome(&fixture, "batch")["found"], false);
 }
 
 #[test]
 fn agent003_goal_assess_criteria_stdin_fences_conflicts_and_preflight_free_execution() {
-    use super::cli_fixture::{assert_read004_counters, output_with_stdin_counted};
-    use serde_json::json;
-
-    let fixture = Fixture::new();
-    fixture.run(&["init", "--idempotency-key", "init"]);
-    fs::write(
-        fixture.0.join("goal-batch.yaml"),
-        include_str!("../../../tests/fixtures/v2/procedures/goal-outcomes.yaml"),
-    )
-    .unwrap();
-    let preview = fixture.run(&["procedure", "preview", "goal-batch.yaml"]);
-    fixture.run(&[
-        "start",
-        "--procedure",
-        "goal-batch.yaml",
-        "--expect-procedure-digest",
-        preview["result"]["procedure_digest"].as_str().unwrap(),
-        "--task",
-        "Batch goal assessment CLI",
-        "--idempotency-key",
-        "start-batch",
-    ]);
-    fixture.run(&[
-        "begin",
-        "--goal",
-        "Verify batch criterion assessment.",
-        "--criterion",
-        "z-proof=Proof is complete.",
-        "--criterion",
-        "a-safety=Safety is verified.",
-        "--idempotency-key",
-        "begin-batch",
-    ]);
-    fixture.run(&[
-        "set",
-        "result",
-        "Evidence recorded.",
-        "--idempotency-key",
-        "set-result",
-    ]);
-    fixture.run(&["complete", "--idempotency-key", "complete-perform"]);
-    let before = fixture.run(&["status"]);
-    let workspace_uuid = before["workspace"]["uuid"].as_str().unwrap().to_owned();
-    let session_id = before["result"]["session"]["id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let session_revision = before["result"]["session"]["revision"].as_u64().unwrap();
-    let attempt_id = before["result"]["current"]["attempt"]["attempt_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-
-    let valid_doc = json!({
-        "schema": "podway.criterion-assessment-many-input/v1",
-        "workspace_uuid": workspace_uuid,
-        "session_id": session_id,
-        "session_revision": session_revision,
-        "attempt_id": attempt_id,
-        "goal_revision": 1,
-        "idempotency_key": "agent003-valid-batch",
-        "actor": "agent-to",
-        "assessments": [
-            {
-                "criterion_id": "a-safety",
-                "status": "satisfied",
-                "reason": "Safety verified.",
-                "evidence": ["perform"]
-            },
-            {
-                "criterion_id": "z-proof",
-                "status": "satisfied",
-                "reason": "Proof verified.",
-                "evidence": ["perform"]
-            }
-        ]
-    });
-    let valid_bytes = serde_json::to_vec(&valid_doc).unwrap();
-    let snapshot = fixture.podway_snapshot();
-
-    let missing_stdin = fixture.output(&["goal", "assess-criteria"]);
-    assert_eq!(missing_stdin.status.code(), Some(2), "{missing_stdin:?}");
-    let missing_err = serde_json::from_slice::<ErrorEnvelopeV2>(&missing_stdin.stdout)
-        .unwrap()
-        .into_value();
-    assert_eq!(missing_err["code"], "REQUEST_INVALID");
-    assert_eq!(missing_err["command"], "goal.assess_criteria");
-    assert!(
-        missing_err["message"].as_str().unwrap().contains("--stdin"),
-        "{missing_err:?}"
-    );
-    fixture.assert_podway_snapshot(&snapshot);
-
-    for conflict in [
-        &["--idempotency-key", "cli-key"][..],
-        &["--if-workspace-uuid", &workspace_uuid][..],
-        &["--if-session-id", &session_id][..],
-        &["--if-session-revision", "1"][..],
-        &["--if-attempt", &attempt_id][..],
-        &["--if-item-revision", "0"][..],
-        &["--if-goal-revision", "1"][..],
-        &["--yes"][..],
+    let (fixture, before, _) = super::e2e_adopt001_scoped_cli::scoped_criterion_fixture(true);
+    let mut input = scoped_template(&before, "goal.assess_criteria", "assessment");
+    input["actor"] = json!("fixture-evaluator");
+    input["assessments"] = json!([{
+        "criterion":"proof","status":"satisfied","reason":"The group returned an eligible result.",
+        "citations":[{"kind":"execution_result"}]
+    }]);
+    let args = &["goal", "assess-criteria", "--stdin", "--with-observation"];
+    for (field, value, expected) in [
+        ("goal_revision", json!(2), "GOAL_REVISION_STALE"),
+        ("session_revision", json!(999), "SESSION_REVISION_CONFLICT"),
     ] {
-        let mut args = vec!["goal", "assess-criteria", "--stdin"];
-        args.extend_from_slice(conflict);
-        let output = output_with_stdin_counted(&fixture, &args, &valid_bytes);
-        assert_eq!(output.status.code(), Some(2), "{conflict:?}: {output:?}");
+        let mut stale = input.clone();
+        stale["context"]["cursor"][field] = value;
+        let output = output_with_stdin_counted(&fixture, args, stale.to_string().as_bytes());
         assert_read004_counters(&output, (0, 0));
-        let err = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
-            .unwrap()
-            .into_value();
-        assert_eq!(err["code"], "REQUEST_INVALID", "{conflict:?}");
-        assert_eq!(err["command"], "goal.assess_criteria", "{conflict:?}");
-        fixture.assert_podway_snapshot(&snapshot);
+        scoped_error(output, expected);
+        assert_eq!(exact_outcome(&fixture, "assessment")["found"], false);
     }
-
-    let malformed = output_with_stdin_counted(
-        &fixture,
-        &["goal", "assess-criteria", "--stdin"],
-        b"{\"schema\":\"podway.criterion-assessment-many-input/v1\"}",
-    );
-    assert_eq!(malformed.status.code(), Some(2));
-    assert_read004_counters(&malformed, (0, 0));
-    assert_eq!(
-        serde_json::from_slice::<ErrorEnvelopeV2>(&malformed.stdout)
-            .unwrap()
-            .as_value()["code"],
-        "REQUEST_INVALID"
-    );
-    fixture.assert_podway_snapshot(&snapshot);
-
-    let oversized = vec![b' '; 1_048_577];
-    let too_large = output_with_stdin_counted(
-        &fixture,
-        &["goal", "assess-criteria", "--stdin"],
-        &oversized,
-    );
-    assert_eq!(too_large.status.code(), Some(2));
-    assert_read004_counters(&too_large, (0, 0));
-    assert_eq!(
-        serde_json::from_slice::<ErrorEnvelopeV2>(&too_large.stdout)
-            .unwrap()
-            .as_value()["code"],
-        "REQUEST_TOO_LARGE"
-    );
-    fixture.assert_podway_snapshot(&snapshot);
-
-    let mut bad_gen_cmd = Command::new(podway_binary());
-    bad_gen_cmd
-        .arg("--json")
-        .arg("--contract-generation")
-        .arg("3")
-        .arg("--worktree")
-        .arg(&fixture.0)
-        .arg("goal")
-        .arg("assess-criteria")
-        .arg("--stdin")
-        .current_dir(&fixture.0)
-        .env_remove("HOME")
-        .env_remove("XDG_CONFIG_HOME")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut bad_gen_guard = GuardedChild::new(bad_gen_cmd.spawn().unwrap());
-    // Keep the producer open without sending bytes: consuming stdin would block.
-    let bad_gen_producer = bad_gen_guard.0.as_mut().unwrap().stdin.take().unwrap();
-    let bad_gen_deadline = Instant::now() + Duration::from_secs(10);
-    while bad_gen_guard
-        .0
-        .as_mut()
-        .unwrap()
-        .try_wait()
-        .unwrap()
-        .is_none()
-    {
-        assert!(
-            Instant::now() < bad_gen_deadline,
-            "generation validation blocked on stdin"
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
-    let bad_gen = bad_gen_guard.0.take().unwrap().wait_with_output().unwrap();
-    drop(bad_gen_producer);
-    assert_eq!(bad_gen.status.code(), Some(2), "{bad_gen:?}");
-    assert!(bad_gen.stderr.is_empty(), "{bad_gen:?}");
-    let bad_gen_err = serde_json::from_slice::<ErrorEnvelopeV2>(&bad_gen.stdout)
-        .unwrap()
-        .into_value();
-    assert_eq!(bad_gen_err["code"], "REQUEST_INVALID");
-    assert_eq!(bad_gen_err["command"], "goal.assess_criteria");
-    assert_eq!(bad_gen_err["exit_code"], 2);
-    assert_eq!(
-        bad_gen_err["message"],
-        "--contract-generation accepts 1 or 2"
-    );
-    fixture.assert_podway_snapshot(&snapshot);
-
-    let deep_json = format!("{}0{}", "[".repeat(65), "]".repeat(65)).into_bytes();
-    let mut seventeen_doc = valid_doc.clone();
-    seventeen_doc["assessments"] = serde_json::Value::Array(
-        (1..=17)
-            .map(|i| {
-                json!({
-                    "criterion_id": format!("c-{i}"),
-                    "status": "satisfied",
-                    "reason": "ok"
-                })
-            })
-            .collect(),
-    );
-    let mut dup_criterion_doc = valid_doc.clone();
-    dup_criterion_doc["assessments"] = json!([
-        {
-            "criterion_id": "a-safety",
-            "status": "satisfied",
-            "reason": "first"
-        },
-        {
-            "criterion_id": "a-safety",
-            "status": "satisfied",
-            "reason": "second"
-        }
-    ]);
-    let mut blank_actor_doc = valid_doc.clone();
-    blank_actor_doc["actor"] = json!("   ");
-    let mut overlong_actor_doc = valid_doc.clone();
-    overlong_actor_doc["actor"] = json!("a".repeat(257));
-    let mut blank_reason_doc = valid_doc.clone();
-    blank_reason_doc["assessments"][0]["reason"] = json!("   ");
-    let mut overlong_reason_doc = valid_doc.clone();
-    overlong_reason_doc["assessments"][0]["reason"] = json!("r".repeat(2001));
-    let mut five_evidence_doc = valid_doc.clone();
-    five_evidence_doc["assessments"][0]["evidence"] = json!(["n1", "n2", "n3", "n4", "n5"]);
-    let mut five_items_doc = valid_doc.clone();
-    five_items_doc["assessments"][0]["items"] = json!(["i1", "i2", "i3", "i4", "i5"]);
-
-    for (label, payload) in [
-        ("depth-65", deep_json),
-        ("17-entries", serde_json::to_vec(&seventeen_doc).unwrap()),
-        (
-            "duplicate-criterion",
-            serde_json::to_vec(&dup_criterion_doc).unwrap(),
-        ),
-        ("blank-actor", serde_json::to_vec(&blank_actor_doc).unwrap()),
-        (
-            "overlong-actor",
-            serde_json::to_vec(&overlong_actor_doc).unwrap(),
-        ),
-        (
-            "overlong-reason",
-            serde_json::to_vec(&overlong_reason_doc).unwrap(),
-        ),
-        (
-            "five-evidence",
-            serde_json::to_vec(&five_evidence_doc).unwrap(),
-        ),
-        ("five-items", serde_json::to_vec(&five_items_doc).unwrap()),
-    ] {
-        let rejected =
-            output_with_stdin_counted(&fixture, &["goal", "assess-criteria", "--stdin"], &payload);
-        assert_eq!(rejected.status.code(), Some(2), "{label}: {rejected:?}");
-        assert_read004_counters(&rejected, (0, 0));
-        let err = serde_json::from_slice::<ErrorEnvelopeV2>(&rejected.stdout)
-            .unwrap()
-            .into_value();
-        assert_eq!(err["code"], "REQUEST_INVALID", "{label}");
-        assert_eq!(err["command"], "goal.assess_criteria", "{label}");
-        assert_eq!(err["exit_code"], 2, "{label}");
-        fixture.assert_podway_snapshot(&snapshot);
-    }
-
-    // Whitespace-only reason passes pre-fence wire decoding and is rejected post-fence inside the
-    // rolled-back transaction without changing database/WAL bytes or session state.
-    let blank_reason_bytes = serde_json::to_vec(&blank_reason_doc).unwrap();
-    let blank_reason_first = output_with_stdin_counted(
-        &fixture,
-        &["goal", "assess-criteria", "--stdin"],
-        &blank_reason_bytes,
-    );
-    assert_eq!(
-        blank_reason_first.status.code(),
-        Some(2),
-        "{blank_reason_first:?}"
-    );
-    assert_read004_counters(&blank_reason_first, (0, 0));
-    let blank_reason_err = serde_json::from_slice::<ErrorEnvelopeV2>(&blank_reason_first.stdout)
-        .unwrap()
-        .into_value();
-    assert_eq!(blank_reason_err["code"], "REQUEST_INVALID");
-    assert_eq!(blank_reason_err["command"], "goal.assess_criteria");
-    assert_eq!(blank_reason_err["exit_code"], 2);
-    let post_rollback_snapshot = fixture.podway_snapshot();
-    assert_eq!(
-        post_rollback_snapshot
-            .iter()
-            .map(|entry| &entry.0)
-            .collect::<Vec<_>>(),
-        snapshot.iter().map(|entry| &entry.0).collect::<Vec<_>>()
-    );
-    for (actual, expected) in post_rollback_snapshot.iter().zip(&snapshot) {
-        assert_eq!(actual.0, expected.0);
-        if actual.0 != std::path::Path::new("runtime/state.sqlite3-shm") {
-            assert_eq!(
-                actual.1,
-                expected.1,
-                "bytes changed: {}",
-                actual.0.display()
-            );
-        }
-        assert_eq!((actual.2, actual.3), (expected.2, expected.3));
-    }
-    let blank_reason_second = output_with_stdin_counted(
-        &fixture,
-        &["goal", "assess-criteria", "--stdin"],
-        &blank_reason_bytes,
-    );
-    assert_eq!(blank_reason_second.status.code(), Some(2));
-    assert_read004_counters(&blank_reason_second, (0, 0));
-    let blank_reason_second_err =
-        serde_json::from_slice::<ErrorEnvelopeV2>(&blank_reason_second.stdout)
-            .unwrap()
-            .into_value();
-    assert_eq!(blank_reason_second_err["code"], "REQUEST_INVALID");
-    assert_eq!(blank_reason_second_err["command"], "goal.assess_criteria");
-    assert_eq!(blank_reason_second_err["exit_code"], 2);
-    fixture.assert_podway_snapshot(&post_rollback_snapshot);
-
-    // Execute valid batch with zero preflight reads, then replay across contract generations.
-    let ok_out = output_with_stdin_counted(
+    let bytes = input.to_string();
+    let conflict = output_with_stdin_counted(
         &fixture,
         &[
-            "--contract-generation",
+            "goal",
+            "assess-criteria",
+            "--stdin",
+            "--if-goal-revision",
             "1",
-            "goal",
-            "assess-criteria",
-            "--stdin",
         ],
-        &valid_bytes,
+        bytes.as_bytes(),
     );
-    assert_eq!(ok_out.status.code(), Some(0), "{ok_out:?}");
-    assert_read004_counters(&ok_out, (0, 0));
-    let ok_envelope = serde_json::from_slice::<OutputEnvelopeV4>(&ok_out.stdout)
-        .unwrap()
-        .into_value();
-    assert_eq!(ok_envelope["command"], "goal.assess_criteria");
-    assert_eq!(ok_envelope["result"]["complete"], true);
-    assert_eq!(ok_envelope["result"]["determined_outcome"], "achieved");
+    assert_read004_counters(&conflict, (0, 0));
+    scoped_error(conflict, "REQUEST_INVALID");
     assert_eq!(
-        ok_envelope["result"]["results"][0]["criterion_id"],
-        "z-proof"
+        fixture.run(&["--contract-generation", "2", "observe"])["result"],
+        before["result"]
+    );
+    let output = output_with_stdin_counted(&fixture, args, bytes.as_bytes());
+    assert_read004_counters(&output, (0, 0));
+    let accepted = scoped_result(output);
+    assert_eq!(
+        accepted["result"]["observation"]["goal"]["outcome"],
+        "achieved"
     );
     assert_eq!(
-        ok_envelope["result"]["results"][1]["criterion_id"],
-        "a-safety"
+        scoped_result(fixture.output_with_stdin(args, bytes.as_bytes())),
+        accepted
     );
-
-    let replay_out = output_with_stdin_counted(
-        &fixture,
-        &[
-            "--contract-generation",
-            "2",
-            "goal",
-            "assess-criteria",
-            "--stdin",
-        ],
-        &valid_bytes,
-    );
-    assert_eq!(replay_out.status.code(), Some(0), "{replay_out:?}");
-    assert_read004_counters(&replay_out, (0, 0));
     assert_eq!(
-        serde_json::from_slice::<OutputEnvelopeV4>(&replay_out.stdout)
-            .unwrap()
-            .into_value(),
-        ok_envelope
+        exact_outcome(&fixture, "assessment")["outcome"]["response"],
+        accepted
     );
-
-    let committed_snapshot = fixture.podway_snapshot();
-    let mut reordered_doc = valid_doc.clone();
-    reordered_doc["assessments"]
-        .as_array_mut()
-        .unwrap()
-        .reverse();
-    let reordered_out = output_with_stdin_counted(
-        &fixture,
-        &["goal", "assess-criteria", "--stdin"],
-        &serde_json::to_vec(&reordered_doc).unwrap(),
-    );
-    assert_eq!(reordered_out.status.code(), Some(2), "{reordered_out:?}");
-    assert_read004_counters(&reordered_out, (0, 0));
-    let reordered_err = serde_json::from_slice::<ErrorEnvelopeV2>(&reordered_out.stdout)
-        .unwrap()
-        .into_value();
-    assert_eq!(reordered_err["code"], "IDEMPOTENCY_KEY_REUSED");
-    assert_eq!(reordered_err["command"], "goal.assess_criteria");
-    assert_eq!(reordered_err["exit_code"], 2);
-    fixture.assert_podway_snapshot(&committed_snapshot);
 }

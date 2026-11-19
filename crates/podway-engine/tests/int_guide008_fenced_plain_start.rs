@@ -60,7 +60,10 @@ impl Guide008Engine {
             _temporary: temporary,
             selector,
             store,
-            resolver: DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest()),
+            resolver: DirectWorkspaceResolverV1::for_v15_fixture(
+                NativeGitResolverV1::new(),
+                digest(),
+            ),
         }
     }
 

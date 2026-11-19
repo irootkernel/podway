@@ -344,7 +344,8 @@ impl Guide006Engine {
     fn bare(path: &str, source: &[u8]) -> Self {
         let (temporary, selector, store, _) = fixture();
         fs::write(temporary.path().join(path), source).unwrap();
-        let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+        let resolver =
+            DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
         Self {
             temporary,
             selector,

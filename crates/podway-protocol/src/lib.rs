@@ -12,6 +12,7 @@ mod json_len;
 mod release_contract;
 mod result_contract;
 mod slice;
+mod successor_input;
 pub use direct_envelope::{
     DirectSessionOutputV1, ERROR_SCHEMA_V2, ErrorEnvelopeInputV2, ErrorEnvelopeV2,
     OUTPUT_SCHEMA_V4, OutputEnvelopeInputV4, OutputEnvelopeV4, RECOVERY_RECIPE_SCHEMA_V2,
@@ -34,13 +35,24 @@ pub use result_contract::{
     NEW_ROUTE_RESULT_SCHEMAS_V1, PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1,
     RELEASED_CONTRACT_MANIFESTS_V1, ResultSchemaContractV2, decode_result_schema_contract_v2,
     ensure_procedure_independent_result_schema_v1, released_writer_release_v1,
-    result_schema_top_level_fields_v2, validate_command_result_v2,
+    result_schema_contracts_v2, result_schema_top_level_fields_v2,
+    scoped_running_template_arguments_v1, validate_command_result_v2,
     validate_daemon_free_document_v1, validate_delegation_document_v1,
     validate_direct_outcome_lookup_headroom_v1, validate_mutation_observation_command_result_v1,
     validate_mutation_observation_output_envelope_v1, validate_procedure_independent_result_v1,
     validate_v2_output_warnings,
 };
 pub use slice::*;
+pub use successor_input::{
+    GROUP_ACTIVATE_INPUT_SCHEMA, GROUP_REPLAN_INPUT_SCHEMA, GroupActivateInputV1,
+    GroupDocumentFormatV1, GroupReplanInputV1, GroupSourceInputV1,
+    MAX_SCOPED_DELEGATION_ACCEPT_BYTES, SCOPED_CRITERION_INPUT_SCHEMA,
+    SCOPED_DELEGATION_ACCEPT_INPUT_SCHEMA, SCOPED_ITEM_RECORD_MANY_INPUT_SCHEMA,
+    ScopedCriterionAssessmentInputV1, ScopedDelegationAcceptInputV1, ScopedItemRecordManyInputV1,
+    SuccessorCursorInputV1, SuccessorMutationContextV1, decode_group_activate_input_v1,
+    decode_group_replan_input_v1, decode_scoped_criterion_input_v1,
+    decode_scoped_delegation_accept_input_v1, decode_scoped_item_record_many_input_v1,
+};
 pub const MAX_COMMAND_BYTES_V1: usize = 128;
 pub const MAX_IDEMPOTENCY_KEY_BYTES_V1: usize = 256;
 pub const MAX_WORKSPACE_ROOT_SCALARS_V1: usize = 4096;
@@ -608,6 +620,41 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
+        code: "GROUP_ACTIVATION_NOT_ALLOWED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "GROUP_RETURN_NOT_ALLOWED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "GROUP_PLAN_STALE",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "GROUP_DEFINITION_MISMATCH",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "GROUP_EXECUTION_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "GROUP_SELECTION_STALE",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "HISTORY_PAGE_TOKEN_STALE",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
         code: "IDEMPOTENCY_KEY_REUSED",
         exit_code: 2,
         retryable: false,
@@ -698,6 +745,11 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
+        code: "OUTCOME_LOOKUP_BUDGET_EXCEEDED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
         code: "PATH_OUTSIDE_WORKTREE",
         exit_code: 5,
         retryable: false,
@@ -745,6 +797,11 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
     ErrorCodeCatalogEntryV1 {
         code: "REQUEST_TOO_LARGE",
         exit_code: 2,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "RESPONSE_BUDGET_EXCEEDED",
+        exit_code: 1,
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
@@ -831,6 +888,11 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         code: "SESSION_START_STATE_CONFLICT",
         exit_code: 4,
         retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_TERMINAL_DISPOSITION_ALREADY_RECORDED",
+        exit_code: 1,
+        retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
         code: "STAGE_NOT_SKIPPABLE",

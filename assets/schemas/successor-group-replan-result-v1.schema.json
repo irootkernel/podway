@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:successor-group-replan-result:v1",
+  "title": "Podway Successor Execution Group Replan Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "operation",
+    "revision_before",
+    "revision",
+    "closed_attempt",
+    "active_attempt",
+    "execution_id",
+    "group_outcome",
+    "group_terminal_attempt",
+    "counters",
+    "guidance",
+    "decision",
+    "closure"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.successor-group-replan-result/v1"
+    },
+    "operation": {
+      "enum": [
+        "group.replan"
+      ]
+    },
+    "revision_before": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "closed_attempt": {
+      "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+    },
+    "active_attempt": {
+      "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+    },
+    "execution_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "group_outcome": {
+      "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/outcome"
+    },
+    "group_terminal_attempt": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "counters": {
+      "$ref": "urn:podway:schema:observation-result:v7#/$defs/counters"
+    },
+    "guidance": {
+      "$ref": "urn:podway:schema:observation-result:v7#/$defs/guidance"
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "option",
+        "reason",
+        "guard_values"
+      ],
+      "properties": {
+        "option": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "guard_values": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source",
+              "item",
+              "revision",
+              "value_digest"
+            ],
+            "properties": {
+              "source": {
+                "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+              },
+              "item": {
+                "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "value_digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              }
+            }
+          },
+          "maxItems": 4
+        }
+      }
+    },
+    "closure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cause",
+        "source",
+        "at_unix_ms",
+        "working_copy_basis",
+        "feedback"
+      ],
+      "properties": {
+        "cause": {
+          "const": "replan"
+        },
+        "source": {
+          "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+        },
+        "at_unix_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "working_copy_basis": {
+          "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/working_copy_basis"
+        },
+        "feedback": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        }
+      }
+    }
+  }
+}

@@ -9,7 +9,7 @@ use podway_core::execution_groups::*;
 use podway_core::{
     AttemptId, BlockerId, BlockerState, BlockerStateV2, CheckResultInputBasisV2, CriterionId,
     GoalCriterionV2, GoalDefinitionV2, GoalStatementV2, ItemId, RecordedItemValueV2, Revision,
-    SessionId, UnixMillis, canonicalize_json_v1, recorded_value_digest_v2,
+    SessionId, SessionLifecycle, UnixMillis, canonicalize_json_v1, recorded_value_digest_v2,
 };
 use podway_core::{GoalOutcome, OptionId, ReasonV2};
 use podway_store::ValidatedWorkspaceRootV1;
@@ -405,6 +405,76 @@ fn persist(connection: &mut Connection, state: &ExecutionSessionV3, sources: &Ca
     transaction.commit().unwrap();
 }
 
+#[test]
+fn cold_reopen_preserves_prepared_state_and_fenced_begin() {
+    let directory = fixture_dir();
+    let path = directory.path().join("state.sqlite3");
+    let admitted = parse(BASE, ProcedureDocumentFormat::Yaml);
+    let base = parse(
+        admitted.canonical_json().as_str(),
+        ProcedureDocumentFormat::Json,
+    );
+    let SuccessorDefinition::Base(definition) = base.definition() else {
+        panic!("fixture must be a base Procedure");
+    };
+    let id = SessionId::new("00000000-0000-4000-8000-000000009999").unwrap();
+    let sources = CandidateSources::from([(
+        base.digest().clone(),
+        base.canonical_json().as_str().to_owned(),
+    )]);
+    let prepared = ExecutionSessionV3::prepared(
+        id,
+        definition.clone(),
+        base.digest().clone(),
+        UnixMillis::new(1),
+    );
+    let mut writer = create_candidate_fixture(&path).unwrap();
+    persist(&mut writer, &prepared, &sources);
+    drop(writer);
+
+    let mut reader = reopen_candidate_fixture(&path).unwrap();
+    let mut state = load(&mut reader, &prepared).unwrap();
+    assert_eq!(state, prepared);
+    assert_eq!(state.lifecycle(), SessionLifecycle::Prepared);
+    assert!(state.active_attempt().is_none());
+    assert!(state.current_goal().is_none());
+
+    let mut stale = state.fence();
+    stale.revision = stale.revision.checked_next().unwrap();
+    assert!(
+        state
+            .begin_prepared(
+                &stale,
+                Some(goal("Preserve work")),
+                attempt(1),
+                UnixMillis::new(2)
+            )
+            .is_err()
+    );
+    assert_eq!(state, prepared);
+    state
+        .begin_prepared(
+            &prepared.fence(),
+            Some(goal("Preserve work")),
+            attempt(1),
+            UnixMillis::new(2),
+        )
+        .unwrap();
+    assert_eq!(state.lifecycle(), SessionLifecycle::Running);
+    assert_eq!(state.fence().revision, stale.revision);
+    assert_eq!(
+        state.active_attempt().unwrap().target().attempt(),
+        &attempt(1)
+    );
+    let begun = state.clone();
+    assert!(
+        state
+            .begin_prepared(&begun.fence(), None, attempt(2), UnixMillis::new(3))
+            .is_err()
+    );
+    assert_eq!(state, begun);
+}
+
 pub(super) fn alter_record(
     connection: &Connection,
     selection: &str,
@@ -479,7 +549,7 @@ fn rejects_tampered_definitions_values_and_rehashed_cross_scope_records() {
             "retained attempt row identity differs",
             attempt_selection,
             attempt_update,
-            "/target/scope/group/group_execution_id",
+            "/target/scope/group_execution_id",
             json!("00000000-0000-4000-8000-000000000202"),
         ),
         (
@@ -564,8 +634,10 @@ fn rejects_rehashed_noncanonical_retained_payload() {
 fn production_v2_store_classifies_candidate_generation_without_opening_it() {
     let fixture_dir = fixture_dir();
     let root = fixture_dir.path().canonicalize().unwrap();
-    let layout =
-        DirectWorkspaceLayoutV1::new(ValidatedWorkspaceRootV1::from_path(&root).unwrap()).unwrap();
+    let layout = DirectWorkspaceLayoutV1::for_v15_fixture(
+        ValidatedWorkspaceRootV1::from_path(&root).unwrap(),
+    )
+    .unwrap();
     std::fs::create_dir_all(layout.runtime_directory()).unwrap();
     let path = layout.database();
     drop(create_candidate_fixture(&path).unwrap());

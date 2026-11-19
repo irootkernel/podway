@@ -76,7 +76,9 @@ def fixture_process(ledger: Path) -> None:
             "adapter_version": "1", "primary_host": request["host"],
             "scope_kind": "qualification", "scope_ref": "scope-1",
             "supervisor_ref": "primary-1", "worker_ref": f"worker-{len(state['assignments']) + 1}",
-            "task_ref": package["package"]["attempt_id"], "role_ref": "reviewer",
+            "task_ref": (package["package"]["target"]["attempt"]
+                         if "target" in package["package"] else package["package"]["attempt_id"]),
+            "role_ref": "reviewer",
             "role_snapshot_digest": digest("reviewer-v1"),
             "agent_configuration_digest": digest({"model": "fixture", "instructions": "review-v1"}),
             "accepted_task_digest": digest(package),
@@ -276,266 +278,248 @@ def same_replay(original: dict, replay: dict) -> None:
     assert original == replay, (original, replay)
 
 
-def decision_evidence(f: Fixture) -> None:
-    worktree = f.workspace("decision-evidence", upstream="decision")
-    package = f.call(worktree, ["delegation", "package"])["result"]
-    evidence = package["package"]["evidence"][0]
-    assert evidence["resolution"] == "resolved"
-    assert evidence["selector"]["node"] == "source"
-    assert len(evidence["items"]) == 1
-    assert evidence["items"][0]["item_id"] == "input"
-    assert evidence["items"][0]["state"] == "present"
-    assert evidence["items"][0]["value_type"] == "text"
-    payload, external = f.acceptance(worktree, "external")
-    assert external["effects"] == 1
-    assert payload["package_digest"] == package["package_digest"]
-    f.accept(worktree, payload)
-    f.mutate(worktree, ["complete"])
-    assert f.receipt(worktree, payload)["applicability"] == "historical"
+class ScopedFixture(Fixture):
+    """Exercise the scoped CLI in a disposable worktree."""
+
+    def workspace(self, name: str, disposition: str | None = "retain", *,
+                  goal: bool = False, upstream: str | None = None,
+                  example: Path | None = None) -> Path:
+        root = self.root / name
+        root.mkdir(mode=0o700)
+        checked = bounded_process(["/usr/bin/git", "init", "--quiet", str(root)])
+        assert checked.returncode == 0, checked
+        self.call(root, ["init", "--idempotency-key", "init"])
+        source = root / "procedure.json"
+        if example:
+            source = root / "procedure.yaml"
+            source.write_bytes(example.read_bytes())
+        else:
+            document = procedure(disposition)
+            document["schema"] = "podway.procedure/v3"
+            node = document["graph"]["nodes"][0]
+            del node["terminal"]
+            node["next"] = "plan"
+            document["node_definitions"].update({
+                "plan": {"type": "action", "title": "Plan", "intent": "Record the design anchor."},
+                "finish": {"type": "action", "title": "Finish", "intent": "Finish the fixture."},
+            })
+            document["graph"]["nodes"].extend([
+                {"id": "plan", "use": "plan", "next": "finish"},
+                {"id": "finish", "use": "finish", "terminal": True},
+            ])
+            document["execution_group"] = {
+                "anchor": "plan", "success_return": "finish", "plan_inputs": [],
+                "result_items": [], "replan_decisions": [],
+            }
+            if goal:
+                document["goal_tracking"] = True
+                outcomes = {"achieved":"achieved", "not-achieved":"not_achieved", "superseded":"superseded"}
+                document["node_definitions"]["assess"] = {
+                    "type":"decision", "title":"Assess", "objective":"Assess the current goal.",
+                    "prompt":"Which outcome applies?", "reason":{"required":True},
+                    "options":[{"id":option,"label":option} for option in outcomes],
+                    "assessment":{"target":"session_goal","outcomes":outcomes},
+                }
+                plan = document["graph"]["nodes"][1]
+                plan["next"] = "assess"
+                document["graph"]["nodes"].insert(2,{
+                    "id":"assess","use":"assess",
+                    "routes":{option:{"to":"finish","effect":"advance"} for option in outcomes},
+                })
+                document["execution_group"]["success_return"] = "assess"
+            if upstream:
+                upstream_item = {"id": "input", "type": "text", "prompt": "Input", "required": True}
+                source_def = {"type": upstream, "title": "Source", "items": [upstream_item]}
+                source_node = {"id": "source", "use": "source"}
+                if upstream == "decision":
+                    source_def.update(objective="Settle the source.", prompt="Proceed?",
+                                      options=[{"id": "go", "label": "Go"}], reason={"required": True})
+                    source_node["routes"] = {"go": {"to": "work", "effect": "advance"}}
+                else:
+                    source_def["intent"] = "Record the source."
+                    source_node["next"] = "work"
+                document["node_definitions"]["source"] = source_def
+                document["graph"]["entry"] = "source"
+                document["graph"]["nodes"].insert(0, source_node)
+                node["evidence_from"] = [{"scope":"local", "node":"source", "required":True, "items":["input"]}]
+            source.write_text(json.dumps(document))
+        preview = self.call(root, ["procedure", "preview", source.name])["result"]
+        self.call(root, ["start", "--procedure", source.name, "--expect-procedure-digest",
+                         preview["digest"], "--task", name, "--idempotency-key", "start"])
+        begin = ["begin"]
+        if goal:
+            begin += ["--goal", "Qualify fresh goal attempts", "--criterion", "proof=Native proof"]
+        self.mutate(root, begin)
+        if upstream or example:
+            self.mutate(root, ["set", "input", "Immutable source input"], item="input")
+            if upstream == "decision":
+                self.mutate(root, ["decide", "--option", "go", "--reason", "Use the recorded input."])
+            else:
+                self.mutate(root, ["complete"])
+        self.mutate(root, ["set", "result", "Final output"], item="result")
+        return root
+
+    @staticmethod
+    def context(observation: dict, key: str | None = None) -> dict:
+        cursor = dict(observation["result"]["cursor"])
+        cursor.pop("session")
+        return {
+            "workspace_uuid": observation["workspace"]["uuid"],
+            "idempotency_key": key or str(uuid.uuid4()), "cursor": cursor,
+        }
+
+    def fences(self, observation: dict, *, attempt: bool = True,
+               item: str | None = None) -> list[str]:
+        cursor = observation["result"]["cursor"]
+        assert not attempt or cursor["attempt"] is not None
+        args = ["--if-workspace-uuid", observation["workspace"]["uuid"],
+                "--if-cursor", json.dumps(cursor)]
+        if item:
+            slot = next(entry for entry in observation["result"]["items"] if entry["item"] == item)
+            args += ["--if-item-revision", str(slot["revision"])]
+        return args
+
+    def mutate(self, worktree: Path, args: list[str], *, item: str | None = None,
+               attempt: bool = True, error: str | None = None) -> dict:
+        return super().mutate(worktree, args, item=item, attempt=attempt and args[0] != "begin", error=error)
+
+    def acceptance(self, worktree: Path, host: str = "external", disposition: str = "idle",
+                   *, uncertain: bool = False) -> tuple[dict, dict]:
+        package = self.call(worktree, ["delegation", "package"])["result"]
+        state = self.external(worktree, "assign", package=package, host=host, uncertain=uncertain)
+        assignment = state["assignments"][-1]
+        return {
+            "schema": "podway.delegation-accept-input/v2",
+            "context": self.context(self.observe(worktree)),
+            "package_digest": package["package_digest"], "execution": assignment["execution"],
+            "rounds_used": assignment["rounds_used"], "result_digest": digest("Final output"),
+            "summary": "Fixture Primary accepted after feedback.",
+            "worker_disposition": disposition, "accepted": True,
+        }, state
+
+    def receipt(self, worktree: Path, payload: dict) -> dict:
+        target = payload["context"]["cursor"]["attempt"]
+        return self.call(worktree, ["delegation", "receipt", "--session", target["session"],
+                                   "--attempt", target["attempt"]])["result"]
 
 
-def host_matrix(f: Fixture, host: str) -> None:
-    worktree = f.workspace(host, upstream="action")
-    payload, external = f.acceptance(worktree, host)
-    assert external["effects"] == 1 and len(external["assignments"][-1]["feedback"]) == 2
-    for field, value, code in [
-        ("role_ref", "incompatible", "DELEGATION_BINDING_MISMATCH"),
-        ("role_snapshot_digest", digest("wrong-role"), "DELEGATION_BINDING_MISMATCH"),
-    ]:
+def check_scoped_acceptance(fixture: ScopedFixture, root: Path, host: str) -> dict:
+    package = fixture.call(root, ["delegation", "package"])["result"]
+    payload, external = fixture.acceptance(root, host)
+    target = payload["context"]["cursor"]["attempt"]
+    key = payload["context"]["idempotency_key"]
+    assert package["package"]["target"] == target
+    assert external["effects"] == 1 and external["assignments"][-1]["feedback"] == ["correct", "accept"]
+    assert fixture.receipt(root, payload)["acceptance_state"] == "missing"
+    fixture.mutate(root, ["complete"], error="DELEGATION_RECEIPT_REQUIRED")
+    for field, value in [("role_ref", "wrong-role"), ("role_snapshot_digest", digest("wrong"))]:
         invalid = deepcopy(payload)
         invalid["execution"][field] = value
-        invalid["idempotency_key"] = str(uuid.uuid4())
-        f.accept(worktree, invalid, code)
-    over_budget = deepcopy(payload)
-    over_budget.update(rounds_used=4, idempotency_key=str(uuid.uuid4()))
-    f.accept(worktree, over_budget, "DELEGATION_BINDING_MISMATCH")
-    f.human(worktree, ["delegation", "package"],
-            ["podway.delegation-package-result/v1", payload["package_digest"]])
-    f.human(worktree, ["delegation", "accept", "--stdin"],
-            ["podway.delegation-accept-result/v2", "accepted", payload["result_digest"]], payload=payload)
-    accepted = f.accept(worktree, payload)
-    receipt = f.receipt(worktree, payload)
-    f.human(worktree, ["delegation", "receipt", "--session", payload["session_id"],
-                       "--attempt", payload["attempt_id"]],
-            ["podway.delegation-receipt-result/v1", receipt["receipt"]["receipt_id"], payload["summary"]])
-    assert receipt["receipt"]["execution"] == payload["execution"], receipt
-    assert receipt["receipt"]["rounds_used"] == 3
-    assert receipt["receipt"]["worker_disposition"] == "idle"
-    before = f.state(worktree, "accepted")["result"]["status"]
-    for args in [["status"], ["next"], ["delegation", "package"],
-                 ["evidence", "read", "--source", "source", "--item", "input"]]:
-        f.call(worktree, args)
-    f.mutate(worktree, ["set", "result", "Final output"], item="result")
-    assert f.state(worktree, "accepted")["result"]["status"]["session"] == before["session"]
-    # A late failure in an atomic batch must not commit the preceding valid item edit.
-    observed = f.observe(worktree)
+        invalid["context"]["idempotency_key"] = str(uuid.uuid4())
+        fixture.accept(root, invalid, "DELEGATION_BINDING_MISMATCH")
+    invalid = deepcopy(payload)
+    invalid["rounds_used"] = 4
+    invalid["context"]["idempotency_key"] = str(uuid.uuid4())
+    fixture.accept(root, invalid, "DELEGATION_BINDING_MISMATCH")
+    original = fixture.accept(root, payload)
+    same_replay(original, fixture.accept(root, payload))
+    lookup = fixture.call(root, ["outcome", "lookup", "--idempotency-key", key])["result"]
+    assert lookup["found"] is True and lookup["outcome"]["response"] == original
+    receipt = fixture.receipt(root, payload)
+    assert receipt["acceptance_state"] == "accepted" and receipt["target"] == target
+    assert receipt["receipt"]["receipt_id"] == original["result"]["receipt_id"]
+    assert receipt["receipt"]["result"]["execution"] == payload["execution"]
+    observed = fixture.observe(root)
+    fixture.human(root, ["delegation", "package"], ["podway.delegation-package-result/v2", payload["package_digest"]])
+    fixture.human(root, ["delegation", "receipt", "--session", target["session"], "--attempt", target["attempt"]],
+                  ["podway.delegation-receipt-result/v2", receipt["receipt"]["receipt_id"]])
     failed_batch = {
-        "schema": "podway.item-record-many-input/v1", "workspace_uuid": payload["workspace_uuid"],
-        "session_id": payload["session_id"], "session_revision": before["session"]["revision"],
-        "attempt_id": payload["attempt_id"], "idempotency_key": str(uuid.uuid4()),
-        "operations": [
-            {"item_id": "note", "expected_item_revision": 0, "record": {"type": "text", "value": "must roll back"}},
-            {"item_id": "result", "expected_item_revision": 999, "record": {"type": "text", "value": "invalid fence"}},
+        "schema":"podway.scoped-item-record-many-input/v1", "context":fixture.context(observed),
+        "operations":[
+            {"item_id":"note","expected_item_revision":0,"record":{"type":"text","value":"must roll back"}},
+            {"item_id":"result","expected_item_revision":999,"record":{"type":"text","value":"invalid fence"}},
         ],
     }
-    f.call(worktree, ["record", "--stdin"], payload=failed_batch, error="ITEM_REVISION_CONFLICT")
-    assert f.observe(worktree)["result"]["active_items"] == observed["result"]["active_items"]
-    f.state(worktree, "accepted")
-    f.mutate(worktree, ["block", "--reason", "External fixture temporarily unavailable"])
-    f.state(worktree, "accepted")
-    f.mutate(worktree, ["complete"], error="BLOCKERS_PRESENT")
-    f.mutate(worktree, ["unblock", "--all"])
-    f.state(worktree, "accepted")
-    assert f.receipt(worktree, payload)["receipt"] == receipt["receipt"]
-    # Cosmetic required-item correction and edit/revert both invalidate permanently.
-    f.mutate(worktree, ["set", "result", "Final output "], item="result")
-    f.state(worktree, "stale_acceptance")
-    f.mutate(worktree, ["set", "result", "Final output"], item="result")
-    f.state(worktree, "stale_acceptance")
-    f.mutate(worktree, ["complete"], error="DELEGATION_RECEIPT_STALE")
-    same_replay(accepted, f.accept(worktree, payload))
-    lookup = f.call(worktree, ["outcome", "lookup", "--idempotency-key", payload["idempotency_key"]])["result"]
-    assert lookup["outcome"]["response"] == accepted
-    f.state(worktree, "stale_acceptance")
-    changed = deepcopy(payload)
-    changed["summary"] = "Changed input cannot repair acceptance"
-    f.accept(worktree, changed, "IDEMPOTENCY_KEY_REUSED")
-    duplicate = deepcopy(payload)
-    duplicate.update(idempotency_key=str(uuid.uuid4()),
-                     session_revision=f.observe(worktree)["result"]["status"]["session"]["revision"])
-    f.accept(worktree, duplicate, "DELEGATION_ALREADY_ACCEPTED")
-    f.mutate(worktree, ["retry", "--reason", "Explicit fresh attempt"])
-    fresh = f.state(worktree, "awaiting_acceptance")["result"]["status"]
-    assert fresh["current"]["attempt"]["attempt_id"] != payload["attempt_id"]
-    assert f.receipt(worktree, payload)["receipt"] == receipt["receipt"]
-    # Fresh ordinary fences cannot turn an old package into a new acceptance.
-    relabeled = deepcopy(payload)
-    relabeled.update(idempotency_key=str(uuid.uuid4()), session_revision=fresh["session"]["revision"],
-                     attempt_id=fresh["current"]["attempt"]["attempt_id"])
-    f.accept(worktree, relabeled, "DELEGATION_BINDING_MISMATCH")
-    assert f.external(worktree, "inspect") == external, "Podway recovery redispatched external work"
-    f.mutate(worktree, ["set", "result", "Final output"], item="result")
-    second, state = f.acceptance(worktree, host)
-    assert state["effects"] == 2
-    f.accept(worktree, second)
-    f.mutate(worktree, ["set", "note", "Optional correction"], item="note")
-    f.state(worktree, "stale_acceptance")
-    f.mutate(worktree, ["clear", "note"], item="note")
-    f.state(worktree, "stale_acceptance")
-    f.mutate(worktree, ["rework", "--to", "work", "--reason", "Explicit rework"])
-    f.state(worktree, "awaiting_acceptance")
-    assert f.receipt(worktree, second)["receipt"]["attempt_id"] == second["attempt_id"]
-    assert f.external(worktree, "inspect") == state
-
-    released = f.workspace(host + "-released", "release")
-    release_input, _ = f.acceptance(released, host, "released")
-    invalid = deepcopy(release_input)
-    invalid.update(worker_disposition="idle", idempotency_key=str(uuid.uuid4()))
-    f.accept(released, invalid, "DELEGATION_BINDING_MISMATCH")
-    f.accept(released, release_input)
-    assert f.receipt(released, release_input)["receipt"]["worker_disposition"] == "released"
-    f.mutate(released, ["complete"])
-    assert f.observe(released)["result"]["status"]["session"]["lifecycle"] == "completed"
+    fixture.call(root, ["record", "--stdin"], payload=failed_batch, error="ITEM_REVISION_CONFLICT")
+    assert fixture.observe(root)["result"]["items"] == observed["result"]["items"]
+    fixture.mutate(root, ["block", "--reason", "The owned fixture is blocked."])
+    fixture.mutate(root, ["complete"], error="BLOCKERS_PRESENT")
+    fixture.mutate(root, ["unblock", "--all"])
+    fixture.mutate(root, ["complete"])
+    historical = fixture.receipt(root, payload)
+    assert historical["applicability"] == "historical" and historical["receipt"] == receipt["receipt"]
+    same_replay(original, fixture.accept(root, payload))
+    return package
 
 
-def documented_example(f: Fixture) -> dict:
-    """Exercise the published YAML bytes, not a reconstructed example graph."""
-    source = Path(__file__).resolve().parent.parent / "docs/examples/procedures/supervised-review-v2.yaml"
-    original = source.read_bytes()
-    worktree = f.root / "documented-example"
-    worktree.mkdir(mode=0o700)
-    subprocess.run(["git", "init", "--quiet", str(worktree)], check=True,
-                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
-    f.call(worktree, ["init", "--idempotency-key", "init"])
-    relative = ".podway/procedures/supervised-review-v2.yaml"
-    target = worktree / relative
-    target.parent.mkdir(exist_ok=True)
-    target.write_bytes(original)
-    formatted = f.call(worktree, ["procedure", "format", relative, "--check"])["result"]
-    assert formatted["changed"] is False
-    assert formatted["document"].encode() == original
-    for operation, flags in (("validate", []), ("vet", []),
-                             ("lint", ["--warnings-as-errors"]), ("check", ["--warnings-as-errors"])):
-        result = f.call(worktree, ["procedure", operation, relative, *flags])["result"]
-        assert result["valid"] is True, result
-    preview = f.call(worktree, ["procedure", "preview", relative])["result"]
-    assert preview["admissible"] is True, preview
-    f.call(worktree, ["start", "--procedure", relative, "--expect-procedure-digest",
-                      preview["procedure_digest"], "--task", "Documented supervised review",
-                      "--idempotency-key", "start-documented-example"])
-    f.mutate(worktree, ["begin"], attempt=False)
-    f.mutate(worktree, ["set", "input", "Review the bounded change against its acceptance criteria."], item="input")
-    f.mutate(worktree, ["complete"])
-    package = f.call(worktree, ["delegation", "package"])["result"]
-    assert package["package"]["placement_id"] == "work", package
+def documented_example(fixture: ScopedFixture) -> dict:
+    source = Path(__file__).resolve().parents[1] / "docs/examples/procedures/supervised-review-v3.yaml"
+    root = fixture.workspace("example", example=source)
+    package = check_scoped_acceptance(fixture, root, "external")
+    return {
+        "source": "docs/examples/procedures/supervised-review-v3.yaml",
+        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "procedure_digest": package["package"]["target"]["base_digest"],
+        "package_digest": package["package_digest"],
+    }
+
+
+def host_matrix(fixture: ScopedFixture, host: str) -> None:
+    root = fixture.workspace(host, upstream="action")
+    package = check_scoped_acceptance(fixture, root, host)
+    assert package["package"]["evidence"][0]["selector"]["node"] == "source"
+
+
+def decision_evidence(fixture: ScopedFixture) -> None:
+    root = fixture.workspace("decision-evidence", upstream="decision")
+    package = check_scoped_acceptance(fixture, root, "external")
     evidence = package["package"]["evidence"][0]
-    assert evidence["selector"] == {"node": "source", "required": True, "items": ["input"]}, evidence
-    readback = f.call(worktree, ["evidence", "read", "--source", "source", "--item", "input"])["result"]
-    assert readback["truncated"] is False, readback
-    f.mutate(worktree, ["set", "result", "Final output"], item="result")
-    f.mutate(worktree, ["complete"], error="DELEGATION_RECEIPT_REQUIRED")
-    payload, external = f.acceptance(worktree)
-    assert payload["package_digest"] == package["package_digest"]
-    for kind in ("role", "package", "rounds"):
-        invalid = deepcopy(payload)
-        invalid["idempotency_key"] = str(uuid.uuid4())
-        if kind == "role":
-            invalid["execution"]["role_ref"] = "wrong-role"
-        elif kind == "package":
-            invalid["package_digest"] = digest("wrong-package")
-        else:
-            invalid["rounds_used"] = 4
-        f.accept(worktree, invalid, "DELEGATION_BINDING_MISMATCH")
-        f.state(worktree, "awaiting_acceptance")
-    before = f.observe(worktree)["result"]["status"]["current"]
-    accepted = f.accept(worktree, payload)
-    after = f.state(worktree, "accepted")["result"]["status"]["current"]
-    assert after["node"] == before["node"] and after["attempt"] == before["attempt"]
-    assert before["readiness"]["can_advance"] is False
-    assert after["readiness"]["can_advance"] is True
-    f.mutate(worktree, ["set", "note", "A clarification after acceptance"], item="note")
-    f.state(worktree, "stale_acceptance")
-    f.mutate(worktree, ["complete"], error="DELEGATION_RECEIPT_STALE")
-    same_replay(accepted, f.accept(worktree, payload))
-    f.state(worktree, "stale_acceptance")
-    for transition in (["retry", "--reason", "Revalidate the corrected review"],
-                       ["rework", "--to", "work", "--reason", "Revalidate through the declared route"]):
-        previous_attempt = f.observe(worktree)["result"]["status"]["current"]["attempt"]["attempt_id"]
-        f.mutate(worktree, transition)
-        current = f.state(worktree, "awaiting_acceptance")["result"]["status"]
-        assert current["current"]["attempt"]["attempt_id"] != previous_attempt
-        assert f.external(worktree, "inspect") == external, "Podway redispatched example work"
-        f.mutate(worktree, ["set", "result", "Final output"], item="result")
-        relabeled = deepcopy(payload)
-        relabeled.update(idempotency_key=str(uuid.uuid4()),
-                         session_revision=f.observe(worktree)["result"]["status"]["session"]["revision"],
-                         attempt_id=current["current"]["attempt"]["attempt_id"])
-        f.accept(worktree, relabeled, "DELEGATION_BINDING_MISMATCH")
-    fresh, _ = f.acceptance(worktree)
-    f.accept(worktree, fresh)
-    f.mutate(worktree, ["complete"])
-    assert f.receipt(worktree, fresh)["applicability"] == "historical"
-    assert [item["item_id"] for item in f.observe(worktree)["result"]["active_items"]] == ["closeout"]
-    f.call(worktree, ["evidence", "read", "--source", "work", "--item", "result"])
-    f.mutate(worktree, ["set", "closeout", "The fixture review is complete; no live executor was used."], item="closeout")
-    f.mutate(worktree, ["complete"])
-    assert f.observe(worktree)["result"]["status"]["session"]["lifecycle"] == "completed"
-    assert source.read_bytes() == target.read_bytes() == original
-    return {"source": source.relative_to(source.parents[3]).as_posix(),
-            "source_sha256": hashlib.sha256(original).hexdigest(),
-            "procedure_digest": preview["procedure_digest"]}
+    assert evidence["resolution"] == "resolved"
+    assert evidence["source"]["scope"] == {"kind": "base"}
+    assert evidence["source"]["node"] == "source"
+    assert evidence["items"][0]["item"] == "input" and evidence["items"][0]["type"] == "text"
 
 
-def recovery(f: Fixture) -> None:
-    worktree = f.workspace("recovery", goal=True)
-    payload, state = f.acceptance(worktree, uncertain=True)
-    # A new Primary process resumes the exact persisted assignment without issuing work.
-    assert f.external(worktree, "inspect") == state
-    assert state["assignments"][-1]["outcome"] == "unknown"
-    f.state(worktree, "awaiting_acceptance")
-    f.mutate(worktree, ["complete"], error="DELEGATION_RECEIPT_REQUIRED")
-    direct = f.workspace("direct", None)
-    f.mutate(direct, ["retry", "--reason", "Direct retry while delegated executor is unknown"])
-    f.mutate(direct, ["set", "result", "Final output"], item="result")
-    f.mutate(direct, ["complete"])
-    assert f.observe(direct)["result"]["status"]["session"]["lifecycle"] == "completed"
-    # A fresh Primary process reconciles the same external outcome before submission.
-    f.state(worktree, "awaiting_acceptance")
-    reconciled = f.external(worktree, "reconcile")
-    assert reconciled["effects"] == state["effects"]
-    assert reconciled["assignments"][-1]["execution"] == payload["execution"]
-    state = reconciled
-    original = f.lost(worktree, ["delegation", "accept", "--stdin"], payload)
-    assert original["command"] == "delegation.accept" and "result" in original, original
-    lookup = f.call(worktree, ["outcome", "lookup", "--idempotency-key", payload["idempotency_key"]])["result"]
-    assert lookup["outcome"]["response"] == original
-    f.mutate(worktree, ["set", "note", "Correction after lost response"], item="note")
-    same_replay(original, f.accept(worktree, payload))
-    f.state(worktree, "stale_acceptance")
-    observed = f.observe(worktree)
-    revision = observed["result"]["status"]["goal_revision"]
-    f.mutate(worktree, ["goal", "revise", "--goal", "Revalidate corrected result",
-                        "--criterion", "proof=Native proof", "--rework-to", "work",
-                        "--reason", "Correction", "--if-goal-revision", str(revision)])
-    f.state(worktree, "awaiting_acceptance")
-    assert f.receipt(worktree, payload)["receipt"]["attempt_id"] == payload["attempt_id"]
+def recovery(fixture: ScopedFixture) -> None:
+    root = fixture.workspace("recovery", goal=True)
+    payload, external = fixture.acceptance(root, uncertain=True)
+    assert external["assignments"][-1]["outcome"] == "unknown"
+    fixture.mutate(root, ["complete"], error="DELEGATION_RECEIPT_REQUIRED")
+    settled = fixture.external(root, "reconcile")
+    assert settled["effects"] == external["effects"]
+    assert settled["assignments"][-1]["execution"] == payload["execution"]
+    original = fixture.accept(root, payload)
+    key = payload["context"]["idempotency_key"]
+    recovered = fixture.call(root, ["outcome", "lookup", "--idempotency-key", key])["result"]
+    assert recovered["outcome"]["response"] == original
+    fixture.mutate(root, ["set", "note", "Retain a changed output."], item="note")
+    assert fixture.receipt(root, payload)["acceptance_state"] == "stale"
+    fixture.mutate(root, ["complete"], error="DELEGATION_RECEIPT_STALE")
+    same_replay(original, fixture.accept(root, payload))
+    fixture.mutate(root, ["goal", "revise", "--goal", "Revalidate corrected result",
+                           "--criterion", "proof=Native proof", "--rework-to", "work",
+                           "--reason", "The accepted result is stale.", "--basis-description", "Owned fixture",
+                           "--basis-digest", digest("changed"), "--feedback", "Request a fresh result."])
+    retained = fixture.receipt(root, payload)
+    assert retained["applicability"] == "historical"
     late = deepcopy(payload)
-    late["idempotency_key"] = str(uuid.uuid4())
-    f.accept(worktree, late, "SESSION_REVISION_CONFLICT")
-    assert f.external(worktree, "inspect") == state
-    # Complete-response loss is independent of acceptance loss and must not repeat effects.
-    ready = f.workspace("complete-loss")
-    current, external = f.acceptance(ready)
-    f.accept(ready, current)
-    args = ["complete", *f.fences(f.observe(ready)), "--idempotency-key", "complete-loss"]
-    f.state(ready, "accepted")
-    completed = f.lost(ready, args)
-    lookup = f.call(ready, ["outcome", "lookup", "--idempotency-key", "complete-loss"])["result"]
-    assert lookup["outcome"]["response"] == completed
-    same_replay(completed, f.call(ready, args))
-    assert f.observe(ready)["result"]["status"]["session"]["lifecycle"] == "completed"
-    assert f.external(ready, "inspect") == external
+    late["context"]["idempotency_key"] = str(uuid.uuid4())
+    refusal = fixture.accept(root, late, "ATTEMPT_NOT_CURRENT")
+    assert refusal["details"]["expected_attempt_id"] == late["context"]["cursor"]["attempt"]["attempt"]
+    current = fixture.observe(root)["result"]["cursor"]["attempt"]["attempt"]
+    assert refusal["details"]["actual_attempt_id"] == current
+    rejected = fixture.call(root, ["outcome", "lookup", "--idempotency-key", late["context"]["idempotency_key"]])
+    assert rejected["result"]["found"] is False
+    assert fixture.external(root, "inspect") == settled
 
+    ready = fixture.workspace("complete-loss")
+    current, external = fixture.acceptance(ready)
+    fixture.accept(ready, current)
+    args = ["complete", *fixture.fences(fixture.observe(ready)), "--idempotency-key", "complete-loss"]
+    completed = fixture.lost(ready, args)
+    same_replay(completed, fixture.call(ready, args))
+    assert fixture.receipt(ready, current)["applicability"] == "historical"
+    assert fixture.external(ready, "inspect") == external
 
 def terminate_qualification(signum: int, _frame: object) -> None:
     # Unwind bounded child cleanup and the owning temporary directory.
@@ -566,7 +550,7 @@ def main() -> None:
         shutil.copy2(supplied, cli)
         cli.chmod(0o500)
         assert hashlib.sha256(cli.read_bytes()).hexdigest() == original_digest
-        f = Fixture(cli, root)
+        f = ScopedFixture(cli, root)
         identity_output = bounded_process([str(cli), "version", "--json", "--identity"], cwd=root)
         assert identity_output.returncode == 0 and not identity_output.stderr
         identity_envelope = json.loads(identity_output.stdout)

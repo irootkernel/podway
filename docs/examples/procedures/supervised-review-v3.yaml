@@ -1,0 +1,73 @@
+schema: podway.procedure/v3
+id: supervised-review-v3
+version: "1"
+name: Supervised Review
+purpose: Review a bounded input through a caller-managed delegated action.
+node_definitions:
+  collect:
+    type: action
+    title: Record the review input
+    intent: Establish the exact source supplied to the reviewer.
+    items:
+      - id: input
+        type: text
+        prompt: Record the immutable source input.
+        required: true
+  work:
+    type: action
+    title: Receive the supervised review
+    intent: Retain the reviewer result and optional scope note.
+    instructions:
+      - Record the accepted external result and reconcile the work receipt before completing this action.
+      - Block and explain the missing evidence when the caller cannot establish a result.
+    items:
+      - id: result
+        type: text
+        prompt: Record the final review result.
+        required: true
+      - id: note
+        type: text
+        prompt: Record any optional scope note.
+        required: false
+  plan:
+    type: action
+    title: Plan the follow-up
+    intent: Propose an explicitly activated execution group if follow-up is required.
+  finish:
+    type: action
+    title: Record the closeout
+    intent: Record that the selected follow-up has completed.
+graph:
+  entry: source
+  nodes:
+    - id: source
+      use: collect
+      next: work
+    - id: work
+      use: work
+      next: plan
+      evidence_from:
+        - scope: local
+          node: source
+          required: true
+          items: [input]
+      delegation:
+        binding_ref: fixture-specialist
+        role_ref: reviewer
+        role_snapshot_digest: sha256:325ce61be20bada5e07f17861c317827cd39252a55b05113433f069dbeacdda7
+        max_rounds: 3
+        after_accept: retain
+    - id: plan
+      use: plan
+      next: finish
+    - id: finish
+      use: finish
+      terminal: true
+manual_rework:
+  allowed_targets: [work]
+execution_group:
+  anchor: plan
+  success_return: finish
+  plan_inputs: []
+  result_items: []
+  replan_decisions: []

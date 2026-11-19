@@ -94,7 +94,7 @@ fn maintenance_recovery_snapshot_replacement_keeps_read_only_refusal() {
                 .success()
         );
         let original = initialize(&root);
-        let base = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+        let base = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
         let mut removal = request(&root, "diagnostic-race-remove", Some(original));
         removal.force = true;
         let interrupted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -107,7 +107,7 @@ fn maintenance_recovery_snapshot_replacement_keeps_read_only_refusal() {
         }));
         assert!(interrupted.is_err());
         let before = files(&root.join(".podway"));
-        let resolver = DirectWorkspaceResolverV1::new(
+        let resolver = DirectWorkspaceResolverV1::for_v15_fixture(
             ReplaceRecoveryRoot {
                 root: root.clone(),
                 retired: retired.clone(),
@@ -170,7 +170,8 @@ fn typed_removal_without_cli_authorization_preserves_the_interactive_retry_ident
     for (fenced, force) in [(false, false), (false, true), (true, false)] {
         let root = fixture();
         let old = initialize(root.path());
-        let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+        let resolver =
+            DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
         let mut original = request(root.path(), "typed-remove", fenced.then_some(old));
         original.force = force;
         let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -237,7 +238,7 @@ fn marked_removal_config_read_failure_stays_maintenance_without_opening_store() 
     use podway_protocol::Rfc3339MillisV1;
     let root = fixture();
     let original = initialize(root.path());
-    let base = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let base = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let mut removal = request(root.path(), "marked-config-remove", Some(original.clone()));
     removal.force = true;
     let interrupted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -257,7 +258,7 @@ fn marked_removal_config_read_failure_stays_maintenance_without_opening_store() 
     std::fs::remove_file(&config).unwrap();
     std::os::unix::fs::symlink(&outside_config, &config).unwrap();
     let before = files(&root.path().join(".podway"));
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest())
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest())
         .with_store_boundary_observer_v1(|_| panic!("marked config failure opened Store"));
     let response = execute_direct_v1(
         &resolver,
@@ -310,7 +311,7 @@ fn qualified_retirement_observer_reads_the_actual_generation_under_its_native_le
     };
     let root = fixture();
     let original = initialize(root.path());
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     podway_engine::direct_workspace::repair_workspace_v1(
         &resolver,
         DirectWorkspaceMutationRequestV1 {
@@ -448,7 +449,7 @@ fn fixture() -> TempDir {
     root
 }
 fn initialize(root: &std::path::Path) -> WorkspaceId {
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let output = initialize_workspace_v1(
         &resolver,
         DirectWorkspaceMutationRequestV1 {
@@ -532,7 +533,7 @@ fn admitted_reset_finishes_after_the_wait_budget_expires() {
     }
     let root = fixture();
     let old = initialize(root.path());
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let mut input = request(root.path(), "expired-reset", Some(old.clone()));
     input.deadline = Instant::now() + Duration::from_millis(500);
     let budget = input.deadline;
@@ -575,7 +576,7 @@ fn admitted_reset_finishes_after_the_wait_budget_expires() {
 fn reset_all_replaces_generation_and_replays_before_old_workspace_fences() {
     let root = fixture();
     let old = initialize(root.path());
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let input = request(root.path(), "reset", Some(old.clone()));
     let output = reset_all_v1(&resolver, input.clone(), &Clock, &NativeDirectIdSourceV1).unwrap();
     assert!(validate_daemon_free_document_v1(
@@ -639,7 +640,7 @@ fn maintenance_fixture_resolves_a_symlinked_temporary_parent() {
     std::os::unix::fs::symlink(root.path().parent().unwrap(), &alias).unwrap();
     let selected = alias.join(root.path().file_name().unwrap());
     let old = initialize(&selected);
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let input = request(&selected, "reset", Some(old.clone()));
     let output = reset_all_v1(&resolver, input.clone(), &Clock, &NativeDirectIdSourceV1).unwrap();
     assert_eq!(
@@ -655,7 +656,7 @@ fn maintenance_fixture_resolves_a_symlinked_temporary_parent() {
 fn reset_selector_workspace_assertion_survives_replacement_and_cannot_be_dropped_or_conflicted() {
     let root = fixture();
     let old = initialize(root.path());
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let (resolved, _) = resolver
         .resolve_existing(selector(root.path()), Some(&old), deadline())
         .unwrap();
@@ -719,7 +720,7 @@ fn reset_selector_workspace_assertion_survives_replacement_and_cannot_be_dropped
 fn destructive_guards_and_shared_exclusion_reject_without_clock_identifiers_or_byte_changes() {
     let root = fixture();
     let old = initialize(root.path());
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let before = files(&root.path().join(".podway"));
     let mut input = request(root.path(), "reset", Some(old.clone()));
     input.confirmed = false;
@@ -760,7 +761,8 @@ fn legacy_markers_are_deleted_only_by_confirmed_reset_all_without_conversion() {
             "daemon-era marker",
         )
         .unwrap();
-        let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+        let resolver =
+            DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
         let before = files(&root.path().join(".podway"));
         assert!(matches!(
             remove_workspace_v1(&resolver, request(root.path(), "remove", None), &NoEffects),
@@ -794,7 +796,7 @@ fn maintenance_crash_child() {
     let phase = std::env::var("PODWAY_MAINTENANCE_PHASE").unwrap();
     let uuid = WorkspaceId::new(std::env::var("PODWAY_MAINTENANCE_UUID").unwrap()).unwrap();
     let expected_uuid = (std::env::var_os("PODWAY_MAINTENANCE_UNFENCED").is_none()).then_some(uuid);
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let observer = move |actual| {
         let expected = match phase.as_str() {
             "intent" => Boundary::IntentPublished,
@@ -912,7 +914,8 @@ fn exact_reset_retry_resumes_all_owned_marker_and_private_publication_windows() 
         let root = fixture();
         let old = initialize(root.path());
         crash(root.path(), &old, "reset", phase);
-        let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+        let resolver =
+            DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
         assert!(
             resolver
                 .resolve_existing(selector(root.path()), None, deadline())
@@ -963,7 +966,8 @@ fn exact_removal_retry_resumes_markers_then_absence_destroys_retention() {
         let root = fixture();
         let old = initialize(root.path());
         crash(root.path(), &old, "remove", phase);
-        let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+        let resolver =
+            DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
         assert!(
             resolver
                 .resolve_existing(selector(root.path()), None, deadline())
@@ -1026,7 +1030,8 @@ fn interrupted_removal_refuses_changed_explicit_and_selector_workspace_fences() 
         for selector_fence in [false, true] {
             let root = fixture();
             let original = initialize(root.path());
-            let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+            let resolver =
+                DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
             let (resolved, _) = resolver.resolve_candidate(selector(root.path())).unwrap();
             let identity = resolved.identity().clone();
             crash(root.path(), &original, "remove", phase);
@@ -1131,7 +1136,7 @@ fn sigkill_between_final_removal_markers_preserves_exact_retry_and_original_resp
             .collect::<Vec<_>>(),
         vec!["runtime/removal.marker"]
     );
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     assert!(
         resolver
             .resolve_existing(selector(root.path()), None, deadline())
@@ -1145,7 +1150,7 @@ fn sigkill_between_final_removal_markers_preserves_exact_retry_and_original_resp
         ),
         Err(Error::Workspace(_))
     ));
-    let wrong_manifest = DirectWorkspaceResolverV1::new(
+    let wrong_manifest = DirectWorkspaceResolverV1::for_v15_fixture(
         NativeGitResolverV1::new(),
         Sha256Digest::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
     );
@@ -1215,7 +1220,8 @@ fn final_removal_contenders_cannot_recreate_unlinked_locks_or_replace_markers() 
         for contender in ["init", "reset", "remove"] {
             let root = fixture();
             let old = initialize(root.path());
-            let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+            let resolver =
+                DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
             let path = root.path().to_path_buf();
             let saved = old.clone();
             let result = remove_workspace_with_boundary_observer_v1(
@@ -1227,8 +1233,10 @@ fn final_removal_contenders_cannot_recreate_unlinked_locks_or_replace_markers() 
                         return;
                     }
                     let before = files(&path.join(".podway"));
-                    let resolver =
-                        DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+                    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(
+                        NativeGitResolverV1::new(),
+                        digest(),
+                    );
                     match contender {
                         "init" => {
                             let result = initialize_workspace_v1(
@@ -1276,7 +1284,8 @@ fn concurrent_fresh_init_after_last_marker_survives_final_removal_and_old_uuid_r
     for _ in 0..8 {
         let root = fixture();
         let old = initialize(root.path());
-        let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+        let resolver =
+            DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
         let fresh = Arc::new(Mutex::new(None));
         let saved = fresh.clone();
         let init_request = DirectWorkspaceMutationRequestV1 {
@@ -1298,8 +1307,10 @@ fn concurrent_fresh_init_after_last_marker_survives_final_removal_and_old_uuid_r
                     let input = contender_request.clone();
                     let clock = contender_clock.clone();
                     *saved.lock().unwrap() = Some(std::thread::spawn(move || {
-                        let resolver =
-                            DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+                        let resolver = DirectWorkspaceResolverV1::for_v15_fixture(
+                            NativeGitResolverV1::new(),
+                            digest(),
+                        );
                         initialize_workspace_v1(
                             &resolver,
                             input,
@@ -1354,7 +1365,7 @@ fn concurrent_fresh_init_after_last_marker_survives_final_removal_and_old_uuid_r
 fn fresh_init_before_old_parent_cleanup_survives_removal_failure_and_old_uuid_retry() {
     let root = fixture();
     let old = initialize(root.path());
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let fresh = Arc::new(Mutex::new(None));
     let saved = fresh.clone();
     let path = root.path().to_path_buf();
@@ -1380,6 +1391,7 @@ fn fresh_init_before_old_parent_cleanup_survives_removal_failure_and_old_uuid_re
             idempotency_key: Some(IdempotencyKeyV1::new("remove").unwrap()),
             timeout_ms: 10_000,
             generation: podway_protocol::ContractGenerationV1::Generation1,
+            successor_store: false,
             maintenance: None,
         },
     )
@@ -1427,7 +1439,7 @@ fn removal_force_and_original_workspace_fence_are_required_for_exact_marker_retr
     use podway_protocol::{SessionStartCommandV1, SessionStartSourceV1, SessionStartV1};
     let root = fixture();
     let old = initialize(root.path());
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     start_session_v1(
         &resolver,
         DirectStartRequestV1 {
@@ -1495,7 +1507,7 @@ fn removal_force_and_original_workspace_fence_are_required_for_exact_marker_retr
 #[test]
 fn reset_all_on_missing_workspace_creates_valid_layout_and_one_generation() {
     let root = fixture();
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let output = reset_all_v1(
         &resolver,
         request(root.path(), "reset", None),
@@ -1539,7 +1551,7 @@ fn integ002_home_root_init_and_removal_preserve_separate_user_settings() {
                 .enabled
         );
     }
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     for enabled in [false, true] {
         std::fs::write(
             home.path().join(".podway/config.yaml"),

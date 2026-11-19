@@ -92,6 +92,30 @@ const ATTEMPT: Flag = Flag {
     long: "attempt",
     takes_value: true,
 };
+const IF_CURSOR: Flag = Flag {
+    long: "if-cursor",
+    takes_value: true,
+};
+const ARCHIVED: Flag = Flag {
+    long: "archived",
+    takes_value: false,
+};
+const LIMIT: Flag = Flag {
+    long: "limit",
+    takes_value: true,
+};
+const EXECUTION: Flag = Flag {
+    long: "execution",
+    takes_value: true,
+};
+const GROUP_EXECUTION: Flag = Flag {
+    long: "group-execution",
+    takes_value: true,
+};
+const DEFINITION_DIGEST: Flag = Flag {
+    long: "definition-digest",
+    takes_value: true,
+};
 const IF_SESSION_REVISION: Flag = Flag {
     long: "if-session-revision",
     takes_value: true,
@@ -1111,6 +1135,72 @@ const ROUTES: &[Route] = &[
         dynamic: None,
     },
     Route {
+        words: "group activate",
+        flags: DIRECT_READ_FLAGS,
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "group replan",
+        flags: DIRECT_READ_FLAGS,
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "group return",
+        flags: DIRECT_READ_FLAGS,
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "group list",
+        flags: DIRECT_READ_FLAGS,
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "group show",
+        flags: DIRECT_READ_FLAGS,
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "group prior-work",
+        flags: DIRECT_READ_FLAGS,
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "history dag",
+        flags: DIRECT_READ_FLAGS,
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "history attempts",
+        flags: DIRECT_READ_FLAGS,
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "history blockers",
+        flags: DIRECT_READ_FLAGS,
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "history item",
+        flags: DIRECT_READ_FLAGS,
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "history goal-revisions",
+        flags: DIRECT_READ_FLAGS,
+        values: "",
+        dynamic: None,
+    },
+    Route {
         words: "integration show",
         flags: &[
             &JSON,
@@ -1205,12 +1295,58 @@ fn static_candidates(route: &Route) -> Vec<String> {
 }
 
 fn route_flags(route: &Route) -> Vec<&'static Flag> {
-    route.flags.to_vec()
+    let mut flags = route.flags.to_vec();
+    match route.words {
+        "begin"
+        | "complete"
+        | "decide"
+        | "rework"
+        | "retry"
+        | "skip"
+        | "cancel"
+        | "block"
+        | "unblock"
+        | "goal define"
+        | "goal revise"
+        | "goal assess-criterion"
+        | "check"
+        | "uncheck"
+        | "set"
+        | "add"
+        | "remove"
+        | "attach"
+        | "clear" => {
+            flags.push(&IF_CURSOR);
+        }
+        "group activate" | "group replan" => flags.push(&STDIN),
+        "group return" => flags.extend([&IF_WORKSPACE_UUID, &IF_CURSOR, &IDEMPOTENCY_KEY]),
+        "group list"
+        | "group show"
+        | "group prior-work"
+        | "history dag"
+        | "history attempts"
+        | "history blockers"
+        | "history item"
+        | "history goal-revisions" => {
+            flags.extend([&IF_WORKSPACE_UUID, &SESSION, &ARCHIVED, &LIMIT, &PAGE_TOKEN]);
+            let selectors: &[&Flag] = match route.words {
+                "group show" => &[&EXECUTION],
+                "group prior-work" => &[&EXECUTION, &DEFINITION_DIGEST],
+                "history dag" | "history attempts" => &[&DEFINITION_DIGEST, &GROUP_EXECUTION],
+                "history blockers" => &[&ATTEMPT],
+                "history item" => &[&ATTEMPT, &ITEM],
+                _ => &[],
+            };
+            flags.extend(selectors);
+        }
+        _ => {}
+    }
+    flags
 }
 
 fn route_values(route: &Route) -> Vec<String> {
     if matches!(route.words, "preset show" | "preset explain" | "start") {
-        return podway_presets::list()
+        return podway_presets::list_v3()
             .iter()
             .map(|preset| preset.metadata.id.to_owned())
             .collect();

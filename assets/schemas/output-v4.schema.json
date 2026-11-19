@@ -152,6 +152,81 @@
     },
     {
       "$ref": "#/$defs/integrationSettings"
+    },
+    {
+      "$ref": "#/$defs/successorCursorMutation"
+    },
+    {
+      "$ref": "#/$defs/successorGroupBoundary"
+    },
+    {
+      "$ref": "#/$defs/successorGroupReplan"
+    },
+    {
+      "$ref": "#/$defs/successorMutationObservation"
+    },
+    {
+      "$ref": "#/$defs/successorObservation"
+    },
+    {
+      "$ref": "#/$defs/successorObservationSummary"
+    },
+    {
+      "$ref": "#/$defs/successorStatus"
+    },
+    {
+      "$ref": "#/$defs/successorAuthoring"
+    },
+    {
+      "$ref": "#/$defs/successorPresets"
+    },
+    {
+      "$ref": "#/$defs/successorGroupList"
+    },
+    {
+      "$ref": "#/$defs/successorGroupShow"
+    },
+    {
+      "$ref": "#/$defs/successorGroupPriorWork"
+    },
+    {
+      "$ref": "#/$defs/successorHistoryGoalRevisions"
+    },
+    {
+      "$ref": "#/$defs/successorHistoryDag"
+    },
+    {
+      "$ref": "#/$defs/successorHistoryAttempts"
+    },
+    {
+      "$ref": "#/$defs/successorHistoryBlockers"
+    },
+    {
+      "$ref": "#/$defs/successorHistoryItem"
+    },
+    {
+      "$ref": "#/$defs/successorSessionReset"
+    },
+    {
+      "$ref": "#/$defs/successorSessionArchive"
+    },
+    {
+      "$ref": "#/$defs/successorSessionArchivePurge"
+    },
+    {
+      "$ref": "#/$defs/successorSessionArchiveShow"
+    },
+    {
+      "$ref": "#/$defs/successorDelegationPackage"
+    },
+    {
+      "$ref": "#/$defs/successorDelegationReceipt"
+    },
+    {
+      "$ref": "#/$defs/successorDelegationAccept"
+    },
+    {
+      "$ref": "#/$defs/scopedEvidenceRead"
     }
   ],
   "$defs": {
@@ -173,7 +248,20 @@
           ]
         },
         "result": {
-          "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/genericObject"
+          "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/genericObject",
+          "not": {
+            "required": [
+              "schema"
+            ],
+            "properties": {
+              "schema": {
+                "enum": [
+                  "podway.successor-authoring-result/v1",
+                  "podway.successor-preset-result/v1"
+                ]
+              }
+            }
+          }
         }
       }
     },
@@ -262,7 +350,14 @@
           ]
         },
         "result": {
-          "$ref": "urn:podway:schema:session-start-result:v4"
+          "oneOf": [
+            {
+              "$ref": "urn:podway:schema:session-start-result:v4"
+            },
+            {
+              "$ref": "urn:podway:schema:successor-session-start-result:v1"
+            }
+          ]
         }
       },
       "allOf": [
@@ -808,6 +903,9 @@
                 "item.attach",
                 "item.clear",
                 "item.record_many",
+                "group.activate",
+                "group.return",
+                "group.replan",
                 "delegation.accept"
               ]
             }
@@ -837,6 +935,399 @@
             ]
           }
         ]
+      }
+    },
+    "successorCursorMutation": {
+      "required": [
+        "workspace",
+        "session"
+      ],
+      "properties": {
+        "command": {
+          "enum": [
+            "session.begin",
+            "session.complete",
+            "session.decide",
+            "session.rework",
+            "session.retry",
+            "session.skip",
+            "session.cancel",
+            "session.block",
+            "session.unblock",
+            "goal.define",
+            "goal.revise",
+            "goal.assess_criterion",
+            "goal.assess_criteria",
+            "item.check",
+            "item.uncheck",
+            "item.set",
+            "item.add",
+            "item.remove",
+            "item.attach",
+            "item.clear",
+            "item.record_many"
+          ]
+        },
+        "result": {
+          "$ref": "urn:podway:schema:successor-cursor-mutation-result:v1"
+        }
+      }
+    },
+    "successorGroupBoundary": {
+      "required": [
+        "workspace",
+        "session"
+      ],
+      "properties": {
+        "command": {
+          "enum": [
+            "group.activate",
+            "group.return"
+          ]
+        },
+        "result": {
+          "$ref": "urn:podway:schema:successor-group-boundary-result:v1"
+        }
+      }
+    },
+    "successorGroupReplan": {
+      "required": [
+        "workspace",
+        "session"
+      ],
+      "properties": {
+        "command": {
+          "const": "group.replan"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:successor-group-replan-result:v1"
+        }
+      }
+    },
+    "successorMutationObservation": {
+      "required": [
+        "workspace",
+        "session"
+      ],
+      "properties": {
+        "command": {
+          "enum": [
+            "session.start",
+            "session.begin",
+            "item.record_many",
+            "session.complete",
+            "session.decide",
+            "goal.assess_criteria"
+          ]
+        },
+        "result": {
+          "$ref": "urn:podway:schema:mutation-observation-result:v2"
+        }
+      }
+    },
+    "successorObservation": {
+      "required": [
+        "workspace",
+        "session"
+      ],
+      "properties": {
+        "command": {
+          "const": "session.observe"
+        },
+        "result": {
+          "oneOf": [
+            {
+              "$ref": "urn:podway:schema:observation-result:v7"
+            },
+            {
+              "$ref": "urn:podway:schema:observation-result:v8"
+            }
+          ]
+        }
+      }
+    },
+    "successorObservationSummary": {
+      "required": [
+        "workspace",
+        "session"
+      ],
+      "properties": {
+        "command": {
+          "enum": [
+            "session.next",
+            "session.status"
+          ]
+        },
+        "result": {
+          "$ref": "urn:podway:schema:observation-result:v7"
+        }
+      }
+    },
+    "successorAuthoring": {
+      "properties": {
+        "command": {
+          "enum": [
+            "procedure.validate",
+            "procedure.show",
+            "procedure.format",
+            "procedure.vet",
+            "procedure.graph",
+            "procedure.preview",
+            "procedure.lint",
+            "procedure.check",
+            "procedure.scaffold"
+          ]
+        },
+        "result": {
+          "$ref": "urn:podway:schema:successor-authoring-result:v1"
+        }
+      }
+    },
+    "successorPresets": {
+      "properties": {
+        "command": {
+          "enum": [
+            "preset.list",
+            "preset.show",
+            "preset.explain"
+          ]
+        },
+        "result": {
+          "$ref": "urn:podway:schema:successor-preset-result:v1"
+        }
+      }
+    },
+    "successorGroupList": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "group.list"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:successor-group-list-result:v1"
+        }
+      }
+    },
+    "successorGroupShow": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "group.show"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:successor-group-show-result:v1"
+        }
+      }
+    },
+    "successorGroupPriorWork": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "group.prior_work"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:successor-history-prior-work-result:v1"
+        }
+      }
+    },
+    "successorHistoryGoalRevisions": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "history.goal_revisions"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:successor-goal-revision-history-result:v1"
+        }
+      }
+    },
+    "successorHistoryDag": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "history.dag"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:successor-history-dag-result:v1"
+        }
+      }
+    },
+    "successorHistoryAttempts": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "history.attempts"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:successor-history-attempts-result:v1"
+        }
+      }
+    },
+    "successorHistoryBlockers": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "history.blockers"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:successor-history-blockers-result:v1"
+        }
+      }
+    },
+    "successorHistoryItem": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "history.item"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:successor-history-item-result:v1"
+        }
+      }
+    },
+    "successorSessionReset": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "session.reset"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:successor-session-reset-result:v1"
+        }
+      }
+    },
+    "successorSessionArchive": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "session.archive"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:successor-session-archive-result:v1"
+        }
+      }
+    },
+    "successorSessionArchivePurge": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "session.archive_purge"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:successor-session-archive-purge-result:v1"
+        }
+      }
+    },
+    "successorSessionArchiveShow": {
+      "required": [
+        "workspace",
+        "session"
+      ],
+      "properties": {
+        "command": {
+          "const": "session.archive_show"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:successor-session-archive-show-result:v1"
+        }
+      }
+    },
+    "successorDelegationPackage": {
+      "required": [
+        "workspace",
+        "session"
+      ],
+      "properties": {
+        "command": {
+          "const": "delegation.package"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:delegation-package-result:v2"
+        }
+      }
+    },
+    "successorDelegationReceipt": {
+      "required": [
+        "workspace",
+        "session"
+      ],
+      "properties": {
+        "command": {
+          "const": "delegation.receipt"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:delegation-receipt-result:v2"
+        }
+      }
+    },
+    "successorDelegationAccept": {
+      "required": [
+        "workspace",
+        "session"
+      ],
+      "properties": {
+        "command": {
+          "const": "delegation.accept"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:delegation-accept-result:v3"
+        }
+      }
+    },
+    "scopedEvidenceRead": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "evidence.read"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:scoped-evidence-read-result:v1"
+        }
+      }
+    },
+    "successorStatus": {
+      "required": [
+        "workspace",
+        "session"
+      ],
+      "properties": {
+        "command": {
+          "const": "session.status"
+        },
+        "result": {
+          "oneOf": [
+            {
+              "$ref": "urn:podway:schema:scoped-compact-status-result:v1"
+            },
+            {
+              "$ref": "urn:podway:schema:scoped-verbose-status-result:v1"
+            }
+          ]
+        }
       }
     }
   },

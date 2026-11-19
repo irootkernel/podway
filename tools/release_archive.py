@@ -290,7 +290,7 @@ def self_test() -> dict[str, Any]:
         write_archive(staging, archive_path)
         with tarfile.open(archive_path, mode="r:gz") as archive:
             verify_packaged_preset_identity(archive)
-        tampered = staging / "share/podway/presets/bug-fix-v2.yaml"
+        tampered = staging / "share/podway/presets/bug-fix-v3.yaml"
         tampered.write_bytes(tampered.read_bytes() + b"# tampered\n")
         write_archive(staging, archive_path)
         try:
@@ -631,10 +631,14 @@ def packaged_preset_manifest_paths() -> list[Path]:
     manifest = contract_manifest_document()
     paths = [Path(asset["path"]) for asset in manifest["assets"] if asset.get("kind") == "preset"]
     expected = [
-        Path("presets/analysis-v2.yaml"),
-        Path("presets/bug-fix-v2.yaml"),
-        Path("presets/small-change-v2.yaml"),
-        Path("presets/sw-dev-v2.yaml"),
+        Path("presets/analysis-default-v3.yaml"),
+        Path("presets/analysis-v3.yaml"),
+        Path("presets/bug-fix-default-v3.yaml"),
+        Path("presets/bug-fix-v3.yaml"),
+        Path("presets/small-change-default-v3.yaml"),
+        Path("presets/small-change-v3.yaml"),
+        Path("presets/sw-dev-default-v3.yaml"),
+        Path("presets/sw-dev-v3.yaml"),
     ]
     if paths != expected:
         fail(f"contract manifest preset identities drift: {paths}")

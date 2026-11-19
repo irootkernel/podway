@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:scoped-evidence-read-result:v1",
+  "title": "Podway Current Scoped Evidence Read Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "workspace",
+    "session",
+    "session_location",
+    "session_revision",
+    "truncated",
+    "next_page_token",
+    "detail",
+    "offset",
+    "size",
+    "total",
+    "unit",
+    "data"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.scoped-evidence-read-result/v1"
+    },
+    "workspace": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "session": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "session_location": {
+      "const": "current"
+    },
+    "session_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "next_page_token": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}:[0-9a-f]{16}$"
+        }
+      ]
+    },
+    "detail": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "consumer": {
+          "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+        },
+        "source_attempt": {
+          "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+        },
+        "source": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "scope",
+                "node"
+              ],
+              "properties": {
+                "scope": {
+                  "const": "local"
+                },
+                "node": {
+                  "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "scope"
+              ],
+              "properties": {
+                "scope": {
+                  "enum": [
+                    "plan",
+                    "execution_result"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "item": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        },
+        "item_type": {
+          "enum": [
+            "confirm",
+            "text",
+            "integer",
+            "list",
+            "choice",
+            "artifact",
+            "check_result"
+          ]
+        },
+        "item_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "value_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "artifact_availability": {
+          "enum": [
+            null,
+            "present",
+            "missing",
+            "unverified"
+          ]
+        }
+      },
+      "required": [
+        "consumer",
+        "source_attempt",
+        "source",
+        "item",
+        "item_type",
+        "item_revision",
+        "value_digest",
+        "artifact_availability"
+      ]
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "size": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "unit": {
+      "enum": [
+        "unicode_scalar",
+        "list_entry",
+        "value"
+      ]
+    },
+    "data": {
+      "oneOf": [
+        {
+          "type": "string",
+          "maxLength": 262144
+        },
+        {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "urn:podway:schema:successor-history-records:v1#/$defs/scalar_item"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

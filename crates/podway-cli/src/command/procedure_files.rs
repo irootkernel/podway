@@ -37,8 +37,11 @@ pub(super) fn read_worktree_procedure(
     )
 }
 
-pub(super) fn read_offline_procedure(procedure: &Path) -> Result<Vec<u8>, LocalFailure> {
-    open_offline_procedure(procedure).map(|opened| opened.bytes)
+pub(super) fn is_worktree_relative_procedure_path(path: &Path) -> bool {
+    !path.is_absolute()
+        && !path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
 }
 
 /// Opens a procedure named by an ordinary filesystem path, keeping everything a rewrite needs.

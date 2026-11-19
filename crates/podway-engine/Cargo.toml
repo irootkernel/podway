@@ -33,3 +33,4 @@ rusqlite.workspace = true
 [[test]]
 name = "int_suite"
 path = "tests/int_suite.rs"
+required-features = ["test-support"]

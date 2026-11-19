@@ -1,0 +1,285 @@
+schema: podway.execution-group/v1
+id: small-change-default-v3
+version: "1"
+name: Small Change default execution group
+purpose: Deliver a small reviewed change with fresh caller-asserted verification evidence.
+node_definitions:
+  implement-change:
+    type: action
+    title: Implement the change
+    intent: Make the smallest complete change within the inspected boundary.
+    instructions:
+      - "Accountable role: Task Operator. Use the current selected evidence and record the declared outputs against that basis."
+      - Implement only the inspected scope and its direct verification.
+      - Record the implementation summary in English.
+      - Report actual negative or incomplete results in the declared output fields. If a required result cannot be supplied, record a blocker with the missing facts.
+    items:
+      - id: implementation-summary
+        type: text
+        prompt: Summarize the implemented change in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+  verify-change:
+    type: action
+    title: Verify the change
+    intent: Record caller-asserted verification evidence for the implemented change.
+    instructions:
+      - "Accountable role: Verifier. Use the current selected evidence and record the declared outputs against that basis."
+      - Run the relevant verification outside Podway.
+      - Record the command and integer exit status; Podway does not execute or attest either value.
+      - Report actual negative or incomplete results in the declared output fields. If a required result cannot be supplied, record a blocker with the missing facts.
+    items:
+      - id: verification-command
+        type: text
+        prompt: Record the caller-asserted verification command.
+        help: Podway records this assertion and does not execute or attest the command. Use a check_result item when structural operation binding is required.
+        required: true
+        min_length: 1
+        max_length: 2000
+        multiline: true
+      - id: verification-exit-status
+        type: integer
+        prompt: Record the caller-asserted verification exit status.
+        help: Podway records this assertion and does not determine whether the command ran or the status is semantically acceptable.
+        required: true
+  assess-review:
+    type: action
+    title: Assess review the change
+    intent: Report the current positive or negative basis for the Coordinator decision.
+    instructions:
+      - "Accountable role: affected Evaluator. Read selected checks, work and findings, identify any actual failure, and record the current verdict and stage."
+      - Success advances immediately. Record not-scored and a zero placeholder for success at any entry.
+      - Use the upcoming entry ordinal for this decision and selected group. First-entry failure receives ordinary local rework, the second receives lightweight screening, and each third or later failure receives scored assessment.
+      - A concrete serious structural defect may receive an earlier scored assessment. Support every score with current facts, scope and provenance.
+      - "Need to change DAG structure (50): 0 no structural defect, 10/20 preference or inefficiency, 30 unsuitable boundaries, 40 missing required dependency or verification route, 50 required delivery is impossible."
+      - "Difficulty of local correction (30): 0 a viable local correction exists, 10 alternatives remain uninvestigated, 20 tried corrections failed but alternatives remain, 30 no viable local correction."
+      - "Lack of progress (20): 0 no repeat or meaningful improvement, 10 repeated cause with partial progress, 20 three or more failure results without meaningful progress."
+      - Scores below 80 prohibit replan. At or above 80, the Coordinator may replan, continue with a viable correction, or retain a blocker.
+      - Reuse a prior applicable assessment only by recording current applicability and provenance. Report unavailable facts as a blocker if required output cannot be recorded.
+      - Never manufacture a failure, inflate a score, or repeat a decision to increase its ordinal.
+    items:
+      - id: assessment-verdict
+        type: choice
+        prompt: Record success only when the selected evidence satisfies the next decision.
+        required: true
+        choices:
+          - success
+          - failure
+      - id: assessment-stage
+        type: choice
+        prompt: Record the stage actually used on the current evidence.
+        required: true
+        choices:
+          - not-scored
+          - lightweight
+          - scored
+      - id: assessment-score
+        type: integer
+        prompt: Record the scored total, or a zero placeholder for an unscored assessment.
+        required: true
+        minimum: 0
+        maximum: 100
+      - id: screening
+        type: text
+        prompt: Record repeated cause, actual progress and remaining local alternatives.
+        required: false
+        required_when:
+          - item: assessment-stage
+            equals: lightweight
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: scored-basis
+        type: text
+        prompt: Record each component in increments of 10, its factual reason, and the current report reference or reuse basis.
+        required: false
+        required_when:
+          - item: assessment-stage
+            equals: scored
+        min_length: 1
+        max_length: 4000
+        multiline: true
+  review-change:
+    type: decision
+    title: Review the change
+    objective: Route the reviewed assertion-supported implementation to closeout or rework.
+    prompt: Is the reviewed change ready for closeout?
+    evidence_guidance:
+      - Read the selected scope, implementation summary, verification command, and exit status.
+      - "Coordinator: read the current verdict, stage, ordinal and supporting evidence. Advance immediately on success."
+      - On failure, use a viable local correction or the current guarded replan option. For every third or later failure, record the scored basis and explain the current route choice.
+      - Settle modifying descendants and uncertain external operations before replanning. Record why and what work is retained. Block with concrete missing facts if no admitted route is viable.
+      - Do not manufacture failures, repeat a decision without new evidence, inflate scores or replan to demonstrate the feature.
+    options:
+      - id: ready
+        label: Change ready
+        criteria: The implementation is within scope and the caller-asserted verification is acceptable.
+        guards:
+          - evidence:
+              scope: local
+              node: assess-review
+              item: assessment-verdict
+            equals: success
+      - id: changes-requested
+        label: Changes requested
+        criteria: The implementation or caller-asserted verification requires another implementation attempt.
+        guards:
+          - evidence:
+              scope: local
+              node: assess-review
+              item: assessment-verdict
+            equals: failure
+      - id: replan
+        label: Return for a new plan
+        criteria: The current failure has a scored assessment of at least 80 and the Coordinator justifies changing topology.
+        guards:
+          - evidence:
+              scope: local
+              node: assess-review
+              item: assessment-verdict
+            equals: failure
+          - evidence:
+              scope: local
+              node: assess-review
+              item: assessment-stage
+            equals: scored
+          - evidence:
+              scope: local
+              node: assess-review
+              item: assessment-score
+            at_least: 80
+    reason:
+      required: true
+      prompt: Explain the selection using the recorded evidence in English.
+  return-group-result:
+    type: action
+    title: Return the completed group result
+    intent: Return the declared current results for the base Procedure.
+    instructions:
+      - "Accountable role: Task Operator. Copy each bound result from the selected fresh evidence of this group and record the exact outputs for the base."
+      - Do not turn a missing or failed result into success. If a declared result is unavailable, record the missing evidence and remain blocked.
+    items:
+      - id: implementation-summary
+        type: text
+        prompt: Summarize the implemented change in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: verification-command
+        type: text
+        prompt: Record the caller-asserted verification command.
+        help: Podway records this assertion and does not execute or attest the command. Use a check_result item when structural operation binding is required.
+        required: true
+        min_length: 1
+        max_length: 2000
+        multiline: true
+      - id: verification-exit-status
+        type: integer
+        prompt: Record the caller-asserted verification exit status.
+        help: Podway records this assertion and does not determine whether the command ran or the status is semantically acceptable.
+        required: true
+graph:
+  entry: implement
+  nodes:
+    - id: implement
+      use: implement-change
+      evidence_from:
+        - scope: plan
+          required: true
+          items:
+            - scope-summary
+      next: verify
+    - id: verify
+      use: verify-change
+      evidence_from:
+        - scope: local
+          node: implement
+          required: true
+          items:
+            - implementation-summary
+      next: assess-review
+    - id: assess-review
+      use: assess-review
+      evidence_from:
+        - scope: plan
+          required: true
+          items:
+            - scope-summary
+        - scope: local
+          node: implement
+          required: true
+          items:
+            - implementation-summary
+        - scope: local
+          node: verify
+          required: true
+          items:
+            - verification-command
+            - verification-exit-status
+      next: review
+    - id: review
+      use: review-change
+      evidence_from:
+        - scope: plan
+          required: true
+          items:
+            - scope-summary
+        - scope: local
+          node: implement
+          required: true
+          items:
+            - implementation-summary
+        - scope: local
+          node: verify
+          required: true
+          items:
+            - verification-command
+            - verification-exit-status
+        - scope: local
+          node: assess-review
+          required: true
+          items:
+            - assessment-verdict
+            - assessment-stage
+            - assessment-score
+            - screening
+            - scored-basis
+      routes:
+        ready:
+          to: return-group-result
+          effect: advance
+        changes-requested:
+          to: implement
+          effect: rework
+        replan:
+          effect: replan
+    - id: return-group-result
+      use: return-group-result
+      evidence_from:
+        - scope: local
+          node: implement
+          required: true
+          items:
+            - implementation-summary
+        - scope: local
+          node: verify
+          required: true
+          items:
+            - verification-command
+            - verification-exit-status
+      terminal: true
+manual_rework:
+  allowed_targets:
+    - implement
+    - verify
+plan_inputs:
+  - id: scope-summary
+    type: text
+    prompt: Summarize the change scope and constraints in English.
+    required: true
+    min_length: 1
+    max_length: 4000
+    multiline: true

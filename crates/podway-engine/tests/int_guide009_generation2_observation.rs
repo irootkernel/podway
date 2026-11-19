@@ -359,7 +359,8 @@ impl Guide009Engine {
     fn new() -> Self {
         let (temporary, selector, store, _) = fixture();
         fs::write(temporary.path().join("work.json"), WORK).unwrap();
-        let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+        let resolver =
+            DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
         let engine = Self {
             _temporary: temporary,
             selector,
@@ -706,7 +707,8 @@ impl Agent005Harness {
         let (temporary, selector, store, _) = fixture();
         fs::write(temporary.path().join("agent005.yaml"), AGENT005_PROCEDURE).unwrap();
         fs::write(temporary.path().join("artifact.txt"), b"agent005-artifact").unwrap();
-        let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+        let resolver =
+            DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
         Self {
             temporary,
             selector,

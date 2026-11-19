@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:scoped-verbose-status-result:v1",
+  "title": "Podway Scoped Verbose Status Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "observation",
+    "attempts",
+    "trace_length",
+    "history_before"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.scoped-verbose-status-result/v1"
+    },
+    "observation": {
+      "$ref": "urn:podway:schema:observation-result:v7"
+    },
+    "attempts": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "$ref": "urn:podway:schema:successor-history-attempts-result:v1#/properties/rows/items"
+      }
+    },
+    "trace_length": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65536
+    },
+    "history_before": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 65536
+        }
+      ]
+    }
+  }
+}

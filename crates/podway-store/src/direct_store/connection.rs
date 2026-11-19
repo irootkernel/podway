@@ -18,8 +18,8 @@ use crate::{
 };
 
 use super::{
-    DIRECT_SCHEMA_GENERATION_V1, DIRECT_STORE_DDL_V1, DirectRecordedOutcomeV1, DirectStoreErrorV1,
-    DirectStoreResultV1, DirectTransactionBoundaryV1, DirectWorkspaceLayoutV1,
+    DirectRecordedOutcomeV1, DirectStoreErrorV1, DirectStoreResultV1, DirectStoreSchema,
+    DirectTransactionBoundaryV1, DirectWorkspaceLayoutV1, LEGACY_DIRECT_SCHEMA_GENERATION_V1,
     maintenance::DirectOpenLease,
 };
 
@@ -336,7 +336,7 @@ impl DirectStoreV1 {
                 Ok(connection) => connection,
                 Err(_) => continue,
             };
-            configure_connection(&mut connection, true, deadline)?;
+            configure_connection(&mut connection, true, deadline, self.layout.schema)?;
             let Ok(binding) = self.validate_connection(&connection) else {
                 continue;
             };
@@ -529,7 +529,7 @@ impl DirectStoreV1 {
         if heap_snapshot && !immutable {
             connection.execute_batch("PRAGMA locking_mode=EXCLUSIVE;")?;
         }
-        configure_connection(&mut connection, readonly, deadline)?;
+        configure_connection(&mut connection, readonly, deadline, self.layout.schema)?;
         Ok(connection)
     }
 
@@ -556,8 +556,8 @@ impl DirectStoreV1 {
         immutable: bool,
     ) -> DirectStoreResultV1<(WorkspaceBindingV1, String)> {
         let generation: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if generation != DIRECT_SCHEMA_GENERATION_V1 {
-            return Err(if generation > DIRECT_SCHEMA_GENERATION_V1 {
+        if generation != self.layout.schema.generation {
+            return Err(if generation > self.layout.schema.generation {
                 DirectStoreErrorV1::UnsupportedGeneration { generation }
             } else {
                 DirectStoreErrorV1::Legacy {
@@ -570,7 +570,7 @@ impl DirectStoreV1 {
         if mode != if immutable { "delete" } else { "wal" } {
             return Err(DirectStoreErrorV1::SchemaMismatch);
         }
-        verify_schema(connection)?;
+        verify_schema(connection, self.layout.schema)?;
         let writer: (String, String, i64) = connection.query_row(
             "SELECT contract_manifest_digest, generation_id, recorded_at_ms FROM writer_contract WHERE singleton = 1",
             [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
@@ -641,17 +641,24 @@ impl DirectStoreV1 {
             {
                 return Err(DirectStoreErrorV1::Unreadable);
             }
-            let admission = v2_state::verify_v2_graph_state_connection_v2(&transaction)?;
-            // Retained inactive graphs are reconstructed one at a time, without an archive Vec.
-            let mut statement = transaction.prepare(
-                "SELECT session_id FROM v2_task_sessions WHERE activity = 'inactive' ORDER BY session_id")?;
-            let mut rows = statement.query([])?;
-            while let Some(row) = rows.next()? {
-                let id: String = row.get(0)?;
-                let id = SessionId::new(id).map_err(|_| DirectStoreErrorV1::Unreadable)?;
-                v2_state::load_archived_session_connection_v2(&transaction, &id)?
-                    .ok_or(DirectStoreErrorV1::Unreadable)?;
-            }
+            let staged_current = if binding.schema_version() == super::EXECUTION_GROUP_STORE_GENERATION_V1 {
+                // The Engine supplies the admitted Config definition decoder for the v16
+                // reconstruction in its callback over this same snapshot.
+                StagedCurrentAdmissionV1::Unadmitted
+            } else {
+                let admission = v2_state::verify_v2_graph_state_connection_v2(&transaction)?;
+                // Reconstruct inactive graphs one at a time.
+                let mut statement = transaction.prepare(
+                    "SELECT session_id FROM v2_task_sessions WHERE activity = 'inactive' ORDER BY session_id")?;
+                let mut rows = statement.query([])?;
+                while let Some(row) = rows.next()? {
+                    let id: String = row.get(0)?;
+                    let id = SessionId::new(id).map_err(|_| DirectStoreErrorV1::Unreadable)?;
+                    v2_state::load_archived_session_connection_v2(&transaction, &id)?
+                        .ok_or(DirectStoreErrorV1::Unreadable)?;
+                }
+                StagedCurrentAdmissionV1::Admitted(Box::new(admission))
+            };
             let mut outcomes = transaction
                 .prepare("SELECT idempotency_key FROM mutation_outcomes ORDER BY workspace_sequence")?;
             let mut outcomes = outcomes.query([])?;
@@ -665,11 +672,7 @@ impl DirectStoreV1 {
                 connection: &transaction,
                 binding,
                 admission: None,
-                // Seeded only here, after every verifier check: the callback
-                // reuses the admission this verifier already validated.
-                staged_current: RefCell::new(StagedCurrentAdmissionV1::Admitted(Box::new(
-                    admission,
-                ))),
+                staged_current: RefCell::new(staged_current),
             };
             let result = read(&snapshot)?;
             lease.revalidate(&self.layout)?;
@@ -748,6 +751,148 @@ enum StagedCurrentAdmissionV1 {
 impl DirectReadSnapshotV1<'_> {
     pub fn binding(&self) -> &WorkspaceBindingV1 {
         &self.binding
+    }
+
+    #[doc(hidden)]
+    pub fn successor_state(
+        &self,
+        admit: impl Fn(
+            &str,
+        ) -> Result<
+            crate::successor_store::CandidateDefinition,
+            crate::successor_store::CandidateStoreError,
+        >,
+    ) -> Result<
+        Option<(
+            podway_core::execution_groups::ExecutionSessionV3,
+            crate::successor_store::CandidateSources,
+        )>,
+        crate::successor_store::CandidateStoreError,
+    > {
+        super::require_execution_group_schema(&self.binding)?;
+        crate::successor_store::load_current_execution(self.connection, admit)
+    }
+
+    #[doc(hidden)]
+    pub fn successor_metadata(
+        &self,
+        session: &SessionId,
+    ) -> Result<
+        Option<crate::successor_store::SuccessorSessionMetadata>,
+        crate::successor_store::CandidateStoreError,
+    > {
+        super::require_execution_group_schema(&self.binding)?;
+        crate::successor_store::session_metadata(self.connection, session)
+    }
+
+    #[doc(hidden)]
+    pub fn successor_disposition(
+        &self,
+        session: &SessionId,
+        revision: podway_core::Revision,
+    ) -> Result<Option<TerminalDispositionV2>, crate::successor_store::CandidateStoreError> {
+        super::require_execution_group_schema(&self.binding)?;
+        crate::successor_store::terminal_disposition(self.connection, session, revision)
+    }
+
+    #[doc(hidden)]
+    pub fn archived_successor_state(
+        &self,
+        session: &SessionId,
+        admit: impl Fn(
+            &str,
+        ) -> Result<
+            crate::successor_store::CandidateDefinition,
+            crate::successor_store::CandidateStoreError,
+        >,
+    ) -> Result<
+        Option<(
+            podway_core::execution_groups::ExecutionSessionV3,
+            crate::successor_store::CandidateSources,
+        )>,
+        crate::successor_store::CandidateStoreError,
+    > {
+        super::require_execution_group_schema(&self.binding)?;
+        crate::successor_store::load_archived_execution(self.connection, session, admit)
+    }
+
+    pub fn successor_current_session_id(
+        &self,
+    ) -> Result<Option<SessionId>, crate::successor_store::CandidateStoreError> {
+        super::require_execution_group_schema(&self.binding)?;
+        Ok(crate::successor_store::current_execution(self.connection)?.map(|(id, _)| id))
+    }
+
+    pub fn successor_history(
+        &self,
+        session: &SessionId,
+        location: crate::successor_store::CandidateSessionLocation,
+        admit: impl Fn(
+            &str,
+        ) -> Result<
+            crate::successor_store::CandidateDefinition,
+            crate::successor_store::CandidateStoreError,
+        >,
+    ) -> Result<
+        crate::successor_store::CandidateHistorySnapshot,
+        crate::successor_store::CandidateStoreError,
+    > {
+        use crate::successor_store;
+        super::require_execution_group_schema(&self.binding)?;
+        let result =
+            successor_store::admitted_history_snapshot(self.connection, session, location, admit)?;
+        successor_store::require_settled_goal_assessments(&result.state)?;
+        successor_store::verify_receipts(self.connection, &result.state)?;
+        let metadata =
+            successor_store::session_metadata(self.connection, session)?.ok_or_else(|| {
+                successor_store::CandidateStoreError::Corrupt("retained session metadata is absent")
+            })?;
+        if let Some(archive) = metadata.archived {
+            successor_store::check_archived_state(self.connection, &result.state, &archive)?;
+        }
+        Ok(result)
+    }
+
+    pub fn successor_delegation_receipt(
+        &self,
+        state: &podway_core::execution_groups::ExecutionSessionV3,
+        attempt: &podway_core::AttemptId,
+    ) -> Result<
+        Option<podway_core::execution_groups::ScopedDelegationReceiptV1>,
+        crate::successor_store::CandidateStoreError,
+    > {
+        super::require_execution_group_schema(&self.binding)?;
+        crate::successor_store::read_receipt(self.connection, state, attempt)
+    }
+
+    pub fn verify_successor_integrity(
+        &self,
+        admit: impl Fn(
+            &str,
+        ) -> Result<
+            crate::successor_store::CandidateDefinition,
+            crate::successor_store::CandidateStoreError,
+        >,
+    ) -> Result<
+        Option<(
+            podway_core::execution_groups::ExecutionSessionV3,
+            crate::successor_store::CandidateSources,
+        )>,
+        crate::successor_store::CandidateStoreError,
+    > {
+        super::require_execution_group_schema(&self.binding)?;
+        crate::successor_store::verify_integrity(self.connection, admit)
+    }
+
+    pub fn successor_archives(
+        &self,
+        limit: usize,
+    ) -> Result<
+        crate::successor_store::SuccessorArchivePage,
+        crate::successor_store::CandidateStoreError,
+    > {
+        super::require_execution_group_schema(&self.binding)?;
+        crate::successor_store::list_archives(self.connection, limit)
     }
 
     pub fn committed_sequence(&self) -> DirectStoreResultV1<u64> {
@@ -1022,13 +1167,14 @@ pub(super) fn configure_connection(
     connection: &mut Connection,
     readonly: bool,
     deadline: Instant,
+    schema: DirectStoreSchema,
 ) -> DirectStoreResultV1<()> {
     install_busy_deadline(connection, deadline)?;
     // Bound SQLite decoding before a corrupt persisted cell can allocate memory.
-    // The canonical 1 MiB document budget includes bounded row metadata headroom.
+    // Retained attempt rows have their own bound, independently of response size.
     connection.set_limit(
         rusqlite::limits::Limit::SQLITE_LIMIT_LENGTH,
-        1_048_576 + 16_384,
+        schema.max_payload_bytes as i32 + 16_384,
     )?;
     connection.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)?;
     connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF; PRAGMA synchronous=FULL; PRAGMA temp_store=MEMORY;")?;
@@ -1194,6 +1340,7 @@ fn file_uri(path: &std::path::Path, readonly: bool) -> String {
 }
 
 pub(super) fn read_binding(connection: &Connection) -> DirectStoreResultV1<WorkspaceBindingV1> {
+    let generation = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     let (uuid, common, admin, root): (String, String, String, String) =
         crate::query_accounting::accounted_query_row(
             connection,
@@ -1212,26 +1359,29 @@ pub(super) fn read_binding(connection: &Connection) -> DirectStoreResultV1<Works
         return Err(DirectStoreErrorV1::Unreadable);
     }
     Ok(WorkspaceBindingV1::new_with_schema_version(
-        identity,
-        root,
-        DIRECT_SCHEMA_GENERATION_V1,
+        identity, root, generation,
     ))
 }
 
 type SchemaInventory = Vec<(String, String, String, String)>;
-static EXPECTED_SCHEMA: OnceLock<Result<SchemaInventory, String>> = OnceLock::new();
+static EXPECTED_WORKFLOW_SCHEMA: OnceLock<Result<SchemaInventory, String>> = OnceLock::new();
+static EXPECTED_EXECUTION_GROUP_SCHEMA: OnceLock<Result<SchemaInventory, String>> = OnceLock::new();
 
-pub(super) fn verify_schema(connection: &Connection) -> DirectStoreResultV1<()> {
-    let expected = EXPECTED_SCHEMA
-        .get_or_init(|| {
-            let connection = Connection::open_in_memory().map_err(|error| error.to_string())?;
-            connection
-                .execute_batch(DIRECT_STORE_DDL_V1)
-                .map_err(|error| error.to_string())?;
-            schema_inventory(&connection).map_err(|error| error.to_string())
-        })
-        .as_ref()
-        .map_err(|_| DirectStoreErrorV1::SchemaMismatch)?;
+fn verify_schema(connection: &Connection, schema: DirectStoreSchema) -> DirectStoreResultV1<()> {
+    let expected = if schema.generation == LEGACY_DIRECT_SCHEMA_GENERATION_V1 {
+        &EXPECTED_WORKFLOW_SCHEMA
+    } else {
+        &EXPECTED_EXECUTION_GROUP_SCHEMA
+    }
+    .get_or_init(|| {
+        let connection = Connection::open_in_memory().map_err(|error| error.to_string())?;
+        connection
+            .execute_batch(schema.ddl)
+            .map_err(|error| error.to_string())?;
+        schema_inventory(&connection).map_err(|error| error.to_string())
+    })
+    .as_ref()
+    .map_err(|_| DirectStoreErrorV1::SchemaMismatch)?;
     if &schema_inventory(connection)? != expected {
         return Err(DirectStoreErrorV1::SchemaMismatch);
     }
@@ -1300,8 +1450,10 @@ mod admit003_tests {
         let temporary = tempfile::TempDir::new().unwrap();
         let root = std::fs::canonicalize(temporary.path()).unwrap();
         let store = DirectStoreV1::new(
-            DirectWorkspaceLayoutV1::new(ValidatedWorkspaceRootV1::from_path(&root).unwrap())
-                .unwrap(),
+            DirectWorkspaceLayoutV1::for_v15_fixture(
+                ValidatedWorkspaceRootV1::from_path(&root).unwrap(),
+            )
+            .unwrap(),
             digest('c'),
             digest('a'),
             digest('b'),

@@ -154,7 +154,7 @@ impl FormattedProcedureV2 {
 /// where the first `\r` sits, not "no difference". The line is clamped to the source's own
 /// newline-split count so the position never runs off the end of the text it describes, and a
 /// divergence past the end of either side reports column 1, since the whole line is the difference.
-fn drift_position(source: &str, formatted: &str) -> (u32, u32) {
+pub(crate) fn drift_position(source: &str, formatted: &str) -> (u32, u32) {
     let source_lines: Vec<&str> = source.split('\n').collect();
     let formatted_lines: Vec<&str> = formatted.split('\n').collect();
     let shared = source_lines.len().min(formatted_lines.len());

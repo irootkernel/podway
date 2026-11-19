@@ -21,6 +21,15 @@ job, sequence, endpoint, queue, or runtime-mode metadata. Rejected mutations ret
 no outcome. Only uncertain COMMIT I/O emits `MUTATION_OUTCOME_UNKNOWN`; response
 loss or external process termination is caller-side uncertainty.
 
+## Scoped execution limits
+
+A deterministic response bound returns `RESPONSE_BUDGET_EXCEEDED`. If the
+direct response fits and its durable lookup envelope or reserved observation
+does not, Podway returns `OUTCOME_LOOKUP_BUDGET_EXCEEDED`. Both errors have
+closed empty details. A rejected mutation leaves no state change or successful
+outcome. Reduce the request or the active definition's projected scope before
+trying a new operation.
+
 ## Integration settings failures
 
 The accepted [integration-settings contract](../operations/integration-settings.md)
@@ -55,9 +64,10 @@ canonical. `job.lookup` names `outcome.lookup`; a null replacement means none.
 
 ## Runtime code inventory
 
-The following are the current catalog's codes, exits, and retryability. Detail
-schemas and the behavioral distinctions below take precedence over a short
-human explanation. Historical defensive entries do not establish new guarantees.
+The [machine catalog](../../../assets/specifications/error-codes.json) owns
+the complete code, exit and retryability inventory. The following table and
+detail descriptions give the behavioral semantics of those entries. Historical
+defensive entries do not establish new guarantees.
 
 | Code | Exit | Retryable | Meaning |
 |---|---:|---|---|
@@ -99,6 +109,13 @@ human explanation. Historical defensive entries do not establish new guarantees.
 | `GOAL_TRACKING_NOT_ENABLED` | 1 | no | The Procedure does not enable session-goal tracking. |
 | `GRAPH_NODE_NOT_FOUND` | 1 | no | The requested graph node does not exist. |
 | `GRAPH_NODE_TYPE_MISMATCH` | 1 | no | The active graph node has the wrong type for the command. |
+| `GROUP_ACTIVATION_NOT_ALLOWED` | 1 | no | Group activation requires the current unselected base anchor and valid prior work. |
+| `GROUP_PLAN_STALE` | 4 | yes | The group activation plan or predecessor differs from the current design. |
+| `GROUP_RETURN_NOT_ALLOWED` | 1 | no | Group return requires the selected running group at its terminal action. |
+| `GROUP_DEFINITION_MISMATCH` | 4 | yes | The supplied or retained group definition does not match the expected digest. |
+| `GROUP_EXECUTION_NOT_FOUND` | 1 | no | The requested execution group was not retained in the session. |
+| `GROUP_SELECTION_STALE` | 4 | yes | The selected execution group changed. |
+| `HISTORY_PAGE_TOKEN_STALE` | 4 | yes | The history page token no longer binds this request or snapshot. |
 | `IDEMPOTENCY_KEY_REUSED` | 2 | no | The idempotency key is bound to another request. |
 | `INTERNAL_ERROR` | 6 | no | An unexpected internal error occurred. |
 | `ITEM_ALREADY_SET` | 4 | yes | The item was expected to be unset. |
@@ -106,7 +123,7 @@ human explanation. Historical defensive entries do not establish new guarantees.
 | `ITEM_NOT_FOUND` | 1 | no | The item does not exist in the active node definition. |
 | `ITEM_REVISION_CONFLICT` | 4 | yes | The item changed after it was observed. |
 | `ITEM_TYPE_MISMATCH` | 1 | no | The command is incompatible with the item type. |
-| `LEGACY_RUNTIME_STATE_UNSUPPORTED` | 5 | no | Daemon-era state requires explicitly confirmed reset-all. |
+| `LEGACY_RUNTIME_STATE_UNSUPPORTED` | 5 | no | Older workspace state requires an explicitly confirmed reset before initializing a current Store. |
 | `LIST_VALUE_DUPLICATE` | 1 | no | The unique list already contains the value. |
 | `LIST_VALUE_NOT_FOUND` | 1 | no | The list value does not exist. |
 | `MANUAL_REWORK_TARGET_NOT_ALLOWED` | 1 | no | The graph node is not an allowed manual rework target. |
@@ -117,6 +134,7 @@ human explanation. Historical defensive entries do not establish new guarantees.
 | `NOT_A_GIT_WORKTREE` | 5 | no | No valid Git worktree contains the path. |
 | `OPTION_GUARD_UNSATISFIED` | 1 | no | The selected decision option has an unmet or unevaluable guard. |
 | `OPTION_NOT_ALLOWED` | 1 | no | The selected decision option is not allowed. |
+| `OUTCOME_LOOKUP_BUDGET_EXCEEDED` | 1 | no | The result cannot fit in a durable outcome lookup. Reduce the requested response or execution scope. |
 | `PATH_OUTSIDE_WORKTREE` | 5 | no | A requested path escapes the worktree. |
 | `PRESET_NOT_FOUND` | 1 | no | Built-in preset does not exist. |
 | `PROCEDURE_DIGEST_MISMATCH` | 4 | no | The canonical Procedure digest differs from the expected digest. |
@@ -127,6 +145,7 @@ human explanation. Historical defensive entries do not establish new guarantees.
 | `REACTIVATION_FLAG_REQUIRED` | 1 | no | Reactivating a completed session requires the explicit flag. |
 | `REQUEST_INVALID` | 2 | no | Request is malformed or violates schema. |
 | `REQUEST_TOO_LARGE` | 2 | no | A bounded stdin document or complete typed request exceeds its named input ceiling. |
+| `RESPONSE_BUDGET_EXCEEDED` | 1 | no | The requested result exceeds its response budget. Reduce the requested response or execution scope. |
 | `REQUIRED_ITEMS_MISSING` | 1 | no | Required items are missing. |
 | `ROUTE_NOT_ALLOWED` | 1 | no | The selected transition route is not allowed. |
 | `SESSION_ALREADY_EXISTS` | 1 | no | A task session already exists. |
@@ -144,6 +163,7 @@ human explanation. Historical defensive entries do not establish new guarantees.
 | `SESSION_REVISION_CONFLICT` | 4 | yes | The session changed after it was observed. |
 | `SESSION_START_DECISION_REQUIRED` | 5 | no | Starting a successor session requires an explicit decision about the current session. |
 | `SESSION_START_STATE_CONFLICT` | 4 | yes | The existing session state changed after the start policy was selected. |
+| `SESSION_TERMINAL_DISPOSITION_ALREADY_RECORDED` | 1 | no | The current terminal revision already has a disposition. |
 | `STAGE_NOT_SKIPPABLE` | 1 | no | The active stage cannot be skipped. |
 | `WORKSPACE_ALREADY_INITIALIZED` | 1 | no | Workspace is already initialized. |
 | `WORKSPACE_BUSY` | 4 | yes | A direct connection or SQLite admission wait expired without a state effect. |
@@ -169,7 +189,7 @@ Named details contain no admission or job facts.
 |---|---|---|---|
 | `WORKSPACE_BUSY` | `workspace-busy-details/v1` | 1, 2 | `boundary`: `connection_gate`, `sqlite_read_admission`, or `sqlite_write_lock`; `timeout_ms`, refresh |
 | `WORKSPACE_MAINTENANCE` | `workspace-maintenance-details/v1` | 1, 2 | Boundary, timeout, boundary-specific recovery |
-| `LEGACY_RUNTIME_STATE_UNSUPPORTED` | `legacy-runtime-state-unsupported-details/v1` | 1, 2 | Store generation, marker names, authorized reset |
+| `LEGACY_RUNTIME_STATE_UNSUPPORTED` | `legacy-runtime-state-unsupported-details/v2` | 1, 2 | Store generation, marker names, authorized reset |
 | `WORKSPACE_CONTRACT_MISMATCH` | `workspace-contract-mismatch-details/v1` | 1 | Expected/actual writer manifest digest, diagnosis |
 | `WORKSPACE_CONTRACT_MISMATCH` (generation 2) | `workspace-contract-mismatch-details/v2` | 2 | Adds `actual_product_version` from the released-manifest table (null for an unknown digest); the recovery reason names the original writer |
 | `COMMAND_RETIRED` | `command-retired-details/v1` | 1, 2 | `retired`, nullable `replacement`, bounded `guidance` |
@@ -179,14 +199,19 @@ Named details contain no admission or job facts.
 | `SESSION_REVISION_CONFLICT`, `ITEM_REVISION_CONFLICT` | `revision-conflict-details/v3` | 1, 2 | `expected_revision` and/or `current_revision`, refresh |
 | `ATTEMPT_NOT_CURRENT` | `attempt-conflict-details/v3` | 1, 2 | Expected/actual attempt, refresh |
 | `EVIDENCE_REFERENCE_STALE`, `GOAL_REVISION_STALE`, `EVIDENCE_PAGE_TOKEN_STALE` | `recoverable-v2-runtime-error-details/v2` | 1, 2 | Code-bound `kind`, bounded facts, refresh |
-| `CRITERION_CITATION_INVALID` | `v2-runtime-error-details/v2` | 1 | Code-bound `kind`, rejected criterion and citation |
-| `CRITERION_CITATION_INVALID` (generation 2) | `criterion-citation-invalid-details/v1` | 2 | Adds the citable evidence source nodes (at most eight) and item identifiers (at most 128) computed with the citation admission rule |
-| Other typed graph/goal/guard/Procedure-v2/evidence errors | `v2-runtime-error-details/v2` | 1, 2 | `kind` equals outer code; closed code-specific fields |
+| `CRITERION_CITATION_INVALID` | `scoped-criterion-citation-invalid-details/v1` | 1 | Exact scoped decision, rejected criterion and citation, and rejection reason |
+| `CRITERION_CITATION_INVALID` (generation 2) | `scoped-criterion-citation-invalid-details/v2` | 2 | Adds citable scoped evidence and item IDs from the admission rule |
+| `OPTION_GUARD_UNSATISFIED` | `scoped-option-guard-unsatisfied-details/v1` | 1, 2 | Exact decision and option, aggregate result and scoped predicate states |
+| `OPTION_NOT_ALLOWED` on a scoped decision | `scoped-option-not-allowed-details/v1` | 1, 2 | Exact decision, undeclared option and current ordinary allowed IDs |
+| `ROUTE_NOT_ALLOWED` when using ordinary decide for a replan option | `scoped-group-replan-required-details/v1` | 1, 2 | Exact decision and option, required command and input schema |
+| `EVIDENCE_NOT_AVAILABLE` on scoped evidence | `scoped-evidence-unavailable-details/v1` | 1, 2 | Consumer attempt, evidence selector and requested item |
+| `PROCEDURE_INVALID`, `PROCEDURE_SCHEMA_UNSUPPORTED` on successor source admission | `procedure-source-error-details/v1` | 1, 2 | Source refusal reason and known schema when applicable |
+| Other typed graph, goal and evidence errors | `v2-runtime-error-details/v2` | 1, 2 | `kind` equals outer code; closed code-specific fields |
 | `BLOCKER_LIMIT_REACHED` | `blocker-limit-details/v2` | 1, 2 | `maximum_open_blockers: 64` |
 | `IDEMPOTENCY_KEY_REUSED` | `idempotency-key-reused-details/v2` | 1, 2 | Closed schema marker |
 | `MUTATION_OUTCOME_UNKNOWN` | `mutation-outcome-unknown-details/v3` | 1, 2 | Original key and matching lookup/recovery key |
 | `WORKSPACE_STATE_UNREADABLE` | `workspace-recovery-details/v2` | 1, 2 | Diagnosis |
-| `WORKSPACE_SCHEMA_UNSUPPORTED` | `workspace-schema-unsupported-details/v1` | 1, 2 | Actual/supported Store generations and compatible-Podway guidance; no recovery recipe |
+| `WORKSPACE_SCHEMA_UNSUPPORTED` | `workspace-schema-unsupported-details/v2` | 1, 2 | Actual/supported Store generations and compatible-Podway guidance; no recovery recipe |
 | `SESSION_RESET_NOT_ELIGIBLE` | `session-reset-not-eligible-details/v2` | 1, 2 | Lifecycle, disposition, required action |
 | `SESSION_START_DECISION_REQUIRED` | `session-start-decision-required-details/v2` | 1, 2 | Lifecycle, disposition, allowed actions |
 | `SESSION_START_STATE_CONFLICT` | `session-start-state-conflict-details/v2` | 1, 2 | Current lifecycle/disposition, allowed actions |
@@ -231,10 +256,10 @@ original maintenance refusal remains with read-only `version --identity` guidanc
 Its boundary names the observed marker, or `maintenance_lock` when no marker was
 observed; the changed diagnostic snapshot grants no recovery authority.
 
-Normal reads, writes, and replay refuse daemon-era Store generations 1–13 and
-markers without conversion, deletion, or SHM creation. The unreleased older direct
-generation 14 also reports `LEGACY_RUNTIME_STATE_UNSUPPORTED` with an explicitly
-confirmed reset recipe; it is not an admitted predecessor. Unsupported newer state
+Normal reads, writes and replay refuse Store generations 1–15 and supported
+legacy input markers without conversion, deletion or SHM creation. The
+`LEGACY_RUNTIME_STATE_UNSUPPORTED` details carry the explicit reset recipe.
+Unsupported newer state
 uses `WORKSPACE_SCHEMA_UNSUPPORTED`; corruption uses `WORKSPACE_STATE_UNREADABLE`.
 An unsupported writer digest uses `WORKSPACE_CONTRACT_MISMATCH` before key replay.
 Unsupported legacy workspace configuration fails validation before Store access.
@@ -345,7 +370,11 @@ alters a historical service, or executes external work.
 `SESSION_NOT_RUNNING` rejects cursor/item/blocker/goal/completion/cancellation/
 retry/skip/decision/rework in prepared state. It also rejects `begin` against
 non-prepared state: re-read lifecycle rather than infer it from the code name.
-Disposition before completion/cancellation returns `SESSION_NOT_TERMINAL`.
+Disposition before completion or cancellation returns `SESSION_NOT_TERMINAL`.
+Reusing a successful original key replays its result. A fresh key for an
+already disposed terminal revision returns
+`SESSION_TERMINAL_DISPOSITION_ALREADY_RECORDED` without changing state or
+recording a successful outcome.
 
 Default reset/replacement eligibility uses `SESSION_RESET_NOT_ELIGIBLE` with
 lifecycle, current disposition, and required action (`record_disposition` or

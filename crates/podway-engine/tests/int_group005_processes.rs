@@ -531,9 +531,7 @@ fn processes_preserve_goal_revisions_prior_work_and_completed_cancellation() {
     let design = fixture.read(&["without-goal"]);
     rejection(
         fixture.run(&activate(&design, "without-goal", &group, vec![])),
-        Refusal::Domain(
-            "activation requires an unselected ready anchor with its current goal".into(),
-        ),
+        Refusal::GoalMissing,
     );
     assert_eq!(fixture.read(&["without-goal"]), design);
     write(
@@ -666,10 +664,7 @@ fn processes_preserve_goal_revisions_prior_work_and_completed_cancellation() {
             "reactivation-required",
             revise("New completed-session goal", false),
         )),
-        Refusal::Domain(
-            "goal revision requires a running session or explicit completed-session reactivation"
-                .into(),
-        ),
+        Refusal::ReactivationFlagRequired,
     );
     assert_eq!(fixture.read(&["reactivation-required"]), finished);
     write(

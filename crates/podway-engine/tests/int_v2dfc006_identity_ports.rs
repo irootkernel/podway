@@ -275,7 +275,7 @@ fn database_replacement_before_begin(contextual: bool) {
         .join("fault-owned-original-database");
     let source = database.clone();
     let backup = saved.clone();
-    engine.resolver = DirectWorkspaceResolverV1::new(
+    engine.resolver = DirectWorkspaceResolverV1::for_v15_fixture(
         NativeGitResolverV1::new(),
         super::int_v2dfc006_direct_execution::digest(),
     )

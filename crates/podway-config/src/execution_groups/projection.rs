@@ -1,15 +1,17 @@
 use super::*;
+use crate::procedure_v2_diagnostics::diagnostic_hint;
 use crate::procedure_v2_document::{
     AuthoringValue as A, condition_value, item_value, node_definition_value,
 };
-use crate::procedure_v2_format::{emit_json, emit_yaml};
+use crate::procedure_v2_format::{drift_position, emit_json, emit_yaml};
 use crate::procedure_v2_source::{build_source_index, scan_source};
-use crate::{FormatRequest, ParsedNodeDefinition, ProcedureDocumentFormat};
+use crate::{AuthoringContext, FormatRequest, ParsedNodeDefinition, ProcedureDocumentFormat};
 use podway_core::{
-    ActionOutcomeV2, ItemConditionV2, MAX_PROCEDURE_DOCUMENT_BYTES,
-    SOURCE_PROJECTION_MAX_CHARACTERS,
+    ActionOutcomeV2, AuthoringDiagnostic, AuthoringDiagnosticCode, ItemConditionV2,
+    MAX_PROCEDURE_DOCUMENT_BYTES, SOURCE_PROJECTION_MAX_CHARACTERS,
 };
 use sha2::{Digest as _, Sha256};
+use std::fmt::Write as _;
 
 fn text(value: &str) -> A {
     A::Text(value.into())
@@ -233,15 +235,20 @@ pub(super) fn authoring(value: &SuccessorDefinition) -> A {
     }
     A::Map(fields)
 }
+pub(crate) const SUCCESSOR_SOURCE_CHARACTERS_FIELD: &str = "successor source projection characters";
+pub(crate) const SUCCESSOR_SOURCE_BYTES_FIELD: &str = "successor source projection bytes";
+pub(crate) const SUCCESSOR_FORMATTED_CHARACTERS_FIELD: &str =
+    "successor formatted source characters";
+
 pub(super) fn bound(value: &str) -> Result<(), ConfigError> {
     crate::validate_count(
-        "successor source projection characters",
+        SUCCESSOR_SOURCE_CHARACTERS_FIELD,
         value.chars().count(),
         1,
         SOURCE_PROJECTION_MAX_CHARACTERS,
     )?;
     crate::validate_count(
-        "successor source projection bytes",
+        SUCCESSOR_SOURCE_BYTES_FIELD,
         value.len(),
         1,
         MAX_PROCEDURE_DOCUMENT_BYTES,
@@ -254,7 +261,7 @@ pub(super) fn digest(bytes: &[u8]) -> Result<Sha256Digest, ConfigError> {
 
 fn bound_formatted(value: &str) -> Result<(), ConfigError> {
     crate::validate_count(
-        "successor formatted source characters",
+        SUCCESSOR_FORMATTED_CHARACTERS_FIELD,
         value.chars().count(),
         1,
         SOURCE_PROJECTION_MAX_CHARACTERS,
@@ -292,6 +299,22 @@ impl FormattedSuccessorDefinition {
     }
     pub const fn changed(&self) -> bool {
         self.changed
+    }
+
+    pub fn drift_diagnostic(&self, context: &AuthoringContext<'_>) -> Option<AuthoringDiagnostic> {
+        if context.source() == self.document {
+            return None;
+        }
+        let (line, column) = drift_position(context.source(), &self.document);
+        let code = AuthoringDiagnosticCode::FormatNotCanonical;
+        Some(AuthoringDiagnostic::new(
+            code,
+            context.source_path(),
+            context.span(line, column),
+            "$",
+            "The source is not in canonical authoring form at this line.",
+            diagnostic_hint(code),
+        ))
     }
 }
 /// One bounded admission feeds the same authoring tree, with existing supported YAML comments.
@@ -342,6 +365,90 @@ pub fn project_successor_graph(
     let projection = project_retained_successor_graph(value)?;
     bound(projection.projection())?;
     Ok(projection)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SuccessorGraphFormat {
+    Mermaid,
+    Dot,
+    PlantUml,
+}
+
+/// Render the same bounded topology exposed by the canonical DAG projection.
+pub fn render_successor_graph(
+    definition: &ValidatedSuccessorDefinition,
+    format: SuccessorGraphFormat,
+) -> Result<(String, Sha256Digest), ConfigError> {
+    use SuccessorGraphFormat::{Dot, Mermaid, PlantUml};
+
+    let graph = project_successor_graph(definition)?;
+    let graph: serde_json::Value = serde_json::from_str(graph.projection())
+        .map_err(|_| invalid("graph", "cannot decode the canonical graph projection"))?;
+    let nodes = graph["nodes"].as_array().expect("projection has nodes");
+    let edges = graph["edges"].as_array().expect("projection has edges");
+    let anchor = graph["execution_group"]["anchor"].as_str();
+    let has_replan = edges.iter().any(|edge| edge["effect"] == "replan");
+    let mut output = match format {
+        Mermaid => String::from("flowchart TD\n"),
+        Dot => String::from("digraph Podway {\n"),
+        PlantUml => String::from("@startuml\nhide empty description\n"),
+    };
+    let alias = |id: &str| format!("n_{}", id.replace('-', "_"));
+    for node in nodes {
+        let id = node["id"].as_str().expect("projection node ID");
+        let alias = alias(id);
+        let decision = node["type"] == "decision";
+        let label = if anchor == Some(id) {
+            format!("{id} · design anchor")
+        } else if node["terminal"] == true {
+            format!("{id} · terminal")
+        } else {
+            id.to_owned()
+        };
+        match format {
+            Mermaid if decision => writeln!(output, "    {alias}{{\"{label}\"}}"),
+            Mermaid => writeln!(output, "    {alias}[\"{label}\"]"),
+            Dot => {
+                let shape = if decision { "diamond" } else { "box" };
+                writeln!(output, "    {alias} [label=\"{label}\", shape={shape}];")
+            }
+            PlantUml => writeln!(output, "state \"{label}\" as {alias}"),
+        }
+        .expect("writing to String cannot fail");
+    }
+    if has_replan && anchor.is_none() {
+        output.push_str(match format {
+            Mermaid => "    design_anchor[[\"Return to base design anchor\"]]\n",
+            Dot => "    design_anchor [label=\"Return to base design anchor\", shape=box];\n",
+            PlantUml => "state \"Return to base design anchor\" as design_anchor\n",
+        });
+    }
+    for edge in edges {
+        let from = alias(edge["from"].as_str().expect("projection edge source"));
+        let effect = edge["effect"].as_str().expect("projection edge effect");
+        let to = edge["to"]
+            .as_str()
+            .or(anchor)
+            .map_or_else(|| "design_anchor".to_owned(), alias);
+        let label = edge["option"].as_str().map_or_else(
+            || effect.to_owned(),
+            |option| format!("{option} · {effect}"),
+        );
+        match format {
+            Mermaid => writeln!(output, "    {from} -->|{label}| {to}"),
+            Dot => writeln!(output, "    {from} -> {to} [label=\"{label}\"];"),
+            PlantUml => writeln!(output, "{from} --> {to} : {label}"),
+        }
+        .expect("writing to String cannot fail");
+    }
+    match format {
+        Mermaid => {}
+        Dot => output.push_str("}\n"),
+        PlantUml => output.push_str("@enduml\n"),
+    }
+    bound(&output)?;
+    let projection_digest = digest(output.as_bytes())?;
+    Ok((output, projection_digest))
 }
 
 /// Build the exact canonical DAG of an admitted definition for a bounded paged consumer.

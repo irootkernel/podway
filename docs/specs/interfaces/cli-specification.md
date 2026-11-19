@@ -45,6 +45,8 @@ that Store nor grants compatibility to another route.
 - Workspace: `init`, `doctor`, `workspace show|repair|remove`, and `reset --all`.
 - Session reads: `status`, `next`, `observe`, `evidence read`,
   `delegation package|receipt`, `archive list|show`, and `outcome lookup`.
+- Scoped execution: `group activate|return|replan|list|show|prior-work` and
+  `history dag|attempts|blockers|item|goal-revisions`.
 - Session mutations: `start`, `begin`, `complete`, `skip`, `retry`, `block`,
   `unblock`, `cancel`, `disposition handed-off|not-required`, `reset`, `archive`,
   `archive purge`, `decide`, `rework`,
@@ -68,7 +70,7 @@ accepted only by applicable routes. Non-applicable or duplicate stdin identity
 fields return `REQUEST_INVALID`. The worktree request options — `--worktree`,
 `--timeout`, `--idempotency-key`, `--if-workspace-uuid`, `--if-session-id`,
 `--if-session-revision`, `--if-attempt`, `--if-item-revision`,
-`--if-goal-revision`, `--with-observation` and `--yes` — apply to workspace routes only: the local
+`--if-goal-revision`, `--if-cursor`, `--with-observation` and `--yes` — apply to workspace routes only: the local
 families `help`, `version`, `completions`, `preset` and `procedure` run
 in-process, open no workspace, and reject every one of them with exit-2
 `REQUEST_INVALID` naming each supplied option. Local commands also accept
@@ -91,7 +93,8 @@ route while retired syntax keeps `COMMAND_RETIRED` precedence.
 | `--if-attempt <UUID>` | Current action/decision/evidence identity; not start/begin/disposition/reset |
 | `--if-item-revision <N>` | Single-item mutation revision; not another route's fence |
 | `--if-goal-revision <N>` | Positive goal revision on decide, goal revise, or assess-criterion; rejected on stdin-fenced `goal assess-criteria --stdin` |
-| `--with-observation` | Return commit-bound `podway.mutation-observation-result/v1` with embedded `podway.observation-result/v6` on plain `start`, `begin`, `record --stdin`, `complete`, `decide`, and `goal assess-criteria --stdin`; rejected on `--dry-run`, `--on-existing`, and all other routes |
+| `--if-cursor <JSON>` | Exact scoped cursor on supported argv mutations. Supply the workspace UUID and omit the individual session, attempt and goal fences represented by the cursor. |
+| `--with-observation` | Return commit-bound `podway.mutation-observation-result/v2` with embedded `podway.observation-result/v8` on plain `start`, `begin`, `record --stdin`, `complete`, `decide`, and `goal assess-criteria --stdin`; rejected on `--dry-run`, `--on-existing`, and all other routes |
 | `--yes` | Explicit destructive confirmation; rejected on ordinary non-destructive commands |
 
 | Route grammar | Command-specific constraints |
@@ -115,13 +118,16 @@ route while retired syntax keeps `COMMAND_RETIRED` precedence.
 | `evidence read --source <NODE> --item <ITEM> [--page-token <TOKEN>]` | Current declared evidence only |
 | `delegation package` | Current delegated action package |
 | `delegation accept --stdin` | Closed complete acceptance document supplies its own identities |
-| `delegation receipt --session <UUID> --attempt <UUID>` | Exact receipt; not a current-session precondition override |
+| `delegation receipt --session <UUID> --attempt <UUID>` | Exact receipt and its applicability across current and retained executions |
+| `group activate --stdin`, `group replan --stdin` | Closed, scoped requests supply every fence and the idempotency key |
+| `group return` | Move from the selected group's terminal action to the declared base successor |
+| `group list\|show\|prior-work`, `history dag\|attempts\|blockers\|item\|goal-revisions` | Exact session and optional `--archived`; bounded pages use the continuation returned by the same query |
 | `complete`, `skip [--reason <TEXT>]`, `retry --reason <TEXT>` | Complete/skip act on actions; retry repeats the active action or decision |
 | `block --reason <TEXT>`, `unblock (<BLOCKER>\|--all)`, `cancel --reason <TEXT>` | Exactly one unblock selector |
 | `decide --option <ID> --reason <TEXT> [--actor <TEXT>]` | Goal fence also applies to goal-assessment decisions |
 | `rework --to <NODE> --reason <TEXT> [--actor <TEXT>]` | Declared manual rework |
 | `goal define --goal <TEXT> --criterion <ID=STATEMENT>... [--actor <TEXT>]` | One or more criteria |
-| `goal revise --goal <TEXT> --criterion <ID=STATEMENT>... --rework-to <NODE> --reason <TEXT> [--actor <TEXT>] [--reactivate]` | Current goal fence and explicit reactivation when required |
+| `goal revise --goal <TEXT> --criterion <ID=STATEMENT>... --rework-to <NODE> --reason <TEXT> --basis-description <TEXT> --basis-digest <SHA256> --feedback <TEXT> [--actor <TEXT>] [--reactivate]` | Current goal fence, working-copy basis and explicit reactivation when required |
 | `goal assess-criterion <ID> --status <satisfied\|unsatisfied\|not_applicable> --reason <TEXT> [--evidence <NODE>...] [--item <ITEM>...] [--actor <TEXT>]` | Typed applicability/assessment rules |
 | `goal assess-criteria --stdin` | Complete closed atomic batch of 1 to 16 criterion assessments; document supplies its own fences and idempotency key |
 | `disposition handed-off --summary <TEXT> --reference <TEXT> [--actor <TEXT>]` | Current terminal revision |
@@ -167,16 +173,17 @@ any `--if-*` flag on argv fails with `REQUEST_INVALID`. By contrast, `set <ITEM>
 fences and CLI preflight, while read-only `outcome lookup` requires the original
 key on the CLI.
 
-`observe` combines compact current status, progression guidance, active items and
-mutation templates, replacing repeated narrow current-state reads. `status`
-retains full standard fields such as `purpose` and `item_values`; `status
---verbose` provides trace history. Human observation and route help explain this
-choice and recording/counter guidance without adding machine response fields.
+`observe` combines the current cursor, progression guidance and active item
+facts. Generation 2 adds mutation templates. Standard `status` and `next`
+return the same v7 observation for either selector. Compact status reports
+bounded identity and revision metadata. Verbose status adds bounded trace
+history to the v7 observation.
+
 For a check result, prefer an observed `stdin_template`, preserving its fences;
 fill `input_basis: {descriptor, digest}`, `executor: {name, version}`, operation
 identity/digest, outcome, summary and output digest from performed work. The caller
 hashes retained exact check-output bytes; Podway neither executes nor attests the
-operation. See the [executable walkthrough](../../examples/v2-workflow.md#keep-counters-distinct)
+operation. See the [previous-writer walkthrough](../../examples/v2-workflow.md#keep-counters-distinct)
 for distinct counter producers and the complete nested input.
 
 ## Worktree selection and deadlines
@@ -278,9 +285,10 @@ It preserves the existing machine envelope and deletion authority.
 
 ## Procedure commands
 
-All procedure commands accept only `podway.procedure/v2`. Validation and authoring
-use the same parser, semantic validator, canonicalizer, diagnostics catalog, and
-bounded source reader as session preparation. `format --write` is the only authoring
+Procedure authoring accepts Procedure v3 bases and Execution Group v1 definitions.
+Session preparation accepts a base. Validation and authoring use the same
+successor parser, semantic validator, canonicalizer, and bounded source reader.
+`format --write` is the only authoring
 operation that modifies a file; it validates and renders fully before an atomic
 same-directory replacement. Other procedure commands are read-only. Unsupported
 schemas report `PROCEDURE_SCHEMA_UNSUPPORTED` or `PROCEDURE_INVALID` as appropriate.
@@ -296,20 +304,22 @@ existing diagnostic and leaves the original file unchanged under `format --write
 Procedure inspection and authoring output preserves optional `required_when` and
 option `guards` structurally. Validation rejects unknown operators, wrong literal
 types, conditional chains, invalid controller order, unselected or optional guard
-sources, and out-of-bound predicate arrays before start. Lint diagnoses ambiguous
-labels and weak criteria rather than warning from option or cycle counts.
+sources, and out-of-bound predicate arrays before start.
 
-Built-in catalog commands expose only `analysis-v2`, `bug-fix-v2`,
-`small-change-v2`, and `sw-dev-v2`. Human `preset explain` adds
-`Goal tracking: enabled|disabled` from admitted Procedure content; JSON retains
-its existing metadata and graph-node shape without a new field.
+`lint` reports bounded advisories on a validated base or group. `check` combines
+formatting and lint findings. With warnings alone, both return `valid: true`.
+`--warnings-as-errors` changes the exit status to 1 and keeps warning severity
+and the source digest. `preview` reports lint separately from admission and
+retains the start recipe for an admissible base.
+
+Built-in catalog commands expose `analysis-v3`, `bug-fix-v3`, `small-change-v3`,
+and `sw-dev-v3`. The closed scoped preset result exposes the pinned base and
+default group identities for `show` and `explain`.
 `start` accepts one preset or one safe worktree-local Procedure
 path, an optional expected Procedure digest for file sources, a nonempty task
 title, and the documented existing-session policy and dry-run controls. Start creates a
 prepared session and never accepts or creates initial goal state.
-When a custom Procedure fails with `PROCEDURE_V2_SCHEMA_INVALID`, human output points
-`procedure check --` at that exact path using shell-safe rendering; JSON output remains the
-unchanged error envelope. Other start failures retain their code-specific remediation.
+An invalid custom definition returns a typed source failure with diagnostics.
 
 `begin` accepts optional initial goal inputs and actor attribution, fences the
 prepared session, and atomically creates the first running attempt. Goal input is
@@ -333,9 +343,8 @@ session precondition flags. Both commands are read-only.
 
 `delegation accept --stdin` reads one closed acceptance document of at most
 32 KiB and commits acceptance synchronously with its success outcome. The
-document alone supplies top-level `workspace_uuid`, `session_id`,
-`session_revision`, `attempt_id`, and `idempotency_key` (with no item fence);
-automatic CLI preflight never runs, and command-line `--idempotency-key` or
+document's `context` supplies the workspace UUID, scoped cursor and idempotency
+key. Automatic CLI preflight never runs. Command-line `--idempotency-key` or
 `--if-*` flags cannot override it and are rejected as `REQUEST_INVALID`. `session_revision` and `rounds_used` require unsigned
 integer JSON literals; a zero-fraction float such as `1.0` is rejected even
 though JSON Schema's `integer` type admits it. Record final action evidence and
@@ -380,17 +389,20 @@ a new mutation. Workspace/writer identity classification still precedes replay.
 Completed workspace removal destroys the Store and converges on absence instead
 of replaying the original response.
 
-`retry` remains on the active action or decision node. `block` and `unblock` also
-apply to either active node type. `rework --to <node>` uses the Procedure
-v2 manual-rework contract. Decisions, goals, and criterion assessments use their
-typed commands. Cursor changes occur only through declared graph effects.
+`retry` remains on the active action or decision node. `block` and `unblock`
+apply to either active node type. `rework --to <node>` requires a declared,
+visited target in the current scope. Cursor changes follow declared effects.
 
-Decision guidance renders the complete authored options and separately marks the
-authoritative allowed option IDs and bounded guard statuses. Human output explains
-unmet and unevaluable predicates without printing text or list content. A guarded
-selection rejected after fresh evidence validation returns
-`OPTION_GUARD_UNSATISFIED`; automation branches on its structured details rather
-than the message.
+Decision guidance retains authored options. `allowed_option_ids` lists
+eligible ordinary choices and `replan_option_ids` lists separately
+eligible explicit replans. Guarded decisions also expose
+`option_guard_statuses` with the bounded state of each predicate and its
+scoped source when available. An unavailable ordinary guard returns
+`OPTION_GUARD_UNSATISFIED`. An undeclared option returns
+`OPTION_NOT_ALLOWED`. A replan option sent through ordinary `decide` returns
+`ROUTE_NOT_ALLOWED` with the `group replan --stdin` route and input schema.
+Use a current observation to obtain its fences. Refusals commit no state.
+
 
 Prepared sessions expose no cursor-bearing mutations. `disposition handed-off`
 requires summary and reference, while `disposition not-required` requires a
@@ -419,6 +431,13 @@ attempt, as exposed by `guidance.references[]`; an item citation must name a
 recorded item of that decision attempt. Unrecorded items and undeclared, skipped
 or stale sources are ineligible. `not_applicable` accepts no citations. Keep
 the observed session, attempt and goal fences.
+
+Clearing an optional cited item leaves the recorded assessment without that
+current citation. While the item is unset, the decision has no assessed outcome
+and does not offer a decide or assessment template. A caller that forces
+`decide` in this state receives exit 2 with `REQUEST_INVALID`, and the request
+retains no outcome. Restore the cited item to make it available again, or use
+`retry` to open a fresh decision attempt and record a new assessment.
 
 `reset` without `--yes` deletes only a prepared session or a completed or
 cancelled session with a disposition for its current revision. `reset --dry-run`
@@ -478,10 +497,11 @@ proposed action without mutation; a fenced dry run verifies the fences read-only
 and reports the same refusals.
 
 `record --stdin` is the only multi-item mutation grammar. It reads at most 1 MiB
-of closed `podway.item-record-many-input/v1` JSON. The document supplies top-level
-`workspace_uuid`, `session_id`, `session_revision`, `attempt_id`, and
-`idempotency_key`, plus required per-operation `expected_item_revision` across
-1..128 unique item operations. The Engine canonicalizes operations by item ID and
+of closed `podway.scoped-item-record-many-input/v1` JSON. The document supplies
+`context` with `workspace_uuid`, `idempotency_key` and the exact scoped
+`cursor`. That cursor binds the session revision, full active attempt, goal
+revision and selected execution. Each of the 1..128 unique item operations
+supplies its expected item revision. The Engine canonicalizes operations by item ID and
 records or clears the complete set atomically without advancing the cursor.
 Under the shared stdin-fenced classification, automatic CLI preflight never
 replaces document fences and passing `--idempotency-key` or any `--if-*` flag on
@@ -500,7 +520,9 @@ recorded or structurally bound external check result and never describes it as
 verified, trusted, attested, or secure evidence.
 
 [ADR-0043](../../architecture-decision-records/0043-atomic-assessment-and-commit-bound-observations.md)
-defines `goal assess-criteria --stdin` (`goal.assess_criteria`, activated in
+introduced the batch and observation boundary. Current scoped inputs and the v2
+wrapper follow the [scoped Direct contract](json-contract.md#scoped-direct-execution).
+For the prior writer, the ADR defines `goal assess-criteria --stdin` (`goal.assess_criteria`, activated in
 `AGENT-003`) and `--with-observation` (activated in `AGENT-005`).
 `decode_criterion_assessment_many_input_v1`
 enforces the 1,048,576-byte direct input ceiling, 64-level JSON nesting depth,

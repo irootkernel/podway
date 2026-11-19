@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:scoped-criterion-assessment-input:v1",
+  "title": "Podway Scoped Criterion Assessment Input v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "context",
+    "assessments"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.scoped-criterion-assessment-input/v1"
+    },
+    "context": {
+      "$ref": "urn:podway:schema:group-activate-input:v1#/$defs/context"
+    },
+    "actor": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "\\S"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "assessments": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "criterion",
+          "status",
+          "reason",
+          "citations"
+        ],
+        "properties": {
+          "criterion": {
+            "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+          },
+          "status": {
+            "enum": [
+              "satisfied",
+              "unsatisfied",
+              "not_applicable"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "pattern": "\\S"
+          },
+          "citations": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind",
+                    "node"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "local"
+                    },
+                    "node": {
+                      "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "plan"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "execution_result"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind",
+                    "item"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "item"
+                    },
+                    "item": {
+                      "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

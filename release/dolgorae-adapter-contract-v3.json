@@ -403,7 +403,18 @@
       "goal.assess_criterion",
       "goal.assess_criteria",
       "integration.show",
-      "outcome.lookup"
+      "outcome.lookup",
+      "group.activate",
+      "group.return",
+      "group.replan",
+      "group.list",
+      "group.show",
+      "group.prior_work",
+      "history.goal_revisions",
+      "history.dag",
+      "history.attempts",
+      "history.blockers",
+      "history.item"
     ],
     "runtime_errors": [
       {
@@ -496,7 +507,7 @@
       },
       {
         "code": "CRITERION_CITATION_INVALID",
-        "details_schema": "podway.v2-runtime-error-details/v2",
+        "details_schema": "podway.scoped-criterion-citation-invalid-details/v1",
         "exit_code": 1,
         "retryable": false,
         "summary": "A criterion citation does not name resolved attempt state."
@@ -711,8 +722,8 @@
         "code": "LEGACY_RUNTIME_STATE_UNSUPPORTED",
         "exit_code": 5,
         "retryable": false,
-        "details_schema": "podway.legacy-runtime-state-unsupported-details/v1",
-        "summary": "Daemon-era state requires explicitly confirmed reset-all."
+        "details_schema": "podway.legacy-runtime-state-unsupported-details/v2",
+        "summary": "Older workspace state requires an explicitly confirmed reset before initializing a current Store."
       },
       {
         "code": "LIST_VALUE_DUPLICATE",
@@ -801,6 +812,7 @@
       },
       {
         "code": "PROCEDURE_INVALID",
+        "details_schema": "podway.procedure-source-error-details/v1",
         "exit_code": 1,
         "retryable": false,
         "summary": "Procedure is invalid."
@@ -813,6 +825,7 @@
       },
       {
         "code": "PROCEDURE_SCHEMA_UNSUPPORTED",
+        "details_schema": "podway.procedure-source-error-details/v1",
         "exit_code": 1,
         "retryable": false,
         "summary": "Procedure schema is unsupported."
@@ -1027,7 +1040,7 @@
       },
       {
         "code": "WORKSPACE_SCHEMA_UNSUPPORTED",
-        "details_schema": "podway.workspace-schema-unsupported-details/v1",
+        "details_schema": "podway.workspace-schema-unsupported-details/v2",
         "exit_code": 5,
         "retryable": false,
         "summary": "The Store generation is newer than this Podway supports."
@@ -1051,6 +1064,66 @@
         "exit_code": 5,
         "retryable": false,
         "summary": "The worktree no longer exists."
+      },
+      {
+        "code": "GROUP_DEFINITION_MISMATCH",
+        "exit_code": 4,
+        "retryable": true,
+        "summary": "The supplied or retained group definition does not match the expected digest."
+      },
+      {
+        "code": "GROUP_EXECUTION_NOT_FOUND",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The requested execution group was not retained in the session."
+      },
+      {
+        "code": "GROUP_SELECTION_STALE",
+        "exit_code": 4,
+        "retryable": true,
+        "summary": "The selected execution group changed."
+      },
+      {
+        "code": "HISTORY_PAGE_TOKEN_STALE",
+        "exit_code": 4,
+        "retryable": true,
+        "summary": "The history page token no longer binds this request or snapshot."
+      },
+      {
+        "code": "OUTCOME_LOOKUP_BUDGET_EXCEEDED",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The result cannot fit in a durable outcome lookup. Reduce the requested response or execution scope."
+      },
+      {
+        "code": "RESPONSE_BUDGET_EXCEEDED",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The requested result exceeds its response budget. Reduce the requested response or execution scope."
+      },
+      {
+        "code": "SESSION_TERMINAL_DISPOSITION_ALREADY_RECORDED",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The current terminal revision already has a disposition."
+      },
+      {
+        "code": "GROUP_ACTIVATION_NOT_ALLOWED",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "Group activation requires the current unselected base anchor and valid prior work."
+      },
+      {
+        "code": "GROUP_RETURN_NOT_ALLOWED",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "Group return requires the selected running group at its terminal action."
+      },
+      {
+        "code": "GROUP_PLAN_STALE",
+        "exit_code": 4,
+        "retryable": true,
+        "summary": "The group activation plan or predecessor differs from the current design."
       }
     ],
     "schema_pins": [
@@ -1115,9 +1188,19 @@
         "sha256": "sha256:0194d8bca39388fbdce24b251099a6c206ad8e4d21d7655021d14dbf46b7daaa"
       },
       {
+        "id": "urn:podway:schema:delegation-accept-input:v2",
+        "path": "schemas/delegation-accept-input-v2.schema.json",
+        "sha256": "sha256:3694a4aab432574311b74b42a379df84a68acea7ce9572144703ccb70d783cf1"
+      },
+      {
         "id": "urn:podway:schema:delegation-accept-result:v2",
         "path": "schemas/delegation-accept-result-v2.schema.json",
         "sha256": "sha256:dd98d0608e2f01621106503439a701c10cdb6874faf73c27f5176d1a73e8a69b"
+      },
+      {
+        "id": "urn:podway:schema:delegation-accept-result:v3",
+        "path": "schemas/delegation-accept-result-v3.schema.json",
+        "sha256": "sha256:e8c4242e47da8d82a1540bcb1f5a3be8a185ac120526316bde591d64122f8a6b"
       },
       {
         "id": "urn:podway:schema:delegation-components:v1",
@@ -1135,6 +1218,11 @@
         "sha256": "sha256:efaa22cbdd48977962ecdf697e140352e4d58847185e79fdeda2acaad7e4ddbd"
       },
       {
+        "id": "urn:podway:schema:delegation-package-result:v2",
+        "path": "schemas/delegation-package-result-v2.schema.json",
+        "sha256": "sha256:8159858a21fbfc8c886b039d66db7e939d2e55cba8aa0d274eccbac5b16bf677"
+      },
+      {
         "id": "urn:podway:schema:delegation-projection:v1",
         "path": "schemas/delegation-projection-v1.schema.json",
         "sha256": "sha256:e629dc05528c86b97df3276f10663246ec662657424e7c5d09771e245f86ee04"
@@ -1145,9 +1233,19 @@
         "sha256": "sha256:90c12147f45f15feee850867ebbb6932d4707f3880ad455a0c9f4deed06e0898"
       },
       {
+        "id": "urn:podway:schema:delegation-receipt-result:v2",
+        "path": "schemas/delegation-receipt-result-v2.schema.json",
+        "sha256": "sha256:b7b1a71a91744de17dae7ea1cb14a9ec34365152232b30a4371435c42496432f"
+      },
+      {
         "id": "urn:podway:schema:delegation-receipt:v1",
         "path": "schemas/delegation-receipt-v1.schema.json",
         "sha256": "sha256:c97a2d31f0bbf99e4d94d0ebcc56ddd4e318bba6b730eaefa8625084ed3f08fe"
+      },
+      {
+        "id": "urn:podway:schema:delegation-receipt:v2",
+        "path": "schemas/delegation-receipt-v2.schema.json",
+        "sha256": "sha256:af532cce1ce7864763535cd1f3e09905136ea16489e6a155ef268aae6fea91dd"
       },
       {
         "id": "urn:podway:schema:delegation-work-package:v1",
@@ -1155,9 +1253,14 @@
         "sha256": "sha256:00100def97d8afcfa3ad6895226e5f2d4e89b132785fb9cd951a6b1246097417"
       },
       {
+        "id": "urn:podway:schema:delegation-work-package:v2",
+        "path": "schemas/delegation-work-package-v2.schema.json",
+        "sha256": "sha256:f46b77a88e975f7409f86f5f861e36077ec4b53662df00313a15d7bc02d351de"
+      },
+      {
         "id": "urn:podway:schema:error:v2",
         "path": "schemas/error-v2.schema.json",
-        "sha256": "sha256:806699fd0c68583f5a42c4fa899c79aec2da85658628ef5f1bed1600a4d2b7ca"
+        "sha256": "sha256:7462c076f804b0dd177f97a6504efd2fd5502546673b48490c5e69422fdb9716"
       },
       {
         "id": "urn:podway:schema:evidence-read-result:v1",
@@ -1183,6 +1286,16 @@
         "id": "urn:podway:schema:goal-revision-result:v2",
         "path": "schemas/goal-revision-result-v2.schema.json",
         "sha256": "sha256:7437148d766bfc1417763ab775dbc92b36cf5d857fbb072634ee3156b521f2aa"
+      },
+      {
+        "id": "urn:podway:schema:group-activate-input:v1",
+        "path": "schemas/group-activate-input-v1.schema.json",
+        "sha256": "sha256:27bf5dfbb602ed69043c0aed8f8e1b697336821ed56458bd29f7ddcc56a176ae"
+      },
+      {
+        "id": "urn:podway:schema:group-replan-input:v1",
+        "path": "schemas/group-replan-input-v1.schema.json",
+        "sha256": "sha256:53747e986eb58a78a2b224aa45f9988a0d85bb416cfc0b1f77f62f44d891586b"
       },
       {
         "id": "urn:podway:schema:idempotency-key-reused-details:v2",
@@ -1220,9 +1333,19 @@
         "sha256": "sha256:90ce5bb5a0287c4b425a3469305af9af5c1be3b990c561b0136aeb0fc8b05f0e"
       },
       {
+        "id": "urn:podway:schema:legacy-runtime-state-unsupported-details:v2",
+        "path": "schemas/legacy-runtime-state-unsupported-details-v2.schema.json",
+        "sha256": "sha256:8ef5921d1c91e18bf83527d591eed4dfe9c2a8d3af70a33c61820f62b12daf14"
+      },
+      {
         "id": "urn:podway:schema:mutation-observation-result:v1",
         "path": "schemas/mutation-observation-result-v1.schema.json",
         "sha256": "sha256:58bf3e88f78727043449baa6bd342b8b6860418a50bc136bac050e5a1715dc7d"
+      },
+      {
+        "id": "urn:podway:schema:mutation-observation-result:v2",
+        "path": "schemas/mutation-observation-result-v2.schema.json",
+        "sha256": "sha256:d288ffe8a550a957c2da4baf11d0ce7c2a9ddcadb657fc1e1554968a4c5beff3"
       },
       {
         "id": "urn:podway:schema:mutation-outcome-unknown-details:v3",
@@ -1245,6 +1368,16 @@
         "sha256": "sha256:c57f8ebc0fa6125acebff4234260938adabf231cb62042012bab53ab4ceaf653"
       },
       {
+        "id": "urn:podway:schema:observation-result:v7",
+        "path": "schemas/observation-result-v7.schema.json",
+        "sha256": "sha256:261558a85d6fcbfef86b17e81abbd56b813de05298f71166101351aa2b4785be"
+      },
+      {
+        "id": "urn:podway:schema:observation-result:v8",
+        "path": "schemas/observation-result-v8.schema.json",
+        "sha256": "sha256:ab6028c61307e2a91d8d581e4123fdbe865b2db398f6e80cb127aa483f10aeda"
+      },
+      {
         "id": "urn:podway:schema:outcome-lookup-result:v1",
         "path": "schemas/outcome-lookup-result-v1.schema.json",
         "sha256": "sha256:4e5b5c5282c0e6790eeeb0b468bbe558e170d31867b7f4902f23bdd2a3782e3f"
@@ -1252,7 +1385,7 @@
       {
         "id": "urn:podway:schema:output:v4",
         "path": "schemas/output-v4.schema.json",
-        "sha256": "sha256:71da513c4ce54dcd64d6a138d37f109348d22ee987565b6acbf9d62adfcda7a3"
+        "sha256": "sha256:362e2739811e4ab9d24da993cf611e0177b0d0e0d5ea00b8746037d1ed0dd38f"
       },
       {
         "id": "urn:podway:schema:prepared-next-result:v3",
@@ -1288,6 +1421,11 @@
         "id": "urn:podway:schema:procedure-preview-result:v2",
         "path": "schemas/procedure-preview-result-v2.schema.json",
         "sha256": "sha256:fa5cc6e46fc623c0d02f1185fa429ed00e666fa11c806130c7560fce7177c946"
+      },
+      {
+        "id": "urn:podway:schema:procedure-source-error-details:v1",
+        "path": "schemas/procedure-source-error-details-v1.schema.json",
+        "sha256": "sha256:e0d31f47c566d9859816f7e5cc2bbeda9f2c99bfe0b61f1606483014c294c9f3"
       },
       {
         "id": "urn:podway:schema:procedure-source-result:v1",
@@ -1328,6 +1466,61 @@
         "id": "urn:podway:schema:rework-result:v2",
         "path": "schemas/rework-result-v2.schema.json",
         "sha256": "sha256:4727781ba5576611085ba499b62a19ba0eee75f9df96c0c3c6925ac706e2b7cf"
+      },
+      {
+        "id": "urn:podway:schema:scoped-compact-status-result:v1",
+        "path": "schemas/scoped-compact-status-result-v1.schema.json",
+        "sha256": "sha256:183f0acd71fb28822f65a4a799a55b73a54795c5c48a9cd0be0d6d3bf62cefc6"
+      },
+      {
+        "id": "urn:podway:schema:scoped-criterion-assessment-input:v1",
+        "path": "schemas/scoped-criterion-assessment-input-v1.schema.json",
+        "sha256": "sha256:9a1203f0fa9419016da7ff9bd44e4dfdc46d604c39d8f6efa48b2fe5880e9a30"
+      },
+      {
+        "id": "urn:podway:schema:scoped-criterion-citation-invalid-details:v1",
+        "path": "schemas/scoped-criterion-citation-invalid-details-v1.schema.json",
+        "sha256": "sha256:900c9b757738f0cbf197b2baefd74e12d7f2008eb9647f0dc0d41017c6a92491"
+      },
+      {
+        "id": "urn:podway:schema:scoped-criterion-citation-invalid-details:v2",
+        "path": "schemas/scoped-criterion-citation-invalid-details-v2.schema.json",
+        "sha256": "sha256:dd49ca95711a932031c8dfbab795ddee1ef2fcdcfa9aa304572cc1ce18e0cc58"
+      },
+      {
+        "id": "urn:podway:schema:scoped-evidence-read-result:v1",
+        "path": "schemas/scoped-evidence-read-result-v1.schema.json",
+        "sha256": "sha256:a71f3c910a66f8022fd9a158094af9635a837e09461332e83ea731ef23156039"
+      },
+      {
+        "id": "urn:podway:schema:scoped-evidence-unavailable-details:v1",
+        "path": "schemas/scoped-evidence-unavailable-details-v1.schema.json",
+        "sha256": "sha256:309b41ac1d90dc3665c5fb4d24a00733354e1e0cabd4b81d84be857faf364dd4"
+      },
+      {
+        "id": "urn:podway:schema:scoped-group-replan-required-details:v1",
+        "path": "schemas/scoped-group-replan-required-details-v1.schema.json",
+        "sha256": "sha256:44de6cf5b4dc2173380404214f3f9da3dfcc87ec8973263ace73a7ce56c63466"
+      },
+      {
+        "id": "urn:podway:schema:scoped-item-record-many-input:v1",
+        "path": "schemas/scoped-item-record-many-input-v1.schema.json",
+        "sha256": "sha256:0c3d9a6d53c4ff39438050aa738c67a826b9e7f80c735ac37d4453033e5b1198"
+      },
+      {
+        "id": "urn:podway:schema:scoped-option-guard-unsatisfied-details:v1",
+        "path": "schemas/scoped-option-guard-unsatisfied-details-v1.schema.json",
+        "sha256": "sha256:3bdb90b1a71374c86596c1012034110c27998a75cdfd417c6e6cdc0b32661085"
+      },
+      {
+        "id": "urn:podway:schema:scoped-option-not-allowed-details:v1",
+        "path": "schemas/scoped-option-not-allowed-details-v1.schema.json",
+        "sha256": "sha256:e194361ff5e63227557f88f5403c0590c6e6d503f470dac466eec2bd72fa831c"
+      },
+      {
+        "id": "urn:podway:schema:scoped-verbose-status-result:v1",
+        "path": "schemas/scoped-verbose-status-result-v1.schema.json",
+        "sha256": "sha256:e12e6b37f569198e7b9150c75ebc9eb91970d0698264b1032d7aacb376a9500c"
       },
       {
         "id": "urn:podway:schema:session-archive-limit-details:v2",
@@ -1413,6 +1606,111 @@
         "id": "urn:podway:schema:status-result:v5",
         "path": "schemas/status-result-v5.schema.json",
         "sha256": "sha256:bc3ea0626eb22d1d74969bfacdd23a08f1dd28a17779b80f42a4ecaf041f6ddc"
+      },
+      {
+        "id": "urn:podway:schema:successor-authoring-diagnostic:v1",
+        "path": "schemas/successor-authoring-diagnostic-v1.schema.json",
+        "sha256": "sha256:b7515055168b8431f7f82cdb1672f0214e490f5cc6b1c4aa364e97967afd2492"
+      },
+      {
+        "id": "urn:podway:schema:successor-authoring-result:v1",
+        "path": "schemas/successor-authoring-result-v1.schema.json",
+        "sha256": "sha256:27708cd76c67591fdea0954ea1e0e81b77658e1f6d16c266b7f88b7a22ce5f45"
+      },
+      {
+        "id": "urn:podway:schema:successor-cursor-mutation-result:v1",
+        "path": "schemas/successor-cursor-mutation-result-v1.schema.json",
+        "sha256": "sha256:da3a76b068ac90604453e0363e7cb6e8cbb9908a2d28194681b05196043f20f6"
+      },
+      {
+        "id": "urn:podway:schema:successor-cursor:v1",
+        "path": "schemas/successor-cursor-v1.schema.json",
+        "sha256": "sha256:c41df6e3f0916f9faca03a09a144953d571977ed913e62c7d6ee8101619f5e86"
+      },
+      {
+        "id": "urn:podway:schema:successor-goal-revision-history-result:v1",
+        "path": "schemas/successor-goal-revision-history-result-v1.schema.json",
+        "sha256": "sha256:ebfe2f4cc7afb1bea1648d8e93f09df67efcbda4e23bd496d2f8660fc7b551dc"
+      },
+      {
+        "id": "urn:podway:schema:successor-group-boundary-result:v1",
+        "path": "schemas/successor-group-boundary-result-v1.schema.json",
+        "sha256": "sha256:95f9f06139a26b19f9c30daba38578d077f4e3a450c111b77fe17a98461af865"
+      },
+      {
+        "id": "urn:podway:schema:successor-group-list-result:v1",
+        "path": "schemas/successor-group-list-result-v1.schema.json",
+        "sha256": "sha256:00ba3d629ad4d574d5c42539c316ccade17967e32269b82f8a08aa5f70637d73"
+      },
+      {
+        "id": "urn:podway:schema:successor-group-replan-result:v1",
+        "path": "schemas/successor-group-replan-result-v1.schema.json",
+        "sha256": "sha256:2978c85d442d1484429c1881cff1283e591c96251cbc0720ea18566e7d178a85"
+      },
+      {
+        "id": "urn:podway:schema:successor-group-show-result:v1",
+        "path": "schemas/successor-group-show-result-v1.schema.json",
+        "sha256": "sha256:2af96e9bbc8a564146a757af4098c480b0f40dc1e5f3b08003b166f15f74d6b1"
+      },
+      {
+        "id": "urn:podway:schema:successor-history-attempts-result:v1",
+        "path": "schemas/successor-history-attempts-result-v1.schema.json",
+        "sha256": "sha256:50e8ddb58f6ca7ce135c4ea55278b7a701d334e4d06e50e408df19458c5f6d2e"
+      },
+      {
+        "id": "urn:podway:schema:successor-history-blockers-result:v1",
+        "path": "schemas/successor-history-blockers-result-v1.schema.json",
+        "sha256": "sha256:9ba5e963378e6058a80c256f80295451fa85368638923036164f3dd40dc6b579"
+      },
+      {
+        "id": "urn:podway:schema:successor-history-dag-result:v1",
+        "path": "schemas/successor-history-dag-result-v1.schema.json",
+        "sha256": "sha256:266731b35bb7441ecd57c237728a984f86c93544adedea19dff7dbca405b9101"
+      },
+      {
+        "id": "urn:podway:schema:successor-history-item-result:v1",
+        "path": "schemas/successor-history-item-result-v1.schema.json",
+        "sha256": "sha256:b4823673e64c44276b8038a96824876726a6bf1d4e2ab1d924f9a224d8de0dbc"
+      },
+      {
+        "id": "urn:podway:schema:successor-history-prior-work-result:v1",
+        "path": "schemas/successor-history-prior-work-result-v1.schema.json",
+        "sha256": "sha256:d5d82fa45b4c65764f404b4524dac5083c92a54ebf44ddbbc42d02ef95dca036"
+      },
+      {
+        "id": "urn:podway:schema:successor-history-records:v1",
+        "path": "schemas/successor-history-records-v1.schema.json",
+        "sha256": "sha256:351435fb190d5a29d043b4ddf40a4be5efefa9d83759f423385fe4052314363e"
+      },
+      {
+        "id": "urn:podway:schema:successor-preset-result:v1",
+        "path": "schemas/successor-preset-result-v1.schema.json",
+        "sha256": "sha256:5bdeab9523917347d22982512260a550156526d5e83c5cd32ed26fe97d43917d"
+      },
+      {
+        "id": "urn:podway:schema:successor-session-archive-purge-result:v1",
+        "path": "schemas/successor-session-archive-purge-result-v1.schema.json",
+        "sha256": "sha256:3d6557f5ac09b32cc81e225b3a5c6fc2b39633a6df6b2fb3d6885ae830da7fa1"
+      },
+      {
+        "id": "urn:podway:schema:successor-session-archive-result:v1",
+        "path": "schemas/successor-session-archive-result-v1.schema.json",
+        "sha256": "sha256:6089c2f6b04dd7ce3b2bbd4b35631b1af717b3a42bbecfbe519d8ec767fdf6d3"
+      },
+      {
+        "id": "urn:podway:schema:successor-session-archive-show-result:v1",
+        "path": "schemas/successor-session-archive-show-result-v1.schema.json",
+        "sha256": "sha256:aecc0bbd066f6d2b35e0cb4217dce59490d57449ce2c278e684a9f96dcc2e838"
+      },
+      {
+        "id": "urn:podway:schema:successor-session-reset-result:v1",
+        "path": "schemas/successor-session-reset-result-v1.schema.json",
+        "sha256": "sha256:97a6f6128bc4092b5cf1753790ff634b4b704cab66fec3609addfb675c6904ce"
+      },
+      {
+        "id": "urn:podway:schema:successor-session-start-result:v1",
+        "path": "schemas/successor-session-start-result-v1.schema.json",
+        "sha256": "sha256:729432c37839493dfce0625444371f3d0b6bf2c86796421a489164abcda52019"
       },
       {
         "id": "urn:podway:schema:terminal-disposition-result:v2",
@@ -1515,6 +1813,11 @@
         "sha256": "sha256:8ed328aa966ad552e935f7d4f969e1497ea873acb4c6b46703fbab8f95d11fe2"
       },
       {
+        "id": "urn:podway:schema:workspace-schema-unsupported-details:v2",
+        "path": "schemas/workspace-schema-unsupported-details-v2.schema.json",
+        "sha256": "sha256:56adf7919a43d77f7424dff379af99f224f5b7d65a689a895b9b887727fc91a7"
+      },
+      {
         "id": "urn:podway:schema:workspace-uuid-mismatch-details:v3",
         "path": "schemas/workspace-uuid-mismatch-details-v3.schema.json",
         "sha256": "sha256:b328e2295743f9b34e2c60cf8c2a2cb3bbae43ee54ea8af5a31e6fc04b5de0e5"
@@ -1547,7 +1850,7 @@
     "output_schema": "podway.output/v4",
     "error_schema": "podway.error/v2",
     "recovery_recipe_schema": "podway.recovery-recipe/v2",
-    "store_schema": "spec/sqlite-v15.sql",
+    "store_schema": "spec/sqlite-v16.sql",
     "retired_command_table": "spec/retired-commands-v1.json",
     "consumer_adoption": "requires-separate-Aquarium-and-Dolgorae-work",
     "version_identity": {
@@ -1558,9 +1861,9 @@
   },
   "current_surface_counts": {
     "authoring_diagnostics": 59,
-    "routes": 59,
-    "runtime_errors": 98,
-    "schemas": 97
+    "routes": 70,
+    "runtime_errors": 108,
+    "schemas": 143
   },
   "migration_boundary": {
     "adapter_database_access": "forbidden",
@@ -1577,18 +1880,11 @@
     "lifecycle_transition": "completed-to-running",
     "notices": [
       {
-        "command": "session.rework",
-        "input_flag": null,
-        "result_pointer": "/result/reactivated",
-        "result_schema": "podway.rework-result/v2",
-        "trigger_value": true
-      },
-      {
         "command": "goal.revise",
         "input_flag": "--reactivate",
-        "result_pointer": "/result/reactivated",
-        "result_schema": "podway.goal-revision-result/v2",
-        "trigger_value": true
+        "result_pointer": "/result/lifecycle",
+        "result_schema": "podway.successor-cursor-mutation-result/v1",
+        "trigger_value": "running"
       }
     ]
   },

@@ -2139,7 +2139,7 @@ impl WorkflowMemoryStateV2 {
     }
 }
 
-fn mutate_item_value_v2(
+pub(crate) fn mutate_item_value_v2(
     specification: &ItemSpecV2,
     current: Option<&RecordedItemValueV2>,
     mutation: ActiveItemMutationV2,

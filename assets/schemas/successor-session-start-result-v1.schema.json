@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:successor-session-start-result:v1",
+  "title": "Podway Successor Session Start Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "operation",
+    "procedure_schema",
+    "procedure_digest",
+    "default_group_digest",
+    "dry_run",
+    "session_state",
+    "goal_tracking",
+    "goal_defined",
+    "active_attempt",
+    "goal_revision",
+    "entry_graph_node_id"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.successor-session-start-result/v1"
+    },
+    "operation": {
+      "enum": [
+        "session.start",
+        "session.start_replace"
+      ]
+    },
+    "procedure_schema": {
+      "const": "podway.procedure/v3"
+    },
+    "procedure_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "default_group_digest": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "dry_run": {
+      "type": "boolean"
+    },
+    "session_state": {
+      "const": "prepared"
+    },
+    "goal_tracking": {
+      "type": "boolean"
+    },
+    "goal_defined": {
+      "const": false
+    },
+    "active_attempt": {
+      "type": "null"
+    },
+    "goal_revision": {
+      "type": "null"
+    },
+    "entry_graph_node_id": {
+      "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+    },
+    "existing_session": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "session_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lifecycle": {
+          "enum": [
+            "prepared",
+            "running",
+            "completed",
+            "cancelled"
+          ]
+        },
+        "action": {
+          "enum": [
+            "delete",
+            "archive",
+            "supersede_archive",
+            "dispose_archive"
+          ]
+        }
+      },
+      "required": [
+        "session_id",
+        "session_revision",
+        "lifecycle",
+        "action"
+      ]
+    },
+    "session_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "revision": {
+      "const": 0
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "dry_run": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "session_id"
+              ]
+            },
+            {
+              "required": [
+                "revision"
+              ]
+            }
+          ]
+        }
+      },
+      "else": {
+        "required": [
+          "session_id",
+          "revision"
+        ]
+      }
+    }
+  ]
+}

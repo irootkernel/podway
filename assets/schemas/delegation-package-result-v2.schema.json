@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:delegation-package-result:v2",
+  "title": "Podway Scoped Delegation Package Result v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "package",
+    "package_digest",
+    "cursor"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.delegation-package-result/v2"
+    },
+    "package": {
+      "$ref": "urn:podway:schema:delegation-work-package:v2"
+    },
+    "package_digest": {
+      "$ref": "urn:podway:schema:delegation-components:v1#/$defs/digest"
+    },
+    "cursor": {
+      "$ref": "urn:podway:schema:observation-result:v7#/$defs/cursor"
+    }
+  },
+  "x-podway-max-json-bytes": 1000000
+}

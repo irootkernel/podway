@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:group-replan-input:v1",
+  "title": "Podway Group Replan Input v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "context",
+    "option",
+    "reason",
+    "working_copy_basis",
+    "feedback"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.group-replan-input/v1"
+    },
+    "context": {
+      "$ref": "urn:podway:schema:group-activate-input:v1#/$defs/context"
+    },
+    "option": {
+      "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000,
+      "pattern": "\\S"
+    },
+    "working_copy_basis": {
+      "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/working_copy_basis"
+    },
+    "feedback": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "pattern": "\\S"
+    }
+  }
+}

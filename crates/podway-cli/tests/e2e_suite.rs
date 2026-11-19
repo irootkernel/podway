@@ -1,5 +1,7 @@
 #[path = "test_support/cli.rs"]
 mod cli_fixture;
+#[path = "e2e_adopt001_scoped_cli.rs"]
+mod e2e_adopt001_scoped_cli;
 #[path = "e2e_guide006_generation1_baselines.rs"]
 mod e2e_guide006_generation1_baselines;
 #[path = "e2e_guide009_generation2_lifecycle.rs"]

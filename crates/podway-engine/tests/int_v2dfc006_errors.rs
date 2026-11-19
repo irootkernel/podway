@@ -199,7 +199,7 @@ fn admit001_resolver_and_operation_failures_keep_order_and_wrappers() {
                 "operation" => 3,
                 _ => 0,
             };
-            let resolver = DirectWorkspaceResolverV1::new(
+            let resolver = DirectWorkspaceResolverV1::for_v15_fixture(
                 Admit001Native {
                     calls: Arc::clone(&calls),
                     at,
@@ -339,7 +339,7 @@ fn admit001_operation_witness_precedes_carried_native_and_view_errors() {
                     _ => unreachable!(),
                 };
                 let calls = Arc::new(AtomicUsize::new(0));
-                let resolver = DirectWorkspaceResolverV1::new(
+                let resolver = DirectWorkspaceResolverV1::for_v15_fixture(
                     Admit001Native {
                         calls: Arc::clone(&calls),
                         at: 3,
@@ -447,7 +447,10 @@ fn admit001_cold_preparation_rejects_unstamped_post_preflight_corruption() {
         atomic::{AtomicUsize, Ordering},
     };
     let (_root, selector, store) = prepare_fixture();
-    let resolver = DirectWorkspaceResolverV1::new(podway_git::NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(
+        podway_git::NativeGitResolverV1::new(),
+        digest(),
+    );
     let initial = graph(&store);
     let historical_attempt = initial
         .trace()
@@ -574,6 +577,7 @@ fn context(command: &str) -> DirectErrorContextV1 {
         idempotency_key: Some(IdempotencyKeyV1::new("original-key").unwrap()),
         timeout_ms: 5000,
         generation: podway_protocol::ContractGenerationV1::Generation1,
+        successor_store: false,
         maintenance: None,
     }
 }
@@ -705,7 +709,7 @@ fn actual_connection_gate_contention_returns_a_valid_public_error() {
         files
     };
     let before = images();
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let responses = [0_u64, 20].map(|timeout| {
         let started = Instant::now();
         let response = execute_direct_v1(
@@ -784,7 +788,7 @@ fn direct_failure_catalog_preserves_store_fences_domain_and_recovery() {
         ),
         (
             store(DirectStoreErrorV1::Legacy {
-                generation: Some(podway_store::direct_store::DIRECT_SCHEMA_GENERATION_V1 - 1),
+                generation: Some(14),
                 marker: None,
             }),
             "LEGACY_RUNTIME_STATE_UNSUPPORTED",
@@ -797,9 +801,7 @@ fn direct_failure_catalog_preserves_store_fences_domain_and_recovery() {
             "WORKSPACE_CONTRACT_MISMATCH",
         ),
         (
-            store(DirectStoreErrorV1::UnsupportedGeneration {
-                generation: podway_store::direct_store::DIRECT_SCHEMA_GENERATION_V1 + 1,
-            }),
+            store(DirectStoreErrorV1::UnsupportedGeneration { generation: 16 }),
             "WORKSPACE_SCHEMA_UNSUPPORTED",
         ),
         (
@@ -1058,7 +1060,7 @@ mod reads004_equivalence {
     };
 
     fn resolver() -> DirectWorkspaceResolverV1<NativeGitResolverV1> {
-        DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest())
+        DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest())
     }
 
     fn status_request(selector: &WorktreeSelectorV1) -> DirectRequestV1 {
@@ -1445,7 +1447,7 @@ mod reads004_equivalence {
         let mut control: Option<Value> = None;
         for (name, display) in scenarios {
             let (temporary, selector, _store) = prepare_fixture();
-            let resolver = DirectWorkspaceResolverV1::new(
+            let resolver = DirectWorkspaceResolverV1::for_v15_fixture(
                 RebuiltWorktreeResolver {
                     display: display.clone(),
                     inner: NativeGitResolverV1::new(),
@@ -1671,7 +1673,7 @@ mod admit002 {
             let session = session(&store);
             let before = admit001_runtime_bytes(&store);
             let calls = Arc::new(AtomicUsize::new(0));
-            let resolver = DirectWorkspaceResolverV1::new(
+            let resolver = DirectWorkspaceResolverV1::for_v15_fixture(
                 Admit001Native {
                     calls: calls.clone(),
                     at: 0,
@@ -1723,7 +1725,7 @@ mod admit002 {
                 let calls = Arc::new(AtomicUsize::new(0));
                 let checkpoints = Arc::new(AtomicUsize::new(0));
                 let observed = checkpoints.clone();
-                let resolver = DirectWorkspaceResolverV1::new(
+                let resolver = DirectWorkspaceResolverV1::for_v15_fixture(
                     Admit001Native {
                         calls: calls.clone(),
                         at: 0,
@@ -1782,7 +1784,7 @@ mod admit002 {
                     } else {
                         store.layout().maintenance_lock()
                     };
-                    let resolver = DirectWorkspaceResolverV1::new(
+                    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(
                         Admit001Native {
                             calls: calls.clone(),
                             at: 2,
@@ -1846,7 +1848,7 @@ mod admit002 {
                     store.layout().maintenance_lock()
                 };
                 let calls = Arc::new(AtomicUsize::new(0));
-                let resolver = DirectWorkspaceResolverV1::new(
+                let resolver = DirectWorkspaceResolverV1::for_v15_fixture(
                     Admit001Native {
                         calls: calls.clone(),
                         at: 3,
@@ -1926,7 +1928,10 @@ mod admit002 {
                     files
                 };
                 let before = images();
-                let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+                let resolver = DirectWorkspaceResolverV1::for_v15_fixture(
+                    NativeGitResolverV1::new(),
+                    digest(),
+                );
                 let clock = Admit001Clock {
                     calls: AtomicUsize::new(0),
                     allowed: true,
@@ -1986,7 +1991,10 @@ mod admit002 {
                 std::fs::remove_file(store.layout().shm()).unwrap();
             }
             for route in ["status", "preflight", "lookup", "show", "reset"] {
-                let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+                let resolver = DirectWorkspaceResolverV1::for_v15_fixture(
+                    NativeGitResolverV1::new(),
+                    digest(),
+                );
                 let clock = Admit001Clock {
                     calls: AtomicUsize::new(0),
                     allowed: true,
@@ -2002,7 +2010,7 @@ mod admit002 {
                 )
                 .unwrap();
             }
-            let resolver = DirectWorkspaceResolverV1::new(
+            let resolver = DirectWorkspaceResolverV1::for_v15_fixture(
                 Admit001Native {
                     calls: Arc::new(AtomicUsize::new(0)),
                     at: 2,
@@ -2082,8 +2090,9 @@ fn admit003_failed_final_preflight_witness_cannot_publish_or_keep_a_hint() {
     use std::sync::{Arc, atomic::AtomicUsize};
     let (root, selector, store) = prepare_fixture();
     let mut context = DirectInvocationContextV1::default();
-    let resolver =
-        || DirectWorkspaceResolverV1::new(podway_git::NativeGitResolverV1::new(), digest());
+    let resolver = || {
+        DirectWorkspaceResolverV1::for_v15_fixture(podway_git::NativeGitResolverV1::new(), digest())
+    };
     assert!(matches!(
         execute_direct_preflight_facts_with_context_v1(
             &resolver(),
@@ -2096,7 +2105,7 @@ fn admit003_failed_final_preflight_witness_cannot_publish_or_keep_a_hint() {
     ));
     let database = store.layout().database();
     let saved = root.path().join("admit003-original-database");
-    let replacing = DirectWorkspaceResolverV1::new(
+    let replacing = DirectWorkspaceResolverV1::for_v15_fixture(
         Admit001Native {
             calls: Arc::new(AtomicUsize::new(0)),
             at: 3,

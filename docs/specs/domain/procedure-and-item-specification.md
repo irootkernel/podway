@@ -1,8 +1,13 @@
 # Procedure and Item Specification
 
-Procedure definitions are YAML or JSON documents conforming to
-`podway.procedure/v2`. The normative machine contract is
-[`procedure-v2.schema.json`](../../../assets/schemas/procedure-v2.schema.json).
+Current session bases use
+[`podway.procedure/v3`](../../../assets/schemas/procedure-v3.schema.json).
+Selected executions use
+[`podway.execution-group/v1`](../../../assets/schemas/execution-group-v1.schema.json).
+The [group model](execution-groups.md) owns scoped graph and evidence rules.
+The item declarations and bounds below apply to both current and historical
+definitions. The [v2 schema](../../../assets/schemas/procedure-v2.schema.json)
+remains the source contract for the prior writer.
 
 A procedure declares `id`, `version`, `name`, `purpose`, optional description and goal tracking, between one and 1,024 reusable `node_definitions`, and a closed `graph`. The graph names one entry placement and between one and 1,024 placements. Every reference must resolve; all reachable execution paths must terminate; advance cycles are rejected; and a manual rework target must be explicitly declared.
 
@@ -127,16 +132,20 @@ on the embedded shipped digest.
 
 ## Snapshot behavior
 
-Each session stores one immutable admitted Procedure v2 snapshot. Later source or
-preset changes do not alter an existing session.
+Each session stores one immutable admitted Procedure v3 base snapshot. Activation
+pins the selected group definition and its exact port bindings. Later source or
+preset changes do not alter those snapshots.
 
-Adding the literal `max_total_length` default in `V2SCL-003` rotates the canonical digest of every Procedure that declares a list item, exactly once; a Procedure with no list item keeps its digest. The Procedure schema identifier remains `podway.procedure/v2`, and stored sessions continue to use their stored canonical snapshots and digests. Automation that pins a digest receives `DIGEST_CONFIRMATION_REQUIRED` until it re-pins.
+In the original Procedure v2 contract, adding the literal `max_total_length`
+default in `V2SCL-003` rotated the canonical digest of Procedures that declared a
+list item. Their stored snapshots and digests remained valid for the original
+writer. Current automation can use `procedure preview` to re-pin changed source.
 
 The optional `required_when` and `guards` fields have no materialized defaults.
 Procedures that omit them retain their existing canonical bytes and digest, and
 the established built-in preset digests do not rotate. Conditions are part of the
 immutable canonical snapshot and require no runtime-row migration.
 
-`podway procedure validate`, `format`, `vet`, `graph`, `preview`, `lint`, `check`,
-and `scaffold` operate only on Procedure v2 documents. An unsupported schema is
-rejected and is never converted implicitly or explicitly.
+Current authoring commands accept Procedure v3 bases and Execution Group v1
+definitions. `scaffold` emits a Procedure v3 base. `start` admits only a base.
+An older Procedure v2 document requires its original authoring tool and writer.

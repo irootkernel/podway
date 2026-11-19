@@ -14,6 +14,9 @@ use podway_protocol as protocol;
 use super::*;
 use std::ops::ControlFlow;
 
+#[path = "successor_stdin.rs"]
+mod successor_stdin;
+
 pub(super) struct Invocation {
     context: protocol_boundary::DirectInvocationContextV1,
     #[cfg(test)]
@@ -239,7 +242,7 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
                 Ok(local_result(
                     "__complete",
                     json!({}),
-                    dynamic_candidates_v2(result, kind).join("\n"),
+                    dynamic_candidates(result, kind).join("\n"),
                 ))
             }
             _ => Ok(empty_dynamic_completion()),
@@ -249,6 +252,18 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
         return Ok(local);
     }
     let route = cli.command.canonical_route();
+    if cli.if_cursor.is_some()
+        && !super::successor_cursor::is_cursor_command(&cli.command)
+        && !cli.command.is_item_mutation()
+    {
+        cli.reject_stdin_conflicting_fences()?;
+        return Err(LocalFailure::request_invalid(
+            "--if-cursor applies only to scoped mutations",
+        ));
+    }
+    if let Some(result) = successor_stdin::execute_scoped_stdin(&cli, started, generation)? {
+        return Ok(result);
+    }
     prepare_stdin_payload(&mut cli.command)?;
     apply_record_input(&mut cli)?;
     validate_direct_flags(&cli)?;
@@ -266,7 +281,7 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     ) && cli.if_workspace_uuid.is_none()
         && cli.if_session_id.is_none()
     {
-        return execute_start_dry_run(&cli);
+        return start::preview(&cli);
     }
     let mut target = workspace_target(cli.worktree.clone())?;
     if matches!(
@@ -281,6 +296,9 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     apply_archive_purge_revision(&mut cli.command, &fences)?;
     let mut invocation =
         Invocation::new(&target, cli.timeout.unwrap_or(5_000), started, generation)?;
+    if super::successor_cursor::is_cursor_command(&cli.command) || cli.command.is_item_mutation() {
+        return execute_successor_cursor(&cli, invocation, fences);
+    }
     let maintenance_fenced = podway_engine::workspace::workspace_request_is_fenced_v1(
         fences.workspace_id.as_ref(),
         &invocation.selector,
@@ -354,27 +372,11 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
         resolve_existing_start(&mut cli, preflight, terminal_disposed)?;
     }
     let command = typed_command(&cli, &fences)?;
-    let key = if cli.command.is_mutation() {
-        let value = match cli.idempotency_key.as_ref() {
-            Some(value) => value.clone(),
-            None if !cli.json && io::stdin().is_terminal() && io::stdout().is_terminal() => {
-                let value = Uuid::new_v4().to_string();
-                write_text_line(
-                    &mut io::stderr().lock(),
-                    format_args!("idempotency key: {value}"),
-                )?;
-                value
-            }
-            None => {
-                return Err(LocalFailure::request_invalid(
-                    "automation mutations require --idempotency-key",
-                ));
-            }
-        };
-        Some(protocol_boundary::IdempotencyKeyV1::new(value).map_err(invalid_v2_value)?)
-    } else {
-        None
-    };
+    let key = cli
+        .command
+        .is_mutation()
+        .then(|| mutation_key(&cli))
+        .transpose()?;
     let response = invocation.execute(
         command,
         fences.workspace_id.clone(),
@@ -401,25 +403,14 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
         && error.as_value()["code"].as_str() == Some("SESSION_START_DECISION_REQUIRED")
     {
         let disposed = error.as_value()["details"]["current_terminal_disposition"].as_bool();
-        let status = invocation.execute(
-            Direct::Read {
-                command: ReadCommand::Status {
-                    tier: GraphStatusTierV2::Standard,
-                    history_before: None,
-                },
-                expected_session_id: None,
-            },
-            fences.workspace_id.clone(),
-            None,
-            false,
-        )?;
-        let output = match status {
-            protocol_boundary::DirectResponseV1::Success(output) => output,
-            protocol_boundary::DirectResponseV1::Failure(error) => {
+        let preflight = match invocation.preflight_facts(fences.workspace_id.clone(), None)? {
+            podway_engine::direct_execution::DirectPreflightFactsResponseV1::Facts(facts) => {
+                StatusPreflight::from_facts(facts)
+            }
+            podway_engine::direct_execution::DirectPreflightFactsResponseV1::Failure(error) => {
                 return preflight_error(&cli.command, error);
             }
         };
-        let preflight = StatusPreflight::from_direct(&output)?;
         fill_facts(&cli.command, &mut fences, &preflight);
         match resolve_existing_start(&mut cli, &preflight, disposed)? {
             ExistingStartResolution::Continue => {
@@ -468,6 +459,131 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     Ok(result)
 }
 
+// This code is included in command/direct.rs. It uses one invocation/deadline
+// for any convenience read and the actual fenced mutation.
+fn execute_successor_cursor(
+    cli: &Cli,
+    mut invocation: Invocation,
+    mut fences: ExplicitPreconditions,
+) -> Result<RunResult, LocalFailure> {
+    use super::successor_cursor::{build_mutation, decode_cursor_argument};
+
+    if let Some(item) = item_id(&cli.command) {
+        ItemId::new(item.to_owned()).map_err(invalid_v2_value)?;
+    }
+    let key = mutation_key(cli)?;
+    let (cursor, observed_items) = if let Some(value) = &cli.if_cursor {
+        if fences.workspace_id.is_none() {
+            return Err(LocalFailure::request_invalid(
+                "--if-cursor requires --if-workspace-uuid",
+            ));
+        }
+        (decode_cursor_argument(value)?, None)
+    } else {
+        match invocation.preflight_facts(fences.workspace_id.clone(), fences.session_id.clone())? {
+            podway_engine::direct_execution::DirectPreflightFactsResponseV1::Facts(facts) => {
+                fences.workspace_id.get_or_insert(facts.workspace_id);
+                let cursor = facts.successor_cursor.ok_or_else(|| {
+                    LocalFailure::response_invalid("preflight omitted the successor cursor")
+                })?;
+                (*cursor, Some(facts.item_revisions))
+            }
+            podway_engine::direct_execution::DirectPreflightFactsResponseV1::Failure(error) => {
+                return preflight_error(&cli.command, error);
+            }
+        }
+    };
+    check_cursor_flags(&fences, &cursor)?;
+    let command = if cli.command.is_item_mutation() {
+        let attempt = cursor.execution.attempt.ok_or_else(|| {
+            LocalFailure::catalog("SESSION_NOT_RUNNING", "no active attempt", "cli")
+        })?;
+        let item_revision = fences.item_revision.or_else(|| {
+            let revisions = observed_items.as_ref()?;
+            let wanted = item_id(&cli.command)?;
+            Some(
+                revisions
+                    .iter()
+                    .find(|(item, _)| item == wanted)
+                    .map_or(Revision::ZERO, |(_, revision)| *revision),
+            )
+        });
+        fences.session_id = Some(cursor.execution.session);
+        fences.attempt_id = Some(attempt.attempt().clone());
+        fences.item_revision = item_revision;
+        let Direct::Item(command) = typed_command(cli, &fences)? else {
+            unreachable!("ordinary item grammar always creates a typed item command");
+        };
+        Direct::SuccessorWrite(
+            podway_engine::successor_execution::DirectSuccessorWriteV1::Edit {
+                attempt,
+                selected_group: cursor.selected_group,
+                command,
+            },
+        )
+    } else {
+        Direct::SuccessorMutation(build_mutation(&cli.command, cursor)?)
+    };
+    let response = invocation.execute(
+        command,
+        fences.workspace_id,
+        Some(key),
+        cli.with_observation,
+    )?;
+    Ok(direct_response_result(&cli.command, response))
+}
+
+fn check_cursor_flags(
+    fences: &ExplicitPreconditions,
+    cursor: &podway_engine::successor_execution::SuccessorCursor,
+) -> Result<(), LocalFailure> {
+    let execution = &cursor.execution;
+    if fences
+        .session_id
+        .as_ref()
+        .is_some_and(|id| id != &execution.session)
+        || fences.attempt_id.as_ref().is_some_and(|id| {
+            execution.attempt.as_ref().map(|attempt| attempt.attempt()) != Some(id)
+        })
+        || fences
+            .goal_revision
+            .is_some_and(|revision| execution.goal_revision != Some(revision))
+    {
+        return Err(LocalFailure::request_invalid(
+            "explicit fences disagree with the scoped cursor",
+        ));
+    }
+    if let Some(expected) = fences.session_revision
+        && expected != execution.revision
+    {
+        return Err(LocalFailure::session_revision_conflict(
+            "session.observe",
+            expected,
+            execution.revision,
+        ));
+    }
+    Ok(())
+}
+
+fn mutation_key(cli: &Cli) -> Result<protocol_boundary::IdempotencyKeyV1, LocalFailure> {
+    let value = match cli.idempotency_key.as_ref() {
+        Some(value) => value.clone(),
+        None if !cli.json && io::stdin().is_terminal() && io::stdout().is_terminal() => {
+            let value = Uuid::new_v4().to_string();
+            write_text_line(
+                &mut io::stderr().lock(),
+                format_args!("idempotency key: {value}"),
+            )?;
+            value
+        }
+        None => {
+            return Err(LocalFailure::request_invalid(
+                "automation mutations require --idempotency-key",
+            ));
+        }
+    };
+    protocol_boundary::IdempotencyKeyV1::new(value).map_err(invalid_v2_value)
+}
 fn required<T>(value: Option<T>, flag: &str) -> Result<T, LocalFailure> {
     value.ok_or_else(|| LocalFailure::request_invalid(format!("{flag} is required")))
 }
@@ -537,6 +653,11 @@ pub(super) fn typed_command(
         expected_session_id: fences.session_id.clone(),
     };
     Ok(match &cli.command {
+        Command::History { .. }
+        | Command::Group {
+            command:
+                GroupCommand::List(_) | GroupCommand::Show { .. } | GroupCommand::PriorWork { .. },
+        } => Direct::SuccessorHistory(super::successor_history::query(&cli.command)?),
         Command::Init { repair } => Direct::WorkspaceInit { repair: *repair },
         Command::Doctor { deep } => Direct::WorkspaceDoctor { deep: *deep },
         Command::Workspace {
@@ -641,17 +762,23 @@ pub(super) fn typed_command(
         Command::Observe(_) => read(ReadCommand::Observe),
         Command::Evidence {
             command: EvidenceCommand::Read(args),
-        } => read(ReadCommand::Evidence {
-            source: GraphNodeId::new(args.source.clone()).map_err(invalid_v2_value)?,
-            item_id: ItemId::new(args.item.clone()).map_err(invalid_v2_value)?,
-            expected_consumer_attempt_id: fences.attempt_id.clone(),
-            token: args
-                .page_token
-                .as_deref()
-                .map(protocol::EvidencePageTokenV1::decode)
-                .transpose()
-                .map_err(invalid_v2_value)?,
-        }),
+        } => {
+            use podway_engine::successor_execution::{
+                CandidateSessionLocation, DirectSuccessorHistoryCommandV1, DirectSuccessorHistoryV1,
+            };
+            let source = super::successor_cursor::parse_evidence_selector(&args.source)?;
+            Direct::SuccessorHistory(DirectSuccessorHistoryV1 {
+                session: fences.session_id.clone(),
+                location: CandidateSessionLocation::Current,
+                limit: 1,
+                continuation: args.page_token.clone(),
+                command: DirectSuccessorHistoryCommandV1::CurrentEvidence {
+                    source,
+                    expected_attempt: fences.attempt_id.clone(),
+                    item: ItemId::new(args.item.clone()).map_err(invalid_v2_value)?,
+                },
+            })
+        }
         Command::Delegation {
             command: DelegationCommand::Package,
         } => read(ReadCommand::DelegationPackage),
@@ -1015,7 +1142,7 @@ mod admit003_tests {
             "podway",
             "start",
             "--preset",
-            "small-change-v2",
+            "small-change-v3",
             "--task",
             "request identity",
         ])
@@ -1039,22 +1166,33 @@ mod admit003_tests {
         else {
             panic!("preflight failed")
         };
-        let response = invocation
-            .execute(
-                Direct::Procedure(protocol::ProcedureV2MutationCommandV1::SessionBegin(
-                    protocol::SessionBeginV1 {
-                        initial_goal: None,
-                        preconditions: protocol::SessionIdentityPreconditionsWireV1 {
-                            expected_session_id: facts.session_id,
-                            expected_session_revision: facts.session_revision,
+        let response =
+            invocation
+                .execute(
+                    Direct::SuccessorMutation(
+                        podway_engine::successor_execution::DirectSuccessorMutationV1::Cursor {
+                            actor: None,
+
+                            cursor: podway_engine::successor_execution::SuccessorCursor {
+                                execution: podway_core::execution_groups::ExecutionCursorFenceV1 {
+                                    session: facts.session_id,
+                                    revision: facts.session_revision,
+                                    attempt: None,
+                                    goal_revision: None,
+                                },
+                                selected_group: None,
+                            },
+                            operation:
+                                podway_engine::successor_execution::SuccessorCursorMutation::Begin(
+                                    None,
+                                ),
                         },
-                    },
-                )),
-                Some(facts.workspace_id),
-                key("begin"),
-                false,
-            )
-            .unwrap();
+                    ),
+                    Some(facts.workspace_id),
+                    key("begin"),
+                    false,
+                )
+                .unwrap();
         let protocol_boundary::DirectResponseV1::Success(output) = response else {
             panic!("begin failed: {response:?}")
         };

@@ -3116,6 +3116,7 @@ fn current_direct_registry_preserves_the_accepted_known_answer_family_inventory(
         "podway.item-mutation-result/v3",
         "podway.item-record-many-result/v2",
         "podway.legacy-runtime-state-unsupported-details/v1",
+        "podway.legacy-runtime-state-unsupported-details/v2",
         "podway.mutation-observation-result/v1",
         "podway.mutation-outcome-unknown-details/v3",
         "podway.next-result/v5",
@@ -3159,6 +3160,7 @@ fn current_direct_registry_preserves_the_accepted_known_answer_family_inventory(
         "podway.workspace-removal-result/v2",
         "podway.workspace-reset-marker/v1",
         "podway.workspace-schema-unsupported-details/v1",
+        "podway.workspace-schema-unsupported-details/v2",
         "podway.workspace-uuid-mismatch-details/v3",
         "podway.writer-predecessor-declaration/v1",
     ]);
@@ -3185,10 +3187,7 @@ fn membership_inputs() -> MembershipInputs {
             &fs::read_to_string(root().join("assets/specifications/command-catalog.yaml")).unwrap(),
         )
         .unwrap(),
-        registry: EXISTING_ROUTE_RESULT_SCHEMAS_V2
-            .iter()
-            .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
-            .chain(DAEMON_FREE_DOCUMENT_SCHEMAS_V1)
+        registry: podway_protocol::result_schema_contracts_v2()
             .flat_map(|entry| {
                 entry
                     .commands
@@ -3353,20 +3352,116 @@ fn output_memberships(input: &MembershipInputs) -> Result<ResultMemberships, Str
     unique_memberships("output", pairs)
 }
 
+// Former active memberships retained for offline v4 validation of historical
+// responses. The successor catalog advertises only current executable results.
+const OFFLINE_V2_RESULT_MEMBERSHIPS: &[(&str, &str)] = &[
+    ("delegation.accept", "podway.delegation-accept-result/v2"),
+    ("delegation.package", "podway.delegation-package-result/v1"),
+    ("delegation.receipt", "podway.delegation-receipt-result/v1"),
+    ("evidence.read", "podway.evidence-read-result/v1"),
+    (
+        "goal.assess_criteria",
+        "podway.criterion-assessment-many-result/v1",
+    ),
+    (
+        "goal.assess_criteria",
+        "podway.mutation-observation-result/v1",
+    ),
+    (
+        "goal.assess_criterion",
+        "podway.criterion-assessment-result/v2",
+    ),
+    ("goal.define", "podway.goal-definition-result/v2"),
+    ("goal.revise", "podway.goal-revision-result/v2"),
+    ("item.add", "podway.item-mutation-result/v3"),
+    ("item.attach", "podway.item-mutation-result/v3"),
+    ("item.check", "podway.item-mutation-result/v3"),
+    ("item.clear", "podway.item-mutation-result/v3"),
+    ("item.record_many", "podway.item-record-many-result/v2"),
+    ("item.record_many", "podway.mutation-observation-result/v1"),
+    ("item.remove", "podway.item-mutation-result/v3"),
+    ("item.set", "podway.item-mutation-result/v3"),
+    ("item.uncheck", "podway.item-mutation-result/v3"),
+    ("procedure.check", "podway.procedure-diagnostics-result/v1"),
+    ("procedure.format", "podway.procedure-diagnostics-result/v1"),
+    ("procedure.format", "podway.procedure-source-result/v1"),
+    ("procedure.graph", "podway.procedure-diagnostics-result/v1"),
+    ("procedure.graph", "podway.procedure-graph-result/v1"),
+    ("procedure.graph", "podway.procedure-graph-result/v2"),
+    ("procedure.lint", "podway.procedure-diagnostics-result/v1"),
+    ("procedure.preview", "podway.procedure-preview-result/v1"),
+    ("procedure.preview", "podway.procedure-preview-result/v2"),
+    (
+        "procedure.scaffold",
+        "podway.procedure-diagnostics-result/v1",
+    ),
+    ("procedure.scaffold", "podway.procedure-source-result/v1"),
+    (
+        "procedure.validate",
+        "podway.procedure-diagnostics-result/v1",
+    ),
+    (
+        "procedure.validate",
+        "podway.procedure-validation-result/v2",
+    ),
+    ("procedure.vet", "podway.procedure-diagnostics-result/v1"),
+    ("session.archive", "podway.session-archive-result/v2"),
+    (
+        "session.archive_purge",
+        "podway.session-archive-purge-result/v1",
+    ),
+    (
+        "session.archive_show",
+        "podway.session-archive-show-result/v3",
+    ),
+    ("session.begin", "podway.mutation-observation-result/v1"),
+    ("session.begin", "podway.session-begin-result/v2"),
+    ("session.block", "podway.stage-transition-result/v3"),
+    ("session.cancel", "podway.stage-transition-result/v3"),
+    ("session.complete", "podway.mutation-observation-result/v1"),
+    ("session.complete", "podway.stage-transition-result/v3"),
+    ("session.decide", "podway.decision-result/v2"),
+    ("session.decide", "podway.mutation-observation-result/v1"),
+    ("session.next", "podway.next-result/v5"),
+    ("session.next", "podway.prepared-next-result/v3"),
+    ("session.observe", "podway.observation-result/v5"),
+    ("session.observe", "podway.observation-result/v6"),
+    ("session.reset", "podway.session-reset-result/v2"),
+    ("session.reset", "podway.stage-transition-result/v3"),
+    ("session.retry", "podway.stage-transition-result/v3"),
+    ("session.rework", "podway.rework-result/v2"),
+    ("session.skip", "podway.stage-transition-result/v3"),
+    ("session.start", "podway.mutation-observation-result/v1"),
+    ("session.start", "podway.session-start-result/v4"),
+    ("session.start_replace", "podway.session-start-result/v4"),
+    ("session.status", "podway.compact-status-result/v5"),
+    ("session.status", "podway.status-result/v5"),
+    ("session.unblock", "podway.stage-transition-result/v3"),
+];
+
 fn compare_result_memberships(input: &MembershipInputs) -> Result<ResultMemberships, String> {
     let catalog = catalog_memberships(&input.catalog)?;
+    let expected = catalog
+        .union(
+            &OFFLINE_V2_RESULT_MEMBERSHIPS
+                .iter()
+                .map(|(command, schema)| (command.to_string(), schema.to_string()))
+                .collect(),
+        )
+        .cloned()
+        .collect::<ResultMemberships>();
     let registry = unique_memberships("registry", input.registry.clone())?;
     let output = output_memberships(input)?;
     for (source, actual) in [("registry", &registry), ("output", &output)] {
-        if &catalog != actual {
+        if &expected != actual {
             return Err(format!(
                 "{source}: missing {:?}; extra {:?}",
-                catalog.difference(actual).collect::<Vec<_>>(),
-                actual.difference(&catalog).collect::<Vec<_>>()
+                expected.difference(actual).collect::<Vec<_>>(),
+                actual.difference(&expected).collect::<Vec<_>>()
             ));
         }
     }
-    Ok(catalog)
+    Ok(expected)
 }
 
 #[test]
@@ -3399,16 +3494,20 @@ fn cntrt001_catalog_registry_and_output_have_exhaustive_result_memberships() {
         ("procedure.preview", "podway.procedure-preview-result/v2"),
         ("procedure.format", "podway.procedure-diagnostics-result/v1"),
         ("procedure.check", "podway.procedure-diagnostics-result/v1"),
+        ("session.observe", "podway.observation-result/v7"),
+        ("session.observe", "podway.observation-result/v8"),
+        (
+            "group.activate",
+            "podway.successor-group-boundary-result/v1",
+        ),
+        ("history.item", "podway.successor-history-item-result/v1"),
+        ("preset.list", "podway.successor-preset-result/v1"),
+        ("preset.show", "podway.successor-preset-result/v1"),
+        ("preset.explain", "podway.successor-preset-result/v1"),
     ] {
         assert!(memberships.contains(&(command.to_owned(), family.to_owned())));
     }
-    for command in [
-        "help",
-        "preset.list",
-        "preset.show",
-        "preset.explain",
-        "__complete",
-    ] {
+    for command in ["help", "__complete"] {
         assert!(!memberships.iter().any(|(name, _)| name == command));
     }
     assert!(

@@ -1,6 +1,65 @@
 # JSON Contract
 
+## Scoped direct execution
+
+Procedure v3 and Execution Group v1 define new v16 workspaces. The base
+contains one design anchor and a declared return placement. Starting selects
+and pins the base, and beginning creates its first attempt. A catalog default
+is available for explicit activation. It takes effect only when the current
+design items and other anchor gates are satisfied and the caller supplies the
+exact plan, scope, and source digest.
+
+The session keeps one current attempt. A group execution is distinct from its
+immutable definition digest. Reusing a definition creates a new execution and
+fresh scoped attempts. A successful group terminal passes its declared outputs
+to the base return placement atomically. Only the explicit guarded replan
+operation closes the selection and opens a fresh design attempt. Retained work
+and applicability records remain available through the scoped historical reads.
+
+Both presentation selectors operate the same Store and runtime. On `observe`,
+generation 1 returns `podway.observation-result/v7` and generation 2 returns
+`podway.observation-result/v8` with current fenced mutation templates.
+`--with-observation` on a supported mutation persists its original result and the
+same-transaction v8 observation in `podway.mutation-observation-result/v2`.
+Replay preserves those original response bytes even after the active cursor
+advances. Selectors do not enter mutation identity.
+
+`next` and standard status return the current v7 observation for either
+selector. Compact status includes bounded identity, revision and recorded-item
+metadata. Verbose status embeds the same v7 observation and adds retained
+attempt summaries in descending trace order. Archive inspection always embeds
+a v8 observation with an empty mutation-template list. Use the returned
+`history_before` as the exclusive bound for the next page. The current
+observation stays pinned to the same read snapshot as that page. Verbose
+archive inspection applies the same exclusive trace bound to immutable
+retained attempts.
+
+Single-item writes compare the exact workspace, session, active scoped attempt,
+selected execution and item revision. Independent item writes can succeed
+across session revisions. Atomic record-many and cursor changes also require
+the expected session revision. After response loss, check the original key in
+the same workspace before replaying precisely the original request. A current
+observation is useful for a fresh request and does not rewrite a previous
+request's optimistic-concurrency preconditions.
+
+The canonical schemas define the [cursor](../../../assets/schemas/successor-cursor-v1.schema.json),
+[activation](../../../assets/schemas/group-activate-input-v1.schema.json),
+[replan](../../../assets/schemas/group-replan-input-v1.schema.json),
+[record-many](../../../assets/schemas/scoped-item-record-many-input-v1.schema.json),
+[criterion assessment](../../../assets/schemas/scoped-criterion-assessment-input-v1.schema.json),
+and [delegation acceptance](../../../assets/schemas/delegation-accept-input-v2.schema.json).
+
+The v16 writer declares no predecessor. Settle Procedure v2 work with its
+original writer. A v16 invocation rejects an older Store before SQLite recovery
+or shared-memory creation. Explicit authorized reset can initialize fresh v16
+state after deleting an older Store. It does not translate existing sessions,
+recorded items or outcomes.
+
 ## Direct CLI generation
+
+The v2-specific families and examples below describe the prior Direct writer.
+For current generation selections, use the scoped contract above and the
+linked command and schema registries.
 
 The V2DFC-007 CLI emits `podway.output/v4` for retained commands and
 `podway.error/v2` for failures. Their canonical closed schemas are
@@ -306,7 +365,7 @@ failures emit `diagnose_writer` / `version --identity`; their closed detail
 schemas retain the earlier doctor form for compatibility and exclude legacy
 reset, maintenance retry,
 and outcome lookup recipes; error/v2 applies the same owning detail constraints.
-Newer Store generations use `workspace-schema-unsupported-details/v1` instead:
+The generation-16 writer reports a newer Store with `workspace-schema-unsupported-details/v2`.
 `store_schema_version` is the actual newer generation,
 `supported_store_schema_version` is this binary's generation, and `guidance`
 requests a Podway version that supports that Store. The closed object admits no
@@ -318,8 +377,8 @@ Store commands. Human output renders the same compatibility guidance.
 `contracts/contract-manifest-v2.json`, and `version --json --identity` emits
 version-result v2 inside output v4. The single-binary release verifier validates
 the complete version envelope and manifest through the canonical schema registry.
-Store v15 DDL is enrolled in the current
-manifest with asset kind `store_schema` so its bytes affect writer identity.
+The prior writer enrolled Store v15 as `store_schema`. The current manifest
+enrolls Store v16 under the same asset kind so its bytes bind writer identity.
 
 [`canonicalization-v1.json`](../../../assets/specifications/canonicalization-v1.json),
 Core's canonicalizer and byte verifier, Protocol's build support and
@@ -344,18 +403,18 @@ Store layout and the writer identity. The canonical declaration
 (`podway.contract-generations/v1`, enrolled in the manifest) declares the
 `default` generation and, for each generation, its selection for every variable
 point and its status from the closed set `reserved`, `supported`, `deprecated`
-and `retired`. Generation 1 is the direct contract shipped since `v0.2.13`; it
-is `deprecated` from the first release that ships generation 2 and remains the
-default until removal
-([ADR-0039](../../architecture-decision-records/0039-opt-in-contract-generations.md)
-decision 7). No runtime warning is emitted. Generation 2 is `supported`: under
-`--contract-generation 2`, `session.observe` serves
-`podway.observation-result/v6`, `CRITERION_CITATION_INVALID` serves
-`podway.criterion-citation-invalid-details/v1`, and
-`WORKSPACE_CONTRACT_MISMATCH` serves
-`podway.workspace-contract-mismatch-details/v2`. The error catalog keeps
-naming the default generation's families in `details_schema`, so its bytes are
-unchanged.
+and `retired`. Generation 1 is the deprecated default. Generation 2 is supported.
+No runtime deprecation warning is emitted.
+
+| Selection | Generation 1 | Generation 2 |
+| --- | --- | --- |
+| `session.observe` | `podway.observation-result/v7` | `podway.observation-result/v8` |
+| `CRITERION_CITATION_INVALID` | `podway.scoped-criterion-citation-invalid-details/v1` | `podway.scoped-criterion-citation-invalid-details/v2` |
+| `WORKSPACE_CONTRACT_MISMATCH` | `podway.workspace-contract-mismatch-details/v1` | `podway.workspace-contract-mismatch-details/v2` |
+
+The v15 writer's observation v5/v6 and original citation detail families are
+retained for that writer and offline verification. The v16 selector keeps the
+same three selection points.
 
 A global `--contract-generation <1|2>` option selects the generation for one
 invocation. The default is 1; it changes only with the removal decision
@@ -371,20 +430,15 @@ replay, outcome lookup, Store state or writer identity. No environment
 variable, workspace configuration or stored preference selects a generation,
 and templates and recovery recipes never embed the option.
 
-`tools/verify_contracts.py` checks the declaration against the Output v4 and
-Error v2 selections in generation order, against the command catalog's
-`session.observe` result schemas, and against the error catalog's
-`details_schema` for the default generation. The
-`podway.observation-result/v6` family specifies executable lifecycle templates:
-running templates keep the v5 shapes, while the prepared and terminal templates
-carry the session fences and the idempotency-key placeholder and use the closed
-placeholder vocabulary of ADR-0039. `session.next` and prepared guidance
-suggestions stay bare in both generations; templates are the executable
-surface. A template whose argv disagrees with its preconditions is a projection
-failure, so inconsistent templates are never emitted. Consumers re-pin on every
-release; the manifest, the Output v4 and Error v2 schema bytes and the Dolgorae
-adapter schema pins change with generation 2, so Dolgorae must re-pin when a
-release ships it.
+`tools/verify_contracts.py` checks the ordered Output v4 and Error v2
+selections against the declaration, route membership in the command catalog,
+and the default error schema branches. The v8 observation carries current
+fenced recipes with their required placeholders. A recipe whose argv or
+stdin context disagrees with its preconditions fails projection. The v7
+`next` and standard status results expose current guidance for both selectors.
+Use generation 2 `observe` for executable templates. Consumers bind the
+exact current manifest and adapter schema pins.
+
 
 ## Evidence paging
 

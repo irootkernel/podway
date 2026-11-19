@@ -1,8 +1,41 @@
 # Built-in Procedures
 
-Podway ships exactly four built-in Procedure v2 presets. Their YAML files under
+Podway ships four built-in Procedure v3 bases with one Execution Group v1
+proposal each. The eight YAML files under
 [`assets/presets/`](../../../assets/presets/) are canonical and embedded into the
 binary with pinned digests.
+
+| ID | Base anchor | Default group entry and correction paths | Verification and goal policy |
+| --- | --- | --- | --- |
+| `analysis-v3` | Define the analysis | Collect sources, challenge the evidence, and return for more evidence or synthesis when required | Source and analysis review with goal tracking |
+| `small-change-v3` | Inspect the change | Implement, verify and assess review. Declared changes return to implementation | Assertion-based verification, guarded choices and no goal tracking |
+| `bug-fix-v3` | Reproduce the defect | Diagnose, implement and verify. Verification or review failure can route to a declared correction | Typed verification with goal tracking |
+| `sw-dev-v3` | Plan the change | Implement and verify, then document and review. Declared correction routes return to the responsible phase | Typed verification, conditional evidence and goal tracking |
+
+Small-change v3 admits Decision guards and preserves its assertion-only
+verification model. The other three bases perform their final goal assessment
+after the selected group returns. The linked [canonical definitions](../../../assets/presets/README.md)
+list the exact node IDs, routes and manual rework targets.
+
+`init` defaults to `sw-dev-v3`. Each preset start pins the exact base and offers
+its default group for explicit activation after the design gates are satisfied.
+The default paths progress on evidence, require a viable correction for local
+rework, and stage failure assessments by actual Decision entry. The structural
+replan score combines the need to change the DAG (50), difficulty of local
+correction (30), and lack of progress (20). A score of at least 80 admits a
+Coordinator choice when the other guard evidence is present. The Coordinator
+records the chosen route and its reason. Repeated failure alone contributes
+at most 20 points. On the second failed entry, screening is a short current
+evidence check. A goal revision requires a real change to the goal and
+preserves the replan policy.
+
+The current CLI rejects the retired `*-v2` preset IDs and custom Procedure v2
+documents. Finish existing v2 work with the writer that admitted it. The
+successor starts new sessions from explicit v3 sources.
+
+## Procedure v2 reference catalog
+
+The remaining paths describe the original v2 writer and its retained fixtures.
 
 | ID | Selection boundary |
 | --- | --- |
@@ -11,25 +44,24 @@ binary with pinned digests.
 | `bug-fix-v2` | A defect workflow that needs reproduction, diagnosis, a structurally bound verification result, guarded retry and review decisions, and goal assessment. |
 | `sw-dev-v2` | The full software-development reference with bounded planning, conditional evidence, paging, an optional artifact, guarded phase-owner rework, and goal assessment. |
 
-`podway preset list`, `show`, and `explain` expose only this catalog. A workspace
-created by `podway init` defaults to `sw-dev-v2`. A preset start admits the exact
-embedded source and fails closed if its shipped digest does not match.
-Human `preset explain` reports `Goal tracking: enabled` or `disabled` from the
-admitted Procedure content for every preset. Its JSON result remains the existing
-preset metadata and graph-node list; it gains no goal-tracking field.
+In the v2 writer, `podway preset list`, `show`, and `explain` exposed this
+catalog and `init` defaulted to `sw-dev-v2`. A start admitted the exact
+embedded source and failed closed on a digest mismatch. Human `preset explain`
+showed the goal-tracking policy derived from the admitted source. Its JSON
+result carried preset metadata and a graph-node list.
 
 `bug-fix-v2` declares version `4`; `small-change-v2` and `sw-dev-v2` remain at
 version `3`, and `analysis-v2` remains at version `1`.
 Version is descriptive public identity while the canonical digest
-binds the admitted semantics. New preset starts use these current identities;
-existing sessions retain their earlier immutable snapshots. Copyable recording,
+bound the admitted semantics. New starts on that writer selected those
+identities. Previously admitted sessions retained their immutable snapshots. Copyable recording,
 condition, guard, selector, page-token, check-result, and rework patterns live in the
 [Procedure v2 workflow](../../examples/v2-workflow.md), not in duplicate preset
 copies.
 
-Custom Procedure v2 files remain supported through the configured safe relative
-procedure paths. Built-in and custom procedures pass through the same v2 parser,
-validator, canonicalizer, and runtime model.
+The v2 writer resolved custom Procedure v2 files through its configured safe
+relative paths. It admitted built-in and custom procedures with the same v2
+parser, validator, canonicalizer and runtime model.
 
 ## Requirement matrix
 
@@ -279,9 +311,9 @@ fixtures; this change authorizes no migration, predecessor declaration, forced
 reset or installed-runtime update. The [writer contract](../storage/sqlite-model.md#workspace-and-writer-identity)
 owns admission.
 
-`podway init` continues to select `sw-dev-v2`. Changes to that preset affect only
-newly initialized workspaces and new sessions. They do not change an already
-admitted snapshot.
+The v2 writer defaulted to `sw-dev-v2` for newly initialized workspaces.
+Changes to that preset affected new sessions and preserved previously admitted
+snapshots.
 
 Podway enforces the declared structure, freshness, conditions, guards, and
 progression rules. It does not execute an external operation, judge semantic

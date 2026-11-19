@@ -1,17 +1,19 @@
 # Built-in Presets
 
-This directory contains the canonical built-in Procedure v2 sources:
+The current embedded catalog contains these Procedure v3 bases and Execution
+Group v1 default proposals:
 
-- `analysis-v2.yaml`
-- `sw-dev-v2.yaml`
-- `bug-fix-v2.yaml`
-- `small-change-v2.yaml`
+| Preset | Base | Default group |
+| --- | --- | --- |
+| `analysis-v3` | [analysis-v3.yaml](analysis-v3.yaml) | [analysis-default-v3.yaml](analysis-default-v3.yaml) |
+| `bug-fix-v3` | [bug-fix-v3.yaml](bug-fix-v3.yaml) | [bug-fix-default-v3.yaml](bug-fix-default-v3.yaml) |
+| `small-change-v3` | [small-change-v3.yaml](small-change-v3.yaml) | [small-change-default-v3.yaml](small-change-default-v3.yaml) |
+| `sw-dev-v3` | [sw-dev-v3.yaml](sw-dev-v3.yaml) | [sw-dev-default-v3.yaml](sw-dev-default-v3.yaml) |
 
-The implementation embeds these exact files. Each preset is admitted through
-the same v2 parser, schema, canonicalizer, semantic validator, and vetting path
-as a custom Procedure. The sources are bound to independently pinned shipped
-digests. A preset update applies only to new sessions and requires a
-procedure-version change when behavior changes.
+Both definitions use the same parser and semantic admission as custom
+sources. Each embedded canonical definition has a pinned digest. Change its
+version when behavior changes. The four `*-v2.yaml` files preserve historical
+sources and fixture identities for the previous writer.
 
 Repository contributors may prepare a candidate with `make preset-create` or
 admit an existing YAML Procedure with `make preset-import`. Both commands validate

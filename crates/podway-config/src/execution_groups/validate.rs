@@ -11,6 +11,7 @@ pub fn validate_successor_definition(
     definition: SuccessorDefinition,
 ) -> Result<ValidatedSuccessorDefinition, ConfigError> {
     admit(&definition)?;
+    validate_delegation_budgets(&definition)?;
     let authoring = super::projection::authoring(&definition);
     let canonical_json = crate::canonical_json_from_serializable(&authoring.clone().into_json())?;
     super::projection::bound(canonical_json.as_str())?;
@@ -21,6 +22,48 @@ pub fn validate_successor_definition(
         canonical_json,
         digest,
     })
+}
+
+fn validate_delegation_budgets(definition: &SuccessorDefinition) -> Result<(), ConfigError> {
+    use crate::{
+        procedure_v2_delegation_package::validate_delegation_projection_budget,
+        procedure_v2_document::node_definition_value,
+    };
+    for placement in definition.graph().nodes() {
+        if !matches!(
+            placement.kind(),
+            PlacementKindV3::Action {
+                delegation: Some(_),
+                ..
+            }
+        ) {
+            continue;
+        }
+        let NodeDefinitionV3::Action(action) = lookup(definition, placement.definition())? else {
+            return Err(invalid(
+                "delegation",
+                "delegation requires an Action definition",
+            ));
+        };
+        let action =
+            node_definition_value(&ParsedNodeDefinition::Action(action.clone())).into_json();
+        let action_bytes = crate::canonical_json_from_serializable(&action)?
+            .as_str()
+            .len();
+        let item_counts = placement
+            .evidence()
+            .iter()
+            .map(|reference| {
+                if reference.items().is_empty() {
+                    Ok(source_items(definition, reference.source())?.len())
+                } else {
+                    Ok(reference.items().len())
+                }
+            })
+            .collect::<Result<Vec<_>, ConfigError>>()?;
+        validate_delegation_projection_budget(action_bytes, item_counts)?;
+    }
+    Ok(())
 }
 fn lookup<'a>(
     definition: &'a SuccessorDefinition,

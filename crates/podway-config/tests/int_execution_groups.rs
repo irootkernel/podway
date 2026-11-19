@@ -1,6 +1,52 @@
 use podway_config::execution_groups::*;
-use podway_config::{ConfigError, FormatRequest, ProcedureDocumentFormat as Format};
+use podway_config::{
+    AuthoringContext, ConfigError, FormatRequest, ProcedureDocumentFormat as Format,
+};
 use serde_json::{Value, json};
+
+#[test]
+fn successor_graph_renderings_preserve_the_replan_boundary() {
+    let base = accept(&base());
+    let group = accept(&group());
+    for format in [
+        SuccessorGraphFormat::Mermaid,
+        SuccessorGraphFormat::Dot,
+        SuccessorGraphFormat::PlantUml,
+    ] {
+        let (base_projection, base_digest) = render_successor_graph(&base, format).unwrap();
+        let (group_projection, group_digest) = render_successor_graph(&group, format).unwrap();
+        assert!(base_projection.contains("n_design"));
+        assert!(base_projection.contains("replan"));
+        assert!(group_projection.contains("Return to base design anchor"));
+        assert!(group_projection.contains("repair · rework"));
+        assert_ne!(base_digest, group_digest);
+        assert_eq!(
+            render_successor_graph(&group, format).unwrap(),
+            (group_projection, group_digest),
+        );
+    }
+}
+
+#[test]
+fn successor_authoring_reports_canonical_drift_at_the_source() {
+    let document = accept(&group());
+    let canonical = project_successor_source(&document, Format::Yaml).unwrap();
+    let drifted = canonical.replacen("schema:", "schema: ", 1);
+    let context = AuthoringContext::new("group.yaml", &drifted, Format::Yaml);
+    let formatted = format_successor_definition(FormatRequest {
+        source: &drifted,
+        source_path: "group.yaml",
+        format: Format::Yaml,
+    })
+    .unwrap();
+    assert!(formatted.changed());
+    assert_eq!(formatted.document(), canonical);
+    assert_eq!(formatted.digest(), document.digest());
+    assert_eq!(
+        formatted.drift_diagnostic(&context).unwrap().code(),
+        podway_core::AuthoringDiagnosticCode::FormatNotCanonical,
+    );
+}
 
 fn reject_controller(value: &Value) {
     match admit(value) {

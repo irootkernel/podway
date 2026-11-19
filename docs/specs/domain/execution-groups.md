@@ -13,22 +13,19 @@ registry and embedded Protocol registry. Enrollment changes the development
 writer's manifest digest; it introduces no predecessor or migration promise.
 
 Core owns immutable successor authoring values and bounded identity records.
-Config's dedicated `execution_groups` API admits internal base/group definitions,
+Config's dedicated `execution_groups` API admits base and group definitions,
 checks their interfaces, and produces canonical identities and source/graph
-projections. Core's internal successor session model applies the pure execution
-transitions specified below. The public parser, CLI, Store and presets use
-Procedure v2. Successor runtime admission is reserved for the atomic product
-cutover. Stores bound to the previous manifest, including v0.2.17, remain with
-their original writer; no predecessor or migration is declared. Tests use
-isolated fixtures rather than opening the active development workspace.
+projections. Core's session model applies the pure execution transitions
+specified below. The current CLI, parser and presets use Procedure v3 and
+Execution Group v1 in Store generation 16. Stores bound to the previous
+manifest, including v0.2.17, require their original writer. Tests use isolated
+fixtures to preserve the active development workspace.
 
-The candidate Engine invokes Core lifecycle, item and delegation mutations inside
-the [success-only fixture transaction](../storage/transactions-concurrency-and-idempotency.md#execution-group-candidate-persistence).
+The Direct Engine invokes Core lifecycle, item and delegation mutations inside
+the [success-only transaction](../storage/transactions-concurrency-and-idempotency.md#execution-group-candidate-persistence).
 It computes current projection and replay bounds before persisting a transition.
 Replan commits the completed Decision and its exact guard evidence, the
-selection closure, and the fresh base anchor together. The typed fixture routes
-exercise the internal execution boundary while product surface selection belongs
-to ADOPT.
+selection closure, and the fresh base anchor together.
 
 ## Authoring boundaries
 
@@ -67,14 +64,13 @@ types, conditional rules, constraints, choices, operation identities and accepte
 outcomes must match, including declaration order. Activation freezes the exact
 anchor attempt, item revisions, value digests and complete item-set digest.
 
-## Internal source admission and projections
+## Source admission and projections
 
 Config reuses the bounded YAML/JSON decoder, closed shared item and node metadata
 constructors, existing predicate vocabulary and bounded local graph analysis.
-The shipped `parse_procedure_document` dispatch still accepts only Procedure v2.
-Internal admission rejects unknown fields, duplicate mappings, nulls, unsupported
-YAML features and resource overruns before constructing the successor model.
-YAML dispatch retains the existing refusal of JSON-form root documents.
+Public authoring and session preparation use the closed successor model. Source
+admission rejects unknown fields, duplicate mappings, nulls, unsupported YAML
+features and resource overruns before constructing the model.
 
 An anchor must be an unskippable Action with `next` equal to `success_return`.
 That static edge describes the group boundary's declared successor, rather than
@@ -131,8 +127,7 @@ owns wire-derived delegation-package sizing and placement-local next/static,
 read-back, preview, token and envelope allocations, for a single scope as well
 as combined base/group responses. Those checks require the successor wire
 families; Config source admission proves neither package nor guidance readiness.
-The candidate Engine bounds its private mutation responses before persisting
-them. ADOPT-001 owns public family and cutover selection. Existing
+The Direct Engine bounds public mutation responses before persisting them. Existing
 per-document, item, reference and source/projection caps remain in force.
 Session-creation budgets
 remain with their original transition/runtime owners.

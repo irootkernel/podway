@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:successor-goal-revision-history-result:v1",
+  "title": "Podway Goal Revision History Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "workspace",
+    "session",
+    "session_location",
+    "session_revision",
+    "truncated",
+    "next_page_token",
+    "total",
+    "rows"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.successor-goal-revision-history-result/v1"
+    },
+    "workspace": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "session": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "session_location": {
+      "enum": [
+        "current",
+        "archived"
+      ]
+    },
+    "session_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "next_page_token": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}:[0-9a-f]{16}$"
+        }
+      ]
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65536
+    },
+    "rows": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "goal_revision",
+          "predecessor",
+          "successor",
+          "closure",
+          "actor"
+        ],
+        "properties": {
+          "goal_revision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 18446744073709551615
+          },
+          "predecessor": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              }
+            ]
+          },
+          "successor": {
+            "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+          },
+          "closure": {
+            "$ref": "urn:podway:schema:successor-history-records:v1#/$defs/closure"
+          },
+          "actor": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "\\S"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

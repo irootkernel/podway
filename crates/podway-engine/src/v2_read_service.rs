@@ -5617,7 +5617,7 @@ mod tests {
             podway_core::Sha256Digest::new(format!("sha256:{}", c.to_string().repeat(64))).unwrap()
         };
         let store = podway_store::direct_store::DirectStoreV1::new(
-            podway_store::direct_store::DirectWorkspaceLayoutV1::new(
+            podway_store::direct_store::DirectWorkspaceLayoutV1::for_v15_fixture(
                 podway_store::ValidatedWorkspaceRootV1::from_path(&root).unwrap(),
             )
             .unwrap(),

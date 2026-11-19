@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:scoped-option-not-allowed-details:v1",
+  "title": "Podway Scoped Undeclared Option Details",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "decision",
+    "option",
+    "allowed_option_ids"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.scoped-option-not-allowed-details/v1"
+    },
+    "decision": {
+      "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+    },
+    "option": {
+      "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+    },
+    "allowed_option_ids": {
+      "type": "array",
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+      }
+    }
+  }
+}

@@ -14,7 +14,9 @@ use podway_store::{
 use serde_json::{Value, json};
 
 use crate::{
-    direct_execution::{DirectDelegationFailureV1, DirectExecutionErrorV1},
+    direct_execution::{
+        DirectDelegationFailureV1, DirectExecutionErrorV1, DirectSuccessorSourceErrorV1,
+    },
     execution::{
         ExecutionBoundaryErrorV1, ExecutionErrorV1, ProcedureV2SourceAdmissionErrorV1,
         ProcedureV2StartPreparationErrorV1,
@@ -36,6 +38,7 @@ pub struct DirectErrorContextV1 {
     /// Presentation-only contract generation (ADR-0039); selects detail
     /// families when generation-2 error details are emitted.
     pub generation: ContractGenerationV1,
+    pub successor_store: bool,
     pub maintenance: Option<DirectMaintenanceRecoveryV1>,
 }
 
@@ -641,16 +644,24 @@ fn store(error: &DirectStoreErrorV1, context: &DirectErrorContextV1) -> Presenta
         E::Legacy { generation, marker } => Presentation {
             code: "LEGACY_RUNTIME_STATE_UNSUPPORTED",
             details: json!({
-            "schema":"podway.legacy-runtime-state-unsupported-details/v1", "store_schema_version":generation,
+            "schema": if context.successor_store {
+                "podway.legacy-runtime-state-unsupported-details/v2"
+            } else {
+                "podway.legacy-runtime-state-unsupported-details/v1"
+            }, "store_schema_version":generation,
             "markers":marker.iter().collect::<Vec<_>>(), "recovery":{"action":"reset_legacy_state","command":"workspace.reset_all",
                 "argv":["podway","--json","reset","--all","--yes","--idempotency-key","<new-idempotency-key>"], "reason":"Replace <new-idempotency-key> with a fresh caller-owned key, then explicitly reset unsupported older runtime state.","requires_explicit_authorization":true}}),
         },
         E::UnsupportedGeneration { generation } => {
-            let supported = podway_store::direct_store::DIRECT_SCHEMA_GENERATION_V1;
+            let supported = if context.successor_store { 16 } else { 15 };
             Presentation {
                 code: "WORKSPACE_SCHEMA_UNSUPPORTED",
                 details: json!({
-                    "schema":"podway.workspace-schema-unsupported-details/v1",
+                    "schema": if context.successor_store {
+                        "podway.workspace-schema-unsupported-details/v2"
+                    } else {
+                        "podway.workspace-schema-unsupported-details/v1"
+                    },
                     "store_schema_version":generation,
                     "supported_store_schema_version":supported,
                     "guidance":format!("Use a Podway version that supports Store generation {generation}. This binary supports generation {supported} and cannot open, reset or remove this newer Store.")
@@ -788,6 +799,31 @@ fn preparation(error: &ExecutionErrorV1, _context: &DirectErrorContextV1) -> Pre
         ExecutionErrorV1::InvalidPersistedExecution { .. } => {
             recovery("WORKSPACE_STATE_UNREADABLE")
         }
+    }
+}
+
+fn successor_source(error: &DirectSuccessorSourceErrorV1) -> Presentation {
+    use DirectSuccessorSourceErrorV1 as E;
+    let (code, reason, known_schema) = match error {
+        E::InvalidDocument => ("PROCEDURE_INVALID", "invalid_document", None),
+        E::InvalidDefinition => ("PROCEDURE_INVALID", "invalid_definition", None),
+        E::ResourceLimit => ("PROCEDURE_INVALID", "resource_limit", None),
+        E::UnsupportedFormat => ("PROCEDURE_SCHEMA_UNSUPPORTED", "unsupported_format", None),
+        E::UnsupportedSchema { known_schema } => (
+            "PROCEDURE_SCHEMA_UNSUPPORTED",
+            "unsupported_schema",
+            *known_schema,
+        ),
+        E::InvalidAdmittedDefinition => return simple("INTERNAL_ERROR"),
+    };
+    Presentation {
+        code,
+        details: json!({
+            "schema": "podway.procedure-source-error-details/v1",
+            "expected_schema": podway_core::execution_groups::PROCEDURE_SCHEMA_V3,
+            "reason": reason,
+            "known_source_schema": known_schema,
+        }),
     }
 }
 
@@ -944,9 +980,117 @@ pub fn render_direct_error_v1(
         DirectExecutionErrorV1::View(error) => view(error),
         DirectExecutionErrorV1::Evidence(error) => evidence(error),
         DirectExecutionErrorV1::Domain(error) => domain(error, context),
+        DirectExecutionErrorV1::Successor(error) => {
+            use crate::successor_execution::SuccessorExecutionError as E;
+            match error {
+                E::GoalRevisionMismatch {
+                    expected: Some(expected),
+                    actual: Some(actual),
+                } => runtime(
+                    "GOAL_REVISION_STALE",
+                    json!({"expected_goal_revision": expected.get(), "actual_goal_revision": actual.get()}),
+                ),
+                E::GuardUnsatisfied(error) => Presentation {
+                    code: "OPTION_GUARD_UNSATISFIED",
+                    details: json!({
+                        "schema": "podway.scoped-option-guard-unsatisfied-details/v1",
+                        "decision": error.decision,
+                        "option": error.option,
+                        "state": error.state.as_str(),
+                        "predicates": error.predicates.iter().map(|predicate| json!({
+                            "source": predicate.source,
+                            "item": predicate.item,
+                            "state": predicate.state.as_str(),
+                        })).collect::<Vec<_>>(),
+                    }),
+                },
+                E::ScopedOptionNotAllowed {
+                    decision,
+                    option,
+                    allowed_option_ids,
+                } => Presentation {
+                    code: "OPTION_NOT_ALLOWED",
+                    details: json!({
+                        "schema": "podway.scoped-option-not-allowed-details/v1",
+                        "decision": decision,
+                        "option": option,
+                        "allowed_option_ids": allowed_option_ids,
+                    }),
+                },
+                E::GroupReplanRequired { decision, option } => Presentation {
+                    code: "ROUTE_NOT_ALLOWED",
+                    details: json!({
+                        "schema": "podway.scoped-group-replan-required-details/v1",
+                        "decision": decision,
+                        "option": option,
+                        "command": "group.replan",
+                        "argv": ["podway", "--json", "group", "replan", "--stdin"],
+                        "input_schema": podway_protocol::GROUP_REPLAN_INPUT_SCHEMA,
+                    }),
+                },
+                E::CriterionCitation(error) => {
+                    use crate::successor_execution::{
+                        criterion_citation_json, evidence_citation_json,
+                    };
+                    let mut details = json!({
+                        "schema": match context.generation {
+                            ContractGenerationV1::Generation1 => "podway.scoped-criterion-citation-invalid-details/v1",
+                            ContractGenerationV1::Generation2 => "podway.scoped-criterion-citation-invalid-details/v2",
+                        },
+                        "decision": error.decision,
+                        "criterion_id": error.criterion,
+                        "citation": criterion_citation_json(&error.citation),
+                        "reason": error.rejection.as_str(),
+                    });
+                    if context.generation == ContractGenerationV1::Generation2 {
+                        details["citable_evidence"] = json!(
+                            error
+                                .citable_evidence
+                                .iter()
+                                .map(|(source, target)| json!({
+                                    "selector": evidence_citation_json(source),
+                                    "attempt": target,
+                                }))
+                                .collect::<Vec<_>>()
+                        );
+                        details["citable_item_ids"] = json!(error.citable_items);
+                    }
+                    Presentation {
+                        code: "CRITERION_CITATION_INVALID",
+                        details,
+                    }
+                }
+                E::ResponseBudget => simple("RESPONSE_BUDGET_EXCEEDED"),
+                E::OutcomeLookupBudget => simple("OUTCOME_LOOKUP_BUDGET_EXCEEDED"),
+                E::TerminalDispositionAlreadyRecorded => {
+                    simple("SESSION_TERMINAL_DISPOSITION_ALREADY_RECORDED")
+                }
+                E::HistoryItemNotFound => simple("ITEM_NOT_FOUND"),
+                E::CurrentEvidenceUnavailable {
+                    consumer,
+                    selector,
+                    item,
+                } => Presentation {
+                    code: "EVIDENCE_NOT_AVAILABLE",
+                    details: json!({"schema":"podway.scoped-evidence-unavailable-details/v1","consumer":consumer,"selector":selector,"item":item}),
+                },
+                E::HistoryAttemptNotFound => simple("ATTEMPT_NOT_FOUND"),
+                E::GroupDefinitionMismatch => simple("GROUP_DEFINITION_MISMATCH"),
+                E::GroupActivationNotAllowed | E::GroupActivationPriorWorkInvalid(_) => {
+                    simple("GROUP_ACTIVATION_NOT_ALLOWED")
+                }
+                E::GroupReturnNotAllowed => simple("GROUP_RETURN_NOT_ALLOWED"),
+                E::GroupPlanStale => simple("GROUP_PLAN_STALE"),
+                E::HistoryGroupNotFound => simple("GROUP_EXECUTION_NOT_FOUND"),
+                E::SelectedActivationMismatch { .. } => simple("GROUP_SELECTION_STALE"),
+                E::StaleHistoryPageToken => simple("HISTORY_PAGE_TOKEN_STALE"),
+                _ => simple("REQUEST_INVALID"),
+            }
+        }
         DirectExecutionErrorV1::Boundary(error) => boundary(error, context),
         DirectExecutionErrorV1::Preparation(error) => preparation(error, context),
         DirectExecutionErrorV1::Start(error) => start(error, context),
+        DirectExecutionErrorV1::SuccessorSource(error) => successor_source(error),
         DirectExecutionErrorV1::StartDecisionRequired {
             lifecycle: value,
             current_terminal_disposition,

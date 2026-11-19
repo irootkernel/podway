@@ -1113,6 +1113,85 @@ fn frame_audit_core_refuses_terminal_with_only_prefix_goal_assessment() {
 }
 
 #[test]
+fn goal_decision_requires_its_complete_current_criterion_set() {
+    let mut session = start_with_supplemental_prefix_assessment();
+    ready_design(&mut session);
+    launch(&mut session, 1, 4, vec![]);
+    reach_review(&mut session, 5);
+    session
+        .decide(
+            &session.fence(),
+            option("pass"),
+            reason(),
+            None,
+            attempt(10),
+            NOW,
+        )
+        .unwrap();
+    let current = session.fence();
+    let original = session.clone();
+    assert!(
+        session
+            .decide_assessed(&current, option("achieved"), reason(), attempt(11), NOW)
+            .is_err()
+    );
+    assert_eq!(session, original);
+    let mut criterion = SuccessorCriterionInputV1 {
+        criterion: CriterionId::new("criterion").unwrap(),
+        status: CriterionStatusV2::Unsatisfied,
+        reason: CriterionAssessmentReasonV2::new("A required check failed").unwrap(),
+        citations: vec![SuccessorCriterionCitationV1::Evidence(
+            EvidenceSourceV3::Local(node("missing")),
+        )],
+    };
+    assert!(
+        session
+            .assess_criteria(&current, vec![criterion.clone()], None, NOW)
+            .is_err()
+    );
+    assert_eq!(session, original);
+    criterion.citations.clear();
+    session
+        .assess_criteria(&current, vec![criterion.clone()], None, NOW)
+        .unwrap();
+    let assessed = session.fence();
+    assert_eq!(
+        session.determined_goal_outcome().unwrap(),
+        Some(GoalOutcome::NotAchieved)
+    );
+    let original = session.clone();
+    assert!(
+        session
+            .assess_criteria(&assessed, vec![criterion], None, NOW)
+            .is_err()
+    );
+    assert!(
+        session
+            .decide_assessed(&assessed, option("achieved"), reason(), attempt(11), NOW)
+            .is_err()
+    );
+    assert_eq!(session, original);
+    session
+        .decide_assessed(
+            &assessed,
+            option("not-achieved"),
+            reason(),
+            attempt(11),
+            NOW,
+        )
+        .unwrap();
+    let decision = session.history_attempt(&attempt(10)).unwrap();
+    assert_eq!(
+        decision.criterion_assessments().unwrap().results[0].status,
+        CriterionStatusV2::Unsatisfied
+    );
+    assert_eq!(
+        decision.decision().unwrap().goal_assessment,
+        Some((GoalRevisionNumberV2::FIRST, GoalOutcome::NotAchieved))
+    );
+}
+
+#[test]
 fn frame_audit_core_requires_fresh_group_assessment_after_same_goal_replan() {
     let mut session = start_with_supplemental_prefix_assessment();
     let current_goal = session.current_goal().unwrap().clone();
@@ -2378,4 +2457,57 @@ fn frame003_w2_replan_keeps_resolved_blocker_and_rejects_id_reuse() {
             .is_err()
     );
     assert_eq!(session, unchanged);
+}
+#[test]
+fn attribution_binds_only_the_exact_admitted_transition_and_is_write_once() {
+    use SuccessorAttributionTargetV1 as Target;
+
+    let mut state = ExecutionSessionV3::prepared(
+        SessionId::new("00000000-0000-4000-8000-000000009999").unwrap(),
+        fixture_base(true, false),
+        digest("a"),
+        NOW,
+    );
+    let original_actor = ActorAttributionV2::new("first author").unwrap();
+    let stale_actor = ActorAttributionV2::new("unrelated author").unwrap();
+    let prepared = state.fence();
+    assert!(
+        state
+            .attribute_transition(&prepared, Target::InitialGoal, stale_actor.clone())
+            .is_err()
+    );
+    state
+        .begin_prepared(&prepared, Some(goal("First scope")), attempt(1), NOW)
+        .unwrap();
+    state
+        .attribute_transition(&prepared, Target::InitialGoal, original_actor.clone())
+        .unwrap();
+    assert_eq!(state.current_goal_actor(), Some(&original_actor));
+    assert!(
+        state
+            .attribute_transition(&prepared, Target::InitialGoal, stale_actor.clone())
+            .is_err()
+    );
+
+    state
+        .complete(&state.fence(), Some(attempt(2)), NOW)
+        .unwrap();
+    assert!(
+        state
+            .attribute_transition(&prepared, Target::RevisedGoal, stale_actor.clone())
+            .is_err()
+    );
+    let initial = state.fence();
+    state
+        .revise_goal(&initial, goal_change("design", false), attempt(3), NOW)
+        .unwrap();
+    state
+        .attribute_transition(&initial, Target::RevisedGoal, stale_actor.clone())
+        .unwrap();
+    assert_eq!(state.initial_goal_actor(), Some(&original_actor));
+    assert_eq!(state.current_goal_actor(), Some(&stale_actor));
+    assert_eq!(
+        state.goal_revision_history()[0].actor.as_ref(),
+        Some(&stale_actor)
+    );
 }

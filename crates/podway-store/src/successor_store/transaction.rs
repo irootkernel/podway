@@ -1,23 +1,34 @@
 //! Success-only Store transaction for the isolated successor Engine fixture.
 
+use super::{CandidateDefinition, CandidateSources, CandidateStoreError, Result, corrupt};
+#[cfg(feature = "test-support")]
 use super::{
-    CandidateDefinition, CandidateSources, CandidateStoreError, Result, admit_writer, bounded_text,
-    corrupt, create_candidate_fixture, load_candidate_content, open_candidate,
+    admit_writer, bounded_text, create_candidate_fixture, load_candidate_content, open_candidate,
     persist_candidate_execution, reopen_candidate_fixture,
 };
+#[cfg(feature = "test-support")]
+use crate::IdempotencyKeyV1;
+use crate::direct_store::next_workspace_sequence;
+#[cfg(feature = "test-support")]
 use crate::direct_store::{
     DirectMutationRequestV1, DirectMutationResultV1, DirectOutcomeScopeV1, DirectRecordedOutcomeV1,
-    DirectStoreErrorV1, candidate_committed_outcome, commit, next_workspace_sequence,
-    persist_success, read_outcome, replay_outcome, validate_success,
+    DirectStoreErrorV1, candidate_committed_outcome, commit, persist_success, read_outcome,
+    replay_outcome, validate_success,
 };
-use crate::{CanonicalExecutionJsonV1, IdempotencyKeyV1, ValidatedWorkspaceRootV1};
+use crate::{CanonicalExecutionJsonV1, ValidatedWorkspaceRootV1};
+#[cfg(feature = "test-support")]
+use podway_core::Revision;
 use podway_core::execution_groups::ExecutionSessionV3;
 use podway_core::{
-    DomainError, Revision, SessionId, SessionLifecycle, Sha256Digest, UnixMillis, WorkspaceId,
+    DomainError, SessionId, SessionLifecycle, Sha256Digest, UnixMillis, WorkspaceId,
 };
-use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, Transaction};
+#[cfg(feature = "test-support")]
+use rusqlite::{OpenFlags, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
+#[cfg(feature = "test-support")]
 use std::path::Path;
+#[cfg(feature = "test-support")]
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -25,6 +36,7 @@ use std::sync::{
 
 /// The exact publication points available only on a test-support successor fixture.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(feature = "test-support")]
 pub enum CandidateCommitBoundary {
     AfterLedgerBeforeCommit,
     AfterCommitBeforeReturn,
@@ -38,6 +50,7 @@ pub enum CandidateSessionLocation {
 }
 
 /// Scope of an explicitly destructive test fixture request.
+#[cfg(feature = "test-support")]
 pub struct CandidateFixtureSession<'a> {
     pub workspace: &'a WorkspaceId,
     pub session: &'a SessionId,
@@ -61,10 +74,12 @@ impl CandidateSessionLocation {
     }
 }
 
+#[cfg(feature = "test-support")]
 type CommitObserver = dyn Fn(CandidateCommitBoundary, &DirectRecordedOutcomeV1) + Send;
 
 /// Owns only a local, explicitly constructed v16 fixture. Product Direct Store admission is
 /// independent. Test callers provide the canonical owning root and exact fixture workspace UUID.
+#[cfg(feature = "test-support")]
 pub struct CandidateExecutionStore {
     connection: Connection,
     root: ValidatedWorkspaceRootV1,
@@ -73,6 +88,7 @@ pub struct CandidateExecutionStore {
     beginning_writer: Option<Arc<AtomicBool>>,
 }
 
+#[cfg(feature = "test-support")]
 impl CandidateExecutionStore {
     pub fn workspace_root(&self) -> &ValidatedWorkspaceRootV1 {
         &self.root
@@ -193,18 +209,7 @@ impl CandidateExecutionStore {
         admit: impl Fn(&str) -> Result<CandidateDefinition>,
     ) -> Result<CandidateHistorySnapshot> {
         let transaction = self.fixture_read(workspace)?;
-        let mut checksums = Sha256::new();
-        checksums.update(b"podway.candidate-history-snapshot/v1");
-        let (state, sources) =
-            load_requested_content(&transaction, session, location, admit, Some(&mut checksums))?;
-        require_terminal_archive(location, &state)?;
-        let content_digest = Sha256Digest::new(format!("sha256:{:x}", checksums.finalize()))
-            .expect("hex encoded SHA-256 is a valid digest");
-        Ok(CandidateHistorySnapshot {
-            state,
-            sources,
-            content_digest,
-        })
+        admitted_history_snapshot(&transaction, session, location, admit)
     }
 
     fn fixture_read(&mut self, workspace: &WorkspaceId) -> Result<Transaction<'_>> {
@@ -414,6 +419,9 @@ impl CandidateExecutionStore {
             root: &self.root,
             workspace,
             session,
+            verify_progress: None,
+            task_title: None,
+            binding: None,
         })?;
         validate_success(request, &success.response).map_err(CandidateStoreError::from)?;
         let outcome = persist_success(
@@ -446,6 +454,7 @@ impl CandidateExecutionStore {
     }
 }
 
+#[cfg(feature = "test-support")]
 fn initialize_fixture(
     transaction: &Transaction<'_>,
     root: &ValidatedWorkspaceRootV1,
@@ -468,6 +477,7 @@ fn initialize_fixture(
     persist_candidate_execution(transaction, initial, sources)
 }
 
+#[cfg(feature = "test-support")]
 fn require_initial_fixture_session(initial: &ExecutionSessionV3) -> Result<()> {
     if initial.lifecycle() != SessionLifecycle::Running
         || initial.attempt_history().len() != 1
@@ -480,6 +490,7 @@ fn require_initial_fixture_session(initial: &ExecutionSessionV3) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-support")]
 fn fixture_session(
     transaction: &Transaction<'_>,
     target: &CandidateFixtureSession<'_>,
@@ -497,6 +508,7 @@ fn fixture_session(
     Ok(state)
 }
 
+#[cfg(feature = "test-support")]
 fn verify_fixture_path(path: &Path, root: &ValidatedWorkspaceRootV1) -> Result<()> {
     let parent = path
         .parent()
@@ -510,6 +522,7 @@ fn verify_fixture_path(path: &Path, root: &ValidatedWorkspaceRootV1) -> Result<(
     Ok(())
 }
 
+#[cfg(feature = "test-support")]
 fn verify_binding(
     connection: &Connection,
     root: &ValidatedWorkspaceRootV1,
@@ -535,19 +548,76 @@ pub struct CandidateExecutionTransaction<'transaction, 'connection> {
     root: &'transaction ValidatedWorkspaceRootV1,
     workspace: &'transaction WorkspaceId,
     session: &'transaction SessionId,
+    verify_progress: Option<(
+        &'transaction crate::WorkspaceBindingV1,
+        &'transaction super::SuccessorProgressVerifier<'transaction>,
+    )>,
+    task_title: Option<String>,
+    binding: Option<&'transaction crate::WorkspaceBindingV1>,
 }
 
-impl CandidateExecutionTransaction<'_, '_> {
+impl<'transaction, 'connection> CandidateExecutionTransaction<'transaction, 'connection> {
+    pub(crate) fn from_native(
+        transaction: &'transaction Transaction<'connection>,
+        root: &'transaction ValidatedWorkspaceRootV1,
+        binding: &'transaction crate::WorkspaceBindingV1,
+        session: &'transaction SessionId,
+        verify_progress: Option<&'transaction super::SuccessorProgressVerifier<'transaction>>,
+    ) -> Result<Self> {
+        let current = super::current_execution(transaction)?;
+        if current.as_ref().map(|(id, _)| id) != Some(session) {
+            return Err(DomainError::SessionIdentityMismatch {
+                expected: session.clone(),
+                actual: current.map(|(id, _)| id),
+            }
+            .into());
+        }
+        let metadata = super::session_metadata(transaction, session)?
+            .ok_or_else(|| corrupt("current session metadata is absent"))?;
+        Ok(Self {
+            transaction,
+            root,
+            workspace: binding.identity().workspace_uuid(),
+            session,
+            verify_progress: verify_progress.map(|verify| (binding, verify)),
+            task_title: Some(metadata.task_title),
+            binding: Some(binding),
+        })
+    }
+
+    pub fn verify_progress(&self, state: &ExecutionSessionV3) -> Result<()> {
+        if let Some((binding, verify)) = self.verify_progress {
+            verify(binding, state)?;
+        }
+        Ok(())
+    }
+
+    pub fn task_title(&self) -> Option<&str> {
+        self.task_title.as_deref()
+    }
+
+    pub fn binding(&self) -> Option<&crate::WorkspaceBindingV1> {
+        self.binding
+    }
+
+    pub fn delegation_receipt(
+        &self,
+        state: &ExecutionSessionV3,
+        attempt: &podway_core::AttemptId,
+    ) -> Result<Option<podway_core::execution_groups::ScopedDelegationReceiptV1>> {
+        super::read_receipt(self.transaction, state, attempt)
+    }
+
     pub fn load(
         &self,
         admit: impl Fn(&str) -> Result<CandidateDefinition>,
     ) -> Result<(ExecutionSessionV3, CandidateSources)> {
-        load_requested_session(
-            self.transaction,
-            self.session,
-            CandidateSessionLocation::Current,
-            admit,
-        )
+        let (state, sources) = super::load_execution(self.transaction, self.session, admit, None)?;
+        if self.binding.is_some() {
+            super::require_settled_goal_assessments(&state)?;
+            super::verify_receipts(self.transaction, &state)?;
+        }
+        Ok((state, sources))
     }
 
     pub fn persist(&self, state: &ExecutionSessionV3, sources: &CandidateSources) -> Result<()> {
@@ -556,7 +626,11 @@ impl CandidateExecutionTransaction<'_, '_> {
                 "candidate state differs from mutation outcome scope",
             ));
         }
-        persist_candidate_execution(self.transaction, state, sources)
+        if self.binding.is_some() {
+            super::require_settled_goal_assessments(state)?;
+            super::verify_receipts(self.transaction, state)?;
+        }
+        super::persist_execution(self.transaction, state, sources)
     }
 
     pub fn next_sequence(&self) -> Result<u64> {
@@ -572,6 +646,7 @@ impl CandidateExecutionTransaction<'_, '_> {
     }
 }
 
+#[cfg(feature = "test-support")]
 fn load_requested_session(
     transaction: &Transaction<'_>,
     session: &SessionId,
@@ -581,6 +656,7 @@ fn load_requested_session(
     load_requested_content(transaction, session, location, admit, None)
 }
 
+#[cfg(feature = "test-support")]
 fn load_requested_content(
     transaction: &Transaction<'_>,
     session: &SessionId,
@@ -603,7 +679,7 @@ fn require_terminal_archive(
 }
 
 fn require_session_location(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     session: &SessionId,
     location: CandidateSessionLocation,
 ) -> Result<()> {
@@ -640,4 +716,24 @@ fn terminal_session(state: &ExecutionSessionV3) -> bool {
 pub struct CandidateSuccess {
     pub response: CanonicalExecutionJsonV1,
     pub now: UnixMillis,
+}
+
+pub(crate) fn admitted_history_snapshot(
+    connection: &Connection,
+    session: &SessionId,
+    location: CandidateSessionLocation,
+    admit: impl Fn(&str) -> Result<CandidateDefinition>,
+) -> Result<CandidateHistorySnapshot> {
+    require_session_location(connection, session, location)?;
+    let mut checksums = Sha256::new();
+    checksums.update(b"podway.candidate-history-snapshot/v1");
+    let (state, sources) = super::load_execution(connection, session, admit, Some(&mut checksums))?;
+    require_terminal_archive(location, &state)?;
+    let content_digest = Sha256Digest::new(format!("sha256:{:x}", checksums.finalize()))
+        .expect("hex encoded SHA-256 is a valid digest");
+    Ok(CandidateHistorySnapshot {
+        state,
+        sources,
+        content_digest,
+    })
 }

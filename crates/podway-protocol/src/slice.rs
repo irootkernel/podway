@@ -814,7 +814,7 @@ struct RawCheckResultExecutorV1 {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RawItemRecordManyOperationV1 {
+pub(crate) struct RawItemRecordManyOperationV1 {
     item_id: ItemId,
     expected_item_revision: Revision,
     #[serde(default, deserialize_with = "deserialize_optional_non_null")]
@@ -877,7 +877,7 @@ pub fn decode_item_record_many_operations_v1(
     validate_item_record_many_operations_v1(operations)
 }
 
-fn validate_item_record_many_operations_v1(
+pub(crate) fn validate_item_record_many_operations_v1(
     operations: Vec<RawItemRecordManyOperationV1>,
 ) -> Result<Vec<ItemRecordManyOperationV1>, SliceErrorV1> {
     if operations.is_empty() {

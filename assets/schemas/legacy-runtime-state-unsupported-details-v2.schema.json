@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:legacy-runtime-state-unsupported-details:v2",
+  "title": "Podway Legacy Runtime State Unsupported Details v2",
+  "$comment": "Current Store generation 16 under ADR-0044.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "store_schema_version",
+    "markers",
+    "recovery"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.legacy-runtime-state-unsupported-details/v2"
+    },
+    "store_schema_version": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "maximum": 15
+    },
+    "markers": {
+      "type": "array",
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "reset.marker",
+          "workspace-removal.marker",
+          "mode-switch.json",
+          "development-v2.marker"
+        ]
+      }
+    },
+    "recovery": {
+      "$ref": "urn:podway:schema:recovery-recipe:v2",
+      "properties": {
+        "action": {
+          "const": "reset_legacy_state"
+        },
+        "command": {
+          "const": "workspace.reset_all"
+        },
+        "requires_explicit_authorization": {
+          "const": true
+        }
+      }
+    }
+  }
+}

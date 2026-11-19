@@ -418,7 +418,7 @@ mod tests {
                 _temp: temp,
                 root,
                 selector,
-                resolver: DirectWorkspaceResolverV1::new(
+                resolver: DirectWorkspaceResolverV1::for_v15_fixture(
                     NativeGitResolverV1::new(),
                     manifest_digest,
                 ),

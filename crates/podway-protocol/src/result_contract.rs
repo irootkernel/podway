@@ -16,6 +16,8 @@ use crate::{
 mod embedded_schemas {
     include!(concat!(env!("OUT_DIR"), "/embedded_json_schemas.rs"));
 }
+mod successor;
+pub use successor::scoped_running_template_arguments_v1;
 
 const EMBEDDED_SCHEMA_BASE_V2: &str = "https://podway.invalid/schemas/";
 const MAX_DELEGATION_WORK_PACKAGE_BYTES_V1: usize =
@@ -180,6 +182,57 @@ pub const EXISTING_ROUTE_RESULT_SCHEMAS_V2: &[ResultSchemaContractV2] = &[result
     &["procedure.validate"],
 )];
 pub const PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1: &str = "podway.procedure-diagnostics-result/v1";
+const SUCCESSOR_AUTHORING_RESULT_SCHEMA: &str = "podway.successor-authoring-result/v1";
+const SUCCESSOR_PRESET_RESULT_SCHEMA: &str = "podway.successor-preset-result/v1";
+const SUCCESSOR_INPUT_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
+    result_schema_v2(
+        "podway.successor-cursor/v1",
+        "schemas/successor-cursor-v1.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        crate::GROUP_ACTIVATE_INPUT_SCHEMA,
+        "schemas/group-activate-input-v1.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        crate::GROUP_REPLAN_INPUT_SCHEMA,
+        "schemas/group-replan-input-v1.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        crate::SCOPED_CRITERION_INPUT_SCHEMA,
+        "schemas/scoped-criterion-assessment-input-v1.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        crate::SCOPED_ITEM_RECORD_MANY_INPUT_SCHEMA,
+        "schemas/scoped-item-record-many-input-v1.schema.json",
+        &[],
+    ),
+];
+const SUCCESSOR_LOCAL_RESULT_SCHEMAS: &[ResultSchemaContractV2] = &[
+    result_schema_v2(
+        SUCCESSOR_AUTHORING_RESULT_SCHEMA,
+        "schemas/successor-authoring-result-v1.schema.json",
+        &[
+            "procedure.validate",
+            "procedure.show",
+            "procedure.format",
+            "procedure.vet",
+            "procedure.graph",
+            "procedure.preview",
+            "procedure.lint",
+            "procedure.check",
+            "procedure.scaffold",
+        ],
+    ),
+    result_schema_v2(
+        SUCCESSOR_PRESET_RESULT_SCHEMA,
+        "schemas/successor-preset-result-v1.schema.json",
+        &["preset.list", "preset.show", "preset.explain"],
+    ),
+];
 pub const NEW_ROUTE_RESULT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
     result_schema_v2(
         PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1,
@@ -236,6 +289,21 @@ pub const NEW_ROUTE_RESULT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
     ),
 ];
 const DELEGATION_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
+    result_schema_v2(
+        crate::SCOPED_DELEGATION_ACCEPT_INPUT_SCHEMA,
+        "schemas/delegation-accept-input-v2.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.delegation-work-package/v2",
+        "schemas/delegation-work-package-v2.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.delegation-receipt/v2",
+        "schemas/delegation-receipt-v2.schema.json",
+        &[],
+    ),
     result_schema_v2(
         "podway.delegation-accept-input/v1",
         "schemas/delegation-accept-input-v1.schema.json",
@@ -374,6 +442,11 @@ pub const DAEMON_FREE_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
         "podway.item-record-many-result/v2",
         "schemas/item-record-many-result-v2.schema.json",
         &["item.record_many"],
+    ),
+    result_schema_v2(
+        "podway.legacy-runtime-state-unsupported-details/v2",
+        "schemas/legacy-runtime-state-unsupported-details-v2.schema.json",
+        &[],
     ),
     result_schema_v2(
         "podway.legacy-runtime-state-unsupported-details/v1",
@@ -602,6 +675,11 @@ pub const DAEMON_FREE_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
         &[],
     ),
     result_schema_v2(
+        "podway.workspace-schema-unsupported-details/v2",
+        "schemas/workspace-schema-unsupported-details-v2.schema.json",
+        &[],
+    ),
+    result_schema_v2(
         "podway.workspace-schema-unsupported-details/v1",
         "schemas/workspace-schema-unsupported-details-v1.schema.json",
         &[],
@@ -684,16 +762,18 @@ pub fn released_writer_release_v1(manifest_digest: &str) -> Option<&'static str>
 pub fn decode_result_schema_contract_v2(result: &Value) -> Option<&'static ResultSchemaContractV2> {
     let object = result.as_object()?;
     let schema = object.get("schema")?.as_str()?;
-    let contract = current_result_contracts_v2().find(|contract| contract.schema == schema)?;
+    let contract = result_schema_contracts_v2().find(|contract| contract.schema == schema)?;
     (validate_json_map_depth(object, 1).is_ok()
         && validate_selected_direct_schema_v1(schema, "", result)
         && validate_result_correlations_v2(schema, object))
     .then_some(contract)
 }
-fn current_result_contracts_v2() -> impl Iterator<Item = &'static ResultSchemaContractV2> {
+pub fn result_schema_contracts_v2() -> impl Iterator<Item = &'static ResultSchemaContractV2> {
     EXISTING_ROUTE_RESULT_SCHEMAS_V2
         .iter()
         .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
+        .chain(successor::RESULT_SCHEMAS)
+        .chain(SUCCESSOR_LOCAL_RESULT_SCHEMAS)
         .chain(
             DAEMON_FREE_DOCUMENT_SCHEMAS_V1
                 .iter()
@@ -2035,6 +2115,9 @@ fn daemon_free_generation_correlations_v1(schema: &str, value: &Value) -> bool {
             .is_some_and(workspace_mismatch_v2_release_agrees_v1),
         "podway.output/v4" => {
             let result = &value["result"];
+            if let Some(valid) = successor::envelope_correlations(value, result) {
+                return valid;
+            }
             if result.get("schema").and_then(Value::as_str) == Some("podway.observation-result/v6")
             {
                 result
@@ -2124,6 +2207,11 @@ pub fn validate_v2_output_warnings(warnings: &[Map<String, Value>]) -> bool {
 }
 
 pub fn validate_command_result_v2(command: &str, result: &Value) -> Result<(), ProtocolError> {
+    if !successor::command_agrees(command, result) {
+        return Err(ProtocolError::InvalidCommandResult {
+            command: command.to_owned(),
+        });
+    }
     if result.get("schema").and_then(Value::as_str) == Some("podway.mutation-observation-result/v1")
     {
         return validate_mutation_observation_command_result_v1(command, result);
@@ -2402,7 +2490,10 @@ fn direct_document_contracts_v1() -> impl Iterator<Item = &'static ResultSchemaC
         .iter()
         .chain(EXISTING_ROUTE_RESULT_SCHEMAS_V2)
         .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
+        .chain(successor::RESULT_SCHEMAS)
+        .chain(SUCCESSOR_LOCAL_RESULT_SCHEMAS)
         .chain(DELEGATION_DOCUMENT_SCHEMAS_V1)
+        .chain(SUCCESSOR_INPUT_DOCUMENT_SCHEMAS_V1)
 }
 fn direct_schema_source_v1(contract: &ResultSchemaContractV2) -> Result<Value, String> {
     let filename = contract

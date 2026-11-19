@@ -26,6 +26,10 @@ use podway_core::{
     SourceLocation,
 };
 
+use crate::execution_groups::projection::{
+    SUCCESSOR_FORMATTED_CHARACTERS_FIELD, SUCCESSOR_SOURCE_BYTES_FIELD,
+    SUCCESSOR_SOURCE_CHARACTERS_FIELD,
+};
 use crate::procedure_v2_canonical::{
     CANONICAL_PROJECTION_BYTES_FIELD, CANONICAL_PROJECTION_CHARACTERS_FIELD,
 };
@@ -411,7 +415,11 @@ fn classify(error: &ConfigError) -> Classification<'_> {
         ConfigError::OutOfBounds { field, .. }
             if matches!(
                 *field,
-                CANONICAL_PROJECTION_CHARACTERS_FIELD | CANONICAL_PROJECTION_BYTES_FIELD
+                CANONICAL_PROJECTION_CHARACTERS_FIELD
+                    | CANONICAL_PROJECTION_BYTES_FIELD
+                    | SUCCESSOR_FORMATTED_CHARACTERS_FIELD
+                    | SUCCESSOR_SOURCE_BYTES_FIELD
+                    | SUCCESSOR_SOURCE_CHARACTERS_FIELD
             ) =>
         {
             Classification {

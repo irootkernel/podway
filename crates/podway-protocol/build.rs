@@ -53,6 +53,7 @@ fn emit_git_rerun_paths(workspace: &Path) {
 
 fn generate_embedded_schemas(workspace: &Path, output_dir: &Path) {
     let schema_dir = workspace.join("assets/schemas");
+    println!("cargo:rerun-if-changed={}", schema_dir.display());
     let mut paths = fs::read_dir(&schema_dir)
         .unwrap_or_else(|error| fail(error.to_string()))
         .map(|entry| entry.unwrap_or_else(|error| fail(error.to_string())).path())

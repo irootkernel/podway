@@ -327,8 +327,9 @@ fn third_plan_pages_exact_first_group_work_without_inheriting_gates() {
         let ledger = fixture.ledger();
         assert!(matches!(
             activate_group(&mut fixture.store, request, || TIME, &NativeDirectIdSourceV1),
-            Err(SuccessorExecutionError::Domain(DomainError::InvalidState { reason }))
-                if reason == expected
+            Err(SuccessorExecutionError::GroupActivationPriorWorkInvalid(
+                DomainError::InvalidState { reason }
+            )) if reason == expected
         ));
         fixture.compare_rejected(&before_activation, key, ledger);
     }
@@ -519,7 +520,7 @@ fn third_plan_pages_exact_first_group_work_without_inheriting_gates() {
     let seen = read_pages(&mut fixture, target);
     assert!(matches!(
         list_successor_prior_work(&mut fixture.store, target, g3, base_digest, page(64, None)),
-        Err(SuccessorExecutionError::HistoryDefinitionMismatch)
+        Err(SuccessorExecutionError::GroupDefinitionMismatch)
     ));
     assert!(matches!(
         list_successor_prior_work(

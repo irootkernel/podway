@@ -1,0 +1,201 @@
+schema: podway.procedure/v3
+id: analysis-v3
+version: "1"
+name: Analysis v3
+purpose: Produce a reviewed decision-ready analysis from bounded sources, explicit assumptions, counterarguments, and uncertainty.
+description: A research and technical-analysis Procedure with guarded evidence-gap rework, phase-owner review, and goal-directed closeout.
+goal_tracking: true
+node_definitions:
+  definition:
+    type: action
+    title: Define the analysis
+    intent: Establish the question, decision context, scope, and constraints before gathering evidence.
+    instructions:
+      - "Accountable role: Coordinator. Use the current selected evidence and record the declared outputs against that basis."
+      - Inspect the repository authorities and state one decision-relevant question.
+      - Record the analysis boundary and constraints in English.
+      - Report actual negative or incomplete results in the declared output fields. If a required result cannot be supplied, record a blocker with the missing facts.
+      - Select a validated group proposal only after recording the planning basis. Activate it explicitly; when revising a plan, reconcile retained work and current evidence before activating a fresh group.
+    items:
+      - id: analysis-question
+        type: text
+        prompt: Record the focused analysis question in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: decision-context
+        type: text
+        prompt: Record the decision or use that this analysis must support in English.
+        required: true
+        min_length: 1
+        max_length: 2000
+        multiline: true
+      - id: scope-and-constraints
+        type: list
+        prompt: List the analysis scope and material constraints in English.
+        required: true
+        min_items: 1
+        max_items: 20
+        max_item_length: 500
+        max_total_length: 10000
+        unique: true
+  assess-goal:
+    type: decision
+    title: Assess the session goal
+    objective: Determine whether fresh source, analysis, challenge, synthesis, and review evidence supports the goal.
+    prompt: What is the outcome of the current session goal?
+    evidence_guidance:
+      - Assess every criterion against the selected fresh evidence and decision records.
+      - "Coordinator: assess every current criterion using the admitted group's selected terminal outputs."
+      - Use an actual negative criterion where the evidence establishes a failure. Block if required proof remains unavailable.
+    items:
+      - id: assessment-note
+        type: text
+        prompt: Record observations supporting the criterion assessments in English.
+        required: false
+        min_length: 0
+        max_length: 2000
+        multiline: true
+    options:
+      - id: achieved
+        label: Goal achieved
+        criteria: Fresh criterion assessments support the current analysis goal revision.
+      - id: not-achieved
+        label: Goal not achieved
+        criteria: Fresh evidence does not support the current analysis goal revision.
+      - id: superseded
+        label: Goal superseded
+        criteria: The current analysis goal revision is no longer desired.
+    reason:
+      required: true
+      prompt: Explain the outcome using criterion assessments and evidence in English.
+    assessment:
+      target: session_goal
+      outcomes:
+        achieved: achieved
+        not-achieved: not_achieved
+        superseded: superseded
+  closeout:
+    type: action
+    title: Record the closeout
+    intent: Record the terminal outcome for the assessed analysis goal.
+    instructions:
+      - "Accountable role: Coordinator. Use the current selected evidence and record the declared outputs against that basis."
+      - Report actual negative or incomplete results in the declared output fields. If a required result cannot be supplied, record a blocker with the missing facts.
+    items:
+      - id: closeout-note
+        type: text
+        prompt: Record the final analysis closeout in English.
+        required: true
+        min_length: 1
+        max_length: 2000
+        multiline: true
+graph:
+  entry: define
+  nodes:
+    - id: define
+      use: definition
+      next: assess-goal
+    - id: assess-goal
+      use: assess-goal
+      evidence_from:
+        - scope: local
+          node: define
+          required: true
+          items:
+            - analysis-question
+        - scope: execution_result
+          required: true
+          items:
+            - sources
+            - conclusion
+            - recommendation
+            - confidence
+            - residual-risks
+            - review-summary
+            - unresolved-source-findings
+            - unresolved-analysis-findings
+      routes:
+        achieved:
+          to: closeout
+          effect: advance
+        not-achieved:
+          to: closeout
+          effect: advance
+        superseded:
+          to: closeout
+          effect: advance
+    - id: closeout
+      use: closeout
+      evidence_from:
+        - scope: local
+          node: assess-goal
+          required: true
+      terminal: true
+execution_group:
+  anchor: define
+  success_return: assess-goal
+  plan_inputs:
+    - analysis-question
+    - decision-context
+    - scope-and-constraints
+  result_items:
+    - id: sources
+      type: list
+      prompt: List the authoritative sources or stable inputs used by the analysis.
+      required: true
+      min_items: 2
+      max_items: 40
+      max_item_length: 1000
+      max_total_length: 40000
+      unique: true
+    - id: conclusion
+      type: text
+      prompt: Record the supported conclusion in English.
+      required: true
+      min_length: 1
+      max_length: 4000
+      multiline: true
+    - id: recommendation
+      type: text
+      prompt: Record the recommended decision or next action in English.
+      required: true
+      min_length: 1
+      max_length: 4000
+      multiline: true
+    - id: confidence
+      type: choice
+      prompt: Select the confidence in the conclusion.
+      required: true
+      choices:
+        - low
+        - medium
+        - high
+    - id: residual-risks
+      type: list
+      prompt: List residual risks in English, or record an empty list when none remains.
+      required: true
+      min_items: 0
+      max_items: 20
+      max_item_length: 1000
+      max_total_length: 20000
+      unique: true
+    - id: review-summary
+      type: text
+      prompt: Summarize the review result in English.
+      required: true
+      min_length: 1
+      max_length: 4000
+      multiline: true
+    - id: unresolved-source-findings
+      type: integer
+      prompt: Record the number of unresolved source or evidence findings.
+      required: true
+      minimum: 0
+    - id: unresolved-analysis-findings
+      type: integer
+      prompt: Record the number of unresolved reasoning, synthesis, or trust-claim findings.
+      required: true
+      minimum: 0
+  replan_decisions: []

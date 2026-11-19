@@ -254,7 +254,7 @@ fn local_rework_preserves_exact_attempt_provenance_and_pageable_blockers() {
         rows[0],
         json!({
             "attempt": source, "trace_sequence": 2, "lifecycle": "completed", "validity": "stale",
-            "opened_at": later(1), "closed_at": later(5), "reason": null, "delegation": original_delegation,
+            "opened_at": later(1), "closed_at": later(5), "actor": null, "reason": null, "delegation": original_delegation,
             "decision_entry": null, "selected_group": null, "decision": null, "blocker_count": 0,
             "items": [
                 {"item":"memo", "item_type":"text", "revision":2, "recorded":true},
@@ -512,7 +512,7 @@ fn admitted_dag_above_the_authoring_response_bound_is_fully_pageable() {
             },
             None
         ),
-        Err(SuccessorExecutionError::HistoryDefinitionMismatch)
+        Err(SuccessorExecutionError::GroupDefinitionMismatch)
     ));
     let dag = full_text(first, |token| {
         content(read_successor_history_dag(&mut fixture.store, target, group, Some(token)).unwrap())
@@ -759,7 +759,7 @@ fn scoped_attempts_values_and_artifact_presence_survive_replacement_and_archive(
             SuccessorHistoryDefinition::Base(group.digest()),
             None
         ),
-        Err(SuccessorExecutionError::HistoryDefinitionMismatch)
+        Err(SuccessorExecutionError::GroupDefinitionMismatch)
     ));
     let unknown_execution =
         GroupExecutionIdV1::new("00000000-0000-4000-8000-000000000001").unwrap();
@@ -793,9 +793,9 @@ fn scoped_attempts_values_and_artifact_presence_survive_replacement_and_archive(
             SuccessorHistorySession { session: &unknown_session, ..target },
             first, None,
         ),
-        Err(SuccessorExecutionError::Store(CandidateStoreError::Domain(
+        Err(SuccessorExecutionError::Domain(
             DomainError::SessionIdentityMismatch { expected, actual: None }
-        ))) if expected == unknown_session
+        )) if expected == unknown_session
     ));
     let earlier_dag =
         content(read_successor_history_dag(&mut fixture.store, target, first, None).unwrap());

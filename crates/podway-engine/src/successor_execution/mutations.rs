@@ -1,19 +1,35 @@
 //! Typed current-cursor and item-local fixture mutations.
 
 use super::*;
-use podway_core::workflow_v2::item_value_json_v2;
 use podway_core::{
-    BlockerId, BlockerState, BlockerStateV2, GoalOutcome, MAX_ACTIVE_ITEM_MUTATIONS_V2, OptionId,
-    ReasonV2,
+    ActorAttributionV2, BlockerId, BlockerState, BlockerStateV2, OptionId, ReasonV2,
 };
-use podway_protocol::serialized_json_len_v1;
+#[cfg(feature = "test-support")]
+use podway_core::{GoalOutcome, workflow_v2::item_value_json_v2};
+#[cfg(feature = "test-support")]
+use {podway_core::MAX_ACTIVE_ITEM_MUTATIONS_V2, podway_protocol::serialized_json_len_v1};
 
+#[derive(Clone, Debug)]
 pub enum SuccessorCursorMutation {
+    Begin(Option<ExecutionGoalV3>),
     Complete,
+    #[cfg(feature = "test-support")]
     Decide {
         option: OptionId,
         reason: ReasonV2,
         goal_outcome: Option<GoalOutcome>,
+    },
+    DecideAssessed {
+        option: OptionId,
+        reason: ReasonV2,
+    },
+    AssessCriterion {
+        entry: SuccessorCriterionInputV1,
+        actor: Option<ActorAttributionV2>,
+    },
+    AssessCriteria {
+        entries: Vec<SuccessorCriterionInputV1>,
+        actor: Option<ActorAttributionV2>,
     },
     Rework {
         target: podway_core::GraphNodeId,
@@ -26,41 +42,81 @@ pub enum SuccessorCursorMutation {
     Cancel(ReasonV2),
     Block(ReasonV2),
     Unblock(BlockerId),
+    UnblockAll,
 }
 
 /// The immutable attempt identity and selected activation are mandatory. A write to one slot does
 /// not rely on the session revision or on an unrelated slot's revision.
+#[cfg(feature = "test-support")]
 pub struct SuccessorItemRequest {
     pub workspace: WorkspaceId,
     pub key: IdempotencyKeyV1,
     pub request_id: RequestIdV1,
     pub target: ScopedAttemptV1,
     pub selected_group: Option<GroupExecutionIdV1>,
+    pub response: SuccessorMutationResponseV1,
 }
 
 pub fn issue_cursor_mutation(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorMutationStore,
     request: SuccessorMutationRequest,
     operation: SuccessorCursorMutation,
     clock: impl FnOnce() -> UnixMillis,
     ids: &impl DirectIdSourceV1,
 ) -> Result<DirectMutationResultV1> {
-    let (command, body) = operation.request_parts();
+    issue_cursor_mutation_attributed(store, request, operation, None, clock, ids)
+}
+
+pub(super) fn issue_cursor_mutation_attributed(
+    store: &mut impl SuccessorMutationStore,
+    request: SuccessorMutationRequest,
+    operation: SuccessorCursorMutation,
+    actor: Option<ActorAttributionV2>,
+    clock: impl FnOnce() -> UnixMillis,
+    ids: &impl DirectIdSourceV1,
+) -> Result<DirectMutationResultV1> {
+    let command = operation.command_name();
+    let mut body = operation.request_body();
+    let attribution = actor
+        .map(|actor| {
+            use SuccessorAttributionTargetV1 as Target;
+            let target = match &operation {
+                SuccessorCursorMutation::Begin(Some(_))
+                | SuccessorCursorMutation::DefineGoal(_) => Target::InitialGoal,
+                SuccessorCursorMutation::ReviseGoal(_) => Target::RevisedGoal,
+                SuccessorCursorMutation::DecideAssessed { .. }
+                | SuccessorCursorMutation::Rework { .. } => Target::ClosedAttempt,
+                _ => {
+                    return Err(SuccessorExecutionError::Invalid(
+                        "this transition cannot retain actor attribution",
+                    ));
+                }
+            };
+            body["actor"] = json!(actor.as_str());
+            Ok((target, actor))
+        })
+        .transpose()?;
+    let verify_progress = operation.needs_progress_verification();
     scoped_mutation(
         store,
         request,
         command,
         body,
+        verify_progress,
         clock,
-        |workspace, state, fence, now| {
-            operation.apply(workspace, state, fence, now, ids)?;
-            Ok(None)
+        |_, state, fence, clock| {
+            let now = operation.apply(state, fence, clock, ids)?;
+            if let Some((target, actor)) = attribution {
+                state.attribute_transition(fence, target, actor)?;
+            }
+            Ok((None, now))
         },
     )
 }
 
+#[cfg(feature = "test-support")]
 pub fn record_successor_item(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorMutationStore,
     request: SuccessorItemRequest,
     write: GroupItemWriteV1,
     clock: impl FnOnce() -> UnixMillis,
@@ -79,13 +135,14 @@ pub fn record_successor_item(
             "selected_group": request.selected_group,
         }),
         body,
+        false,
     )?;
-    store.mutate(&request.workspace, &exact, |transaction| {
+    store.scoped_mutation(&request.workspace, &exact, clock, |transaction, now| {
         let (mut state, sources) = transaction.load(admit_candidate_definition)?;
         verify_selection(&state, request.selected_group.as_ref())?;
         state.verify_attempt(&request.target)?;
         let before = state.fence().revision;
-        let now = clock();
+        let now = now();
         let revision = state
             .record_item(
                 &request.target,
@@ -103,12 +160,14 @@ pub fn record_successor_item(
             before,
             now,
             Some(revision != write.expected_revision),
+            request.response,
         )
     })
 }
 
+#[cfg(feature = "test-support")]
 pub fn record_successor_many(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorMutationStore,
     request: SuccessorMutationRequest,
     mut writes: Vec<GroupItemWriteV1>,
     clock: impl FnOnce() -> UnixMillis,
@@ -141,8 +200,10 @@ pub fn record_successor_many(
         request,
         "item.record_many",
         Value::Array(body),
+        false,
         clock,
-        |_, state, fence, now| {
+        |_, state, fence, clock| {
+            let now = clock();
             // scoped_mutation has already compared the live session revision.
             let changed = state
                 .record_many(fence, writes, now)
@@ -150,11 +211,12 @@ pub fn record_successor_many(
                     GraphMutationErrorV2::Domain(error) => item_write_error(error),
                     error => error,
                 })?;
-            Ok(Some(changed))
+            Ok((Some(changed), now))
         },
     )
 }
 
+#[cfg(feature = "test-support")]
 fn item_write_error(error: DomainError) -> GraphMutationErrorV2 {
     match error {
         DomainError::PreconditionFailed { expected, actual } => {
@@ -164,8 +226,9 @@ fn item_write_error(error: DomainError) -> GraphMutationErrorV2 {
     }
 }
 
+#[cfg(feature = "test-support")]
 pub fn accept_successor_delegation(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorMutationStore,
     request: SuccessorMutationRequest,
     binding: ScopedDelegationBindingV1,
     clock: impl FnOnce() -> UnixMillis,
@@ -176,8 +239,10 @@ pub fn accept_successor_delegation(
         request,
         "delegation.accept",
         body,
+        false,
         clock,
-        |workspace, state, fence, now| {
+        |workspace, state, fence, clock| {
+            let now = clock();
             let package = current::delegation_package(workspace, state)?;
             if state
                 .active_attempt()
@@ -189,30 +254,44 @@ pub fn accept_successor_delegation(
                 ));
             }
             state.accept_delegation(fence, binding, package.package_digest(), now)?;
-            Ok(None)
+            Ok((None, now))
         },
     )
 }
 
 fn scoped_mutation(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorMutationStore,
     request: SuccessorMutationRequest,
     command: &str,
     body: Value,
+    verify_progress: bool,
     clock: impl FnOnce() -> UnixMillis,
     apply: impl FnOnce(
         &WorkspaceId,
         &mut ExecutionSessionV3,
         &ExecutionCursorFenceV1,
-        UnixMillis,
-    ) -> Result<Option<bool>>,
+        &mut dyn FnMut() -> UnixMillis,
+    ) -> Result<(Option<bool>, UnixMillis)>,
 ) -> Result<DirectMutationResultV1> {
     let exact = outcome_request(&request, command, body)?;
-    store.mutate(&request.workspace, &exact, |transaction| {
+    store.scoped_mutation(&request.workspace, &exact, clock, |transaction, now| {
         let (mut state, sources) = transaction.load(admit_candidate_definition)?;
         verify_cursor(&state, &request.cursor)?;
-        let now = clock();
-        let changed = apply(
+        use podway_core::SessionLifecycle;
+        let lifecycle = state.lifecycle();
+        if command != "session.begin"
+            && lifecycle != SessionLifecycle::Running
+            && !(command == "goal.revise" && lifecycle != SessionLifecycle::Prepared)
+        {
+            return Err(GraphMutationErrorV2::SessionNotRunning.into());
+        }
+        if command == "session.complete" {
+            current::verify_delegated_completion(transaction, &state)?;
+        }
+        if verify_progress {
+            transaction.verify_progress(&state)?;
+        }
+        let (changed, now) = apply(
             transaction.workspace(),
             &mut state,
             &request.cursor.execution,
@@ -226,10 +305,12 @@ fn scoped_mutation(
             request.cursor.execution.revision,
             now,
             changed,
+            request.response,
         )
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish_current_mutation(
     transaction: &CandidateExecutionTransaction<'_, '_>,
     identity: &DirectMutationRequestV1,
@@ -238,6 +319,7 @@ fn finish_current_mutation(
     before: Revision,
     now: UnixMillis,
     changed: Option<bool>,
+    response: SuccessorMutationResponseV1,
 ) -> Result<CandidateSuccess> {
     let mut view = current::observation(
         transaction.workspace(),
@@ -248,9 +330,19 @@ fn finish_current_mutation(
     if let Some(changed) = changed {
         view["changed"] = json!(changed);
     }
-    persist_transition(transaction, identity, state, sources, before, view, now)
+    persist_transition(
+        transaction,
+        identity,
+        state,
+        sources,
+        before,
+        view,
+        now,
+        response,
+    )
 }
 
+#[cfg(feature = "test-support")]
 fn item_write_json(write: &GroupItemWriteV1) -> Result<Value> {
     let value = write
         .value
@@ -264,54 +356,109 @@ fn item_write_json(write: &GroupItemWriteV1) -> Result<Value> {
 }
 
 impl SuccessorCursorMutation {
-    fn request_parts(&self) -> (&'static str, Value) {
+    pub(crate) const fn command_name(&self) -> &'static str {
         match self {
-            Self::Complete => ("complete", json!({})),
+            Self::Begin(_) => "session.begin",
+            Self::Complete => "session.complete",
+            #[cfg(feature = "test-support")]
+            Self::Decide { .. } => "session.decide",
+            Self::DecideAssessed { .. } => "session.decide",
+            Self::AssessCriterion { .. } => "goal.assess_criterion",
+            Self::AssessCriteria { .. } => "goal.assess_criteria",
+            Self::Rework { .. } => "session.rework",
+            Self::Retry(_) => "session.retry",
+            Self::Skip(_) => "session.skip",
+            Self::DefineGoal(_) => "goal.define",
+            Self::ReviseGoal(_) => "goal.revise",
+            Self::Cancel(_) => "session.cancel",
+            Self::Block(_) => "session.block",
+            Self::Unblock(_) | Self::UnblockAll => "session.unblock",
+        }
+    }
+
+    pub(super) fn needs_progress_verification(&self) -> bool {
+        match self {
+            Self::Complete | Self::DecideAssessed { .. } => true,
+            #[cfg(feature = "test-support")]
+            Self::Decide { .. } => true,
+            _ => false,
+        }
+    }
+
+    fn request_body(&self) -> Value {
+        match self {
+            Self::Begin(goal) => json!({"goal": goal.as_ref().map(goal_json)}),
+            Self::Complete => json!({}),
+            #[cfg(feature = "test-support")]
             Self::Decide {
                 option,
                 reason,
                 goal_outcome,
-            } => (
-                "decide",
-                json!({
-                    "option": option, "reason": reason.as_str(), "goal_outcome": goal_outcome.map(GoalOutcome::as_str),
-                }),
-            ),
-            Self::Rework { target, reason } => (
-                "rework",
-                json!({"target": target, "reason": reason.as_str()}),
-            ),
-            Self::Retry(reason) => ("retry", json!({"reason": reason.as_str()})),
-            Self::Skip(reason) => (
-                "skip",
-                json!({"reason": reason.as_ref().map(ReasonV2::as_str)}),
-            ),
-            Self::DefineGoal(goal) => ("goal.define", goal_json(goal)),
-            Self::ReviseGoal(change) => (
-                "goal.revise",
-                json!({
-                    "goal": goal_json(&change.goal), "target": change.target, "reactivate": change.reactivate,
-                    "reason": change.feedback.reason(), "working_copy_basis": change.feedback.working_copy_basis(),
-                    "feedback": change.feedback.feedback(),
-                }),
-            ),
-            Self::Cancel(reason) => ("cancel", json!({"reason": reason.as_str()})),
-            Self::Block(reason) => ("block", json!({"reason": reason.as_str()})),
-            Self::Unblock(blocker) => ("unblock", json!({"blocker": blocker})),
+            } => json!({
+                "option": option, "reason": reason.as_str(), "goal_outcome": goal_outcome.map(GoalOutcome::as_str),
+            }),
+            Self::DecideAssessed { option, reason } => {
+                json!({"option": option, "reason": reason.as_str()})
+            }
+            Self::AssessCriterion { entry, actor } => Self::AssessCriteria {
+                entries: vec![entry.clone()],
+                actor: actor.clone(),
+            }
+            .request_body(),
+            Self::AssessCriteria { entries, actor } => json!({
+                "actor": actor.as_ref().map(ActorAttributionV2::as_str),
+                "entries": entries.iter().map(|entry| json!({
+                    "criterion": entry.criterion,
+                    "status": entry.status.as_str(),
+                    "reason": entry.reason.as_str(),
+                    "citations": entry.citations.iter().map(criterion_citation_json).collect::<Vec<_>>(),
+                })).collect::<Vec<_>>(),
+            }),
+            Self::Rework { target, reason } => json!({"target": target, "reason": reason.as_str()}),
+            Self::Retry(reason) => json!({"reason": reason.as_str()}),
+            Self::Skip(reason) => json!({"reason": reason.as_ref().map(ReasonV2::as_str)}),
+            Self::DefineGoal(goal) => goal_json(goal),
+            Self::ReviseGoal(change) => json!({
+                "goal": goal_json(&change.goal), "target": change.target, "reactivate": change.reactivate,
+                "reason": change.feedback.reason(), "working_copy_basis": change.feedback.working_copy_basis(),
+                "feedback": change.feedback.feedback(),
+            }),
+            Self::Cancel(reason) | Self::Block(reason) => json!({"reason": reason.as_str()}),
+            Self::Unblock(blocker) => json!({"blocker": blocker}),
+            Self::UnblockAll => json!({"all": true}),
         }
     }
 
     fn apply(
         self,
-        workspace: &WorkspaceId,
         state: &mut ExecutionSessionV3,
         fence: &ExecutionCursorFenceV1,
-        now: UnixMillis,
+        clock: &mut dyn FnMut() -> UnixMillis,
         ids: &impl DirectIdSourceV1,
-    ) -> Result<()> {
-        match self {
+    ) -> Result<UnixMillis> {
+        let operation = match self {
+            Self::DecideAssessed { option, reason } => {
+                return Ok(state.decide_assessed_with_effects(
+                    fence,
+                    option,
+                    reason,
+                    clock,
+                    || ids.next_attempt_id(),
+                )?);
+            }
+            Self::Rework { target, reason } => {
+                return Ok(
+                    state.rework_with_effects(fence, &target, reason, clock, || {
+                        ids.next_attempt_id()
+                    })?,
+                );
+            }
+            operation => operation,
+        };
+        let now = clock();
+        match operation {
+            Self::Begin(goal) => state.begin_prepared(fence, goal, ids.next_attempt_id(), now)?,
             Self::Complete => {
-                current::verify_delegated_completion(workspace, state)?;
                 let base_terminal = fence.attempt.as_ref().is_some_and(|attempt| {
                     attempt.scope() == &ExecutionScopeV1::Base
                         && state.current_placement().is_some_and(|placement| {
@@ -326,6 +473,7 @@ impl SuccessorCursorMutation {
                 });
                 state.complete(fence, (!base_terminal).then(|| ids.next_attempt_id()), now)?;
             }
+            #[cfg(feature = "test-support")]
             Self::Decide {
                 option,
                 reason,
@@ -338,14 +486,54 @@ impl SuccessorCursorMutation {
                 ids.next_attempt_id(),
                 now,
             )?,
-            Self::Rework { target, reason } => {
-                state.rework(fence, &target, reason, ids.next_attempt_id(), now)?
+            Self::DecideAssessed { .. } => unreachable!("ordinary decision has its own admission"),
+            Self::AssessCriterion { entry, actor } => {
+                state.assess_criteria(fence, vec![entry], actor, now)?;
             }
+            Self::AssessCriteria { entries, actor } => {
+                state.assess_criteria(fence, entries, actor, now)?;
+            }
+            Self::Rework { .. } => unreachable!("manual rework has its own admission"),
             Self::Retry(reason) => state.retry(fence, reason, ids.next_attempt_id(), now)?,
-            Self::Skip(reason) => state.skip(fence, reason, ids.next_attempt_id(), now)?,
+            Self::Skip(reason) => {
+                let node = state
+                    .current_placement()
+                    .ok_or(GraphMutationErrorV2::SessionNotRunning)?
+                    .id();
+                let policy = state.current_skip_policy().ok_or_else(|| {
+                    GraphMutationErrorV2::SkipNotAllowed {
+                        graph_node_id: node.clone(),
+                    }
+                })?;
+                if policy.reason_required() && reason.is_none() {
+                    return Err(GraphMutationErrorV2::SkipReasonRequired {
+                        graph_node_id: node.clone(),
+                    }
+                    .into());
+                }
+                state.skip(fence, reason, ids.next_attempt_id(), now)?;
+            }
             Self::DefineGoal(goal) => state.define_goal(fence, goal, now)?,
             Self::ReviseGoal(change) => {
-                state.revise_goal(fence, change, ids.next_attempt_id(), now)?
+                let target = change.target.clone();
+                state
+                    .revise_goal_with_admission(fence, change, ids.next_attempt_id(), now)
+                    .map_err(|error| match error {
+                        GroupGoalRevisionErrorV1::TargetNotAllowed(_) => {
+                            GraphMutationErrorV2::GoalRevisionTargetNotAllowed {
+                                target_graph_node_id: target,
+                            }
+                        }
+                        GroupGoalRevisionErrorV1::TargetNotOnTrace(_) => {
+                            GraphMutationErrorV2::ManualReworkTargetNotOnTrace {
+                                target_graph_node_id: target,
+                            }
+                        }
+                        GroupGoalRevisionErrorV1::ReactivationFlagRequired(_) => {
+                            GraphMutationErrorV2::ReactivationFlagRequired
+                        }
+                        GroupGoalRevisionErrorV1::Domain(error) => error.into(),
+                    })?;
             }
             Self::Cancel(reason) => state.cancel(fence, reason, now)?,
             Self::Block(reason) => update_blockers(state, fence, now, |attempt, blockers| {
@@ -371,22 +559,54 @@ impl SuccessorCursorMutation {
                         blocker.blocker_id() == &id && blocker.state() == BlockerState::Open
                     })
                     .ok_or(DomainError::BlockerNotCurrent)?;
-                *blocker = BlockerStateV2::new(
-                    blocker.blocker_id().clone(),
-                    blocker.attempt_id().clone(),
-                    blocker.reason(),
-                    BlockerState::Resolved,
-                    blocker.created_at(),
-                    Some(now),
-                )
-                .map_err(|error| DomainError::InvalidState {
-                    reason: error.reason(),
-                })?;
+                resolve_blocker(blocker, now)
+            })?,
+            Self::UnblockAll => update_blockers(state, fence, now, |_, blockers| {
+                let mut open = blockers
+                    .iter_mut()
+                    .filter(|blocker| blocker.state() == BlockerState::Open)
+                    .peekable();
+                if open.peek().is_none() {
+                    return Err(GraphMutationErrorV2::NoOpenBlockers.into());
+                }
+                for blocker in open {
+                    resolve_blocker(blocker, now)?;
+                }
                 Ok(())
             })?,
         }
-        Ok(())
+        Ok(now)
     }
+}
+
+pub(crate) fn criterion_citation_json(citation: &SuccessorCriterionCitationV1) -> Value {
+    match citation {
+        SuccessorCriterionCitationV1::Item(item) => json!({"kind": "item", "item": item}),
+        SuccessorCriterionCitationV1::Evidence(source) => evidence_citation_json(source),
+    }
+}
+
+pub(crate) fn evidence_citation_json(source: &EvidenceSourceV3) -> Value {
+    match source {
+        EvidenceSourceV3::Local(node) => json!({"kind": "local", "node": node}),
+        EvidenceSourceV3::Plan => json!({"kind": "plan"}),
+        EvidenceSourceV3::ExecutionResult => json!({"kind": "execution_result"}),
+    }
+}
+
+fn resolve_blocker(blocker: &mut BlockerStateV2, now: UnixMillis) -> Result<()> {
+    *blocker = BlockerStateV2::new(
+        blocker.blocker_id().clone(),
+        blocker.attempt_id().clone(),
+        blocker.reason(),
+        BlockerState::Resolved,
+        blocker.created_at(),
+        Some(now),
+    )
+    .map_err(|error| DomainError::InvalidState {
+        reason: error.reason(),
+    })?;
+    Ok(())
 }
 
 fn update_blockers(

@@ -81,7 +81,7 @@ def verify(podway: Path) -> dict[str, Any]:
             raise AssertionError(receipt)
         created_file = created / "release-check.yaml"
         validated = validate_with_podway(podway, created_file)
-        if validated["result"]["procedure_schema"] != "podway.procedure/v2":
+        if validated["result"]["document_schema"] != "podway.procedure/v3":
             raise AssertionError("created scaffold did not preserve its identity")
         original = created_file.read_bytes()
         expect_failure(
@@ -111,7 +111,7 @@ def verify(podway: Path) -> dict[str, Any]:
             created.as_posix(),
         )
 
-        source = ROOT / "assets/presets/bug-fix-v2.yaml"
+        source = ROOT / "assets/presets/bug-fix-v3.yaml"
         code, receipt = run_tool(
             podway,
             "import",
@@ -120,7 +120,7 @@ def verify(podway: Path) -> dict[str, Any]:
             "--output-dir",
             imported.as_posix(),
         )
-        imported_file = imported / "bug-fix-v2.yaml"
+        imported_file = imported / "bug-fix-v3.yaml"
         if code != 0 or receipt.get("ok") is not True or imported_file.read_bytes() != source.read_bytes():
             raise AssertionError(f"valid import did not preserve exact source bytes: {receipt}")
         expect_failure(

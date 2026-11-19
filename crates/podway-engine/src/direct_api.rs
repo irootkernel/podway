@@ -53,6 +53,9 @@ pub enum DirectCommandV1 {
     Cursor(DirectCursorCommandV1),
     Item(DirectItemCommandV1),
     RecordMany(ItemRecordManyV1),
+    SuccessorMutation(crate::successor_execution::DirectSuccessorMutationV1),
+    SuccessorWrite(crate::successor_execution::DirectSuccessorWriteV1),
+    SuccessorHistory(crate::successor_execution::DirectSuccessorHistoryV1),
     Procedure(ProcedureV2MutationCommandV1),
     Session(DirectSessionCommandV1),
     WorkspaceInit {
@@ -66,6 +69,7 @@ pub enum DirectCommandV1 {
     },
     WorkspaceRepair,
     DelegationAccept(DelegationAcceptV1),
+    SuccessorDelegationAccept(podway_protocol::ScopedDelegationAcceptInputV1),
     OutcomeLookup {
         key: IdempotencyKeyV1,
     },
@@ -86,6 +90,9 @@ impl DirectCommandV1 {
             Self::Cursor(command) => command.slice_command().command_name(),
             Self::Item(command) => command.slice_command().command_name(),
             Self::RecordMany(_) => "item.record_many",
+            Self::SuccessorMutation(command) => command.command_name(),
+            Self::SuccessorWrite(command) => command.command_name(),
+            Self::SuccessorHistory(input) => input.command.command_name(),
             Self::Procedure(command) => command.command_name(),
             Self::Session(command) => command.slice().command_name(),
             Self::WorkspaceInit { .. } => "workspace.init",
@@ -93,7 +100,7 @@ impl DirectCommandV1 {
             Self::IntegrationShow => "integration.show",
             Self::WorkspaceDoctor { .. } => "workspace.doctor",
             Self::WorkspaceRepair => "workspace.repair",
-            Self::DelegationAccept(_) => "delegation.accept",
+            Self::DelegationAccept(_) | Self::SuccessorDelegationAccept(_) => "delegation.accept",
             Self::OutcomeLookup { .. } => "outcome.lookup",
             Self::WorkspaceResetAll { .. } => "workspace.reset_all",
             Self::WorkspaceRemove { .. } => "workspace.remove",
@@ -165,6 +172,13 @@ pub struct DirectRequestV1 {
 
 fn supports_return_observation_v1(command: &DirectCommandV1) -> bool {
     match command {
+        DirectCommandV1::SuccessorMutation(command) => matches!(
+            command.command_name(),
+            "session.begin" | "session.complete" | "session.decide" | "goal.assess_criteria"
+        ),
+        DirectCommandV1::SuccessorWrite(
+            crate::successor_execution::DirectSuccessorWriteV1::Atomic { .. },
+        ) => true,
         DirectCommandV1::Start(DirectStartCommandV1::Start(command)) => !command.start.dry_run,
         DirectCommandV1::Cursor(DirectCursorCommandV1::Complete(_))
         | DirectCommandV1::RecordMany(_)
@@ -348,6 +362,7 @@ fn execute_direct_inner_v1<R: GitResolverContractV1>(
         idempotency_key: request.idempotency_key.clone(),
         timeout_ms: request.timeout_ms,
         generation: request.generation,
+        successor_store: resolver.uses_execution_groups(),
         maintenance: None,
     };
     let selector = request.selector.clone();
@@ -421,6 +436,7 @@ pub fn precheck_direct_removal_v1<R: GitResolverContractV1>(
         idempotency_key: None,
         timeout_ms: request.timeout_ms,
         generation: request.generation,
+        successor_store: resolver.uses_execution_groups(),
         maintenance: None,
     };
     let result = resolver
@@ -486,10 +502,17 @@ fn execute_direct_preflight_facts_inner_v1<R: GitResolverContractV1>(
         idempotency_key: None,
         timeout_ms: request.timeout_ms,
         generation: request.generation,
+        successor_store: resolver.uses_execution_groups(),
         maintenance: None,
     };
     let selector = request.selector.clone();
-    match preflight_facts_with_view_v1(resolver, request, clock, invocation.is_some()) {
+    let facts = if resolver.uses_execution_groups() {
+        crate::successor_execution::preflight_successor_facts(resolver, request)
+            .map(|facts| (facts, None))
+    } else {
+        preflight_facts_with_view_v1(resolver, request, clock, invocation.is_some())
+    };
+    match facts {
         Ok((facts, view)) => {
             // The composed read has returned: its final witness and guard drops
             // precede conversion and publication into the invocation context.
@@ -682,6 +705,26 @@ fn dispatch<R: GitResolverContractV1>(
     maintenance_observer: Option<MaintenanceObserver>,
     invocation: Option<&mut DirectInvocationContextV1>,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
+    if resolver.uses_execution_groups()
+        && matches!(
+            request.command,
+            DirectCommandV1::Item(_)
+                | DirectCommandV1::RecordMany(_)
+                | DirectCommandV1::Cursor(_)
+                | DirectCommandV1::DelegationAccept(_)
+                | DirectCommandV1::Procedure(
+                    ProcedureV2MutationCommandV1::SessionBegin(_)
+                        | ProcedureV2MutationCommandV1::SessionDecide(_)
+                        | ProcedureV2MutationCommandV1::SessionRework(_)
+                        | ProcedureV2MutationCommandV1::GoalDefine(_)
+                        | ProcedureV2MutationCommandV1::GoalRevise(_)
+                        | ProcedureV2MutationCommandV1::GoalAssessCriterion(_)
+                        | ProcedureV2MutationCommandV1::GoalAssessCriteria(_)
+                )
+        )
+    {
+        return Err(DirectExecutionErrorV1::InvalidRequest);
+    }
     if request.return_observation && !supports_return_observation_v1(&request.command) {
         return Err(DirectExecutionErrorV1::Store(
             DirectStoreErrorV1::InvalidInput {
@@ -720,35 +763,36 @@ fn dispatch<R: GitResolverContractV1>(
             if matches!(command, DirectReadCommandV1::Status { .. }) {
                 reads004_preflight_counters::record(&reads004_preflight_counters::STATUS_DISPATCHES);
             }
-            execute_read_v1(
-                resolver,
-                DirectReadRequestV1 {
-                    request_id: request.request_id,
-                    selector: request.selector,
-                    expected_workspace_id: request.expected_workspace_id,
-                    expected_session_id,
-                    command,
-                    deadline: request.deadline,
-                    generation: request.generation,
-                },
-                clock,
-            )
+            let read = DirectReadRequestV1 {
+                request_id: request.request_id,
+                selector: request.selector,
+                expected_workspace_id: request.expected_workspace_id,
+                expected_session_id,
+                command,
+                deadline: request.deadline,
+                generation: request.generation,
+            };
+            execute_read_v1(resolver, read, clock)
         }
-        DirectCommandV1::Start(command) => start_session_with_context_v1(
-            resolver,
-            DirectStartRequestV1 {
+        DirectCommandV1::Start(command) => {
+            let start = DirectStartRequestV1 {
                 request_id: request.request_id,
                 selector: request.selector,
                 expected_workspace_id: request.expected_workspace_id,
                 key: request.idempotency_key,
                 command,
                 deadline: request.deadline,
-            },
-            clock,
-            ids,
-            invocation,
-            request.return_observation,
-        ),
+            };
+            if resolver.uses_execution_groups() {
+                use crate::successor_execution::{SuccessorMutationResponseV1, start_native_successor_with_response};
+                let response = start_native_successor_with_response(
+                    resolver, start, clock, ids,
+                    SuccessorMutationResponseV1::Public { return_observation: request.return_observation },
+                )?;
+                return serde_json::from_str(response.as_str()).map_err(|_| DirectStoreErrorV1::Unreadable.into());
+            }
+            start_session_with_context_v1(resolver, start, clock, ids, invocation, request.return_observation)
+        }
         DirectCommandV1::Cursor(command) => execute_cursor_with_context_v1(
             resolver,
             DirectCursorRequestV1 {
@@ -790,6 +834,57 @@ fn dispatch<R: GitResolverContractV1>(
             clock,
             request.return_observation,
         ),
+        DirectCommandV1::SuccessorMutation(operation) => {
+            use crate::successor_execution::{
+                DirectSuccessorMutationRequestV1, SuccessorMutationResponseV1,
+                dispatch_successor_mutation,
+            };
+            let response = dispatch_successor_mutation(
+                resolver,
+                DirectSuccessorMutationRequestV1 {
+                    key: key()?,
+                    request_id: request.request_id,
+                    selector: request.selector,
+                    expected_workspace_id: request.expected_workspace_id.ok_or(DirectExecutionErrorV1::InvalidRequest)?,
+                    deadline: request.deadline,
+                    operation,
+                    response: SuccessorMutationResponseV1::Public {
+                        return_observation: request.return_observation,
+                    },
+                },
+                clock,
+                ids,
+            )?;
+            serde_json::from_str(response.as_str()).map_err(|_| DirectStoreErrorV1::Unreadable.into())
+        }
+        DirectCommandV1::SuccessorWrite(command) => {
+            use crate::successor_execution::{DirectSuccessorWriteRequestV1, dispatch_successor_write};
+            let outcome = dispatch_successor_write(
+                resolver,
+                DirectSuccessorWriteRequestV1 {
+                    key: key()?,
+                    request_id: request.request_id,
+                    selector: request.selector,
+                    expected_workspace_id: request.expected_workspace_id.ok_or(DirectExecutionErrorV1::InvalidRequest)?,
+                    deadline: request.deadline,
+                    command,
+                    return_observation: request.return_observation,
+                },
+                clock,
+            )?;
+            serde_json::from_str(outcome.as_str()).map_err(|_| DirectStoreErrorV1::Unreadable.into())
+        }
+        DirectCommandV1::SuccessorHistory(input) => {
+            use crate::successor_execution::{DirectSuccessorHistoryRequestV1, dispatch_successor_history};
+            if request.idempotency_key.is_some() {
+                return Err(DirectExecutionErrorV1::InvalidRequest);
+            }
+            dispatch_successor_history(resolver, DirectSuccessorHistoryRequestV1 {
+                request_id: request.request_id, selector: request.selector,
+                expected_workspace_id: request.expected_workspace_id,
+                deadline: request.deadline, input,
+            }, clock)
+        }
         DirectCommandV1::Procedure(command) => execute_procedure_with_context_v1(
             resolver,
             DirectProcedureRequestV1 {
@@ -838,6 +933,14 @@ fn dispatch<R: GitResolverContractV1>(
         }
         DirectCommandV1::WorkspaceRepair => {
             repair_workspace_v1(resolver, mutation()?, clock).map_err(Into::into)
+        }
+        DirectCommandV1::SuccessorDelegationAccept(input) => {
+            use crate::successor_execution::{DirectDelegationAcceptRequestV1, dispatch_successor_delegation_accept};
+            dispatch_successor_delegation_accept(resolver, DirectDelegationAcceptRequestV1 {
+                request_id: request.request_id.clone(), selector: request.selector.clone(),
+                expected_workspace_id: request.expected_workspace_id.clone(), key: key()?,
+                deadline: request.deadline, input,
+            }, clock, ids)
         }
         DirectCommandV1::DelegationAccept(input) => accept_delegation_v1(
             resolver,

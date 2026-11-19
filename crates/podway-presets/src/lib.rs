@@ -10,6 +10,9 @@ use podway_config::{
 use podway_core::{AuthoringSeverity, PROCEDURE_SCHEMA_V2};
 use serde::Serialize;
 
+mod catalog_v3;
+
+pub use catalog_v3::{EmbeddedPresetV3, ValidatedPresetV3, list_v3, lookup_v3};
 pub use podway_core::Sha256Digest;
 
 pub const ANALYSIS_V2_YAML: &str = include_str!("../../../assets/presets/analysis-v2.yaml");

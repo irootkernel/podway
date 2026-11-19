@@ -7,121 +7,6 @@ use serde_json::Value;
 
 use super::cli_fixture::Fixture;
 
-const STATE: &str =
-    include_str!("../../../tests/fixtures/v2/procedures/state-derivation-procedure.yaml");
-const RETRY: &str = include_str!("../../../tests/fixtures/v2/procedures/retry-procedure.yaml");
-const SKIP: &str = include_str!("../../../tests/fixtures/v2/procedures/skip-procedure.yaml");
-
-fn running_fixture(procedure: &str) -> Fixture {
-    let fixture = Fixture::new();
-    fixture.run(&["init", "--idempotency-key", "init"]);
-    fs::write(fixture.0.join("procedure.yaml"), procedure).unwrap();
-    let preview = fixture.run(&["procedure", "preview", "procedure.yaml"]);
-    fixture.run(&[
-        "start",
-        "--procedure",
-        "procedure.yaml",
-        "--expect-procedure-digest",
-        preview["result"]["procedure_digest"].as_str().unwrap(),
-        "--task",
-        "Retained runtime",
-        "--idempotency-key",
-        "start",
-    ]);
-    fixture.run(&["begin", "--idempotency-key", "begin"]);
-    fixture
-}
-
-fn fences(before: &Value, attempt: bool) -> Vec<String> {
-    let status = &before["result"];
-    let mut argv = vec![
-        "--if-workspace-uuid".into(),
-        before["workspace"]["uuid"].as_str().unwrap().into(),
-        "--if-session-id".into(),
-        status["session"]["id"].as_str().unwrap().into(),
-        "--if-session-revision".into(),
-        status["session"]["revision"].as_u64().unwrap().to_string(),
-    ];
-    if attempt {
-        argv.extend([
-            "--if-attempt".into(),
-            status["current"]["attempt"]["attempt_id"]
-                .as_str()
-                .unwrap()
-                .into(),
-        ]);
-    }
-    argv
-}
-
-fn transition(
-    fixture: &Fixture,
-    args: &[&str],
-    key: &str,
-    attempt: bool,
-    explicit: bool,
-    json: bool,
-) -> Value {
-    let before = fixture.run(&["status"]);
-    let original_fences = fences(&before, attempt);
-    let mut argv: Vec<String> = args.iter().map(|arg| (*arg).into()).collect();
-    argv.extend(["--idempotency-key".into(), key.into()]);
-    if explicit {
-        argv.extend(original_fences.clone());
-    }
-    if json {
-        argv.push("--json".into());
-    }
-    let output = fixture.raw_output(&argv.iter().map(String::as_str).collect::<Vec<_>>());
-    assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
-    assert!(output.stderr.is_empty(), "{output:?}");
-    let original = fixture.run(&["outcome", "lookup", "--idempotency-key", key])["result"]["outcome"]["response"].clone();
-    assert!(original.is_object());
-    if json {
-        assert_eq!(
-            serde_json::from_slice::<OutputEnvelopeV4>(&output.stdout)
-                .unwrap()
-                .into_value(),
-            original
-        );
-    } else {
-        let text = String::from_utf8(output.stdout).unwrap();
-        assert!(text.contains("workspace:"), "{text}");
-        assert!(
-            text.contains(original["result"]["schema"].as_str().unwrap()),
-            "{text}"
-        );
-    }
-    let read_after = if matches!(
-        original["command"].as_str(),
-        Some("session.reset" | "session.archive")
-    ) {
-        vec!["workspace", "show"]
-    } else {
-        vec!["status"]
-    };
-    let after = fixture.run(&read_after);
-    assert_eq!(
-        after["workspace"]["latest_workspace_sequence"]
-            .as_u64()
-            .unwrap(),
-        before["workspace"]["latest_workspace_sequence"]
-            .as_u64()
-            .unwrap()
-            + 1
-    );
-    if !explicit {
-        argv.extend(original_fences);
-    }
-    argv.retain(|arg| arg != "--json");
-    assert_eq!(
-        fixture.run(&argv.iter().map(String::as_str).collect::<Vec<_>>()),
-        original
-    );
-    assert_eq!(fixture.run(&read_after)["result"], after["result"]);
-    original
-}
-
 fn reject(fixture: &Fixture, args: &[&str], key: &str, code: &str) {
     let before = fixture.run(&["observe"]);
     let mut argv = args.to_vec();
@@ -141,50 +26,279 @@ fn reject(fixture: &Fixture, args: &[&str], key: &str, code: &str) {
     );
 }
 
-fn generated_mutation(
+fn scoped_runtime_transition(
+    fixture: &Fixture,
+    semantic: &[&str],
+    key: &str,
+    scoped: bool,
+    explicit: bool,
+    json: bool,
+) -> Value {
+    let before = scoped_runtime_observe(fixture);
+    let cursor = &before["result"]["cursor"];
+    let workspace = before["workspace"]["uuid"].as_str().unwrap();
+    let mut fences = vec!["--if-workspace-uuid".to_owned(), workspace.to_owned()];
+    if scoped {
+        fences.extend(["--if-cursor".to_owned(), cursor.to_string()]);
+    } else {
+        fences.extend([
+            "--if-session-id".to_owned(),
+            cursor["session"].as_str().unwrap().to_owned(),
+            "--if-session-revision".to_owned(),
+            cursor["session_revision"].to_string(),
+        ]);
+    }
+    let mut args = semantic
+        .iter()
+        .map(|value| (*value).to_owned())
+        .collect::<Vec<_>>();
+    args.extend(["--idempotency-key".to_owned(), key.to_owned()]);
+    if explicit {
+        args.extend(fences.clone());
+    }
+    fn render(args: &[String]) -> Vec<&str> {
+        args.iter().map(String::as_str).collect()
+    }
+    let output = if json {
+        fixture.output(&render(&args))
+    } else {
+        fixture.raw_output(&render(&args))
+    };
+    assert!(output.status.success(), "{semantic:?}: {output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let lookup = fixture.run(&["outcome", "lookup", "--idempotency-key", key]);
+    let original = lookup["result"]["outcome"]["response"].clone();
+    assert!(original.is_object(), "{lookup}");
+    if json {
+        assert_eq!(
+            serde_json::from_slice::<OutputEnvelopeV4>(&output.stdout)
+                .unwrap()
+                .into_value(),
+            original
+        );
+    } else {
+        let human = String::from_utf8(output.stdout).unwrap();
+        assert!(human.contains("workspace:"), "{human}");
+        assert!(
+            human.contains(original["result"]["schema"].as_str().unwrap()),
+            "{human}"
+        );
+    }
+    let after_route = if semantic[0] == "reset" {
+        &["workspace", "show"][..]
+    } else {
+        &["status"][..]
+    };
+    let after = fixture.run(after_route);
+    assert_eq!(
+        after["workspace"]["latest_workspace_sequence"]
+            .as_u64()
+            .unwrap(),
+        before["workspace"]["latest_workspace_sequence"]
+            .as_u64()
+            .unwrap()
+            + 1
+    );
+    if !explicit {
+        args.extend(fences);
+    }
+    assert_eq!(fixture.run(&render(&args)), original);
+    assert_eq!(fixture.run(after_route)["result"], after["result"]);
+    original
+}
+
+fn scoped_runtime_retry_fixture() -> Fixture {
+    use serde_json::json;
+    scoped_runtime_start(&scoped_runtime_base(
+        json!({
+            "work":{"type":"action","title":"Work","intent":"Record current evidence.",
+                "items":[scoped_runtime_source("result",200)]},
+            "review":{"type":"decision","title":"Review","objective":"Evaluate the current result.",
+                "prompt":"Accept this result?","reason":{"required":true},
+                "options":[{"id":"accept","label":"Accept"},{"id":"reject","label":"Reject"}]}
+        }),
+        vec![
+            json!({"id":"work","use":"work","next":"review"}),
+            json!({"id":"review","use":"review",
+            "evidence_from":[{"scope":"local","node":"work","required":true,"items":["result"]}],
+            "routes":{"accept":{"effect":"advance","to":"plan"},"reject":{"effect":"rework","to":"work"}}}),
+        ],
+        false,
+    ))
+}
+
+fn scoped_runtime_skip_fixture() -> Fixture {
+    use serde_json::json;
+    scoped_runtime_start(&scoped_runtime_base(
+        json!({
+            "prepare":{"type":"action","title":"Prepare","intent":"Reach the skippable prefix."},
+            "source":{"type":"action","title":"Source","intent":"Record optional evidence.",
+                "items":[scoped_runtime_source("required-note",200)]},
+            "consumer":{"type":"action","title":"Consumer","intent":"Use available evidence."}
+        }),
+        vec![
+            json!({"id":"prepare","use":"prepare","next":"source"}),
+            json!({"id":"source","use":"source","next":"consumer","skip":{"allowed":true,"reason_required":true}}),
+            json!({"id":"consumer","use":"consumer","next":"plan","skip":{"allowed":true,"reason_required":false},
+            "evidence_from":[{"scope":"local","node":"source","required":false}]}),
+        ],
+        false,
+    ))
+}
+
+fn scoped_runtime_source(item: &str, limit: u64) -> Value {
+    serde_json::json!({"id":item,"type":"text","prompt":"Record the source value.",
+        "required":true,"max_length":limit})
+}
+
+fn scoped_runtime_base(mut definitions: Value, mut nodes: Vec<Value>, tracked: bool) -> Value {
+    let entry = nodes
+        .first()
+        .map(|node| node["id"].clone())
+        .unwrap_or_else(|| serde_json::json!("plan"));
+    definitions["plan"] = serde_json::json!({
+        "type":"action","title":"Plan","intent":"Activate the explicitly selected work group."
+    });
+    definitions["finish"] = serde_json::json!({
+        "type":"action","title":"Finish","intent":"Record the terminal disposition basis."
+    });
+    let return_node = if tracked {
+        definitions["assess"] = serde_json::json!({
+            "type":"decision","title":"Assess","objective":"Assess the selected group result.",
+            "prompt":"What is the resulting goal outcome?",
+            "options":[{"id":"achieved","label":"Achieved"},{"id":"not-achieved","label":"Not achieved"},
+                {"id":"superseded","label":"Superseded"}],
+            "reason":{"required":true},
+            "assessment":{"target":"session_goal","outcomes":{
+                "achieved":"achieved","not-achieved":"not_achieved","superseded":"superseded"
+            }}
+        });
+        "assess"
+    } else {
+        "finish"
+    };
+    nodes.push(serde_json::json!({"id":"plan","use":"plan","next":return_node}));
+    if tracked {
+        nodes.push(serde_json::json!({
+            "id":"assess","use":"assess",
+            "evidence_from":[{"scope":"execution_result","required":true,"items":["result"]}],
+            "routes":{
+                "achieved":{"effect":"advance","to":"finish"},
+                "not-achieved":{"effect":"advance","to":"finish"},
+                "superseded":{"effect":"advance","to":"finish"},
+            }
+        }));
+    }
+    nodes.push(serde_json::json!({"id":"finish","use":"finish","terminal":true}));
+    let results = if tracked {
+        vec![scoped_runtime_source("result", 200)]
+    } else {
+        vec![]
+    };
+    let mut base = serde_json::json!({
+        "schema":"podway.procedure/v3","id":"scoped-runtime-regression","version":"1",
+        "name":"Scoped runtime regression","purpose":"Exercise retained current and historical state.",
+        "node_definitions":definitions,
+        "graph":{"entry":entry,"nodes":nodes},
+        "execution_group":{"anchor":"plan","success_return":return_node,"plan_inputs":[],
+            "result_items":results,"replan_decisions":[]},
+    });
+    if tracked {
+        base["goal_tracking"] = serde_json::json!(true);
+    }
+    base
+}
+
+fn scoped_runtime_start(base: &Value) -> Fixture {
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    fs::write(fixture.0.join("scoped.json"), base.to_string()).unwrap();
+    let preview = fixture.run(&["procedure", "preview", "scoped.json"]);
+    fixture.run(&[
+        "start",
+        "--procedure",
+        "scoped.json",
+        "--expect-procedure-digest",
+        preview["result"]["digest"].as_str().unwrap(),
+        "--task",
+        "Scoped runtime regression",
+        "--idempotency-key",
+        "start",
+    ]);
+    fixture.run(&["begin", "--idempotency-key", "begin"]);
+    fixture
+}
+
+fn scoped_runtime_observe(fixture: &Fixture) -> Value {
+    fixture.run(&["--contract-generation", "2", "observe"])
+}
+
+fn scoped_runtime_template<'a>(observation: &'a Value, command: &str) -> &'a Value {
+    observation["result"]["mutation_templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|template| template["command"] == command)
+        .unwrap_or_else(|| {
+            panic!(
+                "missing {command} template at {}",
+                observation["result"]["cursor"]
+            )
+        })
+}
+
+fn scoped_runtime_recipe(
     fixture: &Fixture,
     command: &str,
     item: Option<&str>,
     replacements: &[(&str, &str)],
     key: &str,
 ) -> Value {
-    let before = fixture.run(&["observe"]);
-    let template = before["result"]["mutation_templates"]
-        .as_array()
-        .unwrap()
+    let before = scoped_runtime_observe(fixture);
+    let template = scoped_runtime_template(&before, command);
+    let item_revision = item.map(|id| {
+        before["result"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["item"] == id)
+            .unwrap()["revision"]
+            .to_string()
+    });
+    let argv = template["argv"].as_array().unwrap();
+    assert_eq!(
+        &argv[..2],
+        &[serde_json::json!("podway"), serde_json::json!("--json")]
+    );
+    let args: Vec<_> = argv[2..]
         .iter()
-        .find(|template| {
-            template["command"] == command && item.is_none_or(|item| template["argv"][2] == item)
-        })
-        .unwrap_or_else(|| panic!("missing template: {command}, {item:?}"));
-    let argv: Vec<String> = template["argv"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .skip(1)
-        .map(|value| {
-            let literal = value.as_str().unwrap();
-            if literal == "<idempotency-key>" {
-                return key.to_owned();
+        .map(|argument| {
+            let argument = argument.as_str().unwrap();
+            match argument {
+                "<idempotency-key>" => key,
+                "<item-id>" => item.unwrap(),
+                "<item-revision>" => item_revision.as_deref().unwrap(),
+                _ => replacements
+                    .iter()
+                    .find_map(|(placeholder, value)| (*placeholder == argument).then_some(*value))
+                    .unwrap_or(argument),
             }
-            replacements
-                .iter()
-                .find_map(|(placeholder, value)| (*placeholder == literal).then_some(*value))
-                .unwrap_or(literal)
-                .to_owned()
         })
         .collect();
-    assert!(argv.iter().all(|arg| !arg.starts_with('<')), "{argv:?}");
-    let args: Vec<_> = argv.iter().map(String::as_str).collect();
-    let original = fixture.run(&args);
+    assert!(args.iter().all(|arg| !arg.starts_with('<')), "{args:?}");
+    let original = fixture.output(&args);
+    assert!(original.status.success(), "{command}: {original:?}");
+    assert_eq!(fixture.output(&args).stdout, original.stdout);
+    let original: Value = serde_json::from_slice::<OutputEnvelopeV4>(&original.stdout)
+        .unwrap()
+        .into_value();
     assert_eq!(original["command"], command);
-    assert_eq!(fixture.run(&args), original);
     assert_eq!(
         fixture.run(&["outcome", "lookup", "--idempotency-key", key])["result"]["outcome"]["response"],
         original
     );
     assert_eq!(
-        fixture.run(&["observe"])["workspace"]["latest_workspace_sequence"]
+        scoped_runtime_observe(fixture)["workspace"]["latest_workspace_sequence"]
             .as_u64()
             .unwrap(),
         before["workspace"]["latest_workspace_sequence"]
@@ -195,53 +309,177 @@ fn generated_mutation(
     original
 }
 
+fn scoped_runtime_activate(fixture: &Fixture, tracked: bool) {
+    scoped_runtime_activate_with_key(fixture, tracked, "activate");
+}
+
+fn scoped_runtime_activate_with_key(fixture: &Fixture, tracked: bool, key: &str) {
+    let mut perform =
+        serde_json::json!({"type":"action","title":"Perform","intent":"Record the group result."});
+    if tracked {
+        perform["items"] = serde_json::json!([scoped_runtime_source("result", 200)]);
+    }
+    let group = serde_json::json!({
+        "schema":"podway.execution-group/v1","id":"scoped-runtime-group","version":"1",
+        "name":"Runtime regression group","purpose":"Settle one admitted group.",
+        "plan_inputs":[],
+        "node_definitions":{"perform":perform},
+        "graph":{"entry":"perform","nodes":[{"id":"perform","use":"perform","terminal":true}]}
+    })
+    .to_string();
+    fs::write(fixture.0.join("group.json"), &group).unwrap();
+    let digest = fixture.run(&["procedure", "preview", "group.json"])["result"]["digest"].clone();
+    let before = scoped_runtime_observe(fixture);
+    let template = scoped_runtime_template(&before, "group.activate");
+    let mut input: Value =
+        serde_json::from_str(template["stdin_template"].as_str().unwrap()).unwrap();
+    input["context"]["idempotency_key"] = serde_json::json!(key);
+    if input["predecessor"].is_string() {
+        assert_eq!(input["prior_work"], "<prior-work-dispositions-array>");
+        input["prior_work"] = serde_json::json!([{
+            "group_execution_id": input["predecessor"], "choice": "revalidate",
+            "rationale": "Retain the prior fixture work and obtain a fresh result for the revised goal."
+        }]);
+    }
+    input["source"] = serde_json::json!({"kind":"document","format":"json","source":group});
+    input["expected_definition"] = digest;
+    input["working_copy_basis"] = serde_json::json!({
+        "descriptor":"Owned runtime regression worktree",
+        "digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    });
+    if let Some(predecessor) = input["predecessor"].as_str() {
+        let snapshot = || {
+            let mut files = fixture.podway_snapshot();
+            files.retain(|entry| entry.0 != std::path::Path::new("runtime/state.sqlite3-shm"));
+            files
+        };
+        let before_mutations = snapshot();
+        let invalid_prior_work = [
+            ("no-prior-work", serde_json::json!([])),
+            (
+                "unknown-prior-group",
+                serde_json::json!([{
+                    "group_execution_id":"00000000-0000-4000-8000-000000000001",
+                    "choice":"revalidate", "rationale":"Reject the unknown execution."
+                }]),
+            ),
+            (
+                "mismatched-prior-attempt",
+                serde_json::json!([{
+                    "group_execution_id":predecessor, "choice":"revalidate",
+                    "rationale":"Reject the attempt outside the preceding execution.",
+                    "attempt":before["result"]["cursor"]["attempt"]["attempt"]
+                }]),
+            ),
+        ];
+        for (key, prior_work) in invalid_prior_work {
+            let mut invalid = input.clone();
+            invalid["context"]["idempotency_key"] = serde_json::json!(key);
+            invalid["prior_work"] = prior_work;
+            let error = scoped_runtime_error(
+                fixture.output_with_stdin(
+                    &["group", "activate", "--stdin"],
+                    invalid.to_string().as_bytes(),
+                ),
+                1,
+                "GROUP_ACTIVATION_NOT_ALLOWED",
+            );
+            assert_eq!(error["details"], serde_json::json!({}));
+            assert_eq!(scoped_runtime_observe(fixture)["result"], before["result"]);
+            assert_eq!(
+                fixture.run(&["outcome", "lookup", "--idempotency-key", key])["result"]["found"],
+                false
+            );
+            assert_eq!(snapshot(), before_mutations);
+        }
+    }
+    let original = fixture.output_with_stdin(
+        &["group", "activate", "--stdin"],
+        input.to_string().as_bytes(),
+    );
+    assert!(original.status.success(), "{original:?}");
+    assert_eq!(
+        fixture
+            .output_with_stdin(
+                &["group", "activate", "--stdin"],
+                input.to_string().as_bytes()
+            )
+            .stdout,
+        original.stdout
+    );
+}
+
+fn scoped_runtime_history_item(fixture: &Fixture, attempt: &Value, item: &str) -> Value {
+    fixture.run(&[
+        "history",
+        "item",
+        "--session",
+        attempt["session"].as_str().unwrap(),
+        "--attempt",
+        &attempt.to_string(),
+        "--item",
+        item,
+    ])["result"]
+        .clone()
+}
+
+fn scoped_runtime_error(output: std::process::Output, exit: i32, code: &str) -> Value {
+    assert_eq!(output.status.code(), Some(exit), "{output:?}");
+    let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(error["code"], code);
+    error
+}
+
 #[test]
 fn calls003_help_and_human_observation_explain_reads_records_and_counters() {
-    let fixture = running_fixture(STATE);
-    let before = fixture.run(&["observe"]);
+    let base = scoped_runtime_base(serde_json::json!({}), vec![], false);
+    let fixture = scoped_runtime_start(&base);
+    let before = scoped_runtime_observe(&fixture);
     let human = fixture.raw_output(&["observe"]);
-    assert!(human.status.success());
+    assert!(human.status.success(), "{human:?}");
     let text = String::from_utf8(human.stdout).unwrap();
     for phrase in [
-        "observe combines",
-        "status --verbose",
-        "stdin_template",
-        "input_basis",
-        "executor",
-        "exact check-output bytes",
-        "active_items[].revision",
+        "current scoped cursor",
+        "active item revisions",
+        "Generation 2 adds executable templates",
+        "history queries",
+        "Record typed items through record --stdin",
+        "input basis, executor, outcome and output digest",
+        "does not execute or attest",
+        "result.items[].revision",
         "latest_workspace_sequence",
     ] {
         assert!(text.contains(phrase), "missing {phrase}: {text}");
     }
-    assert_eq!(fixture.run(&["observe"])["result"], before["result"]);
+    assert_eq!(scoped_runtime_observe(&fixture)["result"], before["result"]);
     for (topic, phrases) in [
         (
             "session.observe",
-            vec![
-                "narrow current-state reads",
-                "status --verbose",
-                "stdin_template",
-                "exact check-output bytes",
-            ],
+            &[
+                "current scoped cursor",
+                "executable templates",
+                "history queries",
+                "does not execute or attest",
+            ][..],
         ),
         (
             "item.record_many",
-            vec![
-                "input_basis: {descriptor, digest}",
-                "executor: {name, version}",
-                "exact check-output bytes",
-                "stdin_template",
-            ],
+            &[
+                "podway.scoped-item-record-many-input/v1",
+                "input basis, executor, outcome and output digest",
+                "result.items[].revision",
+            ][..],
         ),
+        ("item.set", &["--if-cursor", "result.items[].revision"][..]),
         (
-            "item.set",
-            vec!["session revision", "active_items[].revision"],
+            "workspace.init",
+            &["initialization marker", "latest_workspace_sequence"][..],
         ),
-        ("workspace.init", vec!["revision", "initialization marker"]),
         (
             "session.archive_list",
-            vec!["archived_workspace_revision", "session revision"],
+            &["inactive sessions", "latest_workspace_sequence"][..],
         ),
     ] {
         let help = fixture.run(&["help", topic]);
@@ -254,281 +492,417 @@ fn calls003_help_and_human_observation_explain_reads_records_and_counters() {
 
 #[test]
 fn generated_item_recipes_preserve_all_types_clearing_and_attachment_evidence() {
-    let fixture = running_fixture(include_str!(
-        "../../../tests/fixtures/v2/procedures/action-readback-procedure.yaml"
-    ));
-    fs::write(
-        fixture.0.join("evidence.txt"),
-        "Retained attachment evidence.",
-    )
-    .unwrap();
-    let cases = [
-        ("item.check", "confirmed", "", ""),
-        ("item.set", "summary", "<text>", "Focused checks passed."),
-        ("item.set", "outcome", "<choice>", "accepted"),
-        ("item.set", "count", "<integer>", "7"),
-        ("item.add", "findings", "<value>", "daemon"),
-        ("item.attach", "report", "<path>", "evidence.txt"),
-    ];
-    for (command, item, placeholder, value) in cases {
-        generated_mutation(&fixture, command, Some(item), &[(placeholder, value)], item);
-    }
-    let observed = fixture.run(&["observe"]);
-    let items = observed["result"]["active_items"].as_array().unwrap();
-    for (item, expected) in [
-        ("confirmed", serde_json::json!(true)),
-        ("summary", serde_json::json!("Focused checks passed.")),
-        ("outcome", serde_json::json!("accepted")),
-        ("count", serde_json::json!(7)),
-        ("findings", serde_json::json!(["daemon"])),
+    use serde_json::json;
+    let base = scoped_runtime_base(
+        json!({
+            "capture":{
+                "type":"action","title":"Capture","intent":"Record representative item types.","items":[
+                    {"id":"confirmed","type":"confirm","prompt":"Confirm capture.","required":true},
+                    {"id":"summary","type":"text","prompt":"Summarize capture.","required":true},
+                    {"id":"outcome","type":"choice","prompt":"Choose an outcome.","required":true,
+                        "choices":["accepted","rejected"]},
+                    {"id":"count","type":"integer","prompt":"Record the count.","required":true,"minimum":0,"maximum":10},
+                    {"id":"findings","type":"list","prompt":"Record findings.","required":true,
+                        "min_items":1,"max_items":3,"unique":true},
+                    {"id":"report","type":"artifact","prompt":"Attach the report.","required":true,
+                        "allowed_media_types":["text/plain"]},
+                    {"id":"internal-note","type":"text","prompt":"Record an unselected note.","required":false}
+                ]
+            },
+            "consume":{
+                "type":"action","title":"Consume","intent":"Use selected current evidence.","items":[
+                    {"id":"consumed","type":"confirm","prompt":"Confirm consumption.","required":true}
+                ]
+            }
+        }),
+        vec![
+            json!({"id":"capture-results","use":"capture","next":"consume-results"}),
+            json!({"id":"consume-results","use":"consume","next":"plan",
+            "evidence_from":[{"scope":"local","node":"capture-results","required":true,
+                "items":["summary","findings","report"]}]}),
+        ],
+        false,
+    );
+    let fixture = scoped_runtime_start(&base);
+    let attachment = fixture.0.join("evidence.txt");
+    let contents = "Retained attachment evidence.";
+    fs::write(&attachment, contents).unwrap();
+    let capture = scoped_runtime_observe(&fixture)["result"]["cursor"]["attempt"].clone();
+
+    scoped_runtime_recipe(&fixture, "item.check", Some("confirmed"), &[], "confirmed");
+    for (item, value) in [
+        ("summary", "Focused checks passed."),
+        ("outcome", "accepted"),
+        ("count", "7"),
     ] {
-        assert_eq!(
-            items.iter().find(|entry| entry["item_id"] == item).unwrap()["value"],
-            expected
+        scoped_runtime_recipe(
+            &fixture,
+            "item.set",
+            Some(item),
+            &[
+                ("<value>", value),
+                ("<text>", value),
+                ("<choice>", value),
+                ("<integer>", value),
+            ],
+            item,
         );
     }
-    generated_mutation(&fixture, "item.uncheck", Some("confirmed"), &[], "uncheck");
-    generated_mutation(&fixture, "item.check", Some("confirmed"), &[], "recheck");
-    generated_mutation(
+    scoped_runtime_recipe(
+        &fixture,
+        "item.add",
+        Some("findings"),
+        &[("<value>", "first finding")],
+        "add",
+    );
+    scoped_runtime_recipe(
+        &fixture,
+        "item.attach",
+        Some("report"),
+        &[("<path>", "evidence.txt")],
+        "attach",
+    );
+    for (item, expected) in [
+        ("confirmed", json!({"kind":"confirm"})),
+        ("summary", json!("Focused checks passed.")),
+        ("outcome", json!({"kind":"choice","value":"accepted"})),
+        ("count", json!({"kind":"integer","value":7})),
+        ("findings", json!(["first finding"])),
+    ] {
+        assert_eq!(
+            scoped_runtime_history_item(&fixture, &capture, item)["data"],
+            expected,
+            "{item}"
+        );
+    }
+    scoped_runtime_recipe(&fixture, "item.uncheck", Some("confirmed"), &[], "uncheck");
+    assert!(scoped_runtime_history_item(&fixture, &capture, "confirmed")["data"].is_null());
+    scoped_runtime_recipe(&fixture, "item.check", Some("confirmed"), &[], "recheck");
+    scoped_runtime_recipe(
         &fixture,
         "item.remove",
         Some("findings"),
-        &[("<value>", "daemon")],
+        &[("<value>", "first finding")],
         "remove",
     );
-    generated_mutation(
+    scoped_runtime_recipe(
         &fixture,
         "item.add",
         Some("findings"),
         &[("<value>", "retained")],
         "readd",
     );
-    generated_mutation(&fixture, "item.clear", Some("summary"), &[], "clear");
-    let cleared = fixture.run(&["observe"]);
-    assert!(
-        cleared["result"]["active_items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|entry| entry["item_id"] == "summary")
-            .unwrap()["value"]
-            .is_null()
+    assert_eq!(
+        scoped_runtime_history_item(&fixture, &capture, "findings")["data"],
+        json!(["retained"])
     );
-    generated_mutation(
+    scoped_runtime_recipe(&fixture, "item.clear", Some("summary"), &[], "clear");
+    assert!(scoped_runtime_history_item(&fixture, &capture, "summary")["data"].is_null());
+    scoped_runtime_recipe(
         &fixture,
         "item.set",
         Some("summary"),
-        &[("<text>", "Restored summary.")],
+        &[
+            ("<value>", "Restored summary."),
+            ("<text>", "Restored summary."),
+        ],
         "restore",
     );
-    generated_mutation(&fixture, "session.complete", None, &[], "capture-complete");
-    let report = fixture.run(&[
-        "evidence",
-        "read",
-        "--source",
-        "capture-results",
-        "--item",
-        "report",
-    ]);
-    assert_eq!(report["result"]["item"]["item_id"], "report");
-    assert_eq!(report["result"]["page"]["data"]["location"], "evidence.txt");
-    generated_mutation(&fixture, "item.check", Some("consumed"), &[], "consume");
-    generated_mutation(&fixture, "session.complete", None, &[], "consume-complete");
-    generated_mutation(&fixture, "session.complete", None, &[], "finish-complete");
+    scoped_runtime_recipe(&fixture, "session.complete", None, &[], "capture-complete");
+
+    let evidence = || {
+        fixture.run(&[
+            "evidence",
+            "read",
+            "--source",
+            "capture-results",
+            "--item",
+            "report",
+        ])
+    };
+    let present = evidence();
+    assert_eq!(present["result"]["detail"]["item"], "report");
+    assert_eq!(present["result"]["detail"]["source_attempt"], capture);
     assert_eq!(
-        fixture.run(&["status"])["result"]["session"]["lifecycle"],
-        "completed"
+        present["result"]["detail"]["artifact_availability"],
+        "present"
     );
+    assert_eq!(present["result"]["data"]["location"], "evidence.txt");
+    fs::remove_file(&attachment).unwrap();
+    let missing = evidence();
+    assert_eq!(
+        missing["result"]["detail"]["artifact_availability"],
+        "missing"
+    );
+    assert_eq!(missing["result"]["data"], present["result"]["data"]);
+    fs::write(&attachment, contents).unwrap();
+    scoped_runtime_recipe(&fixture, "item.check", Some("consumed"), &[], "consume");
+    scoped_runtime_recipe(&fixture, "session.complete", None, &[], "consume-complete");
+    scoped_runtime_activate(&fixture, false);
+    scoped_runtime_recipe(&fixture, "session.complete", None, &[], "return");
+    scoped_runtime_recipe(&fixture, "session.complete", None, &[], "finish-complete");
+    assert_eq!(fixture.run(&["status"])["result"]["lifecycle"], "completed");
 }
 
 #[test]
 fn generated_cursor_and_goal_recipes_require_only_declared_placeholder_values() {
-    let fixture = running_fixture(RETRY);
-    generated_mutation(
+    use serde_json::json;
+    let retry = scoped_runtime_base(
+        json!({
+            "work":{"type":"action","title":"Work","intent":"Record current evidence.",
+                "items":[scoped_runtime_source("result",200)]},
+            "review":{"type":"decision","title":"Review","objective":"Accept current evidence.",
+                "prompt":"Is the work sufficient?","options":[{"id":"accept","label":"Accept"}],
+                "reason":{"required":true}}
+        }),
+        vec![
+            json!({"id":"work","use":"work","next":"review"}),
+            json!({"id":"review","use":"review","routes":{"accept":{"effect":"advance","to":"plan"}},
+            "evidence_from":[{"scope":"local","node":"work","required":true,"items":["result"]}]}),
+        ],
+        false,
+    );
+    let fixture = scoped_runtime_start(&retry);
+    scoped_runtime_recipe(
         &fixture,
         "session.retry",
         None,
         &[("<reason>", "Retry the retained work.")],
         "retry",
     );
-    generated_mutation(
+    scoped_runtime_recipe(
         &fixture,
         "item.set",
         Some("result"),
-        &[("<text>", "Retained source evidence.")],
+        &[
+            ("<value>", "Current evidence."),
+            ("<text>", "Current evidence."),
+        ],
         "result",
     );
-    generated_mutation(&fixture, "session.complete", None, &[], "work-complete");
-    generated_mutation(
+    scoped_runtime_recipe(&fixture, "session.complete", None, &[], "work-complete");
+    scoped_runtime_recipe(
         &fixture,
         "session.decide",
         None,
-        &[("<reason>", "The evidence supports acceptance.")],
-        "decide",
+        &[
+            ("<option-id>", "accept"),
+            ("<reason>", "The evidence supports acceptance."),
+        ],
+        "accept",
     );
-    generated_mutation(&fixture, "session.complete", None, &[], "finish-complete");
-    let fixture = running_fixture(SKIP);
-    generated_mutation(&fixture, "session.complete", None, &[], "prepare-complete");
-    generated_mutation(
+    assert_eq!(
+        scoped_runtime_observe(&fixture)["result"]["cursor"]["attempt"]["node"],
+        "plan"
+    );
+
+    let skip = scoped_runtime_base(
+        json!({
+            "prepare":{"type":"action","title":"Prepare","intent":"Start the optional path."},
+            "source":{"type":"action","title":"Source","intent":"Record optional source evidence."},
+            "consumer":{"type":"action","title":"Consumer","intent":"Use available source evidence."}
+        }),
+        vec![
+            json!({"id":"prepare","use":"prepare","next":"source"}),
+            json!({"id":"source","use":"source","next":"consumer","skip":{"allowed":true,"reason_required":true}}),
+            json!({"id":"consumer","use":"consumer","next":"plan","skip":{"allowed":true,"reason_required":false},
+            "evidence_from":[{"scope":"local","node":"source","required":false}]}),
+        ],
+        false,
+    );
+    let fixture = scoped_runtime_start(&skip);
+    scoped_runtime_recipe(&fixture, "session.complete", None, &[], "prepare-complete");
+    scoped_runtime_recipe(
         &fixture,
         "session.skip",
         None,
-        &[("<text>", "The isolated source is inapplicable.")],
+        &[("<reason>", "The source is inapplicable.")],
         "source-skip",
     );
-    generated_mutation(&fixture, "session.skip", None, &[], "consumer-skip");
-    generated_mutation(&fixture, "session.skip", None, &[], "finish-skip");
-    let fixture = running_fixture(include_str!(
-        "../../../tests/fixtures/v2/procedures/goal-outcomes.yaml"
-    ));
-    generated_mutation(
+    scoped_runtime_recipe(&fixture, "session.skip", None, &[], "consumer-skip");
+    assert_eq!(
+        scoped_runtime_observe(&fixture)["result"]["cursor"]["attempt"]["node"],
+        "plan"
+    );
+
+    let goal = scoped_runtime_base(json!({}), vec![], true);
+    let fixture = scoped_runtime_start(&goal);
+    scoped_runtime_recipe(
         &fixture,
         "goal.define",
         None,
         &[
             ("<goal>", "Verify the retained result."),
-            ("<criterion>", "tested=The retained checks pass."),
+            (
+                "<criterion-id>=<statement>",
+                "tested=The retained checks pass.",
+            ),
         ],
         "define",
     );
-    generated_mutation(
+    assert_eq!(
+        scoped_runtime_observe(&fixture)["result"]["goal"]["criteria"][0]["id"],
+        "tested"
+    );
+    scoped_runtime_activate(&fixture, true);
+    scoped_runtime_recipe(
         &fixture,
         "item.set",
         Some("result"),
-        &[("<text>", "The checks passed.")],
+        &[
+            ("<value>", "The checks passed."),
+            ("<text>", "The checks passed."),
+        ],
         "result",
     );
-    generated_mutation(&fixture, "session.complete", None, &[], "work-complete");
-    let assessed = generated_mutation(
+    scoped_runtime_recipe(&fixture, "session.complete", None, &[], "return");
+    scoped_runtime_recipe(
         &fixture,
         "goal.assess_criterion",
         None,
         &[
+            ("<criterion-id>", "tested"),
             ("<status>", "satisfied"),
             ("<reason>", "The retained check passed."),
         ],
-        "tested",
+        "assess",
     );
-    assert_eq!(assessed["result"]["result"]["criterion_id"], "tested");
-    assert_eq!(assessed["result"]["determined_outcome"], "achieved");
-    generated_mutation(
+    let assessed = scoped_runtime_observe(&fixture);
+    assert_eq!(
+        assessed["result"]["goal"]["criteria"][0]["status"],
+        "satisfied"
+    );
+    assert_eq!(assessed["result"]["goal"]["outcome"], "achieved");
+    scoped_runtime_recipe(
         &fixture,
         "session.decide",
         None,
-        &[("<reason>", "The criterion is satisfied.")],
+        &[
+            ("<option-id>", "achieved"),
+            ("<reason>", "The criterion is satisfied."),
+        ],
         "decide",
     );
-    generated_mutation(&fixture, "session.complete", None, &[], "finish-complete");
-    assert_eq!(
-        fixture.run(&["status"])["result"]["session"]["lifecycle"],
-        "completed"
-    );
+    scoped_runtime_recipe(&fixture, "session.complete", None, &[], "finish-complete");
+    assert_eq!(fixture.run(&["status"])["result"]["lifecycle"], "completed");
 }
 
 #[test]
 fn evidence_continuations_preserve_unicode_pages_and_rework_invalidates_old_tokens() {
-    let procedure = format!(
-        "{}\nmanual_rework:\n  allowed_targets:\n    - work\n",
-        RETRY.replace("max_length: 200", "max_length: 65536")
+    use serde_json::json;
+    let mut base = scoped_runtime_base(
+        json!({
+            "work":{"type":"action","title":"Work","intent":"Record wide current evidence.",
+                "items":[scoped_runtime_source("result",65536)]},
+            "review":{"type":"decision","title":"Review","objective":"Check current evidence.",
+                "prompt":"Is the result current?","options":[{"id":"accept","label":"Accept"}],
+                "reason":{"required":true}}
+        }),
+        vec![
+            json!({"id":"work","use":"work","next":"review"}),
+            json!({"id":"review","use":"review","routes":{"accept":{"effect":"advance","to":"plan"}},
+            "evidence_from":[{"scope":"local","node":"work","required":true,"items":["result"]}]}),
+        ],
+        false,
     );
+    base["manual_rework"] = json!({"allowed_targets":["work"]});
+    let read = ["evidence", "read", "--source", "work", "--item", "result"];
+    let wide = "🦦".repeat(65_536);
     for explicit in [false, true] {
-        let fixture = running_fixture(&procedure);
-        let wide = "한".repeat(50_000);
+        let fixture = scoped_runtime_start(&base);
         let set = fixture.output_with_stdin(
             &["set", "result", "--stdin", "--idempotency-key", "wide"],
             wide.as_bytes(),
         );
-        assert_eq!(set.status.code(), Some(0), "{set:?}");
+        assert!(set.status.success(), "{set:?}");
         fixture.run(&["complete", "--idempotency-key", "work-complete"]);
-        let before = fixture.run(&["observe"]);
-        let session = before["result"]["status"]["session"]["id"]
-            .as_str()
-            .unwrap();
-        let consumer_attempt = before["result"]["status"]["current"]["attempt"]["attempt_id"]
-            .as_str()
-            .unwrap();
+        let before = scoped_runtime_observe(&fixture);
+        let cursor = &before["result"]["cursor"];
+        let consumer = &cursor["attempt"];
+        let consumer_id = consumer["attempt"].as_str().unwrap();
+        let session = cursor["session"].as_str().unwrap();
         let workspace = before["workspace"]["uuid"].as_str().unwrap();
-        let first = fixture.run(&[
-            "evidence",
-            "read",
-            "--source",
-            "work",
-            "--item",
-            "result",
+
+        let mut initial = read.to_vec();
+        initial.extend([
             "--if-workspace-uuid",
             workspace,
             "--if-session-id",
             session,
             "--if-attempt",
-            consumer_attempt,
+            consumer_id,
         ]);
-        assert_eq!(first["result"]["total_size"], 50_000);
-        assert_eq!(first["result"]["truncated"], true);
-        let token = first["result"]["next_page_token"].as_str().unwrap();
-        let next = fixture.run(&[
-            "evidence",
-            "read",
-            "--source",
-            "work",
-            "--item",
-            "result",
-            "--page-token",
-            token,
-            "--if-attempt",
-            consumer_attempt,
-        ]);
-        assert_eq!(next["result"]["page"]["offset"], 43_690);
+        let first = fixture.run(&initial);
+        let page = &first["result"];
+        assert_eq!(page["schema"], "podway.scoped-evidence-read-result/v1");
+        assert_eq!(page["detail"]["consumer"], *consumer);
+        assert_eq!(page["unit"], "unicode_scalar");
+        assert_eq!(page["total"], 65_536);
+        assert_eq!(page["offset"], 0);
+        assert_eq!(page["size"], 65_535);
+        assert_eq!(page["truncated"], true);
+        assert!(serde_json::to_vec(page.get("data").unwrap()).unwrap().len() <= 256 * 1024);
+        assert!(serde_json::to_vec(&first).unwrap().len() <= 320 * 1024);
+        let token = page["next_page_token"].as_str().unwrap();
+        let mut continuation = read.to_vec();
+        continuation.extend(["--page-token", token, "--if-attempt", consumer_id]);
+        let next = fixture.run(&continuation);
+        assert_eq!(next["result"]["offset"], 65_535);
+        assert_eq!(next["result"]["size"], 1);
         assert_eq!(next["result"]["truncated"], false);
         assert!(next["result"]["next_page_token"].is_null());
         assert_eq!(
             format!(
                 "{}{}",
-                first["result"]["page"]["data"].as_str().unwrap(),
-                next["result"]["page"]["data"].as_str().unwrap()
+                page["data"].as_str().unwrap(),
+                next["result"]["data"].as_str().unwrap()
             ),
             wide
         );
-        assert_eq!(fixture.run(&["observe"])["result"], before["result"]);
-        let invalid_revision = fixture.output(&[
-            "evidence",
-            "read",
-            "--source",
+        assert_eq!(scoped_runtime_observe(&fixture)["result"], before["result"]);
+
+        let mut invalid = read.to_vec();
+        invalid.extend(["--if-attempt", consumer_id, "--if-session-revision", "0"]);
+        scoped_runtime_error(fixture.output(&invalid), 2, "REQUEST_INVALID");
+        let mut rework = vec![
+            "rework",
+            "--to",
             "work",
-            "--item",
-            "result",
-            "--if-attempt",
-            consumer_attempt,
-            "--if-session-revision",
-            "0",
-        ]);
-        assert_eq!(
-            invalid_revision.status.code(),
-            Some(2),
-            "{invalid_revision:?}"
-        );
-        let error: ErrorEnvelopeV2 = serde_json::from_slice(&invalid_revision.stdout).unwrap();
-        assert_eq!(error.as_value()["code"], "REQUEST_INVALID");
-        assert_eq!(fixture.run(&["observe"])["result"], before["result"]);
-        transition(
-            &fixture,
-            &[
-                "rework",
-                "--to",
-                "work",
-                "--reason",
-                "Refresh the evidence.",
-                "--actor",
-                "owner",
-            ],
+            "--reason",
+            "Refresh the evidence.",
+            "--actor",
+            "owner",
+            "--idempotency-key",
             "manual-rework",
-            true,
-            explicit,
-            true,
-        );
+        ];
+        let cursor_argument = cursor.to_string();
+        let fences = [
+            "--if-workspace-uuid",
+            workspace,
+            "--if-cursor",
+            &cursor_argument,
+        ];
+        if explicit {
+            rework.extend(fences);
+        }
+        let original = fixture.output(&rework);
+        assert!(original.status.success(), "{original:?}");
+        if !explicit {
+            rework.extend(fences);
+        }
+        assert_eq!(fixture.output(&rework).stdout, original.stdout);
         let history = fixture.run(&["status", "--verbose"]);
-        let record = &history["result"]["rework_history"]["entries"][0];
-        assert_eq!(record["actor"], "owner");
-        assert_eq!(record["reason"], "Refresh the evidence.");
+        let abandoned = history["result"]["attempts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|attempt| attempt["attempt"] == *consumer)
+            .unwrap();
+        assert_eq!(abandoned["lifecycle"], "abandoned");
+        assert_eq!(abandoned["validity"], "stale");
+        assert_eq!(abandoned["actor"], "owner");
+        assert_eq!(abandoned["reason"], "Refresh the evidence.");
+
         fixture.run(&[
             "set",
             "result",
@@ -537,46 +911,24 @@ fn evidence_continuations_preserve_unicode_pages_and_rework_invalidates_old_toke
             "replacement",
         ]);
         fixture.run(&["complete", "--idempotency-key", "replacement-complete"]);
-        let before = fixture.run(&["observe"]);
-        let stale_first = fixture.output(&[
-            "evidence",
-            "read",
-            "--source",
-            "work",
-            "--item",
-            "result",
-            "--if-session-id",
-            session,
-            "--if-attempt",
-            consumer_attempt,
-        ]);
-        assert_eq!(stale_first.status.code(), Some(4), "{stale_first:?}");
-        let error: ErrorEnvelopeV2 = serde_json::from_slice(&stale_first.stdout).unwrap();
-        assert_eq!(error.as_value()["code"], "ATTEMPT_NOT_CURRENT");
+        let after = scoped_runtime_observe(&fixture);
+        let mut previous = read.to_vec();
+        previous.extend(["--if-session-id", session, "--if-attempt", consumer_id]);
+        let stale = scoped_runtime_error(fixture.output(&previous), 4, "ATTEMPT_NOT_CURRENT");
+        assert_eq!(stale["details"]["expected_attempt_id"], consumer_id);
         assert_eq!(
-            error.as_value()["details"]["expected_attempt_id"],
-            consumer_attempt
+            stale["details"]["actual_attempt_id"],
+            after["result"]["cursor"]["attempt"]["attempt"]
         );
-        assert_eq!(
-            error.as_value()["details"]["actual_attempt_id"],
-            before["result"]["status"]["current"]["attempt"]["attempt_id"]
+        let mut previous_page = read.to_vec();
+        previous_page.extend(["--page-token", token]);
+        let stale = scoped_runtime_error(
+            fixture.output(&previous_page),
+            4,
+            "HISTORY_PAGE_TOKEN_STALE",
         );
-        assert_eq!(fixture.run(&["observe"])["result"], before["result"]);
-        let stale = fixture.output(&[
-            "evidence",
-            "read",
-            "--source",
-            "work",
-            "--item",
-            "result",
-            "--page-token",
-            token,
-        ]);
-        assert_eq!(stale.status.code(), Some(4), "{stale:?}");
-        let error: ErrorEnvelopeV2 = serde_json::from_slice(&stale.stdout).unwrap();
-        assert_eq!(error.as_value()["code"], "EVIDENCE_PAGE_TOKEN_STALE");
-        assert_eq!(error.as_value()["retryable"], true);
-        assert_eq!(fixture.run(&["observe"])["result"], before["result"]);
+        assert_eq!(stale["retryable"], true);
+        assert_eq!(scoped_runtime_observe(&fixture)["result"], after["result"]);
     }
 }
 
@@ -584,15 +936,14 @@ fn evidence_continuations_preserve_unicode_pages_and_rework_invalidates_old_toke
 fn running_start_policies_preserve_or_delete_the_prior_session_with_partial_fences() {
     for preserve in [false, true] {
         for partial in [false, true] {
-            let fixture = running_fixture(STATE);
+            let fixture =
+                scoped_runtime_start(&scoped_runtime_base(serde_json::json!({}), vec![], false));
             let before = fixture.run(&["observe"]);
-            let session = before["result"]["status"]["session"]["id"]
-                .as_str()
-                .unwrap();
+            let session = before["result"]["cursor"]["session"].as_str().unwrap();
             let undecided = fixture.output(&[
                 "start",
                 "--preset",
-                "small-change-v2",
+                "small-change-v3",
                 "--task",
                 "successor",
                 "--idempotency-key",
@@ -609,7 +960,7 @@ fn running_start_policies_preserve_or_delete_the_prior_session_with_partial_fenc
             let mut argv = vec![
                 "start",
                 "--preset",
-                "small-change-v2",
+                "small-change-v3",
                 "--task",
                 "successor",
                 "--on-existing",
@@ -648,7 +999,7 @@ fn running_start_policies_preserve_or_delete_the_prior_session_with_partial_fenc
             assert_eq!(started["command"], "session.start_replace");
             assert_eq!(started["result"]["session_state"], "prepared");
             assert_ne!(started["session"]["id"], session);
-            let old_revision = before["result"]["status"]["session"]["revision"]
+            let old_revision = before["result"]["cursor"]["session_revision"]
                 .as_u64()
                 .unwrap()
                 .to_string();
@@ -669,16 +1020,13 @@ fn running_start_policies_preserve_or_delete_the_prior_session_with_partial_fenc
                 assert_eq!(archives["result"]["sessions"][0]["session_id"], session);
                 let archived =
                     fixture.run(&["archive", "show", "--session-id", session, "--verbose"]);
-                assert_eq!(archived["result"]["activity"], "inactive");
                 assert_eq!(
-                    archived["result"]["state"]["session"]["lifecycle"],
-                    "cancelled"
+                    archived["result"]["observation"]["lifecycle_guidance"]["activity"],
+                    "archived"
                 );
-                assert_eq!(
-                    archived["result"]["terminal_disposition"]["kind"],
-                    "superseded"
-                );
-                assert_eq!(archived["result"]["terminal_disposition"]["actor"], "owner");
+                assert_eq!(archived["result"]["observation"]["lifecycle"], "cancelled");
+                assert_eq!(archived["result"]["disposition"]["kind"], "superseded");
+                assert_eq!(archived["result"]["disposition"]["actor"], "owner");
             } else {
                 let absent = fixture.output(&["archive", "show", "--session-id", session]);
                 assert_eq!(
@@ -700,18 +1048,18 @@ fn prepared_replacement_preserves_partial_identity_fences_and_rejects_inapplicab
         fixture.run(&[
             "start",
             "--preset",
-            "small-change-v2",
+            "small-change-v3",
             "--task",
             "original",
             "--idempotency-key",
             "start",
         ]);
         let before = fixture.run(&["status"]);
-        let session = before["result"]["session"]["id"].as_str().unwrap();
+        let session = before["result"]["cursor"]["session"].as_str().unwrap();
         let prefix = [
             "start",
             "--preset",
-            "small-change-v2",
+            "small-change-v3",
             "--task",
             "successor",
             "--on-existing",
@@ -753,7 +1101,7 @@ fn prepared_replacement_preserves_partial_identity_fences_and_rejects_inapplicab
         assert_eq!(started["command"], "session.start_replace");
         assert_eq!(started["result"]["session_state"], "prepared");
         assert_ne!(started["session"]["id"], session);
-        let revision = before["result"]["session"]["revision"]
+        let revision = before["result"]["cursor"]["session_revision"]
             .as_u64()
             .unwrap()
             .to_string();
@@ -773,13 +1121,10 @@ fn prepared_replacement_preserves_partial_identity_fences_and_rejects_inapplicab
 
 #[test]
 fn disposed_terminal_start_archives_atomically_and_purge_honors_the_archived_revision() {
-    let fixture = running_fixture(STATE);
-    fixture.run(&["check", "ready", "--idempotency-key", "ready"]);
-    fixture.run(&["complete", "--idempotency-key", "work-complete"]);
-    fixture.run(&["complete", "--idempotency-key", "finish-complete"]);
+    let fixture = guide008_terminal_fixture();
     let terminal = fixture.run(&["status"]);
-    let session = terminal["result"]["session"]["id"].as_str().unwrap();
-    let disposed = transition(
+    let session = terminal["result"]["cursor"]["session"].as_str().unwrap();
+    let disposed = scoped_runtime_transition(
         &fixture,
         &[
             "disposition",
@@ -806,7 +1151,7 @@ fn disposed_terminal_start_archives_atomically_and_purge_honors_the_archived_rev
         let mut invalid = vec![
             "start",
             "--preset",
-            "small-change-v2",
+            "small-change-v3",
             "--task",
             "successor",
             "--on-existing",
@@ -816,21 +1161,10 @@ fn disposed_terminal_start_archives_atomically_and_purge_honors_the_archived_rev
         reject(&fixture, &invalid, key, "REQUEST_INVALID");
     }
     let before = fixture.run(&["observe"]);
-    let archived_workspace_revision: u64 = rusqlite::Connection::open_with_flags(
-        fixture.0.join(".podway/runtime/state.sqlite3"),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .unwrap()
-    .query_row(
-        "SELECT workspace_revision FROM v2_workspace_state WHERE singleton=1",
-        [],
-        |row| row.get(0),
-    )
-    .unwrap();
     let argv = [
         "start",
         "--preset",
-        "small-change-v2",
+        "small-change-v3",
         "--task",
         "successor",
         "--idempotency-key",
@@ -845,11 +1179,11 @@ fn disposed_terminal_start_archives_atomically_and_purge_honors_the_archived_rev
     assert_eq!(list["result"]["sessions"][0]["session_id"], session);
     assert_eq!(
         list["result"]["sessions"][0]["archived_workspace_revision"],
-        archived_workspace_revision
+        successor["workspace"]["latest_workspace_sequence"]
     );
     assert_eq!(
         list["result"]["sessions"][0]["session_revision"],
-        before["result"]["status"]["session"]["revision"]
+        before["result"]["cursor"]["session_revision"]
     );
     let revision = list["result"]["sessions"][0]["session_revision"]
         .as_u64()
@@ -887,7 +1221,18 @@ fn disposed_terminal_start_archives_atomically_and_purge_honors_the_archived_rev
     assert_eq!(purged["result"]["purged"], true);
     assert_eq!(fixture.run(&purge), purged);
     assert_eq!(fixture.run(&["archive", "list"])["result"]["count"], 0);
-    assert_eq!(fixture.run(&["status"])["result"], active["result"]);
+    let after = fixture.run(&["status"]);
+    assert_eq!(after["result"]["cursor"], active["result"]["cursor"]);
+    assert_eq!(after["session"], active["session"]);
+    assert_eq!(
+        after["workspace"]["latest_workspace_sequence"]
+            .as_u64()
+            .unwrap(),
+        active["workspace"]["latest_workspace_sequence"]
+            .as_u64()
+            .unwrap()
+            + 1
+    );
     let missing = fixture.output(&["archive", "show", "--session-id", session, "--verbose"]);
     assert_eq!(
         serde_json::from_slice::<ErrorEnvelopeV2>(&missing.stdout)
@@ -899,11 +1244,11 @@ fn disposed_terminal_start_archives_atomically_and_purge_honors_the_archived_rev
 
 #[test]
 fn bare_terminal_archive_uses_no_active_attempt_and_replays_after_current_session_removal() {
-    let fixture = running_fixture(STATE);
+    let fixture = scoped_runtime_start(&scoped_runtime_base(serde_json::json!({}), vec![], false));
     fixture.run(&[
         "cancel",
         "--reason",
-        "Retain completed work.",
+        "Retain fixture records.",
         "--idempotency-key",
         "cancel",
     ]);
@@ -915,50 +1260,122 @@ fn bare_terminal_archive_uses_no_active_attempt_and_replays_after_current_sessio
         "--idempotency-key",
         "dispose",
     ]);
-    let before = fixture.run(&["status"]);
-    assert!(before["result"]["current"].is_null());
-    let archived = transition(&fixture, &["archive"], "archive", false, false, true);
-    assert_eq!(archived["result"]["activity"], "inactive");
-    let absent = fixture.output(&["status"]);
-    assert_eq!(
-        serde_json::from_slice::<ErrorEnvelopeV2>(&absent.stdout)
-            .unwrap()
-            .as_value()["code"],
-        "SESSION_NOT_FOUND"
-    );
-    assert_eq!(fixture.run(&["archive", "list"])["result"]["count"], 1);
-    let revision = before["result"]["session"]["revision"]
-        .as_u64()
+    let before = scoped_runtime_observe(&fixture);
+    let cursor = &before["result"]["cursor"];
+    assert!(cursor["attempt"].is_null());
+    let session = cursor["session"].as_str().unwrap();
+    let revision = cursor["session_revision"].to_string();
+    let workspace = before["workspace"]["uuid"].as_str().unwrap();
+
+    let original = fixture.output(&["archive", "--idempotency-key", "archive"]);
+    assert!(original.status.success(), "{original:?}");
+    let archived = serde_json::from_slice::<OutputEnvelopeV4>(&original.stdout)
         .unwrap()
-        .to_string();
-    let session = before["result"]["session"]["id"].as_str().unwrap();
-    // A fully fenced replay missing only workspace UUID must skip status preflight;
-    // there is deliberately no current session for an accidental fetch to observe.
+        .into_value();
+    assert_eq!(archived["result"]["activity"], "inactive");
+    assert_eq!(archived["result"]["session_id"], session);
     assert_eq!(
-        fixture.run(&[
-            "archive",
-            "--idempotency-key",
-            "archive",
-            "--if-session-id",
-            session,
-            "--if-session-revision",
-            &revision
-        ]),
+        archived["result"]["session_revision"],
+        cursor["session_revision"]
+    );
+    scoped_runtime_error(fixture.output(&["status"]), 1, "SESSION_NOT_FOUND");
+    assert_eq!(fixture.run(&["archive", "list"])["result"]["count"], 1);
+    assert_eq!(
+        fixture.run(&["workspace", "show"])["workspace"]["latest_workspace_sequence"]
+            .as_u64()
+            .unwrap(),
+        before["workspace"]["latest_workspace_sequence"]
+            .as_u64()
+            .unwrap()
+            + 1
+    );
+    assert_eq!(
+        fixture
+            .output(&[
+                "archive",
+                "--idempotency-key",
+                "archive",
+                "--if-session-id",
+                session,
+                "--if-session-revision",
+                &revision
+            ])
+            .stdout,
+        original.stdout
+    );
+    assert_eq!(
+        fixture
+            .output(&[
+                "archive",
+                "--idempotency-key",
+                "archive",
+                "--if-session-id",
+                session,
+                "--if-session-revision",
+                &revision,
+                "--if-workspace-uuid",
+                workspace
+            ])
+            .stdout,
+        original.stdout
+    );
+    assert_eq!(
+        fixture.run(&["outcome", "lookup", "--idempotency-key", "archive"])["result"]["outcome"]["response"],
         archived
     );
+    let readback = fixture.run(&[
+        "--contract-generation",
+        "2",
+        "archive",
+        "show",
+        "--verbose",
+        "--session-id",
+        session,
+    ]);
+    let archived_state = &readback["result"]["observation"];
     assert_eq!(
-        fixture.run(&["archive", "show", "--session-id", session])["result"]["state"]["session"]["lifecycle"],
-        "cancelled"
+        readback["result"]["attempt_history"]["attempts"][0]["attempt"]["session"],
+        session
     );
+    let empty_page = fixture.run(&[
+        "archive",
+        "show",
+        "--session-id",
+        session,
+        "--verbose",
+        "--history-before",
+        "1",
+    ]);
+    assert_eq!(
+        empty_page["result"]["attempt_history"]["attempts"],
+        serde_json::json!([])
+    );
+    assert_eq!(archived_state["lifecycle"], "cancelled");
+    assert_eq!(archived_state["cursor"], *cursor);
+    assert_eq!(archived_state["lifecycle_guidance"]["activity"], "archived");
+    assert_eq!(archived_state["mutation_templates"], serde_json::json!([]));
 }
 
 #[test]
 fn block_unblock_cancel_and_force_reset_preserve_automatic_and_explicit_fences_and_rendering() {
+    use serde_json::json;
     for explicit in [false, true] {
         for json in [false, true] {
-            let fixture = running_fixture(STATE);
+            let base = scoped_runtime_base(
+                json!({
+                    "prepare":{"type":"action","title":"Prepare","intent":"Record readiness.","items":[
+                        {"id":"ready","type":"confirm","prompt":"Confirm readiness.","required":true}
+                    ]}
+                }),
+                vec![json!({"id":"prepare","use":"prepare","next":"plan"})],
+                false,
+            );
+            let fixture = scoped_runtime_start(&base);
             fixture.run(&["check", "ready", "--idempotency-key", "ready"]);
-            let blocked = transition(
+            let initial = scoped_runtime_observe(&fixture);
+            let attempt = &initial["result"]["cursor"]["attempt"];
+            assert_eq!(initial["result"]["guidance"]["ready"], true);
+            let block = scoped_runtime_transition(
                 &fixture,
                 &["block", "--reason", "waiting for an external decision"],
                 "block",
@@ -966,24 +1383,28 @@ fn block_unblock_cancel_and_force_reset_preserve_automatic_and_explicit_fences_a
                 explicit,
                 json,
             );
-            assert_eq!(blocked["command"], "session.block");
-            assert_eq!(blocked["result"]["transition"], "block");
+            assert_eq!(block["command"], "session.block");
+            let status = scoped_runtime_observe(&fixture);
+            assert_eq!(status["result"]["guidance"]["items"][0]["satisfied"], true);
+            assert_eq!(status["result"]["guidance"]["ready"], false);
+            let blocker = status["result"]["open_blockers"][0].as_str().unwrap();
+            let history = || {
+                fixture.run(&[
+                    "history",
+                    "blockers",
+                    "--session",
+                    attempt["session"].as_str().unwrap(),
+                    "--attempt",
+                    &attempt.to_string(),
+                ])
+            };
+            let open = history();
             assert_eq!(
-                blocked["result"]["reason"],
+                open["result"]["rows"][0]["reason"],
                 "waiting for an external decision"
             );
-            let status = fixture.run(&["status"]);
-            assert_eq!(
-                status["result"]["current"]["readiness"]["items_satisfied"],
-                true
-            );
-            assert_eq!(status["result"]["current"]["readiness"]["unblocked"], false);
-            assert_eq!(
-                status["result"]["current"]["readiness"]["can_advance"],
-                false
-            );
-            let blocker = blocked["result"]["blocker_id"].as_str().unwrap();
-            let unblocked = transition(
+            assert_eq!(open["result"]["rows"][0]["state"], "open");
+            let unblocked = scoped_runtime_transition(
                 &fixture,
                 &["unblock", blocker],
                 "unblock-one",
@@ -992,12 +1413,13 @@ fn block_unblock_cancel_and_force_reset_preserve_automatic_and_explicit_fences_a
                 json,
             );
             assert_eq!(unblocked["command"], "session.unblock");
-            assert_eq!(unblocked["result"]["blocker_id"], blocker);
+            assert_eq!(history()["result"]["rows"][0]["state"], "resolved");
             assert_eq!(
-                fixture.run(&["status"])["result"]["current"]["readiness"]["can_advance"],
+                scoped_runtime_observe(&fixture)["result"]["guidance"]["ready"],
                 true
             );
-            transition(
+
+            scoped_runtime_transition(
                 &fixture,
                 &["block", "--reason", "waiting again"],
                 "block-again",
@@ -1005,7 +1427,7 @@ fn block_unblock_cancel_and_force_reset_preserve_automatic_and_explicit_fences_a
                 explicit,
                 json,
             );
-            let unblocked = transition(
+            scoped_runtime_transition(
                 &fixture,
                 &["unblock", "--all"],
                 "unblock-all",
@@ -1013,12 +1435,11 @@ fn block_unblock_cancel_and_force_reset_preserve_automatic_and_explicit_fences_a
                 explicit,
                 json,
             );
-            assert_eq!(unblocked["result"]["transition"], "unblock");
             assert_eq!(
-                fixture.run(&["status"])["result"]["current"]["blockers_total"],
-                0
+                scoped_runtime_observe(&fixture)["result"]["open_blockers"],
+                json!([])
             );
-            let cancelled = transition(
+            let cancelled = scoped_runtime_transition(
                 &fixture,
                 &["cancel", "--reason", "the task is no longer needed"],
                 "cancel",
@@ -1026,17 +1447,15 @@ fn block_unblock_cancel_and_force_reset_preserve_automatic_and_explicit_fences_a
                 explicit,
                 json,
             );
-            assert_eq!(cancelled["command"], "session.cancel");
-            assert_eq!(cancelled["result"]["session_state"], "cancelled");
-            let terminal = fixture.run(&["status"]);
-            assert_eq!(terminal["result"]["session"]["lifecycle"], "cancelled");
-            assert!(terminal["result"]["current"].is_null());
+            assert_eq!(cancelled["result"]["lifecycle"], "cancelled");
+            let terminal = scoped_runtime_observe(&fixture);
+            assert_eq!(terminal["result"]["lifecycle"], "cancelled");
+            assert!(terminal["result"]["cursor"]["attempt"].is_null());
             let history = fixture.run(&["status", "--verbose"]);
-            assert_eq!(
-                history["result"]["stale_attempt_history"]["entries"][0]["terminal_reason"],
-                "the task is no longer needed"
-            );
-            let reset = transition(
+            let last = &history["result"]["attempts"][0];
+            assert_eq!(last["lifecycle"], "abandoned");
+            assert_eq!(last["reason"], "the task is no longer needed");
+            let reset = scoped_runtime_transition(
                 &fixture,
                 &[
                     "reset",
@@ -1050,16 +1469,13 @@ fn block_unblock_cancel_and_force_reset_preserve_automatic_and_explicit_fences_a
                 json,
             );
             assert_eq!(reset["command"], "session.reset");
-            assert_eq!(reset["result"]["schema"], "podway.session-reset-result/v2");
+            assert_eq!(
+                reset["result"]["schema"],
+                "podway.successor-session-reset-result/v1"
+            );
             assert_eq!(reset["result"]["reset"], true);
             assert_eq!(reset["result"]["mode"], "force");
-            let missing = fixture.output(&["status"]);
-            assert_eq!(
-                serde_json::from_slice::<ErrorEnvelopeV2>(&missing.stdout)
-                    .unwrap()
-                    .as_value()["code"],
-                "SESSION_NOT_FOUND"
-            );
+            scoped_runtime_error(fixture.output(&["status"]), 1, "SESSION_NOT_FOUND");
         }
     }
 }
@@ -1068,104 +1484,131 @@ fn block_unblock_cancel_and_force_reset_preserve_automatic_and_explicit_fences_a
 fn retry_and_skip_preserve_clean_attempts_reasons_and_exact_replay_in_json_and_text() {
     for explicit in [false, true] {
         for json in [false, true] {
-            let fixture = running_fixture(RETRY);
+            let fixture = scoped_runtime_retry_fixture();
             fixture.run(&[
                 "set",
                 "result",
-                "discard on retry",
+                "Keep in history only.",
                 "--idempotency-key",
                 "seed",
             ]);
-            let before = fixture.run(&["status"]);
-            let retry = transition(
+            let before = scoped_runtime_observe(&fixture);
+            let old = &before["result"]["cursor"]["attempt"];
+            let retry = scoped_runtime_transition(
                 &fixture,
-                &["retry", "--reason", "repeat from clean state"],
+                &["retry", "--reason", "Repeat with a clean attempt."],
                 "retry",
                 true,
                 explicit,
                 json,
             );
             assert_eq!(retry["command"], "session.retry");
-            assert_eq!(retry["result"]["transition"], "retry");
-            assert_eq!(retry["result"]["reason"], "repeat from clean state");
-            let after = fixture.run(&["observe"]);
-            assert_ne!(
-                after["result"]["guidance"]["attempt"]["attempt_id"],
-                before["result"]["current"]["attempt"]["attempt_id"]
+            assert_ne!(retry["result"]["cursor"]["attempt"], *old);
+            assert_eq!(retry["result"]["cursor"]["attempt"]["node"], "work");
+            let current = scoped_runtime_observe(&fixture);
+            assert_eq!(current["result"]["items"][0]["recorded"], false);
+            let history = fixture.run(&["status", "--verbose"]);
+            let prior = history["result"]["attempts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|attempt| attempt["attempt"] == *old)
+                .unwrap();
+            assert_eq!(prior["lifecycle"], "abandoned");
+            assert_eq!(prior["validity"], "stale");
+            assert_eq!(prior["reason"], "Repeat with a clean attempt.");
+            assert_eq!(
+                scoped_runtime_history_item(&fixture, old, "result")["data"],
+                "Keep in history only."
             );
-            assert_eq!(after["result"]["guidance"]["attempt"]["attempt_number"], 2);
-            assert_eq!(after["result"]["active_items"][0]["value"], Value::Null);
+
             fixture.run(&[
                 "set",
                 "result",
-                "retained source evidence",
+                "Fresh source evidence.",
                 "--idempotency-key",
                 "seed-again",
             ]);
-            let complete = transition(&fixture, &["complete"], "complete", true, explicit, json);
-            assert_eq!(complete["command"], "session.complete");
-            assert_eq!(complete["result"]["to_graph_node_id"], "review");
-            let decision_retry = transition(
+            let complete = scoped_runtime_transition(
                 &fixture,
-                &["retry", "--reason", "repeat without a status probe"],
+                &["complete"],
+                "complete",
+                true,
+                explicit,
+                json,
+            );
+            let review = &complete["result"]["cursor"]["attempt"];
+            assert_eq!(review["node"], "review");
+            let retry = scoped_runtime_transition(
+                &fixture,
+                &["retry", "--reason", "Repeat the decision."],
                 "decision-retry",
                 true,
                 explicit,
                 json,
             );
-            assert_eq!(decision_retry["result"]["transition"], "retry");
-            assert_eq!(
-                fixture.run(&["status"])["result"]["current"]["node"]["graph_node_id"],
-                "review"
-            );
+            assert_eq!(retry["result"]["cursor"]["attempt"]["node"], "review");
+            assert_ne!(retry["result"]["cursor"]["attempt"], *review);
 
-            let fixture = running_fixture(SKIP);
+            let fixture = scoped_runtime_skip_fixture();
             reject(
                 &fixture,
-                &["skip", "--reason", "not eligible"],
+                &["skip", "--reason", "Not eligible."],
                 "rejected-skip",
                 "STAGE_NOT_SKIPPABLE",
             );
-            transition(&fixture, &["complete"], "prepare", true, explicit, json);
+            scoped_runtime_transition(&fixture, &["complete"], "prepare", true, explicit, json);
             fixture.run(&[
                 "set",
                 "required-note",
-                "discard on skip",
+                "Keep for retrospective reads.",
                 "--idempotency-key",
                 "skip-seed",
             ]);
-            let skip = transition(
+            let attempt = scoped_runtime_observe(&fixture)["result"]["cursor"]["attempt"].clone();
+            let skip = scoped_runtime_transition(
                 &fixture,
-                &["skip", "--reason", "not applicable"],
+                &["skip", "--reason", "Not applicable."],
                 "skip-source",
                 true,
                 explicit,
                 json,
             );
             assert_eq!(skip["command"], "session.skip");
-            assert_eq!(skip["result"]["transition"], "skip");
-            assert_eq!(skip["result"]["reason"], "not applicable");
-            assert_eq!(skip["result"]["to_graph_node_id"], "consumer");
-            let skip = transition(&fixture, &["skip"], "skip-consumer", true, explicit, json);
-            assert!(skip["result"].get("reason").is_none());
-            let terminal = transition(&fixture, &["skip"], "skip-finish", true, explicit, json);
-            assert_eq!(terminal["result"]["session_state"], "completed");
-            assert!(fixture.run(&["status"])["result"]["current"].is_null());
+            assert_eq!(skip["result"]["cursor"]["attempt"]["node"], "consumer");
+            let history = fixture.run(&["status", "--verbose"]);
+            let skipped = history["result"]["attempts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["attempt"] == attempt)
+                .unwrap();
+            assert_eq!(skipped["lifecycle"], "skipped");
+            assert_eq!(skipped["reason"], "Not applicable.");
+            scoped_runtime_transition(&fixture, &["skip"], "skip-consumer", true, explicit, json);
+            let history = fixture.run(&["status", "--verbose"]);
+            assert_eq!(history["result"]["attempts"][1]["lifecycle"], "skipped");
+            assert!(history["result"]["attempts"][1]["reason"].is_null());
+            scoped_runtime_activate(&fixture, false);
+            scoped_runtime_transition(&fixture, &["complete"], "return", true, explicit, json);
+            let terminal =
+                scoped_runtime_transition(&fixture, &["complete"], "finish", true, explicit, json);
+            assert_eq!(terminal["result"]["lifecycle"], "completed");
+            assert!(scoped_runtime_observe(&fixture)["result"]["cursor"]["attempt"].is_null());
         }
     }
 }
 
 #[test]
 fn goal_definition_preserves_actor_and_stable_json_human_and_quiet_rendering() {
+    let base = scoped_runtime_base(serde_json::json!({}), vec![], true);
     for mode in ["json", "human", "quiet"] {
-        let fixture = running_fixture(include_str!(
-            "../../../tests/fixtures/v2/procedures/goal-outcomes.yaml"
-        ));
-        let mut argv = vec![
+        let fixture = scoped_runtime_start(&base);
+        let mut args = vec![
             "goal",
             "define",
             "--goal",
-            "Ship the v2 platform CLI.",
+            "Ship the scoped CLI.",
             "--criterion",
             "stable-json=JSON is stable.",
             "--actor",
@@ -1174,12 +1617,12 @@ fn goal_definition_preserves_actor_and_stable_json_human_and_quiet_rendering() {
             "define",
         ];
         match mode {
-            "json" => argv.push("--json"),
-            "quiet" => argv.push("--quiet"),
+            "json" => args.push("--json"),
+            "quiet" => args.push("--quiet"),
             _ => {}
         }
-        let output = fixture.raw_output(&argv);
-        assert_eq!(output.status.code(), Some(0), "{mode}: {output:?}");
+        let output = fixture.raw_output(&args);
+        assert!(output.status.success(), "{mode}: {output:?}");
         assert!(output.stderr.is_empty());
         match mode {
             "json" => {
@@ -1189,13 +1632,13 @@ fn goal_definition_preserves_actor_and_stable_json_human_and_quiet_rendering() {
                 assert_eq!(envelope["command"], "goal.define");
                 assert_eq!(
                     envelope["result"]["schema"],
-                    "podway.goal-definition-result/v2"
+                    "podway.successor-cursor-mutation-result/v1"
                 );
-                assert_eq!(envelope["result"]["goal_revision"], 1);
+                assert_eq!(envelope["result"]["cursor"]["goal_revision"], 1);
             }
             "human" => {
                 let text = String::from_utf8(output.stdout).unwrap();
-                assert!(text.contains("Ship the v2 platform CLI."), "{text}");
+                assert!(text.contains("Ship the scoped CLI."), "{text}");
                 assert!(text.contains("stable-json"), "{text}");
             }
             "quiet" => assert!(output.stdout.is_empty()),
@@ -1204,28 +1647,37 @@ fn goal_definition_preserves_actor_and_stable_json_human_and_quiet_rendering() {
         let original = fixture.run(&["outcome", "lookup", "--idempotency-key", "define"])["result"]
             ["outcome"]["response"]
             .clone();
-        assert_eq!(original["result"]["actor"], "reviewer");
+        let observed = scoped_runtime_observe(&fixture);
+        assert_eq!(observed["result"]["goal"]["actor"], "reviewer");
+        assert_eq!(original["result"]["goal"]["actor"], "reviewer");
     }
 }
 
 #[test]
 fn general_decisions_evidence_queries_and_verbose_history_preserve_fences_and_actor() {
     for explicit in [false, true] {
-        let fixture = running_fixture(RETRY);
+        let fixture = scoped_runtime_retry_fixture();
+        let mut decisions = Vec::new();
         for round in 0..2 {
-            let set_key = format!("source-{round}");
             fixture.run(&[
                 "set",
                 "result",
                 "Retained source evidence.",
                 "--idempotency-key",
-                &set_key,
+                &format!("source-{round}"),
             ]);
-            let complete_key = format!("complete-{round}");
-            transition(&fixture, &["complete"], &complete_key, true, explicit, true);
-            let before = fixture.run(&["status"]);
-            let session = before["result"]["session"]["id"].as_str().unwrap();
-            let evidence = fixture.run(&[
+            scoped_runtime_transition(
+                &fixture,
+                &["complete"],
+                &format!("complete-{round}"),
+                true,
+                explicit,
+                true,
+            );
+            let before = scoped_runtime_observe(&fixture);
+            let cursor = &before["result"]["cursor"];
+            let session = cursor["session"].as_str().unwrap();
+            let selected = fixture.run(&[
                 "evidence",
                 "read",
                 "--source",
@@ -1237,27 +1689,23 @@ fn general_decisions_evidence_queries_and_verbose_history_preserve_fences_and_ac
                 "--if-workspace-uuid",
                 before["workspace"]["uuid"].as_str().unwrap(),
             ]);
-            assert_eq!(evidence["command"], "evidence.read");
+            assert_eq!(selected["command"], "evidence.read");
             assert_eq!(
-                evidence["result"]["schema"],
-                "podway.evidence-read-result/v1"
+                selected["result"]["schema"],
+                "podway.scoped-evidence-read-result/v1"
             );
-            assert_eq!(evidence["result"]["item"]["item_id"], "result");
-            assert_eq!(evidence["result"]["source"]["graph_node_id"], "work");
-            assert_eq!(evidence["result"]["consumer"]["graph_node_id"], "review");
+            assert_eq!(selected["result"]["detail"]["item"], "result");
             assert_eq!(
-                evidence["result"]["page"]["data"],
-                "Retained source evidence."
+                selected["result"]["detail"]["source_attempt"]["node"],
+                "work"
             );
-            assert_eq!(evidence["result"]["truncated"], false);
-            assert!(evidence["result"]["next_page_token"].is_null());
-            assert_eq!(fixture.run(&["status"])["result"], before["result"]);
-            assert_eq!(
-                evidence["workspace"]["latest_workspace_sequence"],
-                before["workspace"]["latest_workspace_sequence"]
-            );
-            let key = format!("reject-{round}");
-            let decision = transition(
+            assert_eq!(selected["result"]["detail"]["consumer"], cursor["attempt"]);
+            assert_eq!(selected["result"]["data"], "Retained source evidence.");
+            assert_eq!(selected["result"]["truncated"], false);
+            assert!(selected["result"]["next_page_token"].is_null());
+            assert_eq!(selected["workspace"], before["workspace"]);
+            assert_eq!(scoped_runtime_observe(&fixture)["result"], before["result"]);
+            let decision = scoped_runtime_transition(
                 &fixture,
                 &[
                     "decide",
@@ -1268,26 +1716,18 @@ fn general_decisions_evidence_queries_and_verbose_history_preserve_fences_and_ac
                     "--actor",
                     "owner",
                 ],
-                &key,
+                &format!("reject-{round}"),
                 true,
                 explicit,
                 true,
             );
             assert_eq!(decision["command"], "session.decide");
-            assert_eq!(decision["result"]["record"]["actor"], "owner");
-            assert_eq!(
-                decision["result"]["record"]["reason"],
-                "Review found a gap."
-            );
-            assert!(decision["result"]["record"]["goal_revision"].is_null());
-            assert_eq!(decision["result"]["record"]["effect"], "rework");
-            assert_eq!(
-                fixture.run(&["status"])["result"]["current"]["node"]["graph_node_id"],
-                "work"
-            );
+            assert_eq!(decision["result"]["cursor"]["attempt"]["node"], "work");
+            assert_ne!(decision["result"]["cursor"]["attempt"], cursor["attempt"]);
+            decisions.push(cursor["attempt"].clone());
         }
         let before = fixture.run(&["status"]);
-        let session = before["result"]["session"]["id"].as_str().unwrap();
+        let session = before["result"]["cursor"]["session"].as_str().unwrap();
         let argv = [
             "status",
             "--verbose",
@@ -1296,70 +1736,51 @@ fn general_decisions_evidence_queries_and_verbose_history_preserve_fences_and_ac
             "--if-session-id",
             session,
         ];
-        let json = fixture.run(&argv);
-        for (field, count, truncated) in
-            [("decision_history", 1, true), ("rework_history", 2, false)]
-        {
-            let history = &json["result"][field];
-            assert_eq!(history["entries"].as_array().unwrap().len(), count);
-            assert_eq!(history["trace_truncated"], truncated);
-            let entries = history["entries"].as_array().unwrap();
-            assert!(
-                entries
-                    .windows(2)
-                    .all(|pair| pair[0]["trace_sequence"].as_u64().unwrap()
-                        > pair[1]["trace_sequence"].as_u64().unwrap())
-            );
-            assert!(
-                entries
-                    .iter()
-                    .all(|entry| entry["trace_sequence"].as_u64().unwrap() < 42)
-            );
+        let verbose = fixture.run(&argv);
+        let rows = verbose["result"]["attempts"].as_array().unwrap();
+        assert!(
+            rows.windows(2)
+                .all(|pair| pair[0]["trace_sequence"].as_u64().unwrap()
+                    > pair[1]["trace_sequence"].as_u64().unwrap())
+        );
+        assert!(
+            rows.iter()
+                .all(|row| row["trace_sequence"].as_u64().unwrap() < 42)
+        );
+        let recorded = rows
+            .iter()
+            .filter(|row| row["decision"].is_object())
+            .collect::<Vec<_>>();
+        assert_eq!(recorded.len(), 2);
+        assert_eq!(recorded[0]["attempt"], decisions[1]);
+        assert_eq!(recorded[1]["attempt"], decisions[0]);
+        for row in &recorded {
+            assert_eq!(row["decision"]["option"], "reject");
+            assert_eq!(row["decision"]["reason"], "Review found a gap.");
+            assert_eq!(row["actor"], "owner");
+            assert!(row["decision"]["goal_assessment"].is_null());
         }
         let human = fixture.raw_output(&argv);
-        assert_eq!(human.status.code(), Some(0), "{human:?}");
+        assert!(human.status.success(), "{human:?}");
         let text = String::from_utf8(human.stdout).unwrap();
-        let rendered: Value = serde_json::from_str(
-            text.split_once("result: ")
-                .expect("verbose status retains the generic result")
-                .1,
-        )
-        .unwrap();
-        assert_eq!(
-            rendered["decision_history"],
-            json["result"]["decision_history"]
-        );
-        assert_eq!(rendered["rework_history"], json["result"]["rework_history"]);
-        let cutoff = json["result"]["decision_history"]["entries"][0]["trace_sequence"]
-            .as_u64()
-            .unwrap()
-            .to_string();
+        let body: Value = serde_json::from_str(text.split_once("result: ").unwrap().1).unwrap();
+        assert_eq!(body["attempts"], verbose["result"]["attempts"]);
+        let cutoff = recorded[0]["trace_sequence"].to_string();
         let page = fixture.run(&["status", "--verbose", "--history-before", &cutoff]);
+        let earlier = page["result"]["attempts"].as_array().unwrap();
         assert_eq!(
-            page["result"]["rework_history"]["entries"]
-                .as_array()
-                .unwrap()
-                .len(),
+            earlier
+                .iter()
+                .filter(|row| row["decision"].is_object())
+                .count(),
             1
         );
-        assert_eq!(
-            page["result"]["decision_history"]["entries"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
+        assert!(earlier.iter().any(|row| row["attempt"] == decisions[0]));
+        scoped_runtime_error(
+            fixture.output(&["status", "--verbose", "--history-before", "0"]),
+            2,
+            "REQUEST_INVALID",
         );
-        assert_eq!(page["result"]["decision_history"]["trace_truncated"], false);
-        assert!(
-            page["result"]["decision_history"]["entries"][0]["trace_sequence"]
-                .as_u64()
-                .unwrap()
-                < json["result"]["decision_history"]["entries"][0]["trace_sequence"]
-                    .as_u64()
-                    .unwrap()
-        );
-        let invalid = fixture.output(&["status", "--verbose", "--history-before", "0"]);
-        assert_eq!(invalid.status.code(), Some(2));
         assert_eq!(fixture.run(&["status"])["result"], before["result"]);
     }
 }
@@ -1367,8 +1788,8 @@ fn general_decisions_evidence_queries_and_verbose_history_preserve_fences_and_ac
 #[test]
 fn bound005_stdin_identity_and_flag_errors_keep_their_priority() {
     use serde_json::json;
-    let fixture = running_fixture(STATE);
-    let before = fixture.run(&["status"]);
+    let fixture = scoped_runtime_retry_fixture();
+    let before = scoped_runtime_observe(&fixture);
     let snapshot = fixture.podway_snapshot();
     for (input, message) in [
         (&[0xff][..], "stdin text must be valid UTF-8"),
@@ -1381,20 +1802,18 @@ fn bound005_stdin_identity_and_flag_errors_keep_their_priority() {
             &["set", "!!!", "--stdin", "--if-session-revision", "1"],
             input,
         );
-        assert_eq!(output.status.code(), Some(2), "{output:?}");
-        let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
-            .unwrap()
-            .into_value();
-        assert_eq!(error["code"], "REQUEST_INVALID");
+        assert!(output.stderr.is_empty());
+        let error = scoped_runtime_error(output, 2, "REQUEST_INVALID");
         assert_eq!(error["message"], message);
         assert_eq!(error["command"], "item.set");
-        assert!(output.stderr.is_empty());
         fixture.assert_podway_snapshot(&snapshot);
     }
-    let input = json!({"schema":"podway.item-record-many-input/v1", "workspace_uuid":before["workspace"]["uuid"],
-        "session_id":before["result"]["session"]["id"], "session_revision":before["result"]["session"]["revision"],
-        "attempt_id":before["result"]["current"]["attempt"]["attempt_id"], "idempotency_key":"stdin-owned",
-        "operations":[{"item_id":"result","expected_item_revision":0,"record":{"type":"text","value":"record"}}]});
+    let template = scoped_runtime_template(&before, "item.record_many");
+    let mut input: Value =
+        serde_json::from_str(template["stdin_template"].as_str().unwrap()).unwrap();
+    input["context"]["idempotency_key"] = json!("stdin-owned");
+    input["operations"] = json!([{"item_id":"result","expected_item_revision":0,
+        "record":{"type":"text","value":"record"}}]);
     let output = fixture.output_with_stdin(
         &[
             "record",
@@ -1403,27 +1822,23 @@ fn bound005_stdin_identity_and_flag_errors_keep_their_priority() {
             "duplicate-key",
             "--yes",
         ],
-        &serde_json::to_vec(&input).unwrap(),
+        input.to_string().as_bytes(),
     );
-    assert_eq!(output.status.code(), Some(2), "{output:?}");
-    let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
-        .unwrap()
-        .into_value();
-    assert_eq!(error["code"], "REQUEST_INVALID");
-    assert_eq!(
-        error["message"],
-        "record identity, revision, and idempotency fences must come only from stdin"
+    assert!(output.stderr.is_empty());
+    let error = scoped_runtime_error(output, 2, "REQUEST_INVALID");
+    assert!(
+        error["message"].as_str().unwrap().contains("stdin"),
+        "{error}"
     );
     assert_eq!(error["command"], "item.record_many");
-    assert!(output.stderr.is_empty());
     fixture.assert_podway_snapshot(&snapshot);
 }
 
 #[test]
 fn bound005_fresh_and_stateful_previews_keep_distinct_admission() {
-    let fixture = running_fixture(STATE);
+    let fixture = scoped_runtime_start(&scoped_runtime_base(serde_json::json!({}), vec![], false));
     let status = fixture.run(&["status"]);
-    let revision = status["result"]["session"]["revision"]
+    let revision = status["result"]["cursor"]["session_revision"]
         .as_u64()
         .unwrap()
         .to_string();
@@ -1442,7 +1857,7 @@ fn bound005_fresh_and_stateful_previews_keep_distinct_admission() {
     let fresh = fixture.run(&[
         "start",
         "--preset",
-        "small-change-v2",
+        "small-change-v3",
         "--task",
         "Preview",
         "--dry-run",
@@ -1454,7 +1869,7 @@ fn bound005_fresh_and_stateful_previews_keep_distinct_admission() {
     let output = fixture.output(&[
         "start",
         "--preset",
-        "small-change-v2",
+        "small-change-v3",
         "--task",
         "Preview",
         "--dry-run",
@@ -1467,7 +1882,7 @@ fn bound005_fresh_and_stateful_previews_keep_distinct_admission() {
         "--if-workspace-uuid",
         status["workspace"]["uuid"].as_str().unwrap(),
         "--if-session-id",
-        status["result"]["session"]["id"].as_str().unwrap(),
+        status["result"]["cursor"]["session"].as_str().unwrap(),
         "--if-session-revision",
         &revision,
     ]);
@@ -1484,19 +1899,19 @@ fn bound005_fresh_and_stateful_previews_keep_distinct_admission() {
     fixture.assert_podway_snapshot(&before);
 }
 
-/// Drives the STATE fixture to a completed session without a disposition.
+/// Complete a scoped fixture before recording a disposition.
 fn guide008_terminal_fixture() -> Fixture {
-    let fixture = running_fixture(STATE);
-    fixture.run(&["check", "ready", "--idempotency-key", "guide008-ready"]);
+    let fixture = scoped_runtime_start(&scoped_runtime_base(serde_json::json!({}), vec![], false));
+    scoped_runtime_activate(&fixture, false);
     fixture.run(&["complete", "--idempotency-key", "guide008-work-complete"]);
     fixture.run(&["complete", "--idempotency-key", "guide008-finish-complete"]);
     fixture
 }
 
-/// Drives the STATE fixture to a disposed terminal session.
+/// Complete a scoped fixture and settle its disposition.
 fn guide008_disposed_terminal_fixture() -> Fixture {
     let fixture = guide008_terminal_fixture();
-    transition(
+    scoped_runtime_transition(
         &fixture,
         &[
             "disposition",
@@ -1516,7 +1931,7 @@ fn guide008_fenced_start_argv<'a>(session: &'a str, revision: &'a str) -> Vec<&'
     vec![
         "start",
         "--preset",
-        "small-change-v2",
+        "small-change-v3",
         "--task",
         "successor",
         "--if-session-id",
@@ -1530,8 +1945,8 @@ fn guide008_fenced_start_argv<'a>(session: &'a str, revision: &'a str) -> Vec<&'
 fn guide008_cli_fenced_plain_start_archives_disposed_terminal_with_replay_and_lookup() {
     let fixture = guide008_disposed_terminal_fixture();
     let terminal = fixture.run(&["status"]);
-    let session = terminal["result"]["session"]["id"].as_str().unwrap();
-    let revision = terminal["result"]["session"]["revision"]
+    let session = terminal["result"]["cursor"]["session"].as_str().unwrap();
+    let revision = terminal["result"]["cursor"]["session_revision"]
         .as_u64()
         .unwrap()
         .to_string();
@@ -1578,7 +1993,7 @@ fn guide008_cli_fenced_plain_start_refuses_nonterminal_states_without_deletion()
     let seeded = fixture.run(&[
         "start",
         "--preset",
-        "small-change-v2",
+        "small-change-v3",
         "--task",
         "original",
         "--idempotency-key",
@@ -1597,10 +2012,10 @@ fn guide008_cli_fenced_plain_start_refuses_nonterminal_states_without_deletion()
     assert_eq!(error["details"]["lifecycle"], "prepared");
     assert_eq!(fixture.run(&["observe"])["result"], before["result"]);
 
-    let fixture = running_fixture(STATE);
+    let fixture = scoped_runtime_start(&scoped_runtime_base(serde_json::json!({}), vec![], false));
     let status = fixture.run(&["status"]);
-    let session = status["result"]["session"]["id"].as_str().unwrap();
-    let revision = status["result"]["session"]["revision"]
+    let session = status["result"]["cursor"]["session"].as_str().unwrap();
+    let revision = status["result"]["cursor"]["session_revision"]
         .as_u64()
         .unwrap()
         .to_string();
@@ -1618,8 +2033,8 @@ fn guide008_cli_fenced_plain_start_refuses_nonterminal_states_without_deletion()
 
     let fixture = guide008_terminal_fixture();
     let terminal = fixture.run(&["status"]);
-    let session = terminal["result"]["session"]["id"].as_str().unwrap();
-    let revision = terminal["result"]["session"]["revision"]
+    let session = terminal["result"]["cursor"]["session"].as_str().unwrap();
+    let revision = terminal["result"]["cursor"]["session_revision"]
         .as_u64()
         .unwrap()
         .to_string();
@@ -1649,16 +2064,16 @@ fn guide008_cli_fenced_plain_start_refuses_nonterminal_states_without_deletion()
 fn guide008_cli_fenced_plain_start_rejects_partial_and_stale_fences() {
     let fixture = guide008_disposed_terminal_fixture();
     let terminal = fixture.run(&["status"]);
-    let session = terminal["result"]["session"]["id"].as_str().unwrap();
+    let session = terminal["result"]["cursor"]["session"].as_str().unwrap();
     let workspace = terminal["workspace"]["uuid"].as_str().unwrap();
-    let revision = terminal["result"]["session"]["revision"]
+    let revision = terminal["result"]["cursor"]["session_revision"]
         .as_u64()
         .unwrap()
         .to_string();
     let base = [
         "start",
         "--preset",
-        "small-change-v2",
+        "small-change-v3",
         "--task",
         "successor",
     ];
@@ -1718,8 +2133,8 @@ fn guide008_cli_fenced_plain_start_dry_run_never_takes_the_offline_shortcut() {
     let fixture = guide008_disposed_terminal_fixture();
     let before = fixture.run(&["observe"]);
     let terminal = fixture.run(&["status"]);
-    let session = terminal["result"]["session"]["id"].as_str().unwrap();
-    let revision = terminal["result"]["session"]["revision"]
+    let session = terminal["result"]["cursor"]["session"].as_str().unwrap();
+    let revision = terminal["result"]["cursor"]["session_revision"]
         .as_u64()
         .unwrap()
         .to_string();
@@ -1749,8 +2164,8 @@ fn guide008_cli_fenced_start_from_a_terminal_never_interviews() {
     // disposition, archive and replace.
     let fixture = guide008_terminal_fixture();
     let terminal = fixture.run(&["status"]);
-    let session = terminal["result"]["session"]["id"].as_str().unwrap();
-    let revision = terminal["result"]["session"]["revision"]
+    let session = terminal["result"]["cursor"]["session"].as_str().unwrap();
+    let revision = terminal["result"]["cursor"]["session_revision"]
         .as_u64()
         .unwrap()
         .to_string();
@@ -1784,7 +2199,7 @@ fn guide008_cli_fenced_start_from_a_terminal_never_interviews() {
     let seeded = fixture.run(&[
         "start",
         "--preset",
-        "small-change-v2",
+        "small-change-v3",
         "--task",
         "original",
         "--idempotency-key",
@@ -1810,15 +2225,24 @@ fn guide008_cli_fenced_start_from_a_terminal_never_interviews() {
 #[test]
 fn agent003_goal_assess_criteria_partial_full_decide_and_if_goal_revision_flag_gate() {
     use serde_json::json;
-
-    let fixture = running_fixture(include_str!(
-        "../../../tests/fixtures/v2/procedures/goal-outcomes.yaml"
-    ));
-    let defined = fixture.run(&[
+    let mut base = scoped_runtime_base(
+        json!({
+            "inspect": {"type":"action","title":"Inspect","intent":"Inspect the input."},
+            "triage": {"type":"action","title":"Triage","intent":"Triage before planning."},
+        }),
+        vec![
+            json!({"id":"inspect","use":"inspect","next":"triage"}),
+            json!({"id":"triage","use":"triage","next":"plan"}),
+        ],
+        true,
+    );
+    base["manual_rework"] = json!({"allowed_targets":["triage"]});
+    let fixture = scoped_runtime_start(&base);
+    fixture.run(&[
         "goal",
         "define",
         "--goal",
-        "Verify batch criterion assessment and flag gate.",
+        "Verify the assessment flag gate.",
         "--criterion",
         "z-reproduced=The failure was reproduced.",
         "--criterion",
@@ -1828,35 +2252,115 @@ fn agent003_goal_assess_criteria_partial_full_decide_and_if_goal_revision_flag_g
         "--idempotency-key",
         "define-goal",
     ]);
-    assert_eq!(defined["result"]["goal_revision"], 1);
-
-    let bad_complete_out = fixture.output(&[
-        "complete",
-        "--if-goal-revision",
-        "1",
-        "--idempotency-key",
-        "bad-complete",
-    ]);
-    assert_eq!(
-        bad_complete_out.status.code(),
-        Some(2),
-        "{bad_complete_out:?}"
+    let revision_request = |target, expected, key| {
+        [
+            "goal",
+            "revise",
+            "--goal",
+            "Verify the changed requirements.",
+            "--criterion",
+            "verified=The required behavior is verified.",
+            "--rework-to",
+            target,
+            "--reason",
+            "Use the current goal revision policy.",
+            "--basis-description",
+            "Owned fixture basis.",
+            "--basis-digest",
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "--feedback",
+            "Retain the prior group result for later investigation.",
+            "--if-goal-revision",
+            expected,
+            "--idempotency-key",
+            key,
+        ]
+    };
+    let pre_anchor = scoped_runtime_observe(&fixture);
+    assert_eq!(pre_anchor["result"]["cursor"]["attempt"]["node"], "inspect");
+    for (target, key, code) in [
+        (
+            "finish",
+            "undeclared-revision-target",
+            "GOAL_REVISION_TARGET_NOT_ALLOWED",
+        ),
+        (
+            "triage",
+            "unvisited-revision-target",
+            "MANUAL_REWORK_TARGET_NOT_ON_TRACE",
+        ),
+    ] {
+        let refusal =
+            scoped_runtime_error(fixture.output(&revision_request(target, "1", key)), 1, code);
+        assert_eq!(refusal["details"]["target_graph_node_id"], target);
+        assert_eq!(
+            scoped_runtime_observe(&fixture)["result"],
+            pre_anchor["result"]
+        );
+        assert_eq!(
+            fixture.run(&["outcome", "lookup", "--idempotency-key", key])["result"]["found"],
+            false,
+        );
+    }
+    fixture.run(&["complete", "--idempotency-key", "complete-inspect"]);
+    fixture.run(&["complete", "--idempotency-key", "complete-triage"]);
+    let defined = scoped_runtime_observe(&fixture);
+    assert_eq!(defined["result"]["cursor"]["goal_revision"], 1);
+    scoped_runtime_error(
+        fixture.output(&[
+            "complete",
+            "--if-goal-revision",
+            "1",
+            "--idempotency-key",
+            "bad-complete",
+        ]),
+        2,
+        "REQUEST_INVALID",
     );
-    let bad_complete = serde_json::from_slice::<ErrorEnvelopeV2>(&bad_complete_out.stdout)
-        .unwrap()
-        .into_value();
-    assert_eq!(bad_complete["code"], "REQUEST_INVALID");
+    assert_eq!(
+        scoped_runtime_observe(&fixture)["result"],
+        defined["result"]
+    );
 
+    scoped_runtime_activate(&fixture, true);
     fixture.run(&[
         "set",
         "result",
-        "Recorded required evidence for perform.",
+        "The first execution supplied evidence.",
         "--idempotency-key",
-        "set-perform",
+        "first-result",
     ]);
-    fixture.run(&["complete", "--idempotency-key", "complete-perform"]);
-
-    let revised = fixture.run(&[
+    let first_terminal = scoped_runtime_observe(&fixture);
+    let first_execution = first_terminal["result"]["selection"]["execution"]
+        .as_str()
+        .unwrap();
+    let first_return = scoped_runtime_recipe(&fixture, "group.return", None, &[], "return-first");
+    assert_eq!(first_return["result"]["execution_id"], first_execution);
+    assert_eq!(
+        first_return["result"]["closed_attempt"],
+        first_terminal["result"]["cursor"]["attempt"]
+    );
+    let before_revision = scoped_runtime_observe(&fixture);
+    let wrong_target = scoped_runtime_error(
+        fixture.output(&revision_request("assess", "1", "wrong-revision-target")),
+        1,
+        "GOAL_REVISION_TARGET_NOT_ALLOWED",
+    );
+    assert_eq!(wrong_target["details"]["target_graph_node_id"], "assess");
+    assert_eq!(
+        scoped_runtime_observe(&fixture)["result"],
+        before_revision["result"]
+    );
+    assert_eq!(
+        fixture.run(&[
+            "outcome",
+            "lookup",
+            "--idempotency-key",
+            "wrong-revision-target"
+        ])["result"]["found"],
+        false,
+    );
+    fixture.run(&[
         "goal",
         "revise",
         "--goal",
@@ -1866,182 +2370,254 @@ fn agent003_goal_assess_criteria_partial_full_decide_and_if_goal_revision_flag_g
         "--criterion",
         "a-verified=The fix was verified.",
         "--rework-to",
-        "perform",
+        "plan",
         "--reason",
-        "Refine criterion IDs to exercise declaration order.",
+        "Refine the current criteria.",
+        "--basis-description",
+        "Retain the prior fixture evidence.",
+        "--basis-digest",
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "--feedback",
+        "Require a fresh group result for the revised goal.",
         "--if-goal-revision",
         "1",
         "--idempotency-key",
         "revise-goal-1",
     ]);
-    assert_eq!(revised["result"]["goal_revision"], 2);
+    let revised = scoped_runtime_observe(&fixture);
+    assert_eq!(revised["result"]["cursor"]["goal_revision"], 2);
+    assert_eq!(revised["result"]["cursor"]["attempt"]["node"], "plan");
+    let session = revised["session"]["id"].as_str().unwrap();
+    scoped_runtime_activate_with_key(&fixture, true, "activate-revised");
+    let second = scoped_runtime_observe(&fixture);
+    let selection = &second["result"]["selection"];
+    let execution = selection["execution"].as_str().unwrap();
+    let definition = selection["definition_digest"].as_str().unwrap();
+    assert_eq!(
+        definition,
+        first_terminal["result"]["selection"]["definition_digest"]
+    );
+    assert_ne!(execution, first_execution);
+    let old_cursor = first_terminal["result"]["cursor"].to_string();
+    let stale = fixture.output(&[
+        "group",
+        "return",
+        "--if-cursor",
+        &old_cursor,
+        "--if-workspace-uuid",
+        second["workspace"]["uuid"].as_str().unwrap(),
+        "--idempotency-key",
+        "return-old-group",
+    ]);
+    scoped_runtime_error(stale, 4, "ATTEMPT_NOT_CURRENT");
+    assert_eq!(scoped_runtime_observe(&fixture)["result"], second["result"]);
+    assert_eq!(
+        fixture.run(&["outcome", "lookup", "--idempotency-key", "return-old-group"])["result"]["found"],
+        false,
+    );
+    let before_history = fixture.podway_snapshot();
 
+    let group = fixture.run(&[
+        "group",
+        "show",
+        "--session",
+        session,
+        "--execution",
+        execution,
+    ]);
+    assert_eq!(
+        group["result"]["schema"],
+        "podway.successor-group-show-result/v1"
+    );
+    assert_eq!(group["result"]["group"]["summary"]["execution"], execution);
+    assert_eq!(
+        group["result"]["group"]["summary"]["definition_digest"],
+        definition
+    );
+    let prior_work_args = [
+        "group",
+        "prior-work",
+        "--session",
+        session,
+        "--execution",
+        execution,
+        "--definition-digest",
+    ];
+    let previous = fixture.run(&[&prior_work_args[..], &[definition]].concat());
+    assert_eq!(
+        previous["result"]["schema"],
+        "podway.successor-history-prior-work-result/v1"
+    );
+    assert_eq!(previous["result"]["total"], 1);
+    assert_eq!(previous["result"]["rows"][0]["choice"], "revalidate");
+    assert_eq!(
+        previous["result"]["rows"][0]["source"]["group"]["execution"],
+        first_execution
+    );
+    scoped_runtime_error(
+        fixture.output(
+            &[
+                &prior_work_args[..],
+                &["sha256:0000000000000000000000000000000000000000000000000000000000000000"],
+            ]
+            .concat(),
+        ),
+        4,
+        "GROUP_DEFINITION_MISMATCH",
+    );
+
+    let revisions = fixture.run(&["history", "goal-revisions", "--session", session]);
+    assert_eq!(
+        revisions["result"]["schema"],
+        "podway.successor-goal-revision-history-result/v1"
+    );
+    assert_eq!(revisions["result"]["total"], 1);
+    let revision = &revisions["result"]["rows"][0];
+    assert_eq!(revision["goal_revision"], 2);
+    assert_eq!(revision["predecessor"], first_execution);
+    assert_eq!(
+        revision["successor"],
+        revised["result"]["cursor"]["attempt"]
+    );
+    assert_eq!(fixture.podway_snapshot(), before_history);
     fixture.run(&[
         "set",
         "result",
-        "Updated evidence after goal revision.",
+        "The new group recorded current evidence.",
         "--idempotency-key",
-        "set-perform-2",
+        "second-result",
     ]);
-    fixture.run(&["complete", "--idempotency-key", "complete-perform-2"]);
+    fixture.run(&["complete", "--idempotency-key", "return-second"]);
 
-    let at_assess = fixture.run(&["status"]);
-    let workspace_uuid = at_assess["workspace"]["uuid"].as_str().unwrap().to_owned();
-    let session_id = at_assess["result"]["session"]["id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let assess_attempt = at_assess["result"]["current"]["attempt"]["attempt_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let assess_rev = at_assess["result"]["session"]["revision"].as_u64().unwrap();
-
-    let stale_goal_doc = json!({
-        "schema": "podway.criterion-assessment-many-input/v1",
-        "workspace_uuid": workspace_uuid,
-        "session_id": session_id,
-        "session_revision": assess_rev,
-        "attempt_id": assess_attempt,
-        "goal_revision": 1,
-        "idempotency_key": "batch-stale-goal",
-        "assessments": [
-            {
-                "criterion_id": "a-verified",
-                "status": "satisfied",
-                "reason": "Verified."
-            }
-        ]
-    });
-    let stale_raw = fixture.output_with_stdin(
-        &["goal", "assess-criteria", "--stdin"],
-        serde_json::to_string(&stale_goal_doc).unwrap().as_bytes(),
+    fn proposal(current: &Value, key: &str, criterion: &str) -> Value {
+        let template = scoped_runtime_template(current, "goal.assess_criteria");
+        let mut input: Value =
+            serde_json::from_str(template["stdin_template"].as_str().unwrap()).unwrap();
+        input["context"]["idempotency_key"] = serde_json::json!(key);
+        input["actor"] = serde_json::json!("agent-to");
+        input["assessments"] = serde_json::json!([{
+            "criterion":criterion, "status":"satisfied", "reason":"Verified from the current group result.",
+            "citations":[{"kind":"execution_result"}],
+        }]);
+        input
+    }
+    let args = ["goal", "assess-criteria", "--stdin", "--with-observation"];
+    let at_assess = scoped_runtime_observe(&fixture);
+    let mut stale = proposal(&at_assess, "batch-stale-goal", "a-verified");
+    stale["context"]["cursor"]["goal_revision"] = json!(1);
+    scoped_runtime_error(
+        fixture.output_with_stdin(&args, stale.to_string().as_bytes()),
+        4,
+        "GOAL_REVISION_STALE",
     );
-    assert_eq!(stale_raw.status.code(), Some(4), "{stale_raw:?}");
-    let stale_out = serde_json::from_slice::<ErrorEnvelopeV2>(&stale_raw.stdout)
+    assert_eq!(
+        scoped_runtime_observe(&fixture)["result"],
+        at_assess["result"]
+    );
+    assert_eq!(
+        fixture.run(&["outcome", "lookup", "--idempotency-key", "batch-stale-goal"])["result"]["found"],
+        false
+    );
+
+    let partial = proposal(&at_assess, "batch-partial-1", "a-verified");
+    let first = fixture.output_with_stdin(&args, partial.to_string().as_bytes());
+    assert!(first.status.success(), "{first:?}");
+    let first_result = serde_json::from_slice::<OutputEnvelopeV4>(&first.stdout)
         .unwrap()
         .into_value();
-    assert_eq!(stale_out["code"], "GOAL_REVISION_STALE");
+    assert_eq!(first_result["command"], "goal.assess_criteria");
+    assert_eq!(
+        first_result["result"]["schema"],
+        "podway.mutation-observation-result/v2"
+    );
+    let observation = &first_result["result"]["observation"];
+    assert_eq!(observation["goal"]["criteria"][0]["id"], "z-reproduced");
+    assert!(observation["goal"]["criteria"][0]["status"].is_null());
+    assert_eq!(observation["goal"]["criteria"][1]["id"], "a-verified");
+    assert_eq!(observation["goal"]["criteria"][1]["status"], "satisfied");
+    assert!(observation["goal"]["outcome"].is_null());
 
-    let partial_doc = json!({
-        "schema": "podway.criterion-assessment-many-input/v1",
-        "workspace_uuid": workspace_uuid,
-        "session_id": session_id,
-        "session_revision": assess_rev,
-        "attempt_id": assess_attempt,
-        "goal_revision": 2,
-        "idempotency_key": "batch-partial-1",
-        "actor": "agent-to",
-        "assessments": [
-            {
-                "criterion_id": "a-verified",
-                "status": "satisfied",
-                "reason": "Verified by regression test.",
-                "evidence": ["perform"]
-            }
-        ]
-    });
-    let partial_raw = fixture.output_with_stdin(
-        &["goal", "assess-criteria", "--stdin"],
-        serde_json::to_string(&partial_doc).unwrap().as_bytes(),
-    );
-    assert_eq!(partial_raw.status.code(), Some(0), "{partial_raw:?}");
-    let partial_res = serde_json::from_slice::<OutputEnvelopeV4>(&partial_raw.stdout)
-        .unwrap()
-        .into_value();
-    assert_eq!(partial_res["command"], "goal.assess_criteria");
-    assert_eq!(
-        partial_res["result"]["schema"],
-        "podway.criterion-assessment-many-result/v1"
-    );
-    assert_eq!(partial_res["result"]["complete"], false);
-    assert!(partial_res["result"].get("determined_outcome").is_none());
-    assert_eq!(
-        partial_res["result"]["results"].as_array().unwrap().len(),
-        1
-    );
-    assert_eq!(
-        partial_res["result"]["results"][0]["criterion_id"],
-        "a-verified"
-    );
-
-    let decide_early_raw = fixture.output(&[
+    let control = scoped_runtime_observe(&fixture);
+    let early = fixture.output(&[
         "decide",
         "--option",
         "achieved",
         "--reason",
-        "Try deciding before second criterion.",
+        "Second criterion is missing.",
         "--if-goal-revision",
         "2",
         "--idempotency-key",
         "decide-early",
     ]);
+    let error = scoped_runtime_error(early, 1, "CRITERION_RESULT_MISSING");
     assert_eq!(
-        decide_early_raw.status.code(),
-        Some(1),
-        "{decide_early_raw:?}"
+        error["details"]["missing_criterion_ids"],
+        json!(["z-reproduced"])
     );
-    let decide_early = serde_json::from_slice::<ErrorEnvelopeV2>(&decide_early_raw.stdout)
+    assert_eq!(
+        scoped_runtime_observe(&fixture)["result"],
+        control["result"]
+    );
+    assert_eq!(
+        fixture.run(&["outcome", "lookup", "--idempotency-key", "decide-early"])["result"]["found"],
+        false
+    );
+
+    let second = proposal(&control, "batch-partial-2", "z-reproduced");
+    let result = fixture.output_with_stdin(&args, second.to_string().as_bytes());
+    assert!(result.status.success(), "{result:?}");
+    let result = serde_json::from_slice::<OutputEnvelopeV4>(&result.stdout)
         .unwrap()
         .into_value();
-    assert_eq!(decide_early["code"], "CRITERION_RESULT_MISSING");
-
-    let second_rev = partial_res["result"]["revision"].as_u64().unwrap();
-    let second_doc = json!({
-        "schema": "podway.criterion-assessment-many-input/v1",
-        "workspace_uuid": workspace_uuid,
-        "session_id": session_id,
-        "session_revision": second_rev,
-        "attempt_id": assess_attempt,
-        "goal_revision": 2,
-        "idempotency_key": "batch-partial-2",
-        "assessments": [
-            {
-                "criterion_id": "z-reproduced",
-                "status": "satisfied",
-                "reason": "Reproduced cleanly.",
-                "evidence": ["perform"]
-            }
-        ]
-    });
-    let second_raw = fixture.output_with_stdin(
-        &["goal", "assess-criteria", "--stdin"],
-        serde_json::to_string(&second_doc).unwrap().as_bytes(),
-    );
-    assert_eq!(second_raw.status.code(), Some(0), "{second_raw:?}");
-    let second_res = serde_json::from_slice::<OutputEnvelopeV4>(&second_raw.stdout)
-        .unwrap()
-        .into_value();
-    assert_eq!(second_res["result"]["complete"], true);
-    assert_eq!(second_res["result"]["determined_outcome"], "achieved");
-
+    let complete = &result["result"]["observation"]["goal"];
+    assert_eq!(complete["criteria"][0]["status"], "satisfied");
+    assert_eq!(complete["criteria"][1]["status"], "satisfied");
+    assert_eq!(complete["outcome"], "achieved");
     let decided = fixture.run(&[
         "decide",
         "--option",
         "achieved",
         "--reason",
-        "All criteria satisfied.",
+        "All criteria are satisfied.",
         "--if-goal-revision",
         "2",
         "--idempotency-key",
         "decide-final",
     ]);
     assert_eq!(decided["command"], "session.decide");
-
-    let first_replay_raw = fixture.output_with_stdin(
-        &["goal", "assess-criteria", "--stdin"],
-        serde_json::to_string(&partial_doc).unwrap().as_bytes(),
+    assert_eq!(
+        fixture
+            .output_with_stdin(&args, partial.to_string().as_bytes())
+            .stdout,
+        first.stdout
     );
     assert_eq!(
-        first_replay_raw.status.code(),
-        Some(0),
-        "{first_replay_raw:?}"
+        fixture.run(&["outcome", "lookup", "--idempotency-key", "batch-partial-1"])["result"]["outcome"]
+            ["response"],
+        first_result
     );
-    let first_replay = serde_json::from_slice::<OutputEnvelopeV4>(&first_replay_raw.stdout)
-        .unwrap()
-        .into_value();
-    assert_eq!(first_replay, partial_res);
-    let lookup = fixture.run(&["outcome", "lookup", "--idempotency-key", "batch-partial-1"]);
-    assert_eq!(lookup["result"]["found"], true);
-    assert_eq!(lookup["result"]["outcome"]["response"], partial_res);
+    fixture.run(&["complete", "--idempotency-key", "finish"]);
+    let terminal = scoped_runtime_observe(&fixture);
+    let scoped_runtime_error = scoped_runtime_error(
+        fixture.output(&revision_request("plan", "2", "missing-reactivation")),
+        1,
+        "REACTIVATION_FLAG_REQUIRED",
+    );
+    assert_eq!(
+        scoped_runtime_error["details"]["kind"],
+        "REACTIVATION_FLAG_REQUIRED"
+    );
+    assert_eq!(
+        scoped_runtime_observe(&fixture)["result"],
+        terminal["result"]
+    );
+    assert_eq!(
+        fixture.run(&[
+            "outcome",
+            "lookup",
+            "--idempotency-key",
+            "missing-reactivation"
+        ])["result"]["found"],
+        false,
+    );
 }

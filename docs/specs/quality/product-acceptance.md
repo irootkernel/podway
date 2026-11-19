@@ -1,13 +1,17 @@
 # Product Acceptance Criteria
 
-The criteria below define the current Procedure v2 product checked by `make test`.
+The criteria below define the current scoped product checked by `make test`.
 Distribution qualification in `make dist` adds native packaging evidence.
 
 ## Procedure and lifecycle
 
-- Only `podway.procedure/v2` input is admitted.
-- The shipped presets are exactly `analysis-v2`, `bug-fix-v2`,
-  `small-change-v2`, and `sw-dev-v2`, with pinned embedded identities.
+- Session bases use `podway.procedure/v3`. Group definitions use
+  `podway.execution-group/v1`.
+- The catalog ships `analysis-v3`, `bug-fix-v3`, `small-change-v3`, and
+  `sw-dev-v3`, each with an embedded base and default group independently
+  pinned by digest.
+- Explicit activation binds the plan to one current group execution. A
+  guarded replan preserves the prior work and opens a fresh design attempt.
 - `start` snapshots the Procedure into a cursor-free prepared session; `begin`
   creates the first running attempt at the unique graph entry.
 - Action, decision, and terminal nodes enforce their declared transition rules.
@@ -23,9 +27,9 @@ Distribution qualification in `make dist` adds native packaging evidence.
 - State, sequence, journal and the validated success outcome commit atomically.
   Rejections retain no outcome, and exact retained success replays the original
   complete response before the transition callback or clock runs.
-- Direct SQLite generation 15 binds the canonical Git worktree and writer
+- Direct SQLite generation 16 binds the canonical Git worktree and writer
   manifest identity. It contains no runtime mode or durable job state.
-- Generations 1–14 and legacy markers are refused unchanged, with no migration,
+- Generations 1–15 and legacy markers are refused unchanged, with no migration,
   checkpoint or SHM creation. Confirmed reset makes a fresh Store without backup
   or conversion after the separately authorized legacy-writer retirement.
 - Newer Stores refuse even reset and removal. Invalid supported current Stores

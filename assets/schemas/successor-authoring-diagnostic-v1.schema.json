@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:successor-authoring-diagnostic:v1",
+  "title": "Podway Successor Authoring Diagnostic v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "code",
+    "severity",
+    "schema",
+    "source_path",
+    "location",
+    "field",
+    "message",
+    "hint"
+  ],
+  "allOf": [
+    {
+      "$ref": "urn:podway:schema:authoring-diagnostic:v1#/allOf/0"
+    }
+  ],
+  "properties": {
+    "code": {
+      "$ref": "urn:podway:schema:authoring-diagnostic:v1#/properties/code"
+    },
+    "severity": {
+      "$ref": "urn:podway:schema:authoring-diagnostic:v1#/properties/severity"
+    },
+    "schema": {
+      "const": "podway.successor-authoring-diagnostic/v1"
+    },
+    "source_path": {
+      "$ref": "urn:podway:schema:authoring-diagnostic:v1#/properties/source_path"
+    },
+    "location": {
+      "$ref": "urn:podway:schema:authoring-diagnostic:v1#/properties/location"
+    },
+    "field": {
+      "$ref": "urn:podway:schema:authoring-diagnostic:v1#/properties/field"
+    },
+    "node_definition_id": {
+      "$ref": "urn:podway:schema:authoring-diagnostic:v1#/properties/node_definition_id"
+    },
+    "graph_node_id": {
+      "$ref": "urn:podway:schema:authoring-diagnostic:v1#/properties/graph_node_id"
+    },
+    "related_graph_node_ids": {
+      "$ref": "urn:podway:schema:authoring-diagnostic:v1#/properties/related_graph_node_ids"
+    },
+    "message": {
+      "$ref": "urn:podway:schema:authoring-diagnostic:v1#/properties/message"
+    },
+    "hint": {
+      "$ref": "urn:podway:schema:authoring-diagnostic:v1#/properties/hint"
+    }
+  }
+}

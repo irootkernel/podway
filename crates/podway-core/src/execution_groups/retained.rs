@@ -10,12 +10,14 @@ pub struct RetainedAttemptV3 {
     pub validity: AttemptValidityV2,
     pub opened_at: UnixMillis,
     pub closed_at: Option<UnixMillis>,
+    pub closed_actor: Option<crate::ActorAttributionV2>,
     pub slots: Vec<ItemSlotStateV2>,
     pub blockers: Vec<BlockerStateV2>,
     pub delegation: Option<ScopedDelegationBindingV1>,
     pub decision_entry: Option<u64>,
     pub decision_group: Option<GroupExecutionIdV1>,
     pub decision: Option<GroupDecisionRecordV1>,
+    pub criterion_assessments: Option<SuccessorCriterionSetV1>,
     pub reason: Option<ReasonV2>,
 }
 
@@ -27,6 +29,7 @@ impl From<&GroupAttemptStateV1> for RetainedAttemptV3 {
             validity: value.validity,
             opened_at: value.opened_at,
             closed_at: value.closed_at,
+            closed_actor: value.closed_actor.clone(),
             slots: value.slots.clone(),
             blockers: value.blockers.clone(),
             delegation: value.delegation.clone(),
@@ -35,6 +38,7 @@ impl From<&GroupAttemptStateV1> for RetainedAttemptV3 {
                 .selected_decision_entry()
                 .map(|entry| entry.selected_group().clone()),
             decision: value.decision.clone(),
+            criterion_assessments: value.criterion_assessments.clone(),
             reason: value.reason.clone(),
         }
     }
@@ -69,9 +73,11 @@ pub struct RetainedExecutionV3 {
     pub selected: Option<GroupExecutionIdV1>,
     pub attempts: Vec<RetainedAttemptV3>,
     pub initial_goal: Option<ExecutionGoalV3>,
+    pub initial_goal_actor: Option<crate::ActorAttributionV2>,
     pub goal_revisions: Vec<GroupGoalRevisionV1>,
     pub lifecycle: SessionLifecycle,
     pub revision: Revision,
+    pub created_at: UnixMillis,
     pub updated_at: UnixMillis,
 }
 
@@ -88,6 +94,10 @@ impl ExecutionSessionV3 {
         self.updated_at
     }
 
+    pub const fn created_at(&self) -> UnixMillis {
+        self.created_at
+    }
+
     /// Re-admit the trace using the same transition rules that created it. Install only final
     /// item and blocker state for each attempt. Intermediate edits are intentionally absent.
     pub fn from_retained(retained: RetainedExecutionV3) -> Result<Self, DomainError> {
@@ -100,9 +110,11 @@ impl ExecutionSessionV3 {
             selected,
             attempts,
             initial_goal,
+            initial_goal_actor,
             goal_revisions,
             lifecycle,
             revision,
+            created_at,
             updated_at,
         } = retained;
         check_bound("session attempts", attempts.len(), MAX_SESSION_ATTEMPTS_V1)?;
@@ -111,13 +123,31 @@ impl ExecutionSessionV3 {
             executions.len(),
             MAX_GROUP_EXECUTIONS_V1,
         )?;
+        if lifecycle == SessionLifecycle::Prepared {
+            if revision != Revision::ZERO
+                || created_at != updated_at
+                || !attempts.is_empty()
+                || !definitions.is_empty()
+                || !executions.is_empty()
+                || selected.is_some()
+                || initial_goal.is_some()
+                || initial_goal_actor.is_some()
+                || !goal_revisions.is_empty()
+            {
+                return Err(invalid("prepared session contains execution history"));
+            }
+            return Ok(Self::prepared(session, base, base_digest, created_at));
+        }
         let first = attempts
             .first()
             .ok_or_else(|| invalid("retained session has no entry"))?;
-        let mut state = Self::begin(
-            session,
-            base,
-            base_digest,
+        let mut state = Self::prepared(session, base, base_digest, created_at);
+        if initial_goal.is_none() && initial_goal_actor.is_some() {
+            return Err(invalid("retained attribution has no initial goal"));
+        }
+        state.initial_goal_actor = initial_goal_actor;
+        state.begin_prepared(
+            &state.fence(),
             initial_goal,
             first.target.attempt().clone(),
             first.opened_at,
@@ -139,6 +169,7 @@ impl ExecutionSessionV3 {
                 .map(|closure| (closure.source.attempt(), closure))
         }))?;
         let mut minimum_item_writes = 0_u64;
+        let mut minimum_assessment_writes = 0_u64;
         let mut blocker_ids = BTreeSet::new();
         for (index, attempt) in attempts.iter().enumerate() {
             if attempt
@@ -168,6 +199,10 @@ impl ExecutionSessionV3 {
                 .checked_add(attempt_writes)
                 .ok_or_else(|| invalid("retained item revisions exceed session revision range"))?;
             state.admit_retained_values(attempt, updated_at)?;
+            if let Some(set) = &attempt.criterion_assessments {
+                state.admit_retained_criteria(set, attempt.closed_at.unwrap_or(updated_at))?;
+                minimum_assessment_writes += 1;
+            }
             if let Some(change) = goal_change {
                 // Reactivation follows successful termination, even though the new anchor is
                 // adjacent in the retained trace.
@@ -197,6 +232,12 @@ impl ExecutionSessionV3 {
                     next,
                     change.closure.at,
                 )?;
+                state
+                    .goal_revisions
+                    .last_mut()
+                    .expect("goal change was reconstructed")
+                    .actor
+                    .clone_from(&change.actor);
                 continue;
             }
             let Some(at) = attempt.closed_at else {
@@ -247,11 +288,19 @@ impl ExecutionSessionV3 {
                                 at,
                             )?;
                         } else {
+                            let outcome = decision.goal_assessment.map(|(_, outcome)| outcome);
+                            if attempt.criterion_assessments.is_some()
+                                && state.determined_goal_outcome()? != outcome
+                            {
+                                return Err(invalid(
+                                    "retained decision does not match its criterion results",
+                                ));
+                            }
                             state.decide(
                                 &fence,
                                 decision.option.clone(),
                                 ReasonV2::new(&decision.reason)?,
-                                decision.goal_assessment.map(|(_, outcome)| outcome),
+                                outcome,
                                 required_successor(next)?,
                                 at,
                             )?;
@@ -292,6 +341,7 @@ impl ExecutionSessionV3 {
                 .revision
                 .get()
                 .checked_add(minimum_item_writes)
+                .and_then(|minimum| minimum.checked_add(minimum_assessment_writes))
                 .is_none_or(|minimum| minimum > revision.get())
             || state.goal_revisions != goal_revisions
             || state.definitions != definitions
@@ -328,6 +378,9 @@ impl ExecutionSessionV3 {
                 .selected_decision_entry()
                 .map(DecisionEntryV1::selected_group)
                 != attempt.decision_group.as_ref()
+            || attempt.closed_actor.is_some()
+                && !(attempt.lifecycle == AttemptLifecycle::Completed && attempt.decision.is_some()
+                    || attempt.lifecycle == AttemptLifecycle::Abandoned && attempt.reason.is_some())
             || limit < attempt.opened_at
             || limit > updated_at
             || items.len() != attempt.slots.len()
@@ -381,6 +434,7 @@ impl ExecutionSessionV3 {
         current.slots.clone_from(&attempt.slots);
         current.blockers.clone_from(&attempt.blockers);
         current.delegation.clone_from(&attempt.delegation);
+        current.closed_actor.clone_from(&attempt.closed_actor);
         Ok(())
     }
 }

@@ -19,12 +19,11 @@ its in-process Direct Engine as one product and are grouped by concern:
   Its availability section distinguishes
   the accepted contract from current executable support.
 
-## Successor model values
+## Scoped execution
 
-- [Execution groups](domain/execution-groups.md): internal successor source and
+- [Execution groups](domain/execution-groups.md): Procedure v3 and Execution Group v1 source and
   graph admission, canonical identities and projections, exact item interfaces,
   immutable identity, bounded caller records and pure session lifecycle transitions.
-  Public admission uses Procedure v2.
 
 ## Supervised delegation
 

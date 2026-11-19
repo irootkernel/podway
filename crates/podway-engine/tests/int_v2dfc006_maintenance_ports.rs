@@ -26,7 +26,7 @@ fn engine() -> Engine {
         temporary,
         selector,
         store,
-        resolver: DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest()),
+        resolver: DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest()),
     }
 }
 fn uuid(engine: &Engine) -> WorkspaceId {
@@ -731,7 +731,8 @@ fn concurrent_runtime_absent_residual_removals_converge_without_successor() {
         let (release_tx, release_rx) = mpsc::channel();
         let worker = std::thread::spawn(move || {
             ready_rx.recv_timeout(Duration::from_secs(20)).unwrap();
-            let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+            let resolver =
+                DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
             let release_rx = Mutex::new(release_rx);
             let paused_tx = done_tx.clone();
             let result = remove_workspace_with_boundary_observer_v1(
@@ -822,6 +823,7 @@ fn residual_public_error(
             idempotency_key: Some(request.key.clone()),
             timeout_ms: 5000,
             generation: podway_protocol::ContractGenerationV1::Generation1,
+            successor_store: false,
             maintenance: None,
         },
     )
@@ -921,7 +923,8 @@ fn residual_removal_preserves_fresh_init_and_changed_ancestry() {
         let (release_tx, release_rx) = mpsc::channel();
         let worker = std::thread::spawn(move || {
             start_rx.recv_timeout(Duration::from_secs(20)).unwrap();
-            let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+            let resolver =
+                DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
             let podway = worker_root.join(".podway");
             let release_rx = Mutex::new(release_rx);
             if matches!(case, "fresh-parent" | "fresh-runtime") {
@@ -1330,10 +1333,11 @@ fn invalid_configuration_preserves_command_specific_compatibility_precedence() {
             .unwrap();
             let opens = Arc::new(AtomicUsize::new(0));
             let observed = opens.clone();
-            engine.resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest())
-                .with_store_boundary_observer_v1(move |_| {
-                    observed.fetch_add(1, Ordering::SeqCst);
-                });
+            engine.resolver =
+                DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest())
+                    .with_store_boundary_observer_v1(move |_| {
+                        observed.fetch_add(1, Ordering::SeqCst);
+                    });
             let command = match operation {
                 "init" => D::WorkspaceInit { repair: false },
                 "status" => D::Read {
@@ -1930,6 +1934,7 @@ fn generation_replacement_case(
         idempotency_key: Some(request.key.clone()),
         timeout_ms: 5000,
         generation: podway_protocol::ContractGenerationV1::Generation1,
+        successor_store: false,
         maintenance: None,
     };
     let rendered = podway_engine::direct_error::render_direct_error_v1(

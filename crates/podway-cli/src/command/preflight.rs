@@ -8,6 +8,7 @@ use std::{
 use podway_core::{
     AttemptId, GoalRevisionNumberV2, Revision, SessionId, SessionLifecycle, WorkspaceId,
 };
+#[cfg(test)]
 use serde_json::{Map, Value};
 
 use super::{
@@ -33,6 +34,7 @@ pub(super) struct StatusPreflight {
 }
 
 impl StatusPreflight {
+    #[cfg(test)]
     pub(super) fn from_direct(
         output: &podway_protocol::OutputEnvelopeV4,
     ) -> Result<Self, LocalFailure> {
@@ -73,6 +75,7 @@ impl StatusPreflight {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn from_parts(
         result: &Map<String, Value>,
         transport_workspace_id: WorkspaceId,

@@ -38,7 +38,7 @@ fn integ003_typed_query_rejects_keys_and_workspace_fences_before_git_or_home() {
         .unwrap(),
     )
     .unwrap();
-    let resolver = DirectWorkspaceResolverV1::new(
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(
         NativeGitResolverV1::new(),
         Sha256Digest::new(
             podway_protocol::build_identity_v1()

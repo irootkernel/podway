@@ -85,6 +85,25 @@ pub(crate) fn execute_procedure_with_context_v1<R: GitResolverContractV1>(
         }
         .into());
     }
+    if resolver.uses_execution_groups()
+        && let C::SessionTerminalDisposition(input) = &request.command
+    {
+        use crate::successor_execution::{
+            DirectSuccessorDispositionRequestV1, dispatch_successor_disposition,
+        };
+        return dispatch_successor_disposition(
+            resolver,
+            DirectSuccessorDispositionRequestV1 {
+                selector: request.selector,
+                expected_workspace_id: request.expected_workspace_id,
+                request_id: request.request_id,
+                key: request.key,
+                deadline: request.deadline,
+                input: input.clone(),
+            },
+            clock,
+        );
+    }
     let (resolved, store, binding) = resolver.resolve_existing_with_binding(
         request.selector,
         request.expected_workspace_id.as_ref(),

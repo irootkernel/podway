@@ -38,7 +38,10 @@ impl Session {
             temporary,
             selector,
             store,
-            resolver: DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest()),
+            resolver: DirectWorkspaceResolverV1::for_v15_fixture(
+                NativeGitResolverV1::new(),
+                digest(),
+            ),
         };
         let source = prepare_preset_procedure_source_v2(preset).unwrap().unwrap();
         let mut session = Self {

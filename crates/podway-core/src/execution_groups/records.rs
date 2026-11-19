@@ -35,13 +35,53 @@ impl From<GroupExecutionIdV1> for String {
     }
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[serde(from = "ExecutionScopeWire", into = "ExecutionScopeWire")]
 pub enum ExecutionScopeV1 {
     Base,
     Group {
         group_execution_id: GroupExecutionIdV1,
         definition_digest: Sha256Digest,
     },
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum ExecutionScopeWire {
+    Base {},
+    Group {
+        group_execution_id: GroupExecutionIdV1,
+        definition_digest: Sha256Digest,
+    },
+}
+
+impl From<ExecutionScopeWire> for ExecutionScopeV1 {
+    fn from(value: ExecutionScopeWire) -> Self {
+        match value {
+            ExecutionScopeWire::Base {} => Self::Base,
+            ExecutionScopeWire::Group {
+                group_execution_id,
+                definition_digest,
+            } => Self::Group {
+                group_execution_id,
+                definition_digest,
+            },
+        }
+    }
+}
+
+impl From<ExecutionScopeV1> for ExecutionScopeWire {
+    fn from(value: ExecutionScopeV1) -> Self {
+        match value {
+            ExecutionScopeV1::Base => Self::Base {},
+            ExecutionScopeV1::Group {
+                group_execution_id,
+                definition_digest,
+            } => Self::Group {
+                group_execution_id,
+                definition_digest,
+            },
+        }
+    }
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -292,13 +332,7 @@ impl ActivationIdentityV1 {
         if v.prior_work.iter().any(|d| d.group() == &v.execution) {
             return Err(invalid("prior work cannot reference the new activation"));
         }
-        if v.prior_work.len() > MAX_PRIOR_WORK_DISPOSITIONS_V1
-            || v.predecessor.is_none() != v.prior_work.is_empty()
-        {
-            return Err(invalid(
-                "activation history requires one to 128 prior-work dispositions after the first group",
-            ));
-        }
+        Self::validate_prior_work_shape(v.predecessor.as_ref(), v.prior_work.len())?;
         Ok(Self {
             execution: v.execution,
             session: v.session,
@@ -312,6 +346,19 @@ impl ActivationIdentityV1 {
             prior_work: v.prior_work,
         })
     }
+    /// Check whether the disposition count fits a first or replacement activation.
+    pub fn validate_prior_work_shape(
+        predecessor: Option<&GroupExecutionIdV1>,
+        count: usize,
+    ) -> Result<(), DomainError> {
+        if count > MAX_PRIOR_WORK_DISPOSITIONS_V1 || predecessor.is_none() != (count == 0) {
+            return Err(invalid(
+                "activation history requires one to 128 prior-work dispositions after the first group",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn execution(&self) -> &GroupExecutionIdV1 {
         &self.execution
     }

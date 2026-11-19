@@ -36,8 +36,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
-  - podway.procedure-validation-result/v2
-  - podway.procedure-diagnostics-result/v1
+  - podway.successor-authoring-result/v1
 - name: procedure.show
   availability: executable
   cli:
@@ -47,6 +46,8 @@ commands:
   workspace_required: false
   session_mutation: false
   destructive_confirmation: false
+  result_schemas:
+  - podway.successor-authoring-result/v1
 - name: preset.list
   availability: executable
   cli:
@@ -56,6 +57,8 @@ commands:
   workspace_required: false
   session_mutation: false
   destructive_confirmation: false
+  result_schemas:
+  - podway.successor-preset-result/v1
 - name: preset.show
   availability: executable
   cli:
@@ -65,6 +68,8 @@ commands:
   workspace_required: false
   session_mutation: false
   destructive_confirmation: false
+  result_schemas:
+  - podway.successor-preset-result/v1
 - name: preset.explain
   availability: executable
   cli:
@@ -74,6 +79,8 @@ commands:
   workspace_required: false
   session_mutation: false
   destructive_confirmation: false
+  result_schemas:
+  - podway.successor-preset-result/v1
 - name: workspace.init
   availability: executable
   cli:
@@ -142,8 +149,8 @@ commands:
   idempotency_scope: session
   maintenance_barrier: false
   result_schemas:
-  - podway.session-start-result/v4
-  - podway.mutation-observation-result/v1
+  - podway.successor-session-start-result/v1
+  - podway.mutation-observation-result/v2
 - name: session.start_replace
   availability: executable
   cli:
@@ -161,7 +168,7 @@ commands:
   - procedure_digest_file_source_only
   idempotency_scope: session
   result_schemas:
-  - podway.session-start-result/v4
+  - podway.successor-session-start-result/v1
 - name: session.begin
   availability: executable
   cli:
@@ -176,8 +183,8 @@ commands:
   - session_revision
   idempotency_scope: session
   result_schemas:
-  - podway.session-begin-result/v2
-  - podway.mutation-observation-result/v1
+  - podway.successor-cursor-mutation-result/v1
+  - podway.mutation-observation-result/v2
 - name: session.status
   availability: executable
   cli:
@@ -189,8 +196,9 @@ commands:
   preconditions:
   - session_id_optional
   result_schemas:
-  - podway.status-result/v5
-  - podway.compact-status-result/v5
+  - podway.observation-result/v7
+  - podway.scoped-compact-status-result/v1
+  - podway.scoped-verbose-status-result/v1
 - name: session.next
   availability: executable
   cli:
@@ -202,8 +210,7 @@ commands:
   preconditions:
   - session_id_optional
   result_schemas:
-  - podway.next-result/v5
-  - podway.prepared-next-result/v3
+  - podway.observation-result/v7
 - name: session.observe
   availability: executable
   cli:
@@ -215,8 +222,8 @@ commands:
   preconditions:
   - session_id_optional
   result_schemas:
-  - podway.observation-result/v5
-  - podway.observation-result/v6
+  - podway.observation-result/v7
+  - podway.observation-result/v8
 - name: evidence.read
   availability: executable
   cli:
@@ -229,7 +236,7 @@ commands:
   preconditions:
   - session_id_optional
   result_schemas:
-  - podway.evidence-read-result/v1
+  - podway.scoped-evidence-read-result/v1
 - name: delegation.package
   availability: executable
   cli:
@@ -242,7 +249,7 @@ commands:
   preconditions:
   - session_id_optional
   result_schemas:
-  - podway.delegation-package-result/v1
+  - podway.delegation-package-result/v2
 - name: delegation.receipt
   availability: executable
   cli:
@@ -253,7 +260,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
-  - podway.delegation-receipt-result/v1
+  - podway.delegation-receipt-result/v2
 - name: delegation.accept
   availability: executable
   cli:
@@ -270,7 +277,7 @@ commands:
   - attempt_id
   idempotency_scope: session
   result_schemas:
-  - podway.delegation-accept-result/v2
+  - podway.delegation-accept-result/v3
 - name: session.complete
   availability: executable
   cli:
@@ -286,8 +293,8 @@ commands:
   - attempt_id
   idempotency_scope: session
   result_schemas:
-  - podway.stage-transition-result/v3
-  - podway.mutation-observation-result/v1
+  - podway.successor-cursor-mutation-result/v1
+  - podway.mutation-observation-result/v2
 - name: session.skip
   availability: executable
   cli:
@@ -303,7 +310,7 @@ commands:
   - attempt_id
   idempotency_scope: session
   result_schemas:
-  - podway.stage-transition-result/v3
+  - podway.successor-cursor-mutation-result/v1
 - name: session.retry
   availability: executable
   cli:
@@ -319,7 +326,7 @@ commands:
   - attempt_id
   idempotency_scope: session
   result_schemas:
-  - podway.stage-transition-result/v3
+  - podway.successor-cursor-mutation-result/v1
 - name: session.block
   availability: executable
   cli:
@@ -335,7 +342,7 @@ commands:
   - attempt_id
   idempotency_scope: session
   result_schemas:
-  - podway.stage-transition-result/v3
+  - podway.successor-cursor-mutation-result/v1
 - name: session.unblock
   availability: executable
   cli:
@@ -351,7 +358,7 @@ commands:
   - attempt_id
   idempotency_scope: session
   result_schemas:
-  - podway.stage-transition-result/v3
+  - podway.successor-cursor-mutation-result/v1
 - name: session.cancel
   availability: executable
   cli:
@@ -367,7 +374,7 @@ commands:
   - attempt_id
   idempotency_scope: session
   result_schemas:
-  - podway.stage-transition-result/v3
+  - podway.successor-cursor-mutation-result/v1
 - name: session.reset
   availability: executable
   cli:
@@ -383,8 +390,7 @@ commands:
   idempotency_scope: workspace
   maintenance_barrier: true
   result_schemas:
-  - podway.session-reset-result/v2
-  - podway.stage-transition-result/v3
+  - podway.successor-session-reset-result/v1
 - name: session.terminal_disposition
   availability: executable
   cli:
@@ -415,7 +421,7 @@ commands:
   idempotency_scope: session
   maintenance_barrier: true
   result_schemas:
-  - podway.session-archive-result/v2
+  - podway.successor-session-archive-result/v1
 - name: session.archive_list
   availability: executable
   cli:
@@ -437,7 +443,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
-  - podway.session-archive-show-result/v3
+  - podway.successor-session-archive-show-result/v1
 - name: session.archive_purge
   availability: executable
   cli:
@@ -452,7 +458,7 @@ commands:
   - session_id
   - session_revision
   result_schemas:
-  - podway.session-archive-purge-result/v1
+  - podway.successor-session-archive-purge-result/v1
   idempotency_scope: workspace
 - name: workspace.reset_all
   availability: executable
@@ -482,7 +488,7 @@ commands:
   - item_revision
   idempotency_scope: session
   result_schemas:
-  - podway.item-mutation-result/v3
+  - podway.successor-cursor-mutation-result/v1
 - name: item.uncheck
   availability: executable
   cli:
@@ -498,7 +504,7 @@ commands:
   - item_revision
   idempotency_scope: session
   result_schemas:
-  - podway.item-mutation-result/v3
+  - podway.successor-cursor-mutation-result/v1
 - name: item.set
   availability: executable
   cli:
@@ -514,7 +520,7 @@ commands:
   - item_revision
   idempotency_scope: session
   result_schemas:
-  - podway.item-mutation-result/v3
+  - podway.successor-cursor-mutation-result/v1
 - name: item.add
   availability: executable
   cli:
@@ -530,7 +536,7 @@ commands:
   - item_revision
   idempotency_scope: session
   result_schemas:
-  - podway.item-mutation-result/v3
+  - podway.successor-cursor-mutation-result/v1
 - name: item.remove
   availability: executable
   cli:
@@ -546,7 +552,7 @@ commands:
   - item_revision
   idempotency_scope: session
   result_schemas:
-  - podway.item-mutation-result/v3
+  - podway.successor-cursor-mutation-result/v1
 - name: item.attach
   availability: executable
   cli:
@@ -562,7 +568,7 @@ commands:
   - item_revision
   idempotency_scope: session
   result_schemas:
-  - podway.item-mutation-result/v3
+  - podway.successor-cursor-mutation-result/v1
 - name: item.clear
   availability: executable
   cli:
@@ -578,7 +584,7 @@ commands:
   - item_revision
   idempotency_scope: session
   result_schemas:
-  - podway.item-mutation-result/v3
+  - podway.successor-cursor-mutation-result/v1
 - name: item.record_many
   availability: executable
   cli:
@@ -596,8 +602,8 @@ commands:
   - item_revisions
   idempotency_scope: session
   result_schemas:
-  - podway.item-record-many-result/v2
-  - podway.mutation-observation-result/v1
+  - podway.successor-cursor-mutation-result/v1
+  - podway.mutation-observation-result/v2
 - name: procedure.format
   availability: executable
   cli:
@@ -608,8 +614,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
-  - podway.procedure-source-result/v1
-  - podway.procedure-diagnostics-result/v1
+  - podway.successor-authoring-result/v1
 - name: procedure.vet
   availability: executable
   cli:
@@ -620,7 +625,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
-  - podway.procedure-diagnostics-result/v1
+  - podway.successor-authoring-result/v1
 - name: procedure.lint
   availability: executable
   cli:
@@ -631,7 +636,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
-  - podway.procedure-diagnostics-result/v1
+  - podway.successor-authoring-result/v1
 - name: procedure.check
   availability: executable
   cli:
@@ -642,7 +647,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
-  - podway.procedure-diagnostics-result/v1
+  - podway.successor-authoring-result/v1
 - name: procedure.graph
   availability: executable
   cli:
@@ -653,9 +658,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
-  - podway.procedure-diagnostics-result/v1
-  - podway.procedure-graph-result/v1
-  - podway.procedure-graph-result/v2
+  - podway.successor-authoring-result/v1
 - name: procedure.preview
   availability: executable
   cli:
@@ -666,8 +669,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
-  - podway.procedure-preview-result/v1
-  - podway.procedure-preview-result/v2
+  - podway.successor-authoring-result/v1
 - name: procedure.scaffold
   availability: executable
   cli:
@@ -678,8 +680,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
-  - podway.procedure-source-result/v1
-  - podway.procedure-diagnostics-result/v1
+  - podway.successor-authoring-result/v1
 - name: session.decide
   availability: executable
   cli:
@@ -696,8 +697,8 @@ commands:
   - goal_revision_when_goal_defined
   idempotency_scope: session
   result_schemas:
-  - podway.decision-result/v2
-  - podway.mutation-observation-result/v1
+  - podway.successor-cursor-mutation-result/v1
+  - podway.mutation-observation-result/v2
 - name: session.rework
   availability: executable
   cli:
@@ -713,7 +714,7 @@ commands:
   - attempt_id_when_running
   idempotency_scope: session
   result_schemas:
-  - podway.rework-result/v2
+  - podway.successor-cursor-mutation-result/v1
 - name: goal.define
   availability: executable
   cli:
@@ -729,7 +730,7 @@ commands:
   - session_revision
   idempotency_scope: session
   result_schemas:
-  - podway.goal-definition-result/v2
+  - podway.successor-cursor-mutation-result/v1
 - name: goal.revise
   availability: executable
   cli:
@@ -747,7 +748,7 @@ commands:
   - goal_revision
   idempotency_scope: session
   result_schemas:
-  - podway.goal-revision-result/v2
+  - podway.successor-cursor-mutation-result/v1
 - name: goal.assess_criterion
   availability: executable
   cli:
@@ -765,7 +766,7 @@ commands:
   - goal_revision
   idempotency_scope: session
   result_schemas:
-  - podway.criterion-assessment-result/v2
+  - podway.successor-cursor-mutation-result/v1
 - name: goal.assess_criteria
   availability: executable
   cli:
@@ -784,8 +785,8 @@ commands:
   - goal_revision
   idempotency_scope: session
   result_schemas:
-  - podway.criterion-assessment-many-result/v1
-  - podway.mutation-observation-result/v1
+  - podway.successor-cursor-mutation-result/v1
+  - podway.mutation-observation-result/v2
 - name: integration.show
   availability: executable
   cli:
@@ -809,3 +810,124 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.outcome-lookup-result/v1
+- name: group.activate
+  availability: executable
+  cli:
+  - group
+  - activate
+  operation: mutate
+  workspace_required: true
+  session_mutation: true
+  destructive_confirmation: false
+  result_schemas:
+  - podway.successor-group-boundary-result/v1
+- name: group.return
+  availability: executable
+  cli:
+  - group
+  - return
+  operation: mutate
+  workspace_required: true
+  session_mutation: true
+  destructive_confirmation: false
+  result_schemas:
+  - podway.successor-group-boundary-result/v1
+- name: group.replan
+  availability: executable
+  cli:
+  - group
+  - replan
+  operation: mutate
+  workspace_required: true
+  session_mutation: true
+  destructive_confirmation: false
+  result_schemas:
+  - podway.successor-group-replan-result/v1
+- name: group.list
+  availability: executable
+  cli:
+  - group
+  - list
+  operation: query
+  workspace_required: true
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.successor-group-list-result/v1
+- name: group.show
+  availability: executable
+  cli:
+  - group
+  - show
+  operation: query
+  workspace_required: true
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.successor-group-show-result/v1
+- name: group.prior_work
+  availability: executable
+  cli:
+  - group
+  - prior-work
+  operation: query
+  workspace_required: true
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.successor-history-prior-work-result/v1
+- name: history.goal_revisions
+  availability: executable
+  cli:
+  - history
+  - goal-revisions
+  operation: query
+  workspace_required: true
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.successor-goal-revision-history-result/v1
+- name: history.dag
+  availability: executable
+  cli:
+  - history
+  - dag
+  operation: query
+  workspace_required: true
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.successor-history-dag-result/v1
+- name: history.attempts
+  availability: executable
+  cli:
+  - history
+  - attempts
+  operation: query
+  workspace_required: true
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.successor-history-attempts-result/v1
+- name: history.blockers
+  availability: executable
+  cli:
+  - history
+  - blockers
+  operation: query
+  workspace_required: true
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.successor-history-blockers-result/v1
+- name: history.item
+  availability: executable
+  cli:
+  - history
+  - item
+  operation: query
+  workspace_required: true
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.successor-history-item-result/v1

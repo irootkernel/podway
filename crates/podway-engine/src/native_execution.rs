@@ -197,18 +197,27 @@ impl NativeDirectWorkspaceV1 {
         required
             .into_iter()
             .map(|required| {
-                let recorded = &required.artifact;
                 let artifact = self
-                    .prepare_artifact(binding, recorded.location(), recorded.media_type(), true)
+                    .prepare_recorded_local_artifact(binding, &required.artifact)
                     .map_err(E::Boundary)?;
-                if &artifact.artifact != recorded {
-                    return Err(E::Boundary(ExecutionBoundaryErrorV1::domain(
-                        DomainError::ArtifactChanged,
-                    )));
-                }
                 Ok(PreparedRequiredArtifactV2 { required, artifact })
             })
             .collect()
+    }
+
+    pub(crate) fn prepare_recorded_local_artifact(
+        &self,
+        binding: &WorkspaceBindingV1,
+        recorded: &ArtifactValueV1,
+    ) -> Result<PreparedLocalArtifactV1, ExecutionBoundaryErrorV1> {
+        let prepared =
+            self.prepare_artifact(binding, recorded.location(), recorded.media_type(), true)?;
+        if &prepared.artifact != recorded {
+            return Err(ExecutionBoundaryErrorV1::domain(
+                DomainError::ArtifactChanged,
+            ));
+        }
+        Ok(prepared)
     }
 
     pub(crate) fn verify_required_artifacts_v2(
@@ -242,7 +251,7 @@ impl NativeDirectWorkspaceV1 {
         &self,
         binding: &WorkspaceBindingV1,
     ) -> Result<ValidatedWorktreeV1, ExecutionBoundaryErrorV1> {
-        if binding.schema_version() != podway_store::direct_store::DIRECT_SCHEMA_GENERATION_V1
+        if binding.schema_version() != self.resolved.schema_generation()
             || binding.identity() != self.resolved.store_identity()
         {
             return Err(domain_invalid_state_v1(
@@ -429,7 +438,7 @@ impl ProcedureProviderV1 for NativeDirectWorkspaceV1 {
 }
 
 impl NativeDirectWorkspaceV1 {
-    fn procedure_bytes(
+    pub(crate) fn procedure_bytes(
         &self,
         workspace: &WorkspaceBindingV1,
         procedure: &str,
@@ -632,7 +641,8 @@ mod tests {
         )
         .unwrap();
         let digest = Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap();
-        let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest.clone());
+        let resolver =
+            DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest.clone());
         let deadline = || Instant::now() + Duration::from_secs(10);
         let response = execute_direct_v1(
             &resolver,

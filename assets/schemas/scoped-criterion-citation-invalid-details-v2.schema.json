@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:scoped-criterion-citation-invalid-details:v2",
+  "title": "Podway Scoped Criterion Citation Invalid Details v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "decision",
+    "criterion_id",
+    "citation",
+    "reason",
+    "citable_evidence",
+    "citable_item_ids"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.scoped-criterion-citation-invalid-details/v2"
+    },
+    "decision": {
+      "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt",
+      "properties": {
+        "scope": {
+          "properties": {
+            "kind": {
+              "const": "base"
+            }
+          }
+        }
+      }
+    },
+    "criterion_id": {
+      "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+    },
+    "citation": {
+      "$ref": "urn:podway:schema:scoped-criterion-citation-invalid-details:v1#/$defs/citation"
+    },
+    "reason": {
+      "enum": [
+        "unresolved_evidence",
+        "unrecorded_item",
+        "duplicate",
+        "not_applicable"
+      ]
+    },
+    "citable_evidence": {
+      "type": "array",
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "selector",
+          "attempt"
+        ],
+        "properties": {
+          "selector": {
+            "$ref": "urn:podway:schema:scoped-criterion-citation-invalid-details:v1#/$defs/evidenceCitation"
+          },
+          "attempt": {
+            "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+          }
+        }
+      }
+    },
+    "citable_item_ids": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+      }
+    }
+  }
+}

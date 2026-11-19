@@ -284,7 +284,8 @@ impl Guide010Engine {
     fn new(path: &str, source: &[u8]) -> Self {
         let (temporary, selector, store, _) = fixture();
         fs::write(temporary.path().join(path), source).unwrap();
-        let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+        let resolver =
+            DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
         let engine = Self {
             temporary,
             selector,
@@ -612,6 +613,7 @@ fn render_writer_mismatch(actual: &str, generation: ContractGenerationV1) -> Val
         idempotency_key: None,
         timeout_ms: 5000,
         generation,
+        successor_store: false,
         maintenance: None,
     };
     render_direct_error_v1(&error, &context)

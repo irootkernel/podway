@@ -19,13 +19,16 @@ procedures for common work:
 
 | Preset | Best for |
 |---|---|
-| `analysis-v2` | Source-backed research or technical analysis with evidence-gap and review-owner rework |
-| `sw-dev-v2` | Graph-based implementation work with decisions, evidence read-back, rework, and goal assessment |
-| `bug-fix-v2` | Graph-based defect repair with decision rework and goal closeout |
-| `small-change-v2` | Short inspect, implement, verify, review, and closeout path without goal tracking |
+| `analysis-v3` | Source-backed research or technical analysis with evidence-gap and review-owner rework |
+| `sw-dev-v3` | Graph-based implementation work with decisions, evidence read-back, rework, and goal assessment |
+| `bug-fix-v3` | Graph-based defect repair with decision rework and goal closeout |
+| `small-change-v3` | Short inspect, implement, verify, review, and closeout path without goal tracking |
 
-Podway admits only Procedure v2 through the normal runtime and emits successful
-responses through `podway.output/v4` and failures through `podway.error/v2`.
+The current source admits Procedure v3 and Execution Group v1 in Store
+generation 16. Each built-in base has a default group proposal. Activation
+pins the current plan to one explicitly selected execution. The CLI emits
+`podway.output/v4` for success and `podway.error/v2` for failures. Released v0.2.17
+workspaces still require their original writer.
 
 Podway is not a project manager, CI system, command runner, Git automation layer, artifact store, or multi-user access-control service.
 
@@ -37,12 +40,9 @@ self-contained committed task observation, so an agent re-derives what happens
 next from the worktree instead of from its conversation history. Sessions survive context
 loss and transfer between actors mid-task, and mutations accept explicit
 preconditions and idempotency keys so retried or concurrent callers cannot
-corrupt state. See the [Procedure v2 workflow](docs/examples/v2-workflow.md).
-Pass `--contract-generation 2` on every command to select contract generation 2,
-whose observation v6 offers executable fenced lifecycle templates and whose
-citation and writer-mismatch errors carry enriched details; generation 1
-remains the deprecated default and the option is accepted everywhere, including
-the local commands.
+corrupt state. Generation 2 adds executable fenced templates in observation v8.
+Generation 1 is the deprecated default and serves observation v7. Both selectors
+use the same runtime, routes and writer. See the [scoped Direct contract](docs/specs/interfaces/json-contract.md#scoped-direct-execution).
 
 ## Integration permission
 
@@ -117,14 +117,13 @@ podway version --json --identity
 
 ## Legacy state and cutover
 
-The daemon-free contract has no backward compatibility with daemon-era output,
-error codes or Store generations 1–13. The unreleased direct generation 14 is
-also refused unchanged; generation 15 declares no predecessor. An old worktree
-or old maintenance marker returns `LEGACY_RUNTIME_STATE_UNSUPPORTED` without changing its bytes, migrating,
-checkpointing or creating SQLite SHM. Reset is destructive: it makes no backup and
-performs no conversion. Active sessions and retained runtime history are lost.
+The generation 16 writer declares no predecessor. Generations 1–15 and their
+legacy maintenance markers are refused before SQLite recovery or SHM creation.
+Settle older sessions using their original writer. A confirmed reset creates a
+fresh workspace and permanently deletes active sessions and retained history.
 
-The supported order is:
+For daemon-era installations, retire the affected services separately before
+resetting an affected worktree:
 
 1. Finish or explicitly abandon active sessions using their original generation.
 2. Under separate authorization, use the old binary's supported `daemon uninstall`
@@ -166,11 +165,11 @@ For a small project-wide policy, add this template to the project's `AGENTS.md`:
 ```markdown
 ## Podway
 
-- Podway supports Procedure v2 only. Preserve incompatible workspace state and follow its structured recovery guidance; reset or removal requires explicit intent for the exact deletion boundary. Before discard, confirm that no other Podway writer still uses that worktree; retiring one needs its owner's separate authority.
-- When the current workflow authorizes Podway use and `.podway/config.yaml` exists, read `podway observe --json` before task work, passing `--contract-generation 2` on every command. Require Output v4 and `podway.observation-result/v6` for every Procedure, and re-read after every mutation. Generation 1 stays the deprecated default and serves `podway.observation-result/v5` to consumers that have not adopted generation 2.
+- The current source requires Procedure v3 and Store generation 16. Preserve incompatible workspace state and follow its structured recovery guidance; reset or removal requires explicit intent for the exact deletion boundary. Before discard, confirm that no other Podway writer still uses that worktree; retiring one needs its owner's separate authority.
+- When the current workflow authorizes Podway use and `.podway/config.yaml` exists, read `podway --contract-generation 2 observe --json` before task work. For the generation 16 writer, require Output v4 and `podway.observation-result/v8`. After a mutation, use its verified commit-bound observation or read a fresh observation. Generation 1 is the deprecated default and serves `podway.observation-result/v7`.
 - Treat the active Podway graph node and attempt as the current work boundary. Perform the work before recording an item. Side work may run outside Podway, but record only conclusions supported by current evidence on the active attempt.
 - Use JSON fields, stable error codes, explicit preconditions, and idempotency keys for mutations. Never parse human-readable output as an API.
-- You may update items and advance an existing active v2 session when the work supports it. Do not run `podway init`, start or replace a session, cancel or reset state, remove a workspace, or reactivate a completed session through `rework` or `goal revise --reactivate` unless the user explicitly requests it.
+- You may update items and advance an existing active v3 session when the work supports it. Do not run `podway init`, start or replace a session, cancel or reset state, remove a workspace, or reactivate a completed session through `rework` or `goal revise --reactivate` unless the user explicitly requests it.
 - Podway records assertions; it does not run the work or prove semantic truth.
 ```
 
@@ -213,13 +212,11 @@ The authoring skill produces and validates declarative source, then hands off pr
 
 The CLI archive does not include these skills. Installing or resetting Podway
 does not update them; replace the complete skill directories separately. The
-runtime skill requires generation-2 support and teaches passing
+release-tagged v0.2.17 runtime skill requires generation-2 support and teaches passing
 `--contract-generation 2` on every command (Output v4, Error v2, observation v6,
 success-only outcome lookup), keeping generation-1 notes for deprecated consumers.
-The authoring skill follows its exact validation binary's local grammar, including
-older compatible releases without that selector. Before `v0.2.17` is published,
-use the exact reviewed candidate's complete skill directories with its matching
-CLI; the release-tagged downloads above become available only after publication.
+The v0.2.17 authoring skill follows that release's validation grammar. Pair a
+reviewed successor skill with its matching CLI and manifest.
 
 Before replacing an existing CLI or resetting workspace state, read
 [Upgrade and uninstall](#upgrade-and-uninstall). Skill installation does not grant
@@ -253,7 +250,7 @@ Run Podway from anywhere inside a Git worktree, including the repository's main 
 podway init
 podway preset list
 podway start \
-  --preset sw-dev-v2 \
+  --preset sw-dev-v3 \
   --task "add bounded retry backoff"
 podway begin \
   --goal "Retry transient writes with a bounded exponential delay." \
@@ -265,8 +262,7 @@ podway observe --json
 
 `podway next` describes the active graph node, its required items, allowed actions,
 and command suggestions. Perform the work outside Podway, record the requested
-items with the returned item and attempt identities, then use the suggested
-Procedure v2 action with the current revision fences:
+items with the returned item and attempt identities, then use the current scoped action and its revision fences:
 
 ```bash
 podway --json status
@@ -274,8 +270,9 @@ podway --json next
 podway --json observe
 ```
 
-The complete fenced mutation sequence is shown in the
-[Procedure v2 workflow](docs/examples/v2-workflow.md).
+Record the design items at the base anchor. When the plan is ready, generation-2
+observation supplies the `group.activate` template for the default proposal.
+Use the selected group's current guidance to progress. See the [scoped Direct contract](docs/specs/interfaces/json-contract.md#scoped-direct-execution).
 
 Inspect the current session at any time:
 
@@ -292,14 +289,14 @@ the exact grammar of a command; `podway help` prints the topic index.
 Inspect a built-in preset before starting it:
 
 ```bash
-podway preset explain bug-fix-v2
-podway preset show bug-fix-v2
+podway preset explain bug-fix-v3
+podway preset show bug-fix-v3
 ```
 
 For a bounded verified change that does not need a tracked goal:
 
 ```bash
-podway start --preset small-change-v2 --task "update one validation rule"
+podway start --preset small-change-v3 --task "update one validation rule"
 podway begin
 ```
 
@@ -318,11 +315,10 @@ podway start \
 podway begin
 ```
 
-Selected evidence is read one bounded page at a time. `podway next --json` carries each
-item's identity, digest, and total size, and may add a short preview with a continuation
-token. `podway observe --json` carries the same metadata but never a preview or a token.
-`podway evidence read --source <graph-node-id> --item <item-id>` returns the complete value,
-following `next_page_token` until `truncated` is `false`.
+Read declared current evidence with
+`podway evidence read --source <source> --item <item-id> --json`. If the result
+is truncated, pass its `next_page_token` as `--page-token` on the same query.
+Use the group and history queries for retained evidence.
 
 Rework is part of the normal lifecycle:
 
@@ -402,23 +398,20 @@ mode, detach and wait controls are retired; they fail with `COMMAND_RETIRED`.
 `podway record --stdin` accepts one closed, at-most-1-MiB JSON document to
 record or clear 1..128 uniquely identified active-attempt items atomically, and
 `podway goal assess-criteria --stdin` records 1..16 uniquely identified active-attempt
-criterion assessments atomically. Both documents carry every workspace, session,
-attempt, and idempotency fence, with per-operation `expected_item_revision` required
-for `record --stdin` and document-level `goal_revision` required for
-`goal assess-criteria --stdin`; see the [Procedure v2 walkthrough](docs/examples/v2-workflow.md).
+criterion assessments atomically. Both documents carry the workspace UUID,
+idempotency key and current scoped cursor. `record --stdin` also requires each
+operation's `expected_item_revision`. Criterion assessment uses the goal revision
+in the cursor. See the [scoped Direct contract](docs/specs/interfaces/json-contract.md#scoped-direct-execution).
 Common stale-state, uncertain-outcome and workspace failures include a closed
 `details.recovery` recipe. Validate RecoveryRecipe v2 and its command/argv pair;
 read-only recovery and explicitly authorized destructive recovery are distinct.
 A recipe never grants permission for a lifecycle action or weakens a fence.
 
-Podway implements evidence-gated, goal-directed workflow memory:
-Procedure v2 documents are declarative graphs with recorded decisions, selected
-evidence read-back, explicit rework, goal revision, and goal assessment, still with
-exactly one active attempt. Static authoring and inspection are available in the
-normal CLI. Procedure v2 runs through the same Direct Engine for every caller;
-development builds use disposable worktrees and exact writer-manifest identity.
-See the [Procedure v2 walkthrough](docs/examples/v2-workflow.md)
-and the [roadmap](docs/roadmap/README.md).
+A Procedure v3 base keeps one active attempt across planning, execution and
+closeout. The selected group has its own immutable definition and execution
+identity. Local rework stays within its declared scope. Guarded replan retains
+earlier work and opens a fresh design attempt. The group and history commands
+read retained scopes without moving the current cursor. See the [roadmap](docs/roadmap/README.md).
 
 ## Local data and trust
 

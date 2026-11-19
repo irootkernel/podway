@@ -2,7 +2,7 @@
 
 ## Goal
 
-Podway is a local Procedure v2 guard for one task in one Git worktree. It keeps
+Podway is a local procedure guard for one task in one Git worktree. It keeps
 the active graph node, required inputs, goal criteria, decisions, and declared
 rework paths explicit without executing the work itself.
 
@@ -10,12 +10,13 @@ rework paths explicit without executing the work itself.
 
 ```text
 initialize a worktree
-  -> start one cursor-free prepared Procedure v2 session
+  -> start one cursor-free prepared Procedure v3 session
   -> begin it at the unique graph entry, optionally defining the initial goal
   -> define or revise the goal and criteria when the Procedure enables them
-  -> satisfy the active action node
+  -> record the design and activate one execution group
+  -> satisfy each active action node
   -> complete, retry, decide, or follow declared rework
-  -> reach a terminal node and close the goal
+  -> return the group's results to the base and close the goal
   -> record terminal ownership, then archive or start the next task
 ```
 
@@ -32,16 +33,15 @@ writers; there is no durable admission queue or FIFO guarantee. Authoritative
 task state and maintenance locks live under `.podway/runtime/`. Podway creates
 no daemon, socket, LaunchAgent, account state, or global workspace registry.
 
-The public product accepts only `podway.procedure/v2`, emits successful results
-through `podway.output/v4`, and ships exactly `analysis-v2`, `bug-fix-v2`,
-`small-change-v2`, and `sw-dev-v2`.
+The current source accepts `podway.procedure/v3` and `podway.execution-group/v1`.
+It emits successful results through `podway.output/v4` and ships `analysis-v3`,
+`bug-fix-v3`, `small-change-v3`, and `sw-dev-v3`, each with a default group.
 Failures use `podway.error/v2`. Version identity and the contract manifest use
-their v2 families. Every Procedure observes through `podway.observation-result/v5`
+their v2 families. The current runtime observes through `podway.observation-result/v7`
 in the deprecated default generation 1, and through
-`podway.observation-result/v6` under `--contract-generation 2`.
+`podway.observation-result/v8` under `--contract-generation 2`.
 Workspace configuration supports v1/v2/v3; the explicit settings seam also parses
-user-config v1. Other result families retain their own versions;
-Procedure support is identified by `podway.procedure/v2`.
+user-config v1. Scoped result families retain independent versions.
 
 The accepted [integration permission contract](../operations/integration-settings.md)
 allows only explicit read-only user defaults with worktree overrides. Its
@@ -69,8 +69,8 @@ stores artifact metadata rather than artifact bytes.
 ## Supported boundary
 
 The supported release target is native Apple Silicon macOS. Direct SQLite
-generation 15 is the canonical Store. It declares no predecessor: daemon-era
-generations 1–13 and the unreleased direct generation 14 are refused unchanged
+generation 16 is the canonical Store. It declares no predecessor. Generations
+1–15 are refused unchanged
 with `LEGACY_RUNTIME_STATE_UNSUPPORTED`. Explicitly confirmed reset discards
 their runtime history and creates a fresh workspace without conversion or backup.
 Newer generations are refused even by destructive commands and require a

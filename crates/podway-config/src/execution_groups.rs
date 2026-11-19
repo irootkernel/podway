@@ -1,16 +1,19 @@
-//! Internal successor authoring contracts. These APIs do not change public v2 dispatch.
+//! Successor Procedure and Execution Group authoring contracts.
 use crate::procedure_v2_document::AuthoringValue;
 use crate::{CanonicalJsonV1, ConfigError};
 use podway_core::execution_groups::*;
 use podway_core::{ItemSpecV2, Sha256Digest};
 
+mod lint;
 mod parse;
-mod projection;
+pub(crate) mod projection;
 mod validate;
-pub use parse::parse_successor_document;
+pub use lint::lint_successor_definition;
+pub use parse::{parse_successor_base_document, parse_successor_document};
 pub use projection::{
-    FormattedSuccessorDefinition, SuccessorGraphProjection, format_successor_definition,
-    project_retained_successor_graph, project_successor_graph, project_successor_source,
+    FormattedSuccessorDefinition, SuccessorGraphFormat, SuccessorGraphProjection,
+    format_successor_definition, project_retained_successor_graph, project_successor_graph,
+    project_successor_source, render_successor_graph,
 };
 pub use validate::{validate_group_interface, validate_successor_definition};
 

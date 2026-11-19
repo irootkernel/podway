@@ -394,7 +394,7 @@ fn reset_inner<R: GitResolverContractV1>(
     };
     if phase(&marker)? == "prepared" {
         podway_git::WorkspaceLayoutInitializerV1::new()
-            .initialize_with_config(&worktree, podway_config::DEFAULT_WORKSPACE_CONFIG_YAML_V1)
+            .initialize_with_config(&worktree, resolver.initial_workspace_config())
             .map_err(DirectWorkspaceErrorV1::Layout)?;
     }
     let (worktree, _) = resolver.resolve_candidate(request.selector.clone())?;
@@ -693,13 +693,25 @@ fn remove_inner<R: GitResolverContractV1>(
                 let observed =
                     store.read_under_exclusive_lease(&lease, request.deadline, |snapshot| {
                         guard_workspace(&request, snapshot.binding().identity().workspace_uuid())?;
-                        let active = snapshot.current_graph()?.is_some_and(|graph| {
-                            matches!(
-                                graph.trace().lifecycle(),
+                        let current = if resolver.uses_execution_groups() {
+                            snapshot
+                                .successor_state(
+                                    crate::successor_execution::admit_candidate_definition,
+                                )
+                                .map_err(|_| DirectStoreErrorV1::Unreadable)?
+                                .map(|(state, _)| state.lifecycle())
+                        } else {
+                            snapshot
+                                .current_graph()?
+                                .map(|graph| graph.trace().lifecycle())
+                        };
+                        let active = matches!(
+                            current,
+                            Some(
                                 podway_core::SessionLifecycle::Prepared
                                     | podway_core::SessionLifecycle::Running
                             )
-                        });
+                        );
                         Ok((
                             snapshot.binding().identity().workspace_uuid().clone(),
                             active,

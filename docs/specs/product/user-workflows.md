@@ -1,19 +1,21 @@
 # User Workflows
 
 Initialize one Git worktree with `podway init`, inspect `podway preset list`, and
-start `analysis-v2`, `sw-dev-v2`, `bug-fix-v2`, `small-change-v2`, or a validated
-worktree-local Procedure v2 file. Use `analysis-v2` for source-backed research or
+start `analysis-v3`, `sw-dev-v3`, `bug-fix-v3`, `small-change-v3`, or a validated
+worktree-local Procedure v3 base. Use `analysis-v3` for source-backed research or
 technical analysis that needs evidence-gap and phase-owner review rework. Use
-`small-change-v2` for a bounded change that still requires
-explicit inspection, verification, review, and closeout but no tracked goal. Use
+`small-change-v3` for bounded changes with inspection, assertion-based
+verification, review and closeout without a tracked goal. Use
 `--dry-run` before a destructive replacement or other supported preview.
 Starting creates a prepared session without a cursor or goal. Use `podway begin`
 to create its first attempt, optionally defining the initial goal at the same time.
 
-`podway init` selects `sw-dev-v2` for later new sessions. A newly started built-in
-session admits the exact current embedded source, version, and digest. Updating a
-preset changes only later starts: an already admitted session continues from its
-immutable snapshot and is never migrated or reinterpreted in place.
+`podway init` defaults to `sw-dev-v3`. A preset start pins the embedded base
+and makes its default group available. After recording the design inputs, use
+the generation-2 observation template to activate an exact group explicitly.
+A successful group returns its declared results to the base. A guarded replan
+retains the closed group's work and starts a fresh design attempt. A running
+session continues from its admitted definition snapshots.
 
 During a task, read `podway observe` (or the commit-bound `result.observation`
 returned by `--with-observation` on a known first submission of a supported
@@ -34,47 +36,34 @@ Use explicit selected evidence items so each consumer reads only what it needs.
 Use `required_when` for same-node typed conditional requiredness and complementary
 guards for evidence-based routing. Manual rework is a declared target allowlist;
 a decision route with `effect: rework` owns one option-specific target. For a
-selected value larger than the first `session.next` preview, follow the opaque
-`next_page_token` with `evidence read` until `truncated` is false, restarting from
-the first page after `EVIDENCE_PAGE_TOKEN_STALE`. The
-[Procedure v2 workflow](../../examples/v2-workflow.md) provides copyable patterns.
+large selected value, use `evidence read` and follow its opaque
+`next_page_token` until `truncated` is false. Use the scoped group and history
+queries to inspect retained work. The
+[Procedure v2 workflow](../../examples/v2-workflow.md) remains an example for
+the original writer.
 
 If the current attempt must be repeated, use `retry --reason`. If prior work must be
 revisited, use `rework --to <node> --reason` only for a declared manual-rework
 target. Podway creates a fresh attempt and applies the procedure's evidence
 invalidation rules. Blockers prevent advancement until explicitly resolved.
 
-Automation uses `--json`, carries the latest workspace/session/attempt/item/goal
-preconditions, and assigns a stable idempotency key to every mutation. Stdin-fenced
-mutations (`record --stdin`, `goal assess-criteria --stdin`, and `delegation accept
---stdin`) carry all fences and `idempotency_key` inside their closed JSON stdin
-document, reject CLI `--if-*` and `--idempotency-key` flags, and never run implicit
-status preflight. Six direct mutations (plain `start` without `--dry-run` or `--on-existing`,
-`begin`, `record --stdin`, `complete`, `decide`, and `goal assess-criteria
---stdin`) accept `--with-observation` and return
-`podway.mutation-observation-result/v1`, pairing `result.mutation_result` with
-an as-of-commit successor `result.observation` computed in the same transaction
-without a second database read (`podway.observation-result/v6`, with
-`workspace_uuid` read from outer `workspace.uuid` or concrete template
-preconditions and goal state under `guidance.goal`). On action nodes without a
-`check_result` target, where `mutation_templates` omits `item.record_many`,
-callers construct `podway.item-record-many-input/v1` from those observed fences
-so recording and completing a satisfied action node take two normal CLI calls
-(`record --stdin --with-observation` followed by `complete --with-observation`)
-instead of four (`observe`, `record`, `observe`, `complete`); at a
-goal-assessment decision node, callers construct
-`podway.criterion-assessment-many-input/v1` from the observed
-`goal.assess_criterion` template's `preconditions` and `guidance.goal` (no batch
-template is emitted) and map `determined_outcome` to the Procedure's declared
-decision option so three prepared/ready criterion assessments plus `decide` take
-two normal CLI calls (`goal assess-criteria --stdin --with-observation` followed
-by `decide --with-observation`) instead of eight (`3 × (observe + goal
-assess-criterion)` plus `observe + decide`). These `4 -> 2` and `8 -> 2` counts
-are structural normal-path CLI invocation counts excluding setup, external work,
-contention, recovery, and independent verifier observations; they claim no
-measured latency/speedup or guaranteed LLM-turn savings, introduce no fused
-one-call `record-and-complete` or `assess-and-decide` operation, and imply no
-user-global skill installation.
+Automation uses `--json`, carries the workspace UUID and exact observed cursor
+for scoped mutations, and assigns a stable idempotency key to each request.
+Scoped batch recording, criterion assessment, activation, replan and delegation
+acceptance submit their own fences and key in one closed JSON stdin document.
+Use the current `mutation_templates` and the
+[scoped Direct contract](../interfaces/json-contract.md#scoped-direct-execution)
+to construct them. A replan recipe appears only when a replan option is
+currently eligible. The first activation uses an empty `prior_work` array.
+For a replacement activation, replace `<prior-work-dispositions-array>`
+with a nonempty array of dispositions for closed work from this session.
+
+Six mutations support `--with-observation`: plain `start` without `--dry-run`
+or `--on-existing`, `begin`, `record --stdin`, `complete`, `decide`, and
+`goal assess-criteria --stdin`. The v2 wrapper pairs the mutation result with
+a commit-bound v8 observation. Use that observation to construct an eligible
+next mutation after a verified first submission. Record and complete are
+separate transactions, as are criterion assessment and decision.
 
 Each command runs synchronously. Callers may derive the next mutation directly
 from `result.observation` only on a known first submission (no hidden retries)
@@ -90,8 +79,7 @@ uncertain submission history, contention/conflict, or unsupported/unwrapped/inco
 response, obtain a fresh `observe` before deriving any new mutation. See the
 [transaction contract](../storage/transactions-concurrency-and-idempotency.md).
 
-Actors may hand off within a worktree by reading one recorded v2 observation
-result; chat history is not authority. Parallel tasks belong in separate Git
+Actors can hand off within a worktree using the current scoped observation. Parallel tasks belong in separate Git
 worktrees and therefore separate Podway workspaces. Podway does not transfer a
 session between worktrees.
 

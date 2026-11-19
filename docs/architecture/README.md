@@ -57,7 +57,8 @@ Store writer or execute an external adapter.
 The pure core receives explicit IDs, timestamps, hashes and prepared inputs. It
 validates one transition and returns a successor. Infrastructure owns I/O,
 transaction admission and persistence; external work and semantic judgment stay
-with the caller. Procedure v2 retains one cursor and one active attempt. Eight
+with the caller. Procedure v3 retains one cursor and one active attempt across
+the base and selected execution group. Eight
 crates preserve the established dependency direction; the CLI reaches native
 Store/Git behavior through the Engine.
 

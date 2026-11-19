@@ -85,17 +85,16 @@ success.
 
 ### Execution-group candidate persistence
 
-The [candidate Store](sqlite-model.md#execution-group-candidate-store) loads
+The [generation 16 Store](sqlite-model.md#execution-group-candidate-store) loads
 and writes retained execution rows inside a caller-owned SQLite transaction.
 Definitions and goal-revision records accept exact duplicates. A conflict in an
 existing immutable identity, retained closure, or revision fails the state write.
 A committed session revision cannot be replaced by a shorter stale trace.
 A later write preserves a closed attempt's final payload. Its validity may
 change from valid to stale when the Core invalidates the attempt.
-The test-support Engine issues successor mutations against a bound candidate
-workspace. Activation prepares the
+The Direct Engine issues scoped mutations against a bound workspace. Activation prepares the
 canonical group document and checks compatible ports against the immutable
-base before opening the writer. The fixture Store revalidates its identity in
+base before opening the writer. The Store revalidates its identity in
 an IMMEDIATE transaction and resolves exact session-scoped replay before live
 mutation fences. Cursor and selection changes require the current session
 revision, applicable goal revision, exact scoped attempt and selected
@@ -106,10 +105,11 @@ Caller workspace mismatch and a missing requested session have their own
 identity failures. Persisted binding and child-record failures retain their
 storage classifications. Cursor failures distinguish the scoped attempt,
 applicable goal revision, selected activation and session revision.
-For a candidate session already marked archived, the Store refuses a fresh
+For a session already marked archived, the Store refuses a fresh
 cursor, activation or item mutation after resolving original-key replay.
-The terminal-only archive fixture operation checks the expected session
-revision and freezes the existing session rows without a mutation outcome.
+The private fixture archive helper checks the expected session revision and
+freezes the existing session rows without a mutation outcome. Public archive
+records its success through the ordinary outcome transaction.
 
 A single item write fences the workspace, selected activation, exact scoped
 session and attempt, and that item's revision. Independently prepared writes
@@ -142,10 +142,9 @@ worst-case original-outcome lookup wrapper. An oversized projection leaves
 state and outcomes untouched. Replan's current counters cover the base after
 selection closes. Accepted transitions write the closed and new
 attempts, group state, sequence, success response and journal in one transaction.
-The fixture uses the Direct Store's shared exact replay, canonical success,
+The scoped runtime uses the Direct Store's exact replay, canonical success,
 outcome retention and commit primitives. The test path binds its owning root
-and workspace UUID independently of the production maintenance and Git
-admission path.
+and workspace UUID independently of production maintenance and Git admission.
 
 Current reads load the workspace sequence and state from one read transaction.
 Evidence lookup and delegation package preparation use the current fenced
@@ -360,7 +359,10 @@ count result before status/duplicate/citation cloning outside the writer, then
 consumes it only after retained replay and live fences. Shared diagnostic
 ownership changes no rollback, outcome, canonical request or replay boundary.
 
-`AGENT-001` registered the opt-in `--with-observation` request identity,
+The scoped runtime retains commit-bound observations and outcome lookup headroom.
+Its current wrapper includes observation v8 and follows the
+[scoped Direct contract](../interfaces/json-contract.md#scoped-direct-execution).
+For the prior writer, `AGENT-001` registered the opt-in `--with-observation` request identity,
 digest, and lookup-headroom contracts in `podway-protocol`
 (`canonical_direct_slice_mutation_identity_with_observation_v1`,
 `canonical_direct_start_identity_with_observation_v1`,

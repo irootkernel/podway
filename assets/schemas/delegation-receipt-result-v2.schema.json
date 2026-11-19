@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:delegation-receipt-result:v2",
+  "title": "Podway Scoped Delegation Receipt Read Result v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "target",
+    "acceptance_state",
+    "receipt",
+    "applicability"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.delegation-receipt-result/v2"
+    },
+    "target": {
+      "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+    },
+    "acceptance_state": {
+      "enum": [
+        "missing",
+        "stale",
+        "accepted"
+      ]
+    },
+    "receipt": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "urn:podway:schema:delegation-receipt:v2"
+        }
+      ]
+    },
+    "applicability": {
+      "enum": [
+        "current",
+        "historical"
+      ]
+    }
+  },
+  "x-podway-max-json-bytes": 65536
+}

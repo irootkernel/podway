@@ -478,6 +478,94 @@
       "path": ["podway-cli", "podway-engine"],
       "execution": "direct",
       "capabilities": []
+    },
+    {
+      "command": "group.activate",
+      "availability": "executable",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
+      "capabilities": []
+    },
+    {
+      "command": "group.return",
+      "availability": "executable",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
+      "capabilities": []
+    },
+    {
+      "command": "group.replan",
+      "availability": "executable",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
+      "capabilities": []
+    },
+    {
+      "command": "group.list",
+      "availability": "executable",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
+      "capabilities": []
+    },
+    {
+      "command": "group.show",
+      "availability": "executable",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
+      "capabilities": []
+    },
+    {
+      "command": "group.prior_work",
+      "availability": "executable",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
+      "capabilities": []
+    },
+    {
+      "command": "history.goal_revisions",
+      "availability": "executable",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
+      "capabilities": []
+    },
+    {
+      "command": "history.dag",
+      "availability": "executable",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
+      "capabilities": []
+    },
+    {
+      "command": "history.attempts",
+      "availability": "executable",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
+      "capabilities": []
+    },
+    {
+      "command": "history.blockers",
+      "availability": "executable",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
+      "capabilities": []
+    },
+    {
+      "command": "history.item",
+      "availability": "executable",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
+      "capabilities": []
     }
   ]
 }

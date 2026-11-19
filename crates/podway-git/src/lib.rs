@@ -19,6 +19,7 @@ pub mod test_support;
 pub use layout::{
     WorkspaceLayoutElementStatusV1, WorkspaceLayoutInitializerV1, WorkspaceLayoutReportV1,
 };
+pub use native::observe_local_artifact_presence_v1;
 pub use resolver::NativeGitResolverV1;
 
 pub const WORKTREE_SELECTOR_VERSION_V1: u16 = 1;

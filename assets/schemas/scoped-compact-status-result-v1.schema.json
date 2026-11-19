@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:scoped-compact-status-result:v1",
+  "title": "Podway Scoped Compact Status Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "workspace",
+    "workspace_sequence",
+    "lifecycle",
+    "cursor",
+    "base",
+    "items",
+    "retained_group_count",
+    "trace_length"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.scoped-compact-status-result/v1"
+    },
+    "workspace": {
+      "$ref": "urn:podway:schema:observation-result:v7#/properties/workspace"
+    },
+    "workspace_sequence": {
+      "$ref": "urn:podway:schema:observation-result:v7#/properties/workspace_sequence"
+    },
+    "lifecycle": {
+      "$ref": "urn:podway:schema:observation-result:v7#/properties/lifecycle"
+    },
+    "cursor": {
+      "$ref": "urn:podway:schema:observation-result:v7#/properties/cursor"
+    },
+    "base": {
+      "$ref": "urn:podway:schema:observation-result:v7#/properties/base"
+    },
+    "items": {
+      "$ref": "urn:podway:schema:observation-result:v7#/properties/items"
+    },
+    "retained_group_count": {
+      "$ref": "urn:podway:schema:observation-result:v7#/properties/retained_group_count"
+    },
+    "trace_length": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65536
+    }
+  }
+}

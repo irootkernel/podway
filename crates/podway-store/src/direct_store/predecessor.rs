@@ -131,7 +131,7 @@ impl DirectStoreV1 {
             reason: "migration clock exceeds SQLite range",
         })?;
         (predecessor.migrate)(&transaction)?;
-        transaction.pragma_update(None, "user_version", super::DIRECT_SCHEMA_GENERATION_V1)?;
+        transaction.pragma_update(None, "user_version", self.layout.schema.generation)?;
         transaction.execute(
             "UPDATE workspace_state SET last_validated_root=?1,updated_at_ms=?2 WHERE singleton=1",
             params![self.layout.root().as_encoded(), now],
@@ -208,7 +208,7 @@ impl DirectStoreV1 {
         immutable: bool,
     ) -> DirectStoreResultV1<()> {
         if predecessor.generation < 14
-            || predecessor.generation > super::DIRECT_SCHEMA_GENERATION_V1
+            || predecessor.generation > super::LEGACY_DIRECT_SCHEMA_GENERATION_V1
         {
             return Err(DirectStoreErrorV1::SchemaMismatch);
         }
@@ -278,7 +278,7 @@ mod tests {
     fn check_declared_schema_migration(absent_wal: bool, blocked_checkpoint: bool) {
         let root = tempfile::TempDir::new().unwrap();
         let path = std::fs::canonicalize(root.path()).unwrap();
-        let layout = super::super::DirectWorkspaceLayoutV1::new(
+        let layout = super::super::DirectWorkspaceLayoutV1::for_v15_fixture(
             ValidatedWorkspaceRootV1::from_path(&path).unwrap(),
         )
         .unwrap();
@@ -327,13 +327,13 @@ mod tests {
         assert_eq!(std::fs::read(layout.wal()).ok(), before_wal);
         let ddl = format!(
             "{}\nCREATE TABLE predecessor_only(value TEXT);",
-            super::super::DIRECT_STORE_DDL_V1
+            super::super::LEGACY_DIRECT_STORE_DDL
         );
         let lease = ExclusiveMaintenanceLeaseV1::acquire(&layout, deadline(), false).unwrap();
         let _gate = super::super::connection::connection_gate(deadline()).unwrap();
         let rejected = DeclaredPredecessor {
             manifest: OLD,
-            generation: super::super::DIRECT_SCHEMA_GENERATION_V1,
+            generation: super::super::LEGACY_DIRECT_SCHEMA_GENERATION_V1,
             ddl: &ddl,
             migration_id: "test-rejection",
             migrate: rejected_migration,
@@ -349,7 +349,7 @@ mod tests {
         ));
         let accepted = DeclaredPredecessor {
             manifest: OLD,
-            generation: super::super::DIRECT_SCHEMA_GENERATION_V1,
+            generation: super::super::LEGACY_DIRECT_SCHEMA_GENERATION_V1,
             ddl: &ddl,
             migration_id: "test-forward",
             migrate: migration,
@@ -424,7 +424,7 @@ mod tests {
         assert_eq!(
             main.query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
                 .unwrap(),
-            super::super::DIRECT_SCHEMA_GENERATION_V1
+            super::super::LEGACY_DIRECT_SCHEMA_GENERATION_V1
         );
         assert_eq!(
             main.query_row(
@@ -435,8 +435,11 @@ mod tests {
             .unwrap(),
             new.manifest.as_str()
         );
-        super::super::connection::verify_declared_schema(&main, super::super::DIRECT_STORE_DDL_V1)
-            .unwrap();
+        super::super::connection::verify_declared_schema(
+            &main,
+            super::super::LEGACY_DIRECT_STORE_DDL,
+        )
+        .unwrap();
         assert!(std::fs::read(layout.wal()).unwrap().is_empty());
         drop(main);
         drop(checkpoint_reader);
@@ -588,7 +591,7 @@ mod tests {
     fn checkpoint_fixture() -> (tempfile::TempDir, DirectStoreV1, String) {
         let root = tempfile::TempDir::new().unwrap();
         let path = std::fs::canonicalize(root.path()).unwrap();
-        let layout = super::super::DirectWorkspaceLayoutV1::new(
+        let layout = super::super::DirectWorkspaceLayoutV1::for_v15_fixture(
             ValidatedWorkspaceRootV1::from_path(&path).unwrap(),
         )
         .unwrap();
@@ -618,7 +621,7 @@ mod tests {
         drop(lease);
         let ddl = format!(
             "{}\nCREATE TABLE predecessor_only(value TEXT);",
-            super::super::DIRECT_STORE_DDL_V1
+            super::super::LEGACY_DIRECT_STORE_DDL
         );
         (
             root,
@@ -629,7 +632,7 @@ mod tests {
     fn declaration(ddl: &str) -> DeclaredPredecessor<'_> {
         DeclaredPredecessor {
             manifest: OLD,
-            generation: super::super::DIRECT_SCHEMA_GENERATION_V1,
+            generation: super::super::LEGACY_DIRECT_SCHEMA_GENERATION_V1,
             ddl,
             migration_id: "test-forward",
             migrate: migration,
@@ -803,7 +806,10 @@ mod tests {
             assert!(state.syncs.is_empty());
         });
         let committed = committed_snapshot(&store.layout.database());
-        assert_eq!(committed.0, super::super::DIRECT_SCHEMA_GENERATION_V1);
+        assert_eq!(
+            committed.0,
+            super::super::LEGACY_DIRECT_SCHEMA_GENERATION_V1
+        );
         assert!(
             !store
                 .migrate_writer_with_declarations(

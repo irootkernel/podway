@@ -342,8 +342,10 @@ fn owned_store() -> (TempDir, DirectStoreV1) {
     let root = TempDir::new().unwrap();
     let canonical = std::fs::canonicalize(root.path()).unwrap();
     let store = DirectStoreV1::new(
-        DirectWorkspaceLayoutV1::new(ValidatedWorkspaceRootV1::from_path(&canonical).unwrap())
-            .unwrap(),
+        DirectWorkspaceLayoutV1::for_v15_fixture(
+            ValidatedWorkspaceRootV1::from_path(&canonical).unwrap(),
+        )
+        .unwrap(),
         digest_nibble('c'),
         digest_nibble('a'),
         digest_nibble('b'),

@@ -27,10 +27,6 @@ impl Fixture {
         );
         output
     }
-
-    fn run_from_root(&self, arguments: &[String]) -> Output {
-        self.run(arguments)
-    }
 }
 
 fn one_json(output: &Output) -> Value {
@@ -46,13 +42,98 @@ fn one_json(output: &Output) -> Value {
 }
 
 #[test]
-fn calls005_preset_explain_reports_admitted_goal_tracking_only_in_human_output() {
+fn successor_authoring_reports_warnings_and_honors_strict_policy() {
+    let fixture = Fixture::new();
+    for (file, source, base) in [
+        (
+            "base.yaml",
+            include_str!("../../../assets/presets/small-change-v3.yaml"),
+            true,
+        ),
+        (
+            "group.yaml",
+            include_str!("../../../assets/presets/small-change-default-v3.yaml"),
+            false,
+        ),
+    ] {
+        let source = source.replace(
+            "purpose: Deliver a small reviewed change with fresh caller-asserted verification evidence.",
+            "purpose: Todo",
+        );
+        let path = fixture.root.join(file);
+        fs::write(&path, source).unwrap();
+        let format =
+            fixture.run(&["procedure", "format", file, "--write", "--json"].map(str::to_owned));
+        assert!(format.status.success(), "{format:?}");
+        let canonical = fs::read_to_string(&path).unwrap();
+
+        let mut lint_result = None;
+        for generation in ["1", "2"] {
+            for command in ["lint", "check"] {
+                let argv = [
+                    "--contract-generation",
+                    generation,
+                    "procedure",
+                    command,
+                    file,
+                    "--json",
+                ];
+                let normal = fixture.run(&argv.map(str::to_owned));
+                assert!(normal.status.success(), "{normal:?}");
+                let mut strict_argv = argv.map(str::to_owned).to_vec();
+                strict_argv.push("--warnings-as-errors".to_owned());
+                let strict = fixture.run(&strict_argv);
+                assert_eq!(strict.status.code(), Some(1), "{strict:?}");
+                let result = one_json(&normal)["result"].clone();
+                assert_eq!(one_json(&strict)["result"], result);
+                assert_eq!(result["valid"], true);
+                let diagnostics = result["diagnostics"].as_array().unwrap();
+                assert!(
+                    diagnostics
+                        .iter()
+                        .all(|finding| finding["severity"] == "warning")
+                );
+                assert!(
+                    diagnostics
+                        .iter()
+                        .any(|finding| finding["code"] == "WEAK_PURPOSE_GUIDANCE")
+                );
+                lint_result = Some(result);
+            }
+        }
+        let preview = fixture.run(&["procedure", "preview", file, "--json"].map(str::to_owned));
+        assert!(preview.status.success(), "{preview:?}");
+        let preview = one_json(&preview);
+        assert_eq!(preview["result"]["admissible"], true);
+        assert_eq!(preview["result"]["checks"]["lint"], false);
+        assert_eq!(preview["result"].get("start_argv").is_some(), base);
+        let lint_result = lint_result.unwrap();
+        assert_eq!(preview["result"]["digest"], lint_result["digest"]);
+        assert_eq!(preview["result"]["diagnostics"], lint_result["diagnostics"]);
+
+        fs::write(&path, format!("{canonical}\n")).unwrap();
+        let drift = fixture.run(&["procedure", "check", file, "--json"].map(str::to_owned));
+        assert_eq!(drift.status.code(), Some(1), "{drift:?}");
+        let drift = one_json(&drift);
+        assert_eq!(drift["result"]["valid"], false);
+        let diagnostics = drift["result"]["diagnostics"].as_array().unwrap();
+        assert_eq!(diagnostics[0]["severity"], "error");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|finding| finding["code"] == "WEAK_PURPOSE_GUIDANCE")
+        );
+    }
+}
+
+#[test]
+fn calls005_preset_explain_reports_admitted_goal_tracking_and_both_definition_pins() {
     let fixture = Fixture::new();
     for (name, enabled) in [
-        ("analysis-v2", true),
-        ("bug-fix-v2", true),
-        ("small-change-v2", false),
-        ("sw-dev-v2", true),
+        ("analysis-v3", true),
+        ("bug-fix-v3", true),
+        ("small-change-v3", false),
+        ("sw-dev-v3", true),
     ] {
         let shown = fixture.run(&["preset", "show", name, "--json"].map(str::to_owned));
         assert!(shown.status.success(), "{name}: {shown:?}");
@@ -62,15 +143,6 @@ fn calls005_preset_explain_reports_admitted_goal_tracking_only_in_human_output()
             procedure["goal_tracking"].as_bool().unwrap_or(false),
             enabled
         );
-        let expected_nodes: Vec<_> = procedure["graph"]["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|node| {
-                let definition = &procedure["node_definitions"][node["use"].as_str().unwrap()];
-                json!({"id": node["id"], "title": definition["title"], "type": definition["type"]})
-            })
-            .collect();
         for generation in ["1", "2"] {
             let explained = fixture.run(
                 &[
@@ -85,11 +157,15 @@ fn calls005_preset_explain_reports_admitted_goal_tracking_only_in_human_output()
             );
             assert!(explained.status.success(), "{name}: {explained:?}");
             let explained = one_json(&explained);
-            assert_eq!(
-                explained["result"],
-                json!({"preset": shown["result"]["metadata"], "nodes": expected_nodes}),
-                "generation {generation}: {name}"
-            );
+            for field in ["preset", "base_digest", "group_digest"] {
+                assert_eq!(explained["result"][field], shown["result"][field], "{name}");
+            }
+            assert_eq!(explained["result"]["goal_tracking"], enabled);
+            for field in ["base_graph", "default_group_graph"] {
+                let graph: Value =
+                    serde_json::from_str(explained["result"][field].as_str().unwrap()).unwrap();
+                assert!(graph.is_object(), "{name}: {graph}");
+            }
         }
         let human = fixture.run(&["preset", "explain", name].map(str::to_owned));
         assert!(human.status.success(), "{name}: {human:?}");
@@ -149,7 +225,15 @@ fn calls004_help_explains_lifecycle_attribution_and_original_request_recovery() 
         ),
         ("session.rework", vec!["--actor is optional"]),
         ("goal.define", vec!["--actor is optional"]),
-        ("goal.revise", vec!["--actor is optional"]),
+        (
+            "goal.revise",
+            vec![
+                "--actor is optional",
+                "--basis-description",
+                "--basis-digest",
+                "--feedback",
+            ],
+        ),
         (
             "goal.assess_criterion",
             vec![
@@ -562,16 +646,20 @@ fn v2dfc003_reserved_output_preserves_large_admitted_procedure_show() {
         })
         .collect::<serde_json::Map<_, _>>();
     let source = json!({
-        "schema": "podway.procedure/v2",
+        "schema": "podway.procedure/v3",
         "id": "large-projection",
         "version": "1",
         "name": "Large projection",
-        "purpose": "Preserve the admitted canonical projection in a generic result.",
+        "purpose": "Preserve the admitted canonical projection.",
         "node_definitions": definitions,
         "graph": {
             "entry": "work",
-            "nodes": [{"id": "work", "use": "d0000", "terminal": true}],
+            "nodes": [
+                {"id": "work", "use": "d0000", "next": "finish"},
+                {"id": "finish", "use": "d0001", "terminal": true},
+            ],
         },
+        "execution_group": {"anchor":"work","success_return":"finish","plan_inputs":[],"result_items":[],"replan_decisions":[]}
     });
     let path = fixture.root.join("large-projection.json");
     fs::write(&path, serde_json::to_vec(&source).unwrap()).unwrap();
@@ -598,320 +686,122 @@ fn v2dfc003_reserved_output_preserves_large_admitted_procedure_show() {
 #[test]
 fn v2grd006_procedure_preview_preserves_typed_guards_in_schema_valid_json() {
     let fixture = Fixture::new();
-    fs::write(
-        fixture.root.join("typed-guards.yaml"),
-        r#"schema: podway.procedure/v2
-id: typed-preview
-version: "1"
-name: Typed preview
-purpose: Preserve typed conditions in the local preview.
-node_definitions:
-  collect:
-    type: action
-    title: Collect
-    intent: Record typed evidence.
-    items:
-      - id: mode
-        type: choice
-        prompt: Select the mode.
-        required: true
-        choices: [strict, relaxed]
-      - id: notes
-        type: text
-        prompt: Record strict-mode notes.
-        required: false
-        required_when:
-          - item: mode
-            equals: strict
-  decide:
-    type: decision
-    title: Decide
-    objective: Select an evidence-backed outcome.
-    prompt: Which outcome applies?
-    options:
-      - id: noted
-        label: Notes recorded
-        criteria: Strict-mode notes contain at least one scalar.
-        guards:
-          - evidence:
-              node: collect
-              item: notes
-            non_empty: true
-      - id: continue
-        label: Continue without notes
-        criteria: No strict-mode notes are required for this outcome.
-    reason:
-      required: true
-      prompt: Explain the selected outcome.
-  finish:
-    type: action
-    title: Finish
-    intent: Finish the preview workflow.
-graph:
-  entry: collect
-  nodes:
-    - id: collect
-      use: collect
-      next: decide
-    - id: decide
-      use: decide
-      evidence_from:
-        - node: collect
-          required: true
-          items: [notes]
-      routes:
-        noted:
-          to: finish
-          effect: advance
-        continue:
-          to: finish
-          effect: advance
-    - id: finish
-      use: finish
-      terminal: true
-"#,
-    )
-    .unwrap();
-
-    let output = fixture.run_from_root(&[
-        "--json".to_owned(),
-        "procedure".to_owned(),
-        "preview".to_owned(),
-        "typed-guards.yaml".to_owned(),
+    let source = include_str!("../../../assets/presets/small-change-default-v3.yaml");
+    fs::write(fixture.root.join("typed-guards.yaml"), source).unwrap();
+    let preview = fixture
+        .cli
+        .run(&["procedure", "preview", "typed-guards.yaml"]);
+    let shown = fixture
+        .cli
+        .run(&["procedure", "show", "typed-guards.yaml", "--canonical"]);
+    let graph = fixture.cli.run(&[
+        "procedure",
+        "graph",
+        "typed-guards.yaml",
+        "--format",
+        "json",
     ]);
-    assert!(output.status.success(), "{output:?}");
-    let envelope = one_json(&output);
-    assert_eq!(envelope["schema"], "podway.output/v4");
-    assert_eq!(envelope["command"], "procedure.preview");
-    let result = &envelope["result"];
-    assert_eq!(result["schema"], "podway.procedure-preview-result/v1");
-    assert!(decode_result_schema_contract_v2(result).is_some());
-    let direct_graph = fixture.run_from_root(&[
-        "--json".to_owned(),
-        "procedure".to_owned(),
-        "graph".to_owned(),
-        "typed-guards.yaml".to_owned(),
-        "--format".to_owned(),
-        "json".to_owned(),
-    ]);
-    assert!(direct_graph.status.success(), "{direct_graph:?}");
-    let direct_graph = one_json(&direct_graph);
-    assert_eq!(
-        direct_graph["result"]["schema"],
-        "podway.procedure-graph-result/v1"
-    );
-    assert!(direct_graph["result"].get("delegated_placements").is_none());
-    let collect = result["graph"]["nodes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|node| node["graph_node_id"] == "collect")
+    for envelope in [&preview, &shown, &graph] {
+        assert_eq!(
+            envelope["result"]["schema"],
+            "podway.successor-authoring-result/v1"
+        );
+        assert!(decode_result_schema_contract_v2(&envelope["result"]).is_some());
+        assert_eq!(envelope["result"]["digest"], preview["result"]["digest"]);
+    }
+    assert_eq!(preview["result"]["graph"], graph["result"]["projection"]);
+    let document: Value =
+        serde_json::from_str(shown["result"]["canonical_json"].as_str().unwrap()).unwrap();
+    let definitions = document["node_definitions"].as_object().unwrap();
+    let replan = definitions
+        .values()
+        .filter_map(|value| value["options"].as_array())
+        .flatten()
+        .find(|option| option["id"] == "replan")
         .unwrap();
     assert_eq!(
-        collect["items"][1]["required_when"],
-        json!([{"item": "mode", "equals": "strict"}])
+        replan["guards"][2],
+        json!({
+            "evidence":{"scope":"local","node":"assess-review","item":"assessment-score"},
+            "at_least":80
+        })
     );
-    let noted = result["graph"]["edges"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|edge| edge["option_id"] == "noted")
+    let score = definitions
+        .values()
+        .filter_map(|value| value["items"].as_array())
+        .flatten()
+        .find(|item| item["id"] == "assessment-score")
         .unwrap();
-    assert_eq!(
-        noted["guards"],
-        json!([{
-            "evidence": {"node": "collect", "item": "notes"},
-            "non_empty": true
-        }])
-    );
+    assert_eq!(score["type"], "integer");
+    assert!(preview["result"].get("start_argv").is_none());
 }
 
 #[test]
-fn v2sdg006_delegated_preview_and_graph_select_v2_without_changing_direct_results() {
+fn v2sdg006_delegated_group_preview_and_graph_keep_exact_scope_and_declared_order() {
     let fixture = Fixture::new();
-    fs::write(
-        fixture.root.join("delegated.yaml"),
-        concat!(
-            "schema: podway.procedure/v2\n",
-            "id: delegated-preview\n",
-            "version: '1'\n",
-            "name: Delegated preview\n",
-            "purpose: Review the delegation graph.\n",
-            "node_definitions:\n",
-            "  work:\n",
-            "    type: action\n",
-            "    title: Work\n",
-            "    intent: Review the result.\n",
-            "graph:\n",
-            "  entry: work\n",
-            "  nodes:\n",
-            "    - id: work\n",
-            "      use: work\n",
-            "      terminal: true\n",
-            "      delegation:\n",
-            "        binding_ref: local-specialist\n",
-            "        role_ref: reviewer\n",
-            "        role_snapshot_digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
-            "        max_rounds: 3\n",
-            "        after_accept: retain\n",
-        ),
-    )
-    .unwrap();
-    for (subcommand, expected_schema) in [
-        ("preview", "podway.procedure-preview-result/v2"),
-        ("graph", "podway.procedure-graph-result/v2"),
-    ] {
-        let mut arguments = vec![
-            "--json".to_owned(),
-            "procedure".to_owned(),
-            subcommand.to_owned(),
-            "delegated.yaml".to_owned(),
-        ];
-        if subcommand == "graph" {
-            arguments.extend(["--format".to_owned(), "json".to_owned()]);
-        }
-        let output = fixture.run_from_root(&arguments);
-        assert!(output.status.success(), "{output:?}");
-        let envelope = one_json(&output);
-        assert_eq!(envelope["result"]["schema"], expected_schema);
-        assert_eq!(envelope["result"]["delegated_placement_count"], 1);
-        assert_eq!(envelope["result"]["delegated_placements"], json!(["work"]));
-        assert!(decode_result_schema_contract_v2(&envelope["result"]).is_some());
-    }
-    let graph = fixture.run_from_root(&[
-        "--json".to_owned(),
-        "procedure".to_owned(),
-        "graph".to_owned(),
-        "delegated.yaml".to_owned(),
-        "--format".to_owned(),
-        "mermaid".to_owned(),
+    let work = json!({"type":"action","title":"Work","intent":"Review the result."});
+    let delegation = json!({
+        "binding_ref":"local-specialist","role_ref":"reviewer","max_rounds":3,
+        "role_snapshot_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "after_accept":"retain"
+    });
+    let source = json!({
+        "schema":"podway.execution-group/v1","id":"delegated-preview","version":"1",
+        "name":"Delegated preview","purpose":"Exercise the opted-in group placements.",
+        "node_definitions":{"work":work},
+        "graph":{"entry":"z-first","nodes":[
+            {"id":"z-first","use":"work","next":"a-second","delegation":delegation},
+            {"id":"a-second","use":"work","terminal":true,"delegation":delegation}
+        ]},
+        "plan_inputs":[]
+    });
+    fs::write(fixture.root.join("delegated.json"), source.to_string()).unwrap();
+    let preview = fixture.cli.run(&["procedure", "preview", "delegated.json"]);
+    let graph = fixture
+        .cli
+        .run(&["procedure", "graph", "delegated.json", "--format", "json"]);
+    let mermaid = fixture.cli.run(&[
+        "procedure",
+        "graph",
+        "delegated.json",
+        "--format",
+        "mermaid",
     ]);
-    assert!(graph.status.success(), "{graph:?}");
-    let graph = one_json(&graph);
-    assert_eq!(
-        graph["result"]["schema"],
-        "podway.procedure-graph-result/v2"
-    );
-    assert_eq!(graph["result"]["delegated_placements"], json!(["work"]));
-    assert!(
-        graph["result"]["projection"]
-            .as_str()
-            .unwrap()
-            .contains("flowchart TD")
-    );
-    let invalid = fs::read_to_string(fixture.root.join("delegated.yaml"))
-        .unwrap()
-        .replace(
-            "    - id: work\n",
-            "    - id: stranded\n      use: work\n      terminal: true\n    - id: work\n",
-        );
-    fs::write(fixture.root.join("delegated-invalid.yaml"), invalid).unwrap();
-    let output = fixture.run_from_root(&[
-        "--json".to_owned(),
-        "procedure".to_owned(),
-        "preview".to_owned(),
-        "delegated-invalid.yaml".to_owned(),
-    ]);
-    assert!(!output.status.success(), "{output:?}");
-    let envelope = one_json(&output);
-    assert_eq!(
-        envelope["result"]["schema"],
-        "podway.procedure-preview-result/v2"
-    );
-    assert_eq!(envelope["result"]["admissible"], false);
-    assert_eq!(envelope["result"]["checks"]["vet"], false);
-    assert_eq!(envelope["result"]["delegated_placement_count"], 1);
-    assert_eq!(envelope["result"]["delegated_placements"], json!(["work"]));
-    assert!(decode_result_schema_contract_v2(&envelope["result"]).is_some());
-
-    let source = fs::read_to_string(fixture.root.join("delegated.yaml")).unwrap();
-    let (prefix, placement) = source.split_once("    - id: work\n").unwrap();
-    let ordered = format!(
-        "{}    - id: z-first\n{}    - id: a-second\n{}",
-        prefix.replace("entry: work", "entry: z-first"),
-        placement.replace("terminal: true", "next: a-second"),
-        placement,
-    );
-    for (file, source, expected_schema, expected_validate, expected_placements) in [
-        (
-            "delegated-semantic-invalid.yaml",
-            source.replace("use: work", "use: missing"),
-            "podway.procedure-preview-result/v2",
-            false,
-            Some(json!(["work"])),
-        ),
-        (
-            "delegated-malformed.yaml",
-            source.replace("node_definitions:", "node_definitions: ["),
-            "podway.procedure-preview-result/v1",
-            false,
-            None,
-        ),
-        (
-            "delegated-ordered.yaml",
-            ordered,
-            "podway.procedure-preview-result/v2",
-            true,
-            Some(json!(["z-first", "a-second"])),
-        ),
-    ] {
-        fs::write(fixture.root.join(file), source).unwrap();
-        let output = fixture.run_from_root(&[
-            "--json".to_owned(),
-            "procedure".to_owned(),
-            "preview".to_owned(),
-            file.to_owned(),
-        ]);
-        assert_eq!(output.status.code(), Some(i32::from(!expected_validate)));
-        assert!(output.stderr.is_empty(), "{output:?}");
-        let envelope = one_json(&output);
-        let result = &envelope["result"];
-        assert_eq!(result["schema"], expected_schema);
-        assert_eq!(result["checks"]["validate"], expected_validate);
-        assert_eq!(result["admissible"], expected_validate);
-        assert_eq!(
-            result.get("delegated_placements"),
-            expected_placements.as_ref()
-        );
-        if let Some(placements) = expected_placements {
-            assert_eq!(
-                result["delegated_placement_count"],
-                placements.as_array().unwrap().len()
-            );
-        } else {
-            assert!(result.get("delegated_placement_count").is_none());
-        }
-        if !expected_validate {
-            assert_eq!(result["checks"]["vet"], false);
-            assert_eq!(result["checks"]["lint"], false);
-            assert!(result.get("procedure_digest").is_none());
-            assert_eq!(result["diagnostics"].as_array().unwrap().len(), 1);
-            assert_eq!(result["diagnostics_total"], 1);
-            assert_eq!(result["diagnostics_truncated"], false);
-        }
-        assert!(decode_result_schema_contract_v2(result).is_some());
+    assert_eq!(preview["result"]["graph"], graph["result"]["projection"]);
+    assert_eq!(mermaid["result"]["digest"], graph["result"]["digest"]);
+    let rendered = mermaid["result"]["projection"].as_str().unwrap();
+    assert!(rendered.contains("flowchart"));
+    assert!(rendered.contains("z-first") && rendered.contains("a-second"));
+    let shown = fixture
+        .cli
+        .run(&["procedure", "show", "delegated.json", "--canonical"]);
+    let admitted: Value =
+        serde_json::from_str(shown["result"]["canonical_json"].as_str().unwrap()).unwrap();
+    let nodes = admitted["graph"]["nodes"].as_array().unwrap();
+    assert_eq!(nodes[0]["id"], "z-first");
+    assert_eq!(nodes[1]["id"], "a-second");
+    for node in nodes {
+        assert_eq!(node["delegation"], delegation);
     }
 
-    let output = fixture.run_from_root(&[
-        "--json".to_owned(),
-        "procedure".to_owned(),
-        "graph".to_owned(),
-        "delegated-ordered.yaml".to_owned(),
-        "--format".to_owned(),
-        "json".to_owned(),
-    ]);
-    assert!(output.status.success(), "{output:?}");
-    let envelope = one_json(&output);
+    let mut invalid = source.clone();
+    invalid["graph"]["nodes"][1]["use"] = json!("unknown-definition");
+    fs::write(fixture.root.join("invalid.json"), invalid.to_string()).unwrap();
+    let error = fixture
+        .cli
+        .output(&["procedure", "preview", "invalid.json"]);
+    assert_eq!(error.status.code(), Some(1));
+    let rejected = one_json(&error);
     assert_eq!(
-        envelope["result"]["schema"],
-        "podway.procedure-graph-result/v2"
+        rejected["result"]["schema"],
+        "podway.successor-authoring-result/v1"
     );
-    assert_eq!(envelope["result"]["delegated_placement_count"], 2);
     assert_eq!(
-        envelope["result"]["delegated_placements"],
-        json!(["z-first", "a-second"])
+        rejected["result"]["diagnostics"].as_array().unwrap().len(),
+        1
     );
-    assert!(decode_result_schema_contract_v2(&envelope["result"]).is_some());
+    assert!(rejected["result"].get("digest").is_none());
+    assert!(!fixture.root.join(".podway").exists());
 }
 
 #[test]
@@ -1003,7 +893,7 @@ fn v2_grammar_rejects_invalid_shapes_before_workspace_execution() {
 }
 
 #[test]
-fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
+fn help_and_every_completion_target_publish_the_scoped_routes_and_flags() {
     let fixture = Fixture::new();
     let overview = fixture.run(&["--json".to_owned(), "help".to_owned()]);
     assert!(overview.status.success(), "{overview:?}");
@@ -1017,13 +907,13 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
         one_json(&overview)["result"]["text"]
             .as_str()
             .unwrap()
-            .contains("analysis-v2")
+            .contains("analysis-v3")
     );
     assert!(
         one_json(&overview)["result"]["text"]
             .as_str()
             .unwrap()
-            .contains("small-change-v2")
+            .contains("small-change-v3")
     );
     for topic in [
         "session.status",
@@ -1092,7 +982,7 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
         .as_str()
         .unwrap()
         .to_owned();
-    assert!(replacement_help.contains("no replace command or replace flags"));
+    assert!(replacement_help.contains("session.start_replace"));
     assert!(replacement_help.contains("--on-existing preserve|delete"));
     assert!(!replacement_help.contains("--goal"));
     for shell in ["bash", "zsh", "fish"] {
@@ -1116,8 +1006,12 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
             "assess-criterion",
             "assess-criteria",
             "if-goal-revision",
-            "analysis-v2",
-            "small-change-v2",
+            "if-cursor",
+            "group activate",
+            "history attempts",
+            "definition-digest",
+            "analysis-v3",
+            "small-change-v3",
             "evidence",
             "delegation package",
             "delegation accept",
@@ -1336,7 +1230,7 @@ fn guide003_help_topics_resolve_command_words_and_groups() {
         replacement["result"]["text"]
             .as_str()
             .unwrap()
-            .contains("no replace command or replace flags")
+            .contains("--on-existing preserve|delete")
     );
     let reset_all = fixture.run(&[
         "--json".to_owned(),
@@ -1672,7 +1566,7 @@ fn bound005_fresh_preset_preview_remains_offline() {
         &[
             "start",
             "--preset",
-            "small-change-v2",
+            "small-change-v3",
             "--task",
             "Offline preview",
             "--dry-run",
@@ -1699,18 +1593,19 @@ fn cntrt002_format_write_emission_overflow_preserves_original_bytes() {
         })))
         .collect::<serde_json::Map<_, _>>();
     let source = json!({
-        "schema": "podway.procedure/v2", "id": "emission-overflow", "version": "1",
+        "schema": "podway.procedure/v3", "id": "emission-overflow", "version": "1",
         "name": "Emission overflow", "purpose": "Preserve source after emitted overflow.",
         "node_definitions": definitions,
-        "graph": {"entry": "work", "nodes": [{"id": "work", "use": "d0000", "terminal": true}]}
+        "graph": {"entry":"work","nodes":[{"id":"work","use":"d0000","next":"finish"},{"id":"finish","use":"d0001","terminal":true}]},
+        "execution_group":{"anchor":"work","success_return":"finish","plan_inputs":[],"result_items":[],"replan_decisions":[]}
     })
     .to_string();
-    let podway_config::ParsedProcedure::V2(parsed) = podway_config::parse_procedure_document(
+    let admitted = podway_config::execution_groups::parse_successor_document(
         source.as_bytes(),
         podway_config::ProcedureDocumentFormat::Json,
     )
+    .and_then(podway_config::execution_groups::validate_successor_definition)
     .unwrap();
-    let admitted = podway_config::validate_procedure_v2(parsed).unwrap();
     assert!(admitted.canonical_json().as_str().len() <= podway_core::MAX_PROCEDURE_DOCUMENT_BYTES);
     let file = fixture.root.join("overflow.json");
     fs::write(&file, source.as_bytes()).unwrap();
@@ -1720,7 +1615,7 @@ fn cntrt002_format_write_emission_overflow_preserves_original_bytes() {
     let envelope = one_json(&output);
     assert_eq!(
         envelope["result"]["schema"],
-        "podway.procedure-diagnostics-result/v1"
+        "podway.successor-authoring-result/v1"
     );
     assert_eq!(
         envelope["result"]["diagnostics"][0]["code"],
@@ -1731,7 +1626,7 @@ fn cntrt002_format_write_emission_overflow_preserves_original_bytes() {
         envelope["result"]["diagnostics"][0]["message"]
             .as_str()
             .unwrap()
-            .starts_with("Canonical authoring form")
+            .contains("canonical source projection exceeds its budget")
     );
     assert!(envelope["result"].get("document").is_none());
     assert_eq!(fs::read(&file).unwrap(), source.as_bytes());

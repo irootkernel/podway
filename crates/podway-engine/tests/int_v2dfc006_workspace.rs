@@ -30,6 +30,990 @@ use tempfile::TempDir;
 const RESPONSE: &str = "00000000-0000-4000-8000-000000000001";
 const DIFFERENT: &str = "00000000-0000-4000-8000-000000000002";
 
+#[cfg(feature = "test-support")]
+#[test]
+fn successor_public_results_bind_both_generations_to_the_native_cursor() {
+    use podway_engine::{
+        direct_api::{DirectCommandV1, DirectRequestV1, DirectResponseV1, execute_direct_v1},
+        direct_execution::DirectReadCommandV1,
+        direct_items::DirectItemCommandV1,
+        direct_start::DirectStartCommandV1,
+        successor_execution::{
+            DirectSuccessorMutationV1, DirectSuccessorWriteV1, SuccessorCursor,
+            SuccessorCursorMutation,
+        },
+    };
+    use podway_protocol::{
+        ContractGenerationV1::{Generation1, Generation2},
+        ItemMutationPreconditionsWireV1, ItemSetV1, Rfc3339MillisV1, SessionStartCommandV1,
+        SessionStartSourceV1, SessionStartV1, decode_scoped_item_record_many_input_v1,
+    };
+
+    let root = fixture();
+    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let clock = Clock(AtomicUsize::new(0));
+    let workspace = initialize_workspace_v1(
+        &resolver,
+        mutation(root.path(), "public-init"),
+        false,
+        &clock,
+        &NativeDirectIdSourceV1,
+    )
+    .unwrap()
+    .as_value()["workspace"]["uuid"]
+        .as_str()
+        .map(|uuid| WorkspaceId::new(uuid).unwrap())
+        .unwrap();
+    let preset = podway_presets::lookup_v3("small-change-v3").unwrap();
+    std::fs::write(root.path().join("successor.yaml"), preset.base_yaml).unwrap();
+
+    let submit = |command, key: Option<&str>, generation, return_observation| {
+        let response = execute_direct_v1(
+            &resolver,
+            DirectRequestV1 {
+                request_id: RequestIdV1::new(RESPONSE).unwrap(),
+                selector: selector(root.path()),
+                expected_workspace_id: Some(workspace.clone()),
+                command,
+                idempotency_key: key.map(|key| IdempotencyKeyV1::new(key).unwrap()),
+                deadline: deadline(),
+                observed_at: Rfc3339MillisV1::new("2026-10-07T00:00:00.000Z").unwrap(),
+                timeout_ms: 5000,
+                generation,
+                return_observation,
+            },
+            &clock,
+            &NativeDirectIdSourceV1,
+        )
+        .unwrap();
+        match response {
+            DirectResponseV1::Success(output) => output.into_value(),
+            DirectResponseV1::Failure(error) => panic!("{}", error.as_value()),
+        }
+    };
+    let start = submit(
+        DirectCommandV1::Start(DirectStartCommandV1::Start(SessionStartCommandV1 {
+            start: SessionStartV1 {
+                source: SessionStartSourceV1::Procedure {
+                    procedure: "successor.yaml".to_owned(),
+                },
+                expected_procedure_digest: Some(Sha256Digest::new(preset.base_digest).unwrap()),
+                task_title: "Verify native scoped output".into(),
+                dry_run: false,
+            },
+            preconditions: None,
+        })),
+        Some("public-start"),
+        Generation1,
+        true,
+    );
+    assert_eq!(
+        start["result"]["schema"],
+        "podway.mutation-observation-result/v2"
+    );
+    let session = SessionId::new(start["session"]["id"].as_str().unwrap()).unwrap();
+    let prepared = &start["result"]["observation"];
+    assert!(prepared["cursor"]["attempt"].is_null());
+    let begin = submit(
+        DirectCommandV1::SuccessorMutation(DirectSuccessorMutationV1::Cursor {
+            actor: None,
+            cursor: SuccessorCursor {
+                execution: podway_core::execution_groups::ExecutionCursorFenceV1 {
+                    session: session.clone(),
+                    revision: podway_core::Revision::ZERO,
+                    goal_revision: None,
+                    attempt: None,
+                },
+                selected_group: None,
+            },
+            operation: SuccessorCursorMutation::Begin(None),
+        }),
+        Some("public-begin"),
+        Generation1,
+        true,
+    );
+    let observe = |generation| {
+        submit(
+            DirectCommandV1::Read {
+                command: DirectReadCommandV1::Observe,
+                expected_session_id: Some(session.clone()),
+            },
+            None,
+            generation,
+            false,
+        )
+    };
+    let generation1 = observe(Generation1);
+    let generation2 = observe(Generation2);
+    assert_eq!(
+        generation1["result"]["schema"],
+        "podway.observation-result/v7"
+    );
+    assert_eq!(
+        generation2["result"]["schema"],
+        "podway.observation-result/v8"
+    );
+    assert_eq!(
+        generation1["result"]["cursor"],
+        generation2["result"]["cursor"]
+    );
+    assert_eq!(begin["result"]["observation"], generation2["result"]);
+    let mut invalid = begin;
+    invalid["result"]["mutation_result"]["operation"] = serde_json::json!("session.complete");
+    assert!(!validate_daemon_free_document_v1(
+        "podway.output/v4",
+        &invalid
+    ));
+
+    let current = observe(Generation2);
+    let attempt: podway_core::execution_groups::ScopedAttemptV1 =
+        serde_json::from_value(current["result"]["cursor"]["attempt"].clone()).unwrap();
+    let edit = DirectCommandV1::SuccessorWrite(DirectSuccessorWriteV1::Edit {
+        attempt: attempt.clone(),
+        selected_group: None,
+        command: DirectItemCommandV1::Set(ItemSetV1 {
+            item_id: podway_core::ItemId::new("scope-summary").unwrap(),
+            value: "Record the precise test fixture scope.".into(),
+            preconditions: ItemMutationPreconditionsWireV1 {
+                expected_session_id: session.clone(),
+                expected_attempt_id: attempt.attempt().clone(),
+                expected_item_revision: podway_core::Revision::ZERO,
+            },
+        }),
+    });
+    let edited = submit(edit.clone(), Some("public-set"), Generation1, false);
+    assert_eq!(edited["result"]["items"][0]["revision"], 1);
+    assert_eq!(edited["result"]["items"][0]["previous_revision"], 0);
+    assert!(edited["result"]["items"][0]["value_digest"].is_string());
+    assert_eq!(edited, submit(edit, Some("public-set"), Generation2, false));
+
+    let input = serde_json::json!({
+        "schema": "podway.scoped-item-record-many-input/v1",
+        "context": {
+            "workspace_uuid": workspace,
+            "idempotency_key": "public-batch",
+            "cursor": {
+                "attempt": attempt,
+                "session_revision": edited["session"]["revision_after"],
+                "goal_revision": null,
+                "selected_group": null,
+            },
+        },
+        "operations": [{
+            "item_id": "scope-summary", "expected_item_revision": 1,
+            "record": {"type": "text", "value": "Use the updated fixture scope."},
+        }],
+    });
+    let input = decode_scoped_item_record_many_input_v1(input.to_string().as_bytes()).unwrap();
+    let updated = submit(
+        DirectCommandV1::SuccessorWrite(DirectSuccessorWriteV1::Atomic {
+            cursor: SuccessorCursor {
+                execution: input.context.cursor.execution(),
+                selected_group: input.context.cursor.selected_group,
+            },
+            operations: input.operations,
+        }),
+        Some(input.context.idempotency_key.as_str()),
+        Generation1,
+        true,
+    );
+    assert_eq!(
+        updated["result"]["mutation_result"]["items"][0]["revision"],
+        2
+    );
+    assert_eq!(
+        updated["result"]["observation"],
+        observe(Generation2)["result"]
+    );
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn successor_native_delegation_keeps_one_receipt_for_the_scoped_attempt() {
+    use super::int_group002_transactions::{
+        activation, base_document, canonical, definition, group_document, mutation as scope,
+    };
+    use podway_core::{ItemId, ReasonV2, Revision};
+    use podway_engine::{
+        direct_api::{DirectCommandV1, DirectRequestV1, DirectResponseV1, execute_direct_v1},
+        direct_execution::DirectReadCommandV1,
+        direct_start::{DirectStartCommandV1, DirectStartRequestV1},
+        successor_execution::{
+            DirectSuccessorMutationV1, DirectSuccessorWriteV1, SuccessorCursor,
+            SuccessorCursorMutation, SuccessorItemRequest, activate_group, issue_cursor_mutation,
+            record_successor_item, start_native_successor,
+        },
+    };
+    use podway_protocol::{
+        ContractGenerationV1, ItemRecordManyDispositionV1, ItemRecordManyOperationV1,
+        ItemRecordValueV1, Rfc3339MillisV1, SessionStartCommandV1, SessionStartSourceV1,
+        SessionStartV1, decode_scoped_delegation_accept_input_v1,
+    };
+    use podway_store::successor_store::{CandidateStoreError, NativeSuccessorStore};
+    use serde_json::{Value, json};
+
+    let root = fixture();
+    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let clock = Clock(AtomicUsize::new(0));
+    let ids = NativeDirectIdSourceV1;
+    initialize_workspace_v1(
+        &resolver,
+        mutation(root.path(), "init-scoped-delegation"),
+        false,
+        &clock,
+        &ids,
+    )
+    .unwrap();
+    let (resolved, store) = resolver
+        .resolve_existing(selector(root.path()), None, deadline())
+        .unwrap();
+    let workspace = resolved.store_identity().workspace_uuid().clone();
+    let base = canonical(&base_document());
+    std::fs::write(
+        root.path().join("delegated-base.json"),
+        base.canonical_json().as_str(),
+    )
+    .unwrap();
+    start_native_successor(
+        &resolver,
+        DirectStartRequestV1 {
+            selector: selector(root.path()),
+            expected_workspace_id: Some(workspace.clone()),
+            request_id: RequestIdV1::new(RESPONSE).unwrap(),
+            key: Some(IdempotencyKeyV1::new("delegated-start").unwrap()),
+            deadline: deadline(),
+            command: DirectStartCommandV1::Start(SessionStartCommandV1 {
+                start: SessionStartV1 {
+                    source: SessionStartSourceV1::Procedure {
+                        procedure: "delegated-base.json".to_owned(),
+                    },
+                    expected_procedure_digest: Some(base.digest().clone()),
+                    task_title: "Exercise scoped delegated work".to_owned(),
+                    dry_run: false,
+                },
+                preconditions: None,
+            }),
+        },
+        &clock,
+        &ids,
+    )
+    .unwrap();
+    let read = || {
+        store
+            .read_admitting_typed(
+                deadline(),
+                |_| Ok::<_, CandidateStoreError>(()),
+                |(), snapshot| snapshot.successor_state(definition),
+            )
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .0
+    };
+
+    let mut adapter = NativeSuccessorStore::new(&store, deadline(), |_| Ok(()));
+    issue_cursor_mutation(
+        &mut adapter,
+        scope(&workspace, &read(), "delegated-begin"),
+        SuccessorCursorMutation::Begin(None),
+        || clock.now(),
+        &ids,
+    )
+    .unwrap();
+    let active = read().active_attempt().unwrap().target().clone();
+    record_successor_item(
+        &mut adapter,
+        SuccessorItemRequest {
+            response: podway_engine::successor_execution::SuccessorMutationResponseV1::Fixture,
+            workspace: workspace.clone(),
+            key: IdempotencyKeyV1::new("delegated-plan").unwrap(),
+            request_id: RequestIdV1::new(RESPONSE).unwrap(),
+            target: active,
+            selected_group: None,
+        },
+        podway_core::execution_groups::GroupItemWriteV1 {
+            item: ItemId::new("plan").unwrap(),
+            expected_revision: Revision::ZERO,
+            value: Some(
+                podway_core::RecordedItemValueV2::text("Record the deterministic fixture output.")
+                    .unwrap(),
+            ),
+        },
+        || clock.now(),
+    )
+    .unwrap();
+    let mut group = group_document();
+    group["node_definitions"]["work"]["items"] = json!([
+        {"id":"worker-output","type":"text","prompt":"Record the accepted worker output.","required":true}
+    ]);
+    group["graph"]["nodes"][0]["delegation"] = json!({
+        "binding_ref":"fixture-binding", "role_ref":"deterministic-worker",
+        "role_snapshot_digest":digest(), "max_rounds":2, "after_accept":"release",
+    });
+    let group = canonical(&group);
+    activate_group(
+        &mut adapter,
+        activation(&workspace, &read(), &group, "delegated-activate"),
+        || clock.now(),
+        &ids,
+    )
+    .unwrap();
+    let target = read().active_attempt().unwrap().target().clone();
+    assert!(matches!(
+        target.scope(),
+        podway_core::execution_groups::ExecutionScopeV1::Group { .. }
+    ));
+    let session = target.session().clone();
+
+    let invoke = |command, key: Option<&str>| {
+        execute_direct_v1(
+            &resolver,
+            DirectRequestV1 {
+                request_id: RequestIdV1::new(RESPONSE).unwrap(),
+                selector: selector(root.path()),
+                expected_workspace_id: Some(workspace.clone()),
+                command,
+                idempotency_key: key.map(|key| IdempotencyKeyV1::new(key).unwrap()),
+                deadline: deadline(),
+                observed_at: Rfc3339MillisV1::new("2026-11-19T00:00:00.000Z").unwrap(),
+                timeout_ms: 5000,
+                generation: ContractGenerationV1::Generation2,
+                return_observation: false,
+            },
+            &clock,
+            &ids,
+        )
+        .unwrap()
+    };
+    let success = |response| match response {
+        DirectResponseV1::Success(output) => output.into_value(),
+        DirectResponseV1::Failure(error) => panic!("{}", error.as_value()),
+    };
+    let reject = |response, code| match response {
+        DirectResponseV1::Failure(error) => {
+            assert_eq!(error.as_value()["code"], code, "{}", error.as_value())
+        }
+        DirectResponseV1::Success(output) => panic!("{}", output.as_value()),
+    };
+    let package = || {
+        success(invoke(
+            DirectCommandV1::Read {
+                command: DirectReadCommandV1::DelegationPackage,
+                expected_session_id: Some(session.clone()),
+            },
+            None,
+        ))
+    };
+    let write = |key, expected: u64, value: &str| {
+        success(invoke(
+            DirectCommandV1::SuccessorWrite(DirectSuccessorWriteV1::Atomic {
+                cursor: SuccessorCursor::from_state(&read()),
+                operations: vec![ItemRecordManyOperationV1 {
+                    item_id: ItemId::new("worker-output").unwrap(),
+                    expected_item_revision: Revision::new(expected),
+                    disposition: ItemRecordManyDispositionV1::Record {
+                        record: ItemRecordValueV1::Text {
+                            value: value.into(),
+                        },
+                    },
+                }],
+            }),
+            Some(key),
+        ))
+    };
+    let complete = |key| {
+        invoke(
+            DirectCommandV1::SuccessorMutation(DirectSuccessorMutationV1::Cursor {
+                actor: None,
+                cursor: SuccessorCursor::from_state(&read()),
+                operation: SuccessorCursorMutation::Complete,
+            }),
+            Some(key),
+        )
+    };
+    let before = package();
+    write("delegated-output", 0, "Accepted fixture output.");
+    let after = package();
+    assert_eq!(
+        before["result"]["package_digest"],
+        after["result"]["package_digest"]
+    );
+    assert_eq!(after["result"]["package"]["target"], json!(target));
+    reject(complete("receipt-required"), "DELEGATION_RECEIPT_REQUIRED");
+
+    let acceptance = |key: &str, result: &Value| {
+        let payload = json!({
+            "schema":"podway.delegation-accept-input/v2",
+            "context":{
+                "workspace_uuid":workspace, "idempotency_key":key,
+                "cursor":{
+                    "attempt":result["cursor"]["attempt"], "session_revision":result["cursor"]["session_revision"],
+                    "goal_revision":result["cursor"]["goal_revision"], "selected_group":result["cursor"]["selected_group"],
+                },
+            },
+            "package_digest":result["package_digest"],
+            "execution":{
+                "binding_ref":"fixture-binding", "adapter_id":"test-adapter", "adapter_version":"1",
+                "primary_host":"managed", "scope_kind":"session", "scope_ref":"test-scope",
+                "supervisor_ref":"test-supervisor", "worker_ref":"fixture-worker", "task_ref":"fixture-task",
+                "role_ref":"deterministic-worker", "role_snapshot_digest":digest(),
+                "agent_configuration_digest":digest(), "accepted_task_digest":digest(),
+            },
+            "rounds_used":1, "result_digest":digest(), "summary":"Accepted the deterministic fixture.",
+            "worker_disposition":"released", "accepted":true,
+        });
+        let input =
+            decode_scoped_delegation_accept_input_v1(payload.to_string().as_bytes()).unwrap();
+        invoke(DirectCommandV1::SuccessorDelegationAccept(input), Some(key))
+    };
+    let original = success(acceptance("accept-fixture", &after["result"]));
+    assert_eq!(
+        original,
+        success(acceptance("accept-fixture", &after["result"]))
+    );
+    let receipt = || {
+        success(invoke(
+            DirectCommandV1::Read {
+                command: DirectReadCommandV1::DelegationReceipt {
+                    session_id: session.clone(),
+                    attempt_id: target.attempt().clone(),
+                },
+                expected_session_id: Some(session.clone()),
+            },
+            None,
+        ))
+    };
+    let accepted = receipt();
+    assert_eq!(accepted["result"]["acceptance_state"], "accepted");
+    assert_eq!(
+        accepted["result"]["receipt"]["receipt_id"],
+        original["result"]["receipt_id"]
+    );
+    assert_eq!(
+        accepted["result"]["receipt"]["binding"]["target"],
+        json!(target)
+    );
+
+    write("change-accepted-output", 1, "Edited fixture output.");
+    reject(complete("receipt-stale"), "DELEGATION_RECEIPT_STALE");
+    reject(
+        acceptance("duplicate-fixture", &package()["result"]),
+        "DELEGATION_ALREADY_ACCEPTED",
+    );
+    let stale = receipt();
+    assert_eq!(stale["result"]["acceptance_state"], "stale");
+    assert_eq!(accepted["result"]["receipt"], stale["result"]["receipt"]);
+
+    success(invoke(
+        DirectCommandV1::SuccessorMutation(DirectSuccessorMutationV1::Cursor {
+            actor: None,
+            cursor: SuccessorCursor::from_state(&read()),
+            operation: SuccessorCursorMutation::Retry(
+                ReasonV2::new("Replace the demonstrated stale attempt.").unwrap(),
+            ),
+        }),
+        Some("retry-delegated"),
+    ));
+    let retried = package();
+    assert_ne!(
+        after["result"]["package_digest"],
+        retried["result"]["package_digest"]
+    );
+    write("retry-output", 0, "Accepted retry fixture output.");
+    success(acceptance("accept-retry-fixture", &package()["result"]));
+    success(complete("complete-with-receipt"));
+    assert_eq!(
+        read().active_attempt().unwrap().target().node().as_str(),
+        "finish"
+    );
+    assert_eq!(
+        receipt()["result"]["receipt"],
+        accepted["result"]["receipt"]
+    );
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn successor_start_keeps_original_outcome_after_source_disappears() {
+    use podway_engine::{
+        direct_execution::DirectExecutionErrorV1,
+        direct_start::{DirectStartCommandV1, DirectStartRequestV1},
+        successor_execution::start_native_successor,
+    };
+    use podway_protocol::{SessionStartCommandV1, SessionStartSourceV1, SessionStartV1};
+    use serde_json::Value;
+
+    let root = fixture();
+    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let clock = Clock(AtomicUsize::new(0));
+    initialize_workspace_v1(
+        &resolver,
+        mutation(root.path(), "init-successor"),
+        false,
+        &clock,
+        &NativeDirectIdSourceV1,
+    )
+    .unwrap();
+    let path = root.path().join("successor.yaml");
+    let preset = podway_presets::lookup_v3("small-change-v3").unwrap();
+    std::fs::write(&path, preset.base_yaml).unwrap();
+    let config = std::fs::read_to_string(root.path().join(".podway/config.yaml")).unwrap();
+    assert!(
+        config
+            .lines()
+            .any(|line| line == "default_preset: sw-dev-v3")
+    );
+
+    let request = |key: &str, dry_run: bool, digest: Option<Sha256Digest>| DirectStartRequestV1 {
+        selector: selector(root.path()),
+        expected_workspace_id: None,
+        request_id: RequestIdV1::new(RESPONSE).unwrap(),
+        key: Some(IdempotencyKeyV1::new(key).unwrap()),
+        deadline: deadline(),
+        command: DirectStartCommandV1::Start(SessionStartCommandV1 {
+            start: SessionStartV1 {
+                source: SessionStartSourceV1::Procedure {
+                    procedure: "successor.yaml".to_owned(),
+                },
+                expected_procedure_digest: digest,
+                task_title: "Use a pinned successor Procedure".to_owned(),
+                dry_run,
+            },
+            preconditions: None,
+        }),
+    };
+    let preview = start_native_successor(
+        &resolver,
+        request("preview", true, None),
+        &clock,
+        &NativeDirectIdSourceV1,
+    )
+    .unwrap();
+    let preview: Value = serde_json::from_str(preview.as_str()).unwrap();
+    assert_eq!(preview["result"]["procedure_schema"], "podway.procedure/v3");
+    assert_eq!(preview["result"]["procedure_digest"], preset.base_digest);
+    assert!(preview["result"].get("session_id").is_none());
+
+    let digest = Sha256Digest::new(preset.base_digest).unwrap();
+    let start = || request("start-successor", false, Some(digest.clone()));
+    let first =
+        start_native_successor(&resolver, start(), &clock, &NativeDirectIdSourceV1).unwrap();
+    let prepared: Value = serde_json::from_str(first.as_str()).unwrap();
+    assert_eq!(prepared["result"]["revision"], 0);
+    assert_eq!(
+        prepared["session"]["title"],
+        "Use a pinned successor Procedure"
+    );
+    assert!(matches!(
+        start_native_successor(
+            &resolver,
+            request("fresh-existing", false, Some(digest.clone())),
+            &NoEffects,
+            &NoEffects
+        ),
+        Err(DirectExecutionErrorV1::StartDecisionRequired { .. })
+    ));
+
+    std::fs::remove_file(path).unwrap();
+    let replay = start_native_successor(&resolver, start(), &NoEffects, &NoEffects).unwrap();
+    assert_eq!(replay, first);
+    assert!(matches!(
+        start_native_successor(
+            &resolver,
+            request("fresh-missing", false, Some(digest)),
+            &NoEffects,
+            &NoEffects
+        ),
+        Err(DirectExecutionErrorV1::Start(_))
+    ));
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn successor_activation_checks_the_exact_required_artifact_after_admission() {
+    use super::int_group002_transactions::{
+        activation, base_document, canonical, definition, group_document, mutation as scope,
+    };
+    use podway_core::{
+        DomainError, ItemId, RecordedItemValueV2, Revision, execution_groups::GroupItemWriteV1,
+    };
+    use podway_engine::{
+        direct_start::{DirectStartCommandV1, DirectStartRequestV1},
+        native_execution::NativeDirectWorkspaceV1,
+        successor_execution::{
+            SuccessorCursorMutation, SuccessorExecutionError, SuccessorItemRequest, activate_group,
+            issue_cursor_mutation, prepare_successor_progress, record_successor_item,
+            start_native_successor, verify_successor_progress,
+        },
+    };
+    use podway_protocol::{SessionStartCommandV1, SessionStartSourceV1, SessionStartV1};
+    use podway_store::successor_store::{
+        CandidateStoreError, NativeSuccessorStore, SuccessorReadStore,
+    };
+    use serde_json::{Value, json};
+
+    let root = fixture();
+    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let clock = Clock(AtomicUsize::new(0));
+    let ids = NativeDirectIdSourceV1;
+    initialize_workspace_v1(
+        &resolver,
+        mutation(root.path(), "init-progress"),
+        false,
+        &clock,
+        &ids,
+    )
+    .unwrap();
+    let (resolved, store, binding) = resolver
+        .resolve_existing_with_binding(selector(root.path()), None, deadline())
+        .unwrap();
+    let workspace = binding.identity().workspace_uuid();
+    let native = NativeDirectWorkspaceV1::new(resolved);
+    let mut base = base_document();
+    base["node_definitions"]["design"]["items"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "proof", "type": "artifact", "prompt": "Record the plan file.", "required": true
+        }));
+    let base = canonical(&base);
+    std::fs::write(
+        root.path().join("base.json"),
+        base.canonical_json().as_str(),
+    )
+    .unwrap();
+    start_native_successor(
+        &resolver,
+        DirectStartRequestV1 {
+            selector: selector(root.path()),
+            expected_workspace_id: Some(workspace.clone()),
+            request_id: RequestIdV1::new(RESPONSE).unwrap(),
+            key: Some(IdempotencyKeyV1::new("start-progress").unwrap()),
+            deadline: deadline(),
+            command: DirectStartCommandV1::Start(SessionStartCommandV1 {
+                start: SessionStartV1 {
+                    source: SessionStartSourceV1::Procedure {
+                        procedure: "base.json".to_owned(),
+                    },
+                    expected_procedure_digest: Some(base.digest().clone()),
+                    task_title: "Progress artifact fixture".to_owned(),
+                    dry_run: false,
+                },
+                preconditions: None,
+            }),
+        },
+        &clock,
+        &ids,
+    )
+    .unwrap();
+    let read = || {
+        store
+            .read_admitting_typed(
+                deadline(),
+                |_| Ok::<_, CandidateStoreError>(()),
+                |(), snapshot| {
+                    Ok::<_, CandidateStoreError>((
+                        snapshot.successor_state(definition)?.unwrap().0,
+                        snapshot.committed_sequence()?,
+                    ))
+                },
+            )
+            .unwrap()
+            .unwrap()
+    };
+
+    let mut store_adapter = NativeSuccessorStore::new(&store, deadline(), |_| Ok(()));
+    issue_cursor_mutation(
+        &mut store_adapter,
+        scope(workspace, &read().0, "begin-progress"),
+        SuccessorCursorMutation::Begin(None),
+        || clock.now(),
+        &ids,
+    )
+    .unwrap();
+    let proof = root.path().join("proof.txt");
+    std::fs::write(&proof, "original artifact bytes").unwrap();
+    let artifact = native
+        .prepare_local_artifact_v1(&binding, "proof.txt", None)
+        .unwrap();
+    let active = read().0.active_attempt().unwrap().target().clone();
+    for (key, item, value) in [
+        (
+            "write-plan",
+            "plan",
+            RecordedItemValueV2::text("Work from the adopted plan.").unwrap(),
+        ),
+        (
+            "write-proof",
+            "proof",
+            RecordedItemValueV2::artifact(artifact.artifact().clone()),
+        ),
+    ] {
+        record_successor_item(
+            &mut store_adapter,
+            SuccessorItemRequest {
+                response: podway_engine::successor_execution::SuccessorMutationResponseV1::Fixture,
+                workspace: workspace.clone(),
+                key: IdempotencyKeyV1::new(key).unwrap(),
+                request_id: RequestIdV1::new(RESPONSE).unwrap(),
+                target: active.clone(),
+                selected_group: None,
+            },
+            GroupItemWriteV1 {
+                item: ItemId::new(item).unwrap(),
+                expected_revision: Revision::ZERO,
+                value: Some(value),
+            },
+            || clock.now(),
+        )
+        .unwrap();
+    }
+    let (ready, sequence) = read();
+    let group = canonical(&group_document());
+    let activate = || activation(workspace, &ready, &group, "activate-progress");
+    let prepared = prepare_successor_progress(&native, &binding, &ready).unwrap();
+    let verify =
+        |binding: &_, state: &_| verify_successor_progress(&native, binding, state, &prepared);
+    std::fs::write(&proof, "changed artifact bytes").unwrap();
+    let mut guarded =
+        NativeSuccessorStore::new(&store, deadline(), |_| Ok(())).with_progress_verifier(&verify);
+    assert!(matches!(
+        activate_group(
+            &mut guarded,
+            activate(),
+            || panic!("stale progress spent clock"),
+            &NoEffects
+        ),
+        Err(SuccessorExecutionError::Domain(
+            DomainError::ArtifactChanged
+        ))
+    ));
+    assert_eq!(read(), (ready.clone(), sequence));
+    assert!(
+        guarded
+            .lookup_outcome(
+                workspace,
+                &IdempotencyKeyV1::new("activate-progress").unwrap()
+            )
+            .unwrap()
+            .is_none()
+    );
+
+    std::fs::write(&proof, "original artifact bytes").unwrap();
+    let prepared = prepare_successor_progress(&native, &binding, &ready).unwrap();
+    let verify =
+        |binding: &_, state: &_| verify_successor_progress(&native, binding, state, &prepared);
+    let mut guarded =
+        NativeSuccessorStore::new(&store, deadline(), |_| Ok(())).with_progress_verifier(&verify);
+    let committed = activate_group(&mut guarded, activate(), || clock.now(), &ids).unwrap();
+    let output: Value = serde_json::from_str(committed.outcome().response().as_str()).unwrap();
+    assert_eq!(output["session"]["title"], "Progress artifact fixture");
+
+    std::fs::remove_file(proof).unwrap();
+    let unreachable = |_: &_, _: &_| panic!("replay must bypass progress validation");
+    let mut guarded = NativeSuccessorStore::new(&store, deadline(), |_| Ok(()))
+        .with_progress_verifier(&unreachable);
+    let replay = activate_group(
+        &mut guarded,
+        activate(),
+        || panic!("replay spent clock"),
+        &NoEffects,
+    )
+    .unwrap();
+    assert_eq!(replay.outcome(), committed.outcome());
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn successor_start_replaces_only_under_the_selected_native_policy() {
+    use podway_engine::{
+        direct_start::{DirectStartCommandV1, DirectStartRequestV1},
+        successor_execution::{
+            SuccessorCursor, SuccessorCursorMutation, SuccessorMutationRequest,
+            issue_cursor_mutation, start_native_successor,
+        },
+    };
+    use podway_protocol::{
+        SessionDeletionModeV1, SessionIdentityPreconditionsWireV1, SessionStartCommandV1,
+        SessionStartReplaceV1, SessionStartSourceV1, SessionStartV1, TerminalDispositionInputV1,
+    };
+    use podway_store::successor_store::{CandidateStoreError, NativeSuccessorStore};
+
+    let root = fixture();
+    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let clock = Clock(AtomicUsize::new(0));
+    initialize_workspace_v1(
+        &resolver,
+        mutation(root.path(), "init-successor"),
+        false,
+        &clock,
+        &NativeDirectIdSourceV1,
+    )
+    .unwrap();
+    let (resolved, store) = resolver
+        .resolve_existing(selector(root.path()), None, deadline())
+        .unwrap();
+    let workspace = resolved.store_identity().workspace_uuid();
+    let mut native = NativeSuccessorStore::new(&store, deadline(), |_| Ok(()));
+    let input = || SessionStartV1 {
+        source: SessionStartSourceV1::Preset {
+            preset: "small-change-v3".into(),
+        },
+        expected_procedure_digest: None,
+        task_title: "Scoped successor".into(),
+        dry_run: false,
+    };
+    let start = |key: &str, command: DirectStartCommandV1| {
+        start_native_successor(
+            &resolver,
+            DirectStartRequestV1 {
+                selector: selector(root.path()),
+                expected_workspace_id: Some(workspace.clone()),
+                request_id: RequestIdV1::new(RESPONSE).unwrap(),
+                key: Some(IdempotencyKeyV1::new(key).unwrap()),
+                deadline: deadline(),
+                command,
+            },
+            &clock,
+            &NativeDirectIdSourceV1,
+        )
+        .unwrap()
+    };
+    let read = || {
+        store
+            .read_admitting_typed(
+                deadline(),
+                |_| Ok::<_, CandidateStoreError>(()),
+                |(), snapshot| {
+                    snapshot.successor_state(super::int_group002_transactions::definition)
+                },
+            )
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .0
+    };
+    let replace = |mode, fence: podway_core::execution_groups::ExecutionCursorFenceV1| {
+        DirectStartCommandV1::Replace(SessionStartReplaceV1 {
+            start: input(),
+            mode,
+            preconditions: SessionIdentityPreconditionsWireV1 {
+                expected_session_id: fence.session,
+                expected_session_revision: fence.revision,
+            },
+        })
+    };
+
+    start(
+        "original",
+        DirectStartCommandV1::Start(SessionStartCommandV1 {
+            start: input(),
+            preconditions: None,
+        }),
+    );
+    let original = read().fence();
+    start(
+        "replace-eligible",
+        replace(SessionDeletionModeV1::Eligible, original.clone()),
+    );
+    let prepared = read();
+    assert_ne!(prepared.fence().session, original.session);
+    let scope = |key: &str, state| SuccessorMutationRequest {
+        response: podway_engine::successor_execution::SuccessorMutationResponseV1::Fixture,
+        workspace: workspace.clone(),
+        key: IdempotencyKeyV1::new(key).unwrap(),
+        request_id: RequestIdV1::new(RESPONSE).unwrap(),
+        cursor: SuccessorCursor::from_state(state),
+    };
+    issue_cursor_mutation(
+        &mut native,
+        scope("begin-preserved", &prepared),
+        SuccessorCursorMutation::Begin(None),
+        || clock.now(),
+        &NativeDirectIdSourceV1,
+    )
+    .unwrap();
+    let running = read().fence();
+    start(
+        "replacement-preserving-running",
+        replace(
+            SessionDeletionModeV1::Supersede {
+                reason: "Retain the current trace".into(),
+                actor: None,
+            },
+            running.clone(),
+        ),
+    );
+    let replacement = read();
+    issue_cursor_mutation(
+        &mut native,
+        scope("begin-cancelled", &replacement),
+        SuccessorCursorMutation::Begin(None),
+        || clock.now(),
+        &NativeDirectIdSourceV1,
+    )
+    .unwrap();
+    issue_cursor_mutation(
+        &mut native,
+        scope("end-replacement", &read()),
+        SuccessorCursorMutation::Cancel(podway_core::ReasonV2::new("Finish fixture").unwrap()),
+        || clock.now(),
+        &NativeDirectIdSourceV1,
+    )
+    .unwrap();
+    let terminal = read().fence();
+    start(
+        "replacement-with-disposition",
+        replace(
+            SessionDeletionModeV1::DisposeAndArchive {
+                disposition: TerminalDispositionInputV1::NotRequired {
+                    reason: "Owned fixture result".into(),
+                },
+                actor: None,
+            },
+            terminal.clone(),
+        ),
+    );
+    assert_ne!(read().fence().session, terminal.session);
+    store
+        .read_admitting_typed(
+            deadline(),
+            |_| Ok::<_, CandidateStoreError>(()),
+            |(), snapshot| {
+                assert!(snapshot.successor_metadata(&original.session)?.is_none());
+                let preserved = snapshot
+                    .archived_successor_state(
+                        &running.session,
+                        super::int_group002_transactions::definition,
+                    )?
+                    .unwrap()
+                    .0;
+                assert_eq!(
+                    preserved.lifecycle(),
+                    podway_core::SessionLifecycle::Cancelled
+                );
+                let preserved_disposition = snapshot
+                    .successor_disposition(&running.session, preserved.fence().revision)?
+                    .unwrap();
+                assert_eq!(
+                    preserved_disposition.successor_session_id(),
+                    Some(&terminal.session)
+                );
+                assert!(
+                    snapshot
+                        .archived_successor_state(
+                            &terminal.session,
+                            super::int_group002_transactions::definition
+                        )?
+                        .is_some()
+                );
+                Ok::<_, CandidateStoreError>(())
+            },
+        )
+        .unwrap()
+        .unwrap();
+}
+
 #[test]
 fn bounded_preliminary_retries_preserve_native_static_layout_and_durable_binding_failures() {
     use podway_engine::workspace::{DirectWorkspaceResolutionErrorV1, WorkspaceResolutionErrorV1};
@@ -50,7 +1034,8 @@ fn bounded_preliminary_retries_preserve_native_static_layout_and_durable_binding
     let unsafe_root = fixture();
     std::fs::write(unsafe_root.path().join(".podway"), b"ordinary file").unwrap();
     let calls = std::sync::Arc::new(AtomicUsize::new(0));
-    let counted = DirectWorkspaceResolverV1::new(CountedNative(calls.clone()), digest());
+    let counted =
+        DirectWorkspaceResolverV1::for_v15_fixture(CountedNative(calls.clone()), digest());
     for existing in [false, true] {
         let error = if existing {
             counted
@@ -77,7 +1062,7 @@ fn bounded_preliminary_retries_preserve_native_static_layout_and_durable_binding
         b"ordinary file"
     );
     let root = fixture();
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     initialize_workspace_v1(
         &resolver,
         mutation(root.path(), "init"),
@@ -130,7 +1115,7 @@ impl ExecutionClockV1 for Clock {
         UnixMillis::new(1_700_000_000_000)
     }
 }
-struct NoEffects;
+pub(super) struct NoEffects;
 impl ExecutionClockV1 for NoEffects {
     fn now(&self) -> UnixMillis {
         panic!("rejection/replay read clock")
@@ -162,7 +1147,7 @@ fn deadline() -> Instant {
 fn digest() -> Sha256Digest {
     Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap()
 }
-fn selector(path: &std::path::Path) -> WorktreeSelectorV1 {
+pub(super) fn selector(path: &std::path::Path) -> WorktreeSelectorV1 {
     // Temporary roots can have symlinked parents, including macOS /var.
     let path = std::fs::canonicalize(path).expect("canonical fixture worktree");
     WorktreeSelectorV1::new(
@@ -176,7 +1161,7 @@ fn selector(path: &std::path::Path) -> WorktreeSelectorV1 {
     )
     .unwrap()
 }
-fn fixture() -> TempDir {
+pub(super) fn fixture() -> TempDir {
     let root = tempfile::tempdir().unwrap();
     assert!(
         Command::new("git")
@@ -188,7 +1173,7 @@ fn fixture() -> TempDir {
     );
     root
 }
-fn mutation(path: &std::path::Path, key: &str) -> DirectWorkspaceMutationRequestV1 {
+pub(super) fn mutation(path: &std::path::Path, key: &str) -> DirectWorkspaceMutationRequestV1 {
     DirectWorkspaceMutationRequestV1 {
         selector: selector(path),
         expected_workspace_id: None,
@@ -213,7 +1198,7 @@ fn workspace_fixture_resolves_a_symlinked_temporary_parent() {
     let alias = parent.path().join("temporary-parent");
     std::os::unix::fs::symlink(root.path().parent().unwrap(), &alias).unwrap();
     let selected = alias.join(root.path().file_name().unwrap());
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let output = initialize_workspace_v1(
         &resolver,
         mutation(&selected, "init"),
@@ -258,7 +1243,7 @@ fn files(root: &std::path::Path) -> BTreeMap<String, String> {
 #[test]
 fn init_show_doctor_and_repair_validate_and_replay_without_runtime_or_read_writes() {
     let root = fixture();
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let clock = Clock(AtomicUsize::new(0));
     assert!(matches!(
         show_workspace_v1(&resolver, read(root.path()), &NoEffects),
@@ -342,7 +1327,7 @@ fn init_show_doctor_and_repair_validate_and_replay_without_runtime_or_read_write
         show_workspace_v1(&resolver, fenced, &NoEffects),
         Err(DirectWorkspaceErrorV1::Resolution(_))
     ));
-    let foreign = DirectWorkspaceResolverV1::new(
+    let foreign = DirectWorkspaceResolverV1::for_v15_fixture(
         NativeGitResolverV1::new(),
         Sha256Digest::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
     );
@@ -355,7 +1340,7 @@ fn init_show_doctor_and_repair_validate_and_replay_without_runtime_or_read_write
 fn existing_plain_init_refuses_new_keys_but_preserves_original_replay_and_repair() {
     use podway_engine::workspace::{DirectWorkspaceResolutionErrorV1, WorkspaceResolutionErrorV1};
     let root = fixture();
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let original = initialize_workspace_v1(
         &resolver,
         mutation(root.path(), "init"),
@@ -443,7 +1428,8 @@ fn plain_init_refuses_an_outcome_pruned_before_its_authoritative_lookup() {
     const CHILD_ROOT: &str = "PODWAY_V2DFC006_RETENTION_RACE_CHILD_ROOT";
     const TEST: &str = "int_v2dfc006_workspace::plain_init_refuses_an_outcome_pruned_before_its_authoritative_lookup";
     if let Some(root) = std::env::var_os(CHILD_ROOT) {
-        let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+        let resolver =
+            DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
         repair_workspace_v1(
             &resolver,
             mutation(std::path::Path::new(&root), "prune-original-outcome"),
@@ -456,7 +1442,8 @@ fn plain_init_refuses_an_outcome_pruned_before_its_authoritative_lookup() {
     // after the preliminary lookup. Neither may become a new plain init.
     for conflicting in [false, true] {
         let root = fixture();
-        let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+        let resolver =
+            DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
         initialize_workspace_v1(
             &resolver,
             mutation(root.path(), "init"),
@@ -500,21 +1487,22 @@ fn plain_init_refuses_an_outcome_pruned_before_its_authoritative_lookup() {
         let root_path = root.path().to_path_buf();
         let after_pruning = Arc::new(Mutex::new(None));
         let captured = after_pruning.clone();
-        let racing = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest())
-            .with_store_boundary_observer_v1(move |boundary| {
-                if boundary == DirectTransactionBoundaryV1::BeforeBegin {
-                    let child = Command::new(std::env::current_exe().unwrap())
-                        .args(["--exact", TEST, "--nocapture"])
-                        .env(CHILD_ROOT, &root_path)
-                        .output()
-                        .unwrap();
-                    assert!(child.status.success(), "{child:?}");
-                    let mut preserved = files(&root_path.join(".podway"));
-                    // BEGIN/rollback may change only SQLite's volatile index.
-                    preserved.remove("runtime/state.sqlite3-shm");
-                    *captured.lock().unwrap() = Some(preserved);
-                }
-            });
+        let racing =
+            DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest())
+                .with_store_boundary_observer_v1(move |boundary| {
+                    if boundary == DirectTransactionBoundaryV1::BeforeBegin {
+                        let child = Command::new(std::env::current_exe().unwrap())
+                            .args(["--exact", TEST, "--nocapture"])
+                            .env(CHILD_ROOT, &root_path)
+                            .output()
+                            .unwrap();
+                        assert!(child.status.success(), "{child:?}");
+                        let mut preserved = files(&root_path.join(".podway"));
+                        // BEGIN/rollback may change only SQLite's volatile index.
+                        preserved.remove("runtime/state.sqlite3-shm");
+                        *captured.lock().unwrap() = Some(preserved);
+                    }
+                });
         let rejected = initialize_workspace_v1(
             &racing,
             mutation(root.path(), key),
@@ -579,7 +1567,7 @@ fn moved_root_is_reported_without_write_and_rebound_only_by_repair_commit() {
             .unwrap()
             .success()
     );
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let clock = Clock(AtomicUsize::new(0));
     initialize_workspace_v1(
         &resolver,
@@ -626,7 +1614,7 @@ fn init_crash_child() {
         return;
     };
     let phase = std::env::var("PODWAY_WORKSPACE_INIT_PHASE").unwrap();
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     initialize_workspace_with_boundary_observer_v1(
         &resolver,
         mutation(std::path::Path::new(&path), "crashed-init"),
@@ -675,7 +1663,8 @@ fn exact_init_retry_resumes_private_or_published_generation_and_other_requests_f
             Some(77),
             "{phase}: actual Engine crash child did not stop at boundary"
         );
-        let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+        let resolver =
+            DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
         assert!(
             matches!(
                 show_workspace_v1(&resolver, read(root.path()), &NoEffects),
@@ -752,7 +1741,7 @@ fn deep_doctor_detects_changed_required_artifact_without_writing_or_reading_cloc
         SessionStartV1,
     };
     let root = fixture();
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let clock = Clock(AtomicUsize::new(0));
     initialize_workspace_v1(
         &resolver,
@@ -865,7 +1854,7 @@ fn direct_config_admission_rejects_nonprod_and_invalid_bytes_before_store_or_eff
     };
     use podway_protocol::Rfc3339MillisV1;
     let root = fixture();
-    let base = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let base = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     initialize_workspace_v1(
         &base,
         mutation(root.path(), "config-init"),
@@ -876,7 +1865,7 @@ fn direct_config_admission_rejects_nonprod_and_invalid_bytes_before_store_or_eff
     .unwrap();
     let opens = std::sync::Arc::new(AtomicUsize::new(0));
     let observed = opens.clone();
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest())
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest())
         .with_store_boundary_observer_v1(move |_| {
             observed.fetch_add(1, Ordering::SeqCst);
         });
@@ -1017,7 +2006,7 @@ fn bootstrap_rejects_existing_nonprod_config_without_creating_runtime_or_store()
     let config = root.path().join(".podway/config.yaml");
     std::fs::write(&config, b"schema: podway.workspace/v2\nmode: dev\n").unwrap();
     let before = files(&root.path().join(".podway"));
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let error = initialize_workspace_v1(
         &resolver,
         mutation(root.path(), "invalid-bootstrap"),
@@ -1061,7 +2050,7 @@ fn state002_doctor_reuses_verifier_admission_deep_and_non_deep() {
     // Fixture: one current running session with one required local artifact
     // and no archived sessions, from the deep-doctor family.
     let root = fixture();
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let clock = Clock(AtomicUsize::new(0));
     initialize_workspace_v1(
         &resolver,

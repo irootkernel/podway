@@ -832,7 +832,7 @@ pub fn prepare_procedure_v2_item_mutations_v1(
         .collect()
 }
 
-fn procedure_document_format(
+pub(crate) fn procedure_document_format(
     procedure: &str,
 ) -> Result<ProcedureDocumentFormat, ExecutionBoundaryErrorV1> {
     match std::path::Path::new(procedure)

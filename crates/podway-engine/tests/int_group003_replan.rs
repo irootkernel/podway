@@ -456,14 +456,24 @@ fn assert_rejected(
         &mut fixture.store,
         mutation(&fixture.workspace, &before.0, key),
         feedback(&before.0, option),
-        || TIME,
+        || panic!("failed replan admission must not access the mutation clock"),
         &NativeDirectIdSourceV1,
     )
     .unwrap_err();
-    assert!(
-        matches!(&error, SuccessorExecutionError::Domain(DomainError::InvalidState { reason }) if *reason == rejection),
-        "{key}: {error:?}"
-    );
+    match &error {
+        SuccessorExecutionError::GuardUnsatisfied(guard) => {
+            assert_eq!(
+                rejection,
+                "guard is unmet or unevaluable in current evidence"
+            );
+            assert_eq!(guard.decision, *before.0.active_attempt().unwrap().target());
+            assert_eq!(guard.option.as_str(), option);
+        }
+        SuccessorExecutionError::Domain(DomainError::InvalidState { reason }) => {
+            assert_eq!(*reason, rejection, "{key}: {error:?}");
+        }
+        _ => panic!("{key}: {error:?}"),
+    }
     fixture.compare_rejected(before, key, counts);
 }
 

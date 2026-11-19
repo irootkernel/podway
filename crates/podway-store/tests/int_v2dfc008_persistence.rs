@@ -37,7 +37,7 @@ pub(super) fn fixture(identity: &DurableWorktreeIdentityV1) -> (TempDir, DirectS
             assert_eq!(snapshot.binding().identity(), identity);
             assert_eq!(
                 snapshot.binding().schema_version(),
-                DIRECT_SCHEMA_GENERATION_V1
+                super::int_v2dfc005_direct_store::FIXTURE_SCHEMA_GENERATION
             );
             Ok(())
         })

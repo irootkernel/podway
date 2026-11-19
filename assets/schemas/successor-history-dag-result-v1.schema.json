@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:successor-history-dag-result:v1",
+  "title": "Podway Retained Canonical Graph Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "workspace",
+    "session",
+    "session_location",
+    "session_revision",
+    "truncated",
+    "next_page_token",
+    "detail",
+    "offset",
+    "size",
+    "total",
+    "unit",
+    "data"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.successor-history-dag-result/v1"
+    },
+    "workspace": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "session": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "session_location": {
+      "enum": [
+        "current",
+        "archived"
+      ]
+    },
+    "session_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "next_page_token": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}:[0-9a-f]{16}$"
+        }
+      ]
+    },
+    "detail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "definition_digest",
+        "projection_digest",
+        "encoding"
+      ],
+      "properties": {
+        "scope": {
+          "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scope"
+        },
+        "definition_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "projection_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "encoding": {
+          "const": "canonical_json"
+        }
+      }
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "size": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "unit": {
+      "const": "unicode_scalar"
+    },
+    "data": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 262144
+    }
+  }
+}

@@ -885,12 +885,11 @@ PARSE document admission and ownership checks use these registered owners:
   [check suite](../../crates/podway-config/tests/int_v2_procedure_check.rs) owns
   unchanged invalid/unsupported/clean and format/drift/lint ordering behavior.
 - Real CLI [authoring checks](../../crates/podway-cli/tests/e2e_v2dfc007_local_cli.rs)
-  `v2sdg006_delegated_preview_and_graph_select_v2_without_changing_direct_results`
-  preserve direct/delegated generations, semantic/vet failures, malformed fallback
-  and preview/graph authored order. The
-  [direct CLI suite](../../crates/podway-cli/tests/e2e_v2dfc007_direct_cli.rs)
-  retained-command replay/lookup and postcommit-before-stdout SIGKILL cases own
-  original-response recovery through the real binary.
+  `v2sdg006_delegated_group_preview_and_graph_keep_exact_scope_and_declared_order`
+  covers successor group preview and graph output with declared scope and order.
+  The [direct CLI suite](../../crates/podway-cli/tests/e2e_v2dfc007_direct_cli.rs)
+  tests original-response recovery through retained-command replay, outcome
+  lookup and SIGKILL after commit and before stdout.
 
 STATE snapshot state reuse checks use these registered owners:
 
@@ -1057,12 +1056,12 @@ GUIDE agent-guidance and contract-generation checks use these registered owners:
   `GUIDE004_WRITER_MISMATCH_JSON_BASELINE` and
   `GUIDE004_CRITERION_CITATION_JSON_BASELINE` constants pin the generation-1
   error envelopes.
-- The GUIDE-006 baselines are the byte-level regression owners of the default
-  generation: the Engine [baseline suite](../../crates/podway-engine/tests/int_guide006_generation1_baselines.rs)
+- The historical GUIDE-006 Engine baselines guard the previous writer's
+  default generation. The Engine [baseline suite](../../crates/podway-engine/tests/int_guide006_generation1_baselines.rs)
   `int_guide006_generation1_baselines` and the CLI [baseline suite](../../crates/podway-cli/tests/e2e_guide006_generation1_baselines.rs)
-  `e2e_guide006_generation1_baselines`, with the exact expected bytes under
-  `tests/guide006_baselines/`. Their expected values change only through an
-  owner decision such as generation-1 removal. The two suites normalize
+  `e2e_guide006_generation1_baselines`. The current CLI baseline uses the
+  v7 expected bytes under `tests/guide006_scoped_baselines/`. The historical
+  v5 fixtures under `tests/guide006_baselines/` preserve former expected bytes. The two suites normalize
   differently: the Engine suite injects deterministic identifiers and
   timestamps and replaces only the worktree root, while the CLI suite applies
   first-appearance normalization to the request id, generation timestamp,
@@ -1239,12 +1238,15 @@ specification](../specs/quality/testing-and-conformance.md).
 Run `make test-native-qualification NATIVE_EVIDENCE_PARENT=<absolute-owned-directory>`
 on native Apple Silicon with AC power. The existing writable evidence parent must
 be agent-owned; set `TMPDIR` to an owned scratch directory as well.
-`tools/run_native_qualification.py` owns the executable matrix: Store G1/G2 at
-300 and 1,024 nodes, Engine G1/G2 at both sizes, Engine G3, DE01–DE05 and 200
-random kills, G5, G6, and Store G9. Each exact ignored test runs once through an
-immutable copy of the release-profile Cargo artifact, with bounded process-group
-cleanup. Source is captured before building and checked before and after every
-case. A failure stops the entry point; remaining cases are incomplete.
+`tools/run_native_qualification.py` owns the retained generation-15 matrix.
+It includes Store G1/G2 and Engine G1/G2 at 300 and 1,024 nodes, Engine G3,
+the former five-boundary Engine kill case, 200 random kills, G5, G6 and
+Store G9. Each ignored test runs once through an immutable copy of its
+release-profile Cargo artifact with bounded process-group cleanup. Source is
+captured before building and checked before and after every case. A failure
+stops the entry point and leaves remaining cases incomplete. The development
+gate runs the successor Engine's DE01–DE04 proof separately. ADOPT-005 owns
+the integrated successor CLI process matrix.
 
 The runner refuses `PODWAY_DIRECT_SCALE_COUNT`, `PODWAY_DIRECT_SCALE_SECONDS`,
 `PODWAY_ENGINE_SCALE_DIAGNOSTIC_COUNT` and `PODWAY_DIRECT_G9_OBSERVER_DELAY_MS`;
@@ -1466,26 +1468,16 @@ across plain non-dry-run `session.start`, `session.begin`, `item.record_many`,
 and `int_guide009_generation2_observation`, and `podway-cli`
 `command::tests::agent005_*` and
 `e2e_guide009_generation2_lifecycle::agent005_with_observation_lifecycle_replay_lookup_and_conflicts`.
-`AGENT-006` updates the runtime skill (`skills/use-podway/SKILL.md` and
-`skills/use-podway/references/*.md`), workflow example, and caller/testing
-specifications, and verifies the integrated `--with-observation` and
-`goal assess-criteria --stdin` caller workflows across unchanged `small-change-v2`
-and `bug-fix-v2` presets through a local raw CLI call collector in
-`e2e_guide009_generation2_lifecycle::agent006_small_change_v2_integrated_caller_workflow_and_call_counts`,
-`agent006_bug_fix_v2_integrated_caller_workflow_and_batch_goal_assessment`, and
-`agent006_integrated_caller_recovery_contention_and_fallback_paths` (proving
-two-call action `record --stdin` + `complete` segments, two-call three-criterion
-`goal assess-criteria --stdin` + `decide` segments with single
-revision/workspace-sequence increment and stable goal revision, observed
-`check_result` operation-contract binding with hashed bounded fixture check
-facts, generation-1 `--with-observation` embedded `v6` consumption on known
-first submission, partitioned normal versus excluded call traces without hidden
-`observe` helpers, and mandatory fresh `observe`
-recovery after replay, `outcome lookup`, lost stdout, `WORKSPACE_BUSY` SQLite
-write-lock contention, competing-advancement stale-fence refusal, or
-unwrapped or unsupported-route responses, while relying on the `AGENT-003` and
-`AGENT-005` owners above for batch negative/citation/outcome and
-route/mode-conflict matrices).
+`AGENT-006` caller regressions use the production successor CLI. The
+`e2e_guide009_generation2_lifecycle` cases
+`agent006_small_change_v3_integrated_caller_workflow_and_call_counts` and
+`agent006_scoped_goal_assessment_and_closeout` measure two-call record/complete
+segments and the two-call three-criterion assessment/decision segment. They
+carry the commit-bound v8 observation into the following call. The
+`agent006_integrated_caller_recovery_contention_and_fallback_paths` case
+exercises contention, original-key replay and lookup, and a fresh `observe`
+after recovery. These controls complement the scoped check-result binding and
+native batch rejection tests.
 
 ### AGENT source feedback and revisit conditions
 

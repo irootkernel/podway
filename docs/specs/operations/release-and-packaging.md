@@ -3,8 +3,9 @@
 ## Release scope
 
 Podway releases one native macOS executable, `podway`, with the embedded
-`analysis-v2`, `bug-fix-v2`, `small-change-v2` and `sw-dev-v2` presets, reviewable
-schemas/specifications, documentation, shell completion, MIT License, checksums
+`analysis-v3`, `bug-fix-v3`, `small-change-v3` and `sw-dev-v3` bases and their
+default groups, reviewable schemas and specifications, documentation, shell
+completion, MIT License, checksums
 and cumulative changelog. There is no daemon or LaunchAgent in the archive.
 Linux, Windows, Intel macOS, translated, universal, fat and cross-built artifacts
 are not release or support targets.
@@ -14,7 +15,8 @@ are not release or support targets.
 Product releases use semantic versioning. Product and contract versions are
 independent. Current public identities are `podway.output/v4`, `podway.error/v2`,
 `podway.version-result/v2`, `podway.contract-manifest/v2`, workspace configuration
-v1/v2/v3, user-config v1, Procedure v2, and direct SQLite generation 15. The manifest has no
+v1/v2/v3, user-config v1, Procedure v3, Execution Group v1, and direct SQLite
+generation 16. The manifest has no
 `supported_ipc_ids`. Breaking public changes require an explicit versioned
 contract and adopted compatibility plan; there is no inferred migration promise.
 
@@ -70,11 +72,12 @@ records the CHANGELOG placement of the deprecation.
 Consumers that pin Podway's contract manifest re-pin on every release
 (ADR-0039). After re-pinning, an automation consumer adopts generation 2 by
 passing `--contract-generation 2` on every invocation and consuming
-`podway.observation-result/v6` plus the generation-2 detail families of
+`podway.observation-result/v8` plus the scoped generation-2 detail families of
 `CRITERION_CITATION_INVALID` and `WORKSPACE_CONTRACT_MISMATCH`. The selection
 is presentation-only and never changes request identity, idempotency, stored
-outcomes, replay, Store state or writer identity. Consumers that have not
-adopted generation 2 keep working unchanged on the deprecated default.
+outcomes, replay, Store state or writer identity. Consumers using the deprecated
+default must re-pin and consume `podway.observation-result/v7` at the scoped
+cutover.
 
 Generation 1 is removed only when every criterion of ADR-0039 decision 8 holds:
 Aquarium and Dolgorae have published, qualified releases that select generation
@@ -253,12 +256,12 @@ Installation of `v0.2.13` waits for Aquarium and Dolgorae releases that support
 the direct contract generation. Their implementation and qualification belong
 to their own repositories; a prepared Podway handoff alone proves neither.
 
-Aquarium must consume Output v4, Error v2 and observation result v5, recognize
-committed direct mutation success, and replace job/admission settlement with
-read-only `outcome lookup`. It must remove daemon readiness and runtime-mode
-routing and use scratch worktrees for development isolation. Procedure v2's
-single-cursor lifecycle, fences, Goal, evidence and delegation semantics,
-input/output bounds and idempotency requirements remain.
+Aquarium adoption requires exact successor Output v4, Error v2 and scoped
+observation families, commit-bound mutation results and read-only outcome
+recovery. It must use the matching Procedure v3 and group contracts and preserve
+the single cursor, explicit fences, evidence and delegation bounds, and original
+request identity. Existing development worktrees using the earlier contract
+require their original writer.
 
 Dolgorae must adopt adapter contract v3 and pin the exact manifest v2 and version
 result v2 identities, routes, schemas, error catalog and Store compatibility.
@@ -301,8 +304,9 @@ maintenance markers as unsupported legacy input. Classification refuses without
 opening for writes, migration,
 checkpointing or SHM creation and reports `LEGACY_RUNTIME_STATE_UNSUPPORTED` with
 an explicit reset recipe. There is no daemon-era state conversion.
-The unreleased generation-14 direct baseline is also refused unchanged with this
-older-state error and reset recipe; generation 15 declares no predecessor for it.
+The generation 16 writer also refuses prior Direct generations 14 and 15
+unchanged with the older-state error and reset recipe. Settle their work with an
+original compatible writer before discarding the old state.
 
 After backing up any desired historical evidence and confirming the exact target,
 run `podway --worktree <root> --json reset --all --yes --idempotency-key <new-key>`.

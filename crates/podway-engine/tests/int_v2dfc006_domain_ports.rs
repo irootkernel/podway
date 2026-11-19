@@ -203,6 +203,7 @@ fn bound001_deferred_memory_error_keeps_public_mapping_and_fence_priority() {
         idempotency_key: Some(IdempotencyKeyV1::new("deferred-invalid").unwrap()),
         timeout_ms: 5000,
         generation: podway_protocol::ContractGenerationV1::Generation1,
+        successor_store: false,
         maintenance: None,
     };
     let render = |revision| {
@@ -272,7 +273,7 @@ fn empty(source: &str) -> Engine {
         temporary,
         selector,
         store,
-        resolver: DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest()),
+        resolver: DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest()),
     }
 }
 fn start(engine: &Engine, dry_run: bool) -> SessionStartV1 {

@@ -14,7 +14,7 @@ import stat
 import subprocess
 import tempfile
 
-from qualify_supervised_delegation import Fixture, terminate_qualification
+from qualify_supervised_delegation import Fixture, ScopedFixture, terminate_qualification
 
 ROOT = Path(__file__).resolve().parents[1]
 INSPECTIONS = {'copies':0,'file_bytes':0,'removed':0}
@@ -71,7 +71,7 @@ def stored(worktree):
                                  'response_json':row[6], 'response_sha256':sha(row[6].encode())}
                         for row in tables['mutation_outcomes']}
             result = {'tables':tables, 'sequence':tables['workspace_state'][0][5],
-                      'writer':tables['writer_contract'], 'snapshots':tables['v2_procedure_snapshots'],
+                      'writer':tables['writer_contract'], 'snapshots':tables.get('successor_definitions', tables.get('v2_procedure_snapshots')),
                       'outcomes':outcomes, 'schema_version':connection.execute('PRAGMA user_version').fetchone()[0]}
     assert not Path(directory).exists()
     INSPECTIONS['removed'] += 1
@@ -79,7 +79,7 @@ def stored(worktree):
     return result
 
 
-class SettingsFixture(Fixture):
+class SettingsFixture(ScopedFixture):
     def __init__(self, cli, root, records):
         super().__init__(cli, root)
         self.records, self.home = records, None
@@ -128,6 +128,22 @@ class SettingsFixture(Fixture):
         return value
 
 
+class RetainedV15SettingsFixture(SettingsFixture):
+    """Use the selected original binary to create the untouched prior Store."""
+
+    workspace = Fixture.workspace
+    fences = Fixture.fences
+    mutate = Fixture.mutate
+    acceptance = Fixture.acceptance
+    receipt = Fixture.receipt
+
+
+def original_key(payload):
+    if 'context' in payload:
+        return payload['context']['idempotency_key']
+    return payload['idempotency_key']
+
+
 def toggle(worktree, enabled):
     (worktree/'.podway/config.yaml').write_text('schema: podway.workspace/v3\nintegrations: {dolgorae: {enabled: ' + str(enabled).lower() + '}}\n')
 
@@ -139,7 +155,7 @@ def accepted_fixture(fixture, name):
     request = json.loads(json.dumps(fixture.records[-1]))
     receipt = fixture.receipt(worktree, payload)
     state = stored(worktree)
-    retained = state['outcomes'][payload['idempotency_key']]
+    retained = state['outcomes'][original_key(payload)]
     assert response_domain(json.loads(retained['response_json'])) == response_domain(original)
     return worktree, payload, original, request, receipt, state
 
@@ -156,18 +172,20 @@ def recover(fixture, worktree, key, canonical):
 
 def current_matrix(fixture, poison):
     worktree, payload, original, request, receipt, initial = accepted_fixture(fixture, 'current')
-    canonical = json.loads(initial['outcomes'][payload['idempotency_key']]['response_json'])
+    key = original_key(payload)
+    target = payload['context']['cursor']['attempt']
+    canonical = json.loads(initial['outcomes'][key]['response_json'])
     result = {'matrix_cases':0, 'original_request':request, 'original_response':original,
-              'original_retained_success':initial['outcomes'][payload['idempotency_key']],
+              'original_retained_success':initial['outcomes'][key],
               'original_receipt':receipt, 'initial_state':initial, 'cases':[]}
     for enabled in [True,False]:
         for home in [None,poison]:
             toggle(worktree,enabled);fixture.home=home
             before = stored(worktree)
             status = fixture.call(worktree,['status'])
-            assert status['result']['session']['id'] == payload['session_id']
+            assert status['result']['cursor']['session'] == target['session']
             assert fixture.receipt(worktree,payload)['receipt'] == receipt['receipt']
-            recover(fixture,worktree,payload['idempotency_key'],canonical)
+            recover(fixture,worktree,key,canonical)
             assert stored(worktree) == before, 'ordinary reads changed state'
             fixture.mutate(worktree,['block','--reason','Owned continuity check'])
             assert stored(worktree)['sequence'] == before['sequence'] + 1
@@ -176,25 +194,25 @@ def current_matrix(fixture, poison):
             assert after_write['sequence'] == before['sequence'] + 2
             assert after_write['writer'] == initial['writer'] and after_write['snapshots'] == initial['snapshots']
             assert response_domain(replay(fixture,worktree,request)) == response_domain(original)
-            recover(fixture,worktree,payload['idempotency_key'],canonical)
+            recover(fixture,worktree,key,canonical)
             assert fixture.receipt(worktree,payload)['receipt'] == receipt['receipt']
             assert stored(worktree) == after_write, 'original replay/lookup changed persisted state'
             result['cases'].append({'enabled':enabled,'home':'absent' if home is None else 'poisoned',
                                     'sequence_before':before['sequence'],'sequence_after_fresh_writes':after_write['sequence'],
                                     'logical_before_replay_sha256':sha(encoded(after_write)),
                                     'logical_after_replay_sha256':sha(encoded(stored(worktree))),
-                                    'retained_original_response_sha256':after_write['outcomes'][payload['idempotency_key']]['response_sha256']})
+                                    'retained_original_response_sha256':after_write['outcomes'][key]['response_sha256']})
             result['matrix_cases'] += 1
     toggle(worktree,False);fixture.home=poison
     before = stored(worktree)
     completed = fixture.mutate(worktree,['complete'])
-    assert completed['result']['session_state'] == 'completed'
+    assert completed['result']['cursor']['attempt']['node'] == 'plan'
     final = stored(worktree)
     assert final['sequence'] == before['sequence'] + 1
     assert fixture.receipt(worktree,payload)['applicability'] == 'historical'
     assert fixture.receipt(worktree,payload)['receipt'] == receipt['receipt']
     assert response_domain(replay(fixture,worktree,request)) == response_domain(original)
-    recover(fixture,worktree,payload['idempotency_key'],canonical)
+    recover(fixture,worktree,key,canonical)
     assert stored(worktree) == final
     assert final['writer'] == initial['writer'] and final['snapshots'] == initial['snapshots']
     result.update(final_state=final, explicit_disabled_completion=completed, passed=True)
@@ -209,7 +227,7 @@ def unchanged_call(fixture, worktree, args, *, payload_bytes=None, error=None):
     return value, {'argv':fixture.records[-1]['argv'], 'before':before, 'after':after, 'unchanged':True}
 
 
-def previous_matrix(creator, candidate, poison, valid_home, previous_manifest, candidate_manifest):
+def previous_matrix(creator, candidate, poison, valid_home, previous_manifest):
     worktree, payload, original, request, receipt, initial = accepted_fixture(creator,'previous')
     assert initial['writer'][0][1] == previous_manifest, initial['writer']
     fences = creator.fences(creator.observe(worktree))
@@ -222,13 +240,18 @@ def previous_matrix(creator, candidate, poison, valid_home, previous_manifest, c
                         (['outcome','lookup','--idempotency-key',payload['idempotency_key']],None),
                         (['delegation','receipt','--session',payload['session_id'],'--attempt',payload['attempt_id']],None),
                         (['block','--reason','Must refuse',*fences,'--idempotency-key','candidate-must-refuse'],None),
-                        (request['request_args'],bytes.fromhex(request['stdin_hex']))]
+                        ]
             for args, body in operations:
-                error,witness=unchanged_call(candidate,worktree,args,payload_bytes=body,error='WORKSPACE_CONTRACT_MISMATCH')
-                assert error['details']['actual_contract_manifest_digest']==previous_manifest
-                assert error['details']['expected_contract_manifest_digest']==candidate_manifest
+                error,witness=unchanged_call(candidate,worktree,args,payload_bytes=body,error='LEGACY_RUNTIME_STATE_UNSUPPORTED')
+                assert error['details']['store_schema_version'] == initial['schema_version']
                 result['refusals'].append({'enabled':enabled,'home':'absent' if home is None else 'poisoned',
                                            'error':error,'witness':witness})
+            rejected, witness = unchanged_call(
+                candidate, worktree, request['request_args'],
+                payload_bytes=bytes.fromhex(request['stdin_hex']), error='REQUEST_INVALID',
+            )
+            result['refusals'].append({'enabled':enabled, 'home':'absent' if home is None else 'poisoned',
+                                       'error':rejected, 'witness':witness})
     for generation in ['1','2']:
         args=['integration','show','dolgorae','--contract-generation',generation]
         for enabled in [False,True]:
@@ -301,7 +324,7 @@ def main():
         report['current']=current_matrix(candidate,poison)
         assert report['current']['initial_state']['writer'][0][1]==expected
         if args.previous:
-            creator=SettingsFixture(args.previous,root,report['records'])
+            creator=RetainedV15SettingsFixture(args.previous,root,report['records'])
             pins['previous']['identity']=creator.call(root,['version','--identity'])
             selected=json.loads(args.previous_identity.read_text())
             assert pins['previous']['identity']['result']==selected['identity']['result']
@@ -309,7 +332,7 @@ def main():
             report['previous_identity_input']={'path':str(args.previous_identity),'sha256':sha(args.previous_identity.read_bytes())}
             previous_manifest=pins['previous']['identity']['result']['contract_manifest_digest']
             assert previous_manifest!=expected
-            report['previous']=previous_matrix(creator,candidate,poison,valid,previous_manifest,expected)
+            report['previous']=previous_matrix(creator,candidate,poison,valid,previous_manifest)
         report['fixture_file_bytes_before_cleanup']=sum(p.stat().st_size for p in root.rglob('*') if p.is_file() and not p.is_symlink())
         assert not candidate.marker.exists()
         for name,path in binaries.items():assert sha(path.read_bytes())==pins[name]['sha256']

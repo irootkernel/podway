@@ -30,17 +30,26 @@
       "DE05",
       "DE06"
     ],
-    "percent": 100
+    "percent": 100,
+    "scope": "registered_current_and_historical_proof_locators",
+    "historical_only": [
+      "DS01",
+      "DS02",
+      "DS03",
+      "DS04",
+      "DS05",
+      "DE05"
+    ]
   },
   "windows": [
     {
       "id": "D03",
       "proof": {
-        "failpoint": "IntentPublished, MarkerPublished, RuntimeCleared, PhaseAdvanced and BeforeFinalRemoval",
-        "test": "crates/podway-engine/tests/int_v2dfc006_maintenance.rs::exact_removal_retry_resumes_markers_then_absence_destroys_retention",
-        "termination": "Child exits with status77 at each actual injected maintenance boundary",
-        "recovery": "Cold exact-key retry resumes the original removal intent and returns the original response; final absence has no retained outcome",
-        "invariant": "The original workspace identity and response are preserved during recovery, and the Git worktree survives removal",
+        "failpoint": "MarkerPublished, RuntimeCleared, PhaseAdvanced, BeforeFinalRemoval, AfterFirstRemovalMarker, AfterLastRemovalMarker, and DirectoriesRemoved",
+        "test": "crates/podway-cli/tests/e2e_v2dfc007_direct_cli.rs::removal_resumes_after_sigkill_through_final_marker_retirement",
+        "termination": "Seven actual generation-16 CLI child SIGKILLs, one at each named remove boundary before successful output",
+        "recovery": "A fresh CLI invocation with the exact original workspace UUID, remove request, and key succeeds at each stage and observes final namespace absence",
+        "invariant": "The Git config bytes are unchanged and the .podway namespace is removed after recovery",
         "source_locator": "crates/podway-engine/src/direct_maintenance.rs::remove_inner"
       }
     },
@@ -49,7 +58,7 @@
       "proof": {
         "failpoint": "BeforeBegin",
         "test": "crates/podway-store/tests/int_v2dfc005_direct_store.rs::sigkill_at_each_transaction_boundary_preserves_effect_once_recovery",
-        "termination": "20 real child SIGKILLs observed at this boundary",
+        "termination": "Historical generation-15 Store fixture: 20 real child SIGKILLs observed at this boundary",
         "recovery": "cold reopen has the prior state; exact retry commits once",
         "invariant": "no outcome before BEGIN",
         "source_locator": "crates/podway-store/src/direct_store/transaction.rs::DirectStoreV1::mutate"
@@ -60,7 +69,7 @@
       "proof": {
         "failpoint": "AfterBegin",
         "test": "crates/podway-store/tests/int_v2dfc005_direct_store.rs::sigkill_at_each_transaction_boundary_preserves_effect_once_recovery",
-        "termination": "20 real child SIGKILLs observed at this boundary",
+        "termination": "Historical generation-15 Store fixture: 20 real child SIGKILLs observed at this boundary",
         "recovery": "cold reopen rolls back the abandoned transaction; exact retry commits once",
         "invariant": "no state or outcome from an uncommitted transaction",
         "source_locator": "crates/podway-store/src/direct_store/transaction.rs::DirectStoreV1::mutate"
@@ -71,7 +80,7 @@
       "proof": {
         "failpoint": "AfterStateBeforeOutcome",
         "test": "crates/podway-store/tests/int_v2dfc005_direct_store.rs::sigkill_at_each_transaction_boundary_preserves_effect_once_recovery",
-        "termination": "20 real child SIGKILLs observed at this boundary",
+        "termination": "Historical generation-15 Store fixture: 20 real child SIGKILLs observed at this boundary",
         "recovery": "cold reopen rolls back relational updates; exact retry commits state and outcome once",
         "invariant": "domain state and successful outcome remain atomic",
         "source_locator": "crates/podway-store/src/direct_store/transaction.rs::DirectStoreV1::mutate"
@@ -82,7 +91,7 @@
       "proof": {
         "failpoint": "AfterCommitBeforeOutput",
         "test": "crates/podway-store/tests/int_v2dfc005_direct_store.rs::sigkill_at_each_transaction_boundary_preserves_effect_once_recovery",
-        "termination": "20 real child SIGKILLs observed at this boundary",
+        "termination": "Historical generation-15 Store fixture: 20 real child SIGKILLs observed at this boundary",
         "recovery": "cold reopen returns the original recorded success without repeating the callback or clock",
         "invariant": "response loss preserves effect-once success and original response UUID",
         "source_locator": "crates/podway-store/src/direct_store/transaction.rs::DirectStoreV1::mutate"
@@ -93,7 +102,7 @@
       "proof": {
         "failpoint": "BeforeMaintenancePublication",
         "test": "crates/podway-store/tests/int_v2dfc005_direct_store.rs::sigkill_before_private_store_publication_never_exposes_a_partial_store",
-        "termination": "20 real child SIGKILLs observed before private bootstrap publication",
+        "termination": "Historical generation-15 Store fixture: 20 real child SIGKILLs observed before private bootstrap publication",
         "recovery": "ordinary read leaves private bytes unchanged; explicit bootstrap retry publishes one complete Store",
         "invariant": "private bootstrap COMMIT never exposes partial authoritative state; reset/removal protocols are covered separately",
         "source_locator": "crates/podway-store/src/direct_store/transaction.rs::DirectStoreV1::bootstrap"
@@ -103,44 +112,44 @@
       "id": "DE01",
       "proof": {
         "failpoint": "BeforeBegin",
-        "test": "crates/podway-engine/tests/int_v2dfc006_crashes.rs::sigkill_at_all_five_engine_boundaries_preserves_effect_once_recovery",
-        "termination": "20 actual child SIGKILLs at this native boundary in the release profile",
-        "recovery": "Cold lookup and same-key retry observe one recorded effect or no effect followed by exactly one apply.",
-        "invariant": "Direct Engine state and the validated original output/v4 are atomic and success-only.",
-        "source_locator": "crates/podway-engine/src/direct_items.rs::execute_item_v1"
+        "test": "crates/podway-engine/tests/int_v2dfc006_crashes.rs::successor_sigkill_at_four_engine_item_boundaries_preserves_effect_once_recovery",
+        "termination": "One actual child SIGKILL at generation-16 BeforeBegin, four owned children across DE01–DE04",
+        "recovery": "Fresh v16 Store and Direct lookup see the original cursor, item and sequence with no outcome; same-key retry commits once and subsequent replay returns the recorded success",
+        "invariant": "An interrupted uncommitted scoped item mutation has no visible state or outcome",
+        "source_locator": "crates/podway-engine/src/successor_execution/native_items.rs::dispatch_successor_write"
       }
     },
     {
       "id": "DE02",
       "proof": {
         "failpoint": "AfterBegin",
-        "test": "crates/podway-engine/tests/int_v2dfc006_crashes.rs::sigkill_at_all_five_engine_boundaries_preserves_effect_once_recovery",
-        "termination": "20 actual child SIGKILLs at this native boundary in the release profile",
-        "recovery": "Cold lookup and same-key retry observe one recorded effect or no effect followed by exactly one apply.",
-        "invariant": "Direct Engine state and the validated original output/v4 are atomic and success-only.",
-        "source_locator": "crates/podway-engine/src/direct_items.rs::execute_item_v1"
+        "test": "crates/podway-engine/tests/int_v2dfc006_crashes.rs::successor_sigkill_at_four_engine_item_boundaries_preserves_effect_once_recovery",
+        "termination": "One actual child SIGKILL at generation-16 AfterBegin, four owned children across DE01–DE04",
+        "recovery": "Fresh v16 Store and Direct lookup see the original cursor, item and sequence with no outcome; same-key retry commits once and subsequent replay returns the recorded success",
+        "invariant": "An interrupted uncommitted scoped item mutation has no visible state or outcome",
+        "source_locator": "crates/podway-engine/src/successor_execution/native_items.rs::dispatch_successor_write"
       }
     },
     {
       "id": "DE03",
       "proof": {
         "failpoint": "AfterStateBeforeOutcome",
-        "test": "crates/podway-engine/tests/int_v2dfc006_crashes.rs::sigkill_at_all_five_engine_boundaries_preserves_effect_once_recovery",
-        "termination": "20 actual child SIGKILLs at this native boundary in the release profile",
-        "recovery": "Cold lookup and same-key retry observe one recorded effect or no effect followed by exactly one apply.",
-        "invariant": "Direct Engine state and the validated original output/v4 are atomic and success-only.",
-        "source_locator": "crates/podway-engine/src/direct_items.rs::execute_item_v1"
+        "test": "crates/podway-engine/tests/int_v2dfc006_crashes.rs::successor_sigkill_at_four_engine_item_boundaries_preserves_effect_once_recovery",
+        "termination": "One actual child SIGKILL at generation-16 AfterStateBeforeOutcome, four owned children across DE01–DE04",
+        "recovery": "Fresh v16 Store and Direct lookup see the original cursor, item and sequence with no outcome; same-key retry commits once and subsequent replay returns the recorded success",
+        "invariant": "An interrupted uncommitted scoped item mutation has no visible state or outcome",
+        "source_locator": "crates/podway-engine/src/successor_execution/native_items.rs::dispatch_successor_write"
       }
     },
     {
       "id": "DE04",
       "proof": {
         "failpoint": "AfterCommitBeforeOutput",
-        "test": "crates/podway-engine/tests/int_v2dfc006_crashes.rs::sigkill_at_all_five_engine_boundaries_preserves_effect_once_recovery",
-        "termination": "20 actual child SIGKILLs at this native boundary in the release profile",
-        "recovery": "Cold lookup and same-key retry observe one recorded effect or no effect followed by exactly one apply.",
-        "invariant": "Direct Engine state and the validated original output/v4 are atomic and success-only.",
-        "source_locator": "crates/podway-engine/src/direct_items.rs::execute_item_v1"
+        "test": "crates/podway-engine/tests/int_v2dfc006_crashes.rs::successor_sigkill_at_four_engine_item_boundaries_preserves_effect_once_recovery",
+        "termination": "One actual child SIGKILL at generation-16 AfterCommitBeforeOutput, four owned children across DE01–DE04",
+        "recovery": "Fresh v16 Store and Direct lookup retain the original request ID and response; exact original-key retry bypasses the clock and ID source",
+        "invariant": "One committed item revision, session revision, workspace sequence and canonical success envelope survive lost output",
+        "source_locator": "crates/podway-engine/src/successor_execution/native_items.rs::dispatch_successor_write"
       }
     },
     {
@@ -148,9 +157,9 @@
       "proof": {
         "failpoint": "BeforeMaintenancePublication",
         "test": "crates/podway-engine/tests/int_v2dfc006_crashes.rs::sigkill_at_all_five_engine_boundaries_preserves_effect_once_recovery",
-        "termination": "20 actual child SIGKILLs at this native boundary in the release profile",
-        "recovery": "Exact reset key resumes its published marker, publishes one complete Store, and replays the original success.",
-        "invariant": "Marked reads reject without resuming; explicit reset recovery preserves effect-once publication.",
+        "termination": "Historical generation-15 fixture only: 20 child SIGKILLs at exact private Store publication in the release-profile qualification",
+        "recovery": "In the historical fixture, retry with the original reset key resumes its published marker, publishes one complete Store, and replays the recorded result",
+        "invariant": "Historical exact reset prepublication locator. Current generation-16 reset CLI separately covers intent-published, marker-published, runtime-cleared, and phase-advanced; those are not this Store publication boundary.",
         "source_locator": "crates/podway-engine/src/direct_maintenance.rs::reset_inner"
       }
     },
@@ -158,10 +167,10 @@
       "id": "DE06",
       "proof": {
         "failpoint": "AfterFirstRemovalMarker",
-        "test": "crates/podway-engine/tests/int_v2dfc006_maintenance.rs::sigkill_between_final_removal_markers_preserves_exact_retry_and_original_response",
-        "termination": "Actual child SIGKILL after durable recovery-intent and named-lock deletion and before removal-marker deletion",
-        "recovery": "A matching lone removal marker restores its original intent under the retained runtime-directory exclusion; exact retry preserves response identifier and timestamp, and another key or writer cannot resume.",
-        "invariant": "The removal marker survives until the intent and named locks are durably absent; the live runtime directory lease excludes maintenance contenders until final cleanup. Ordinary marked reads never resume maintenance.",
+        "test": "crates/podway-cli/tests/e2e_v2dfc007_direct_cli.rs::removal_resumes_after_sigkill_through_final_marker_retirement",
+        "termination": "One actual generation-16 CLI child SIGKILL after first removal marker retirement and before the last marker retirement, included in the seven-stage D03 test",
+        "recovery": "A fresh CLI invocation with the exact original workspace UUID, remove request, and key resumes from the remaining marker state and returns workspace.remove",
+        "invariant": "The .podway namespace is removed and the Git config bytes are unchanged; this case does not assert replay retention after namespace deletion",
         "source_locator": "crates/podway-engine/src/workspace.rs::ValidatedPodwayRemovalDirectoryV1::finish_direct_removal"
       }
     }

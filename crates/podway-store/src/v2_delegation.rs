@@ -291,7 +291,13 @@ pub fn accepted_items_digest_v1(
         .ok_or(StoreValueErrorV1::InvalidProcedureV2State {
             reason: "delegation acceptance memory is absent",
         })?;
-    let mut slots = memory.item_slots().iter().collect::<Vec<_>>();
+    accepted_slot_set_digest_v1(memory.item_slots())
+}
+
+pub fn accepted_slot_set_digest_v1(
+    slots: &[podway_core::ItemSlotStateV2],
+) -> Result<Sha256Digest, StoreValueErrorV1> {
+    let mut slots = slots.iter().collect::<Vec<_>>();
     slots.sort_unstable_by(|left, right| left.item_id().as_str().cmp(right.item_id().as_str()));
     let values = slots
         .into_iter()

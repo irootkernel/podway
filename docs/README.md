@@ -32,8 +32,8 @@ rules. The [model contract](specs/domain/execution-groups.md) and
 describe the delivered model and its verification owners.
 
 GROUP owns transactional operation and persistence, TRACE owns retained-history
-reads, and ADOPT owns the public cutover. The current public CLI, parser, presets
-and Store use Procedure v2. The
+reads, and ADOPT owns the public cutover to Procedure v3, Execution Group v1
+and Store generation 16. The
 [shared design dossier](todo/TODO-podway-continuation-groups.md) retains the
 new-session-only cutover and retained-history requirements from
 [ADR-0044](architecture-decision-records/0044-versioned-execution-groups.md). The

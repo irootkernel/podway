@@ -81,7 +81,7 @@ impl DirectIdSourceV1 for NoEffects {
 }
 
 fn resolver() -> DirectWorkspaceResolverV1<NativeGitResolverV1> {
-    DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest())
+    DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest())
 }
 
 fn request(selector: &WorktreeSelectorV1, command: DirectCommandV1, key: &str) -> DirectRequestV1 {
@@ -2613,7 +2613,7 @@ fn admit002_bound_revalidation_holds_guards_and_one_snapshot_with_a_real_writer(
                 *after_competitor.lock().unwrap() = Some(images());
             },
         };
-        let composed = DirectWorkspaceResolverV1::new(native, digest());
+        let composed = DirectWorkspaceResolverV1::for_v15_fixture(native, digest());
         let output = success(
             execute_direct_v1(
                 &composed,

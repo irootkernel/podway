@@ -3,11 +3,132 @@
 use std::{collections::BTreeSet, fs, process::Command};
 
 use podway_protocol::ErrorEnvelopeV2;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::cli_fixture::Fixture;
 
-const GOAL: &str = include_str!("../../../tests/fixtures/v2/procedures/goal-outcomes.yaml");
+const BASE_FILE: &str = "procedure.json";
+const GROUP_FILE: &str = "group.json";
+
+fn result_item() -> Value {
+    json!({"id":"result","type":"text","prompt":"Record the result.","required":true})
+}
+
+fn base() -> Value {
+    json!({
+        "schema":"podway.procedure/v3","id":"native-conformance","version":"1",
+        "name":"Native conformance","purpose":"Exercise the public lifecycle and retained work.",
+        "goal_tracking":true,
+        "node_definitions":{
+            "plan":{"type":"action","title":"Plan","intent":"Record the work basis.","items":[
+                {"id":"plan-note","type":"text","prompt":"Record the plan.","required":true}
+            ]},
+            "assess":{
+                "type":"decision","title":"Assess","objective":"Assess the selected evidence.",
+                "prompt":"What is the current goal outcome?",
+                "options":[{"id":"achieved","label":"Achieved"},{"id":"not-achieved","label":"Not achieved"},
+                    {"id":"superseded","label":"Superseded"}],
+                "reason":{"required":true},
+                "assessment":{"target":"session_goal","outcomes":{
+                    "achieved":"achieved","not-achieved":"not_achieved","superseded":"superseded"
+                }}
+            },
+            "finish":{"type":"action","title":"Finish","intent":"Record the closeout.","items":[
+                {"id":"closeout","type":"text","prompt":"Record the closeout.","required":true}
+            ]}
+        },
+        "graph":{"entry":"plan","nodes":[
+            {"id":"plan","use":"plan","next":"assess"},
+            {"id":"assess","use":"assess",
+                "evidence_from":[{"scope":"execution_result","required":true,"items":["result"]}],
+                "routes":{
+                    "achieved":{"effect":"advance","to":"finish"},
+                    "not-achieved":{"effect":"advance","to":"finish"},
+                    "superseded":{"effect":"advance","to":"finish"}
+                }
+            },
+            {"id":"finish","use":"finish","terminal":true}
+        ]},
+        "execution_group":{"anchor":"plan","success_return":"assess","plan_inputs":["plan-note"],
+            "result_items":[result_item()],"replan_decisions":[]
+        }
+    })
+}
+
+fn group() -> Value {
+    json!({
+        "schema":"podway.execution-group/v1","id":"native-conformance-group","version":"1",
+        "name":"Native conformance group","purpose":"Exercise local rework with retained evidence.",
+        "plan_inputs":[{"id":"plan-note","type":"text","prompt":"Read the plan.","required":true}],
+        "node_definitions":{
+            "work":{"type":"action","title":"Work","intent":"Record the work.","items":[result_item()]},
+            "review":{
+                "type":"decision","title":"Review work","objective":"Check the current result.",
+                "prompt":"Is the evidence ready?",
+                "options":[{"id":"accept","label":"Accept"},{"id":"revise","label":"Revise"}],
+                "reason":{"required":true}
+            },
+            "export":{"type":"action","title":"Export","intent":"Settle the result.","items":[result_item()]}
+        },
+        "graph":{"entry":"work","nodes":[
+            {"id":"work","use":"work","next":"review",
+                "evidence_from":[{"scope":"plan","required":true,"items":["plan-note"]}]},
+            {"id":"review","use":"review",
+                "evidence_from":[{"scope":"local","node":"work","required":true,"items":["result"]}],
+                "routes":{"accept":{"effect":"advance","to":"export"},"revise":{"effect":"rework","to":"work"}}},
+            {"id":"export","use":"export","terminal":true,
+                "evidence_from":[{"scope":"local","node":"work","required":true,"items":["result"]}]}
+        ]}
+    })
+}
+
+fn observe(fixture: &Fixture) -> Value {
+    fixture.run(&["--contract-generation", "2", "observe"])
+}
+
+fn begin(fixture: &Fixture, goal: &str, criterion: &str) {
+    fixture.run(&[
+        "begin",
+        "--goal",
+        goal,
+        "--criterion",
+        criterion,
+        "--actor",
+        "owner",
+        "--idempotency-key",
+        "begin",
+    ]);
+}
+
+fn activate(fixture: &Fixture) -> Value {
+    let source = group().to_string();
+    fs::write(fixture.0.join(GROUP_FILE), &source).unwrap();
+    let digest = fixture.run(&["procedure", "preview", GROUP_FILE])["result"]["digest"].clone();
+    let ready = observe(fixture);
+    let template = ready["result"]["mutation_templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|template| template["command"] == "group.activate")
+        .unwrap();
+    let mut input: Value =
+        serde_json::from_str(template["stdin_template"].as_str().unwrap()).unwrap();
+    input["context"]["idempotency_key"] = json!("activate");
+    input["source"] = json!({"kind":"document","format":"json","source":source});
+    input["expected_definition"] = digest;
+    input["working_copy_basis"] = json!({
+        "descriptor":"Owned native conformance fixture",
+        "digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    });
+    let output = fixture.output_with_stdin(
+        &["group", "activate", "--stdin"],
+        input.to_string().as_bytes(),
+    );
+    assert!(output.status.success(), "{output:?}");
+    serde_json::from_slice::<podway_protocol::OutputEnvelopeV4>(&output.stdout)
+        .unwrap()
+        .into_value()
+}
 
 fn failure(fixture: &Fixture, argv: &[&str], code: &str, exit: i32) -> Value {
     let output = fixture.output(argv);
@@ -21,14 +142,14 @@ fn failure(fixture: &Fixture, argv: &[&str], code: &str, exit: i32) -> Value {
 
 fn prepared(fixture: &Fixture) -> Value {
     fixture.run(&["init", "--idempotency-key", "init"]);
-    fs::write(fixture.0.join("procedure.yaml"), GOAL).unwrap();
-    let preview = fixture.run(&["procedure", "preview", "procedure.yaml"]);
+    fs::write(fixture.0.join(BASE_FILE), base().to_string()).unwrap();
+    let preview = fixture.run(&["procedure", "preview", BASE_FILE]);
     let start = fixture.run(&[
         "start",
         "--procedure",
-        "procedure.yaml",
+        BASE_FILE,
         "--expect-procedure-digest",
-        preview["result"]["procedure_digest"].as_str().unwrap(),
+        preview["result"]["digest"].as_str().unwrap(),
         "--task",
         "Native consumer conformance",
         "--idempotency-key",
@@ -36,14 +157,14 @@ fn prepared(fixture: &Fixture) -> Value {
     ]);
     assert_eq!(
         start["result"]["procedure_digest"],
-        preview["result"]["procedure_digest"]
+        preview["result"]["digest"]
     );
     assert_eq!(start["result"]["session_state"], "prepared");
     assert_eq!(start["result"]["revision"], 0);
     assert!(start["result"]["active_attempt"].is_null());
     assert_eq!(
-        fixture.run(&["status"])["result"]["procedure"]["digest"],
-        preview["result"]["procedure_digest"]
+        fixture.run(&["status"])["result"]["base"]["digest"],
+        preview["result"]["digest"]
     );
     start
 }
@@ -51,44 +172,57 @@ fn prepared(fixture: &Fixture) -> Value {
 #[test]
 fn compact_status_keeps_only_bounded_metadata_and_current_identity() {
     let fixture = Fixture::new();
-    prepared(&fixture);
-    fixture.run(&[
-        "begin",
-        "--goal",
+    let started = prepared(&fixture);
+    begin(
+        &fixture,
         "Bounded public status.",
-        "--criterion",
         "bounded=Status contains metadata only.",
+    );
+    fixture.run(&[
+        "set",
+        "plan-note",
+        "Private fixture item contents.",
         "--idempotency-key",
-        "begin",
+        "plan",
     ]);
+    let current = observe(&fixture);
     let compact = fixture.run(&["status", "--compact"]);
     assert_eq!(compact["command"], "session.status");
     let result = compact["result"].as_object().unwrap();
     assert_eq!(
         result.keys().map(String::as_str).collect::<BTreeSet<_>>(),
         BTreeSet::from([
-            "counters",
-            "current",
-            "goal_defined",
-            "goal_revision",
-            "goal_tracking",
+            "base",
+            "cursor",
             "items",
-            "procedure",
+            "lifecycle",
+            "retained_group_count",
             "schema",
-            "session",
             "trace_length",
+            "workspace",
+            "workspace_sequence",
         ])
     );
-    assert_eq!(result["schema"], "podway.compact-status-result/v5");
-    assert_eq!(result["goal_defined"], true);
-    assert_eq!(result["goal_revision"], 1);
+    assert_eq!(result["schema"], "podway.scoped-compact-status-result/v1");
+    assert_eq!(
+        result["base"]["digest"],
+        started["result"]["procedure_digest"]
+    );
+    assert_eq!(result["base"]["goal_tracking"], true);
+    assert_eq!(result["cursor"], current["result"]["cursor"]);
+    assert_eq!(result["cursor"]["goal_revision"], 1);
+    assert_eq!(
+        result["items"],
+        json!([{"item":"plan-note","revision":1,"recorded":true}])
+    );
+    assert_eq!(result["trace_length"], 1);
     assert!(
         compact["workspace"]["latest_workspace_sequence"]
             .as_u64()
-            .is_some_and(|sequence| sequence >= 3)
+            .is_some_and(|seq| seq >= 4)
     );
-    let encoded = serde_json::to_string(&compact).unwrap();
-    assert!(encoded.len() < 262_144);
+    assert!(serde_json::to_string(&compact).unwrap().len() < 262_144);
+    let encoded = serde_json::to_string(result).unwrap();
     for forbidden in [
         "\"instructions\"",
         "\"prompt\"",
@@ -97,9 +231,12 @@ fn compact_status_keeps_only_bounded_metadata_and_current_identity() {
         "\"value\"",
         "\"queue\"",
         "\"job\"",
+        "Private fixture item contents.",
     ] {
         assert!(!encoded.contains(forbidden), "{forbidden}");
     }
+    let generation_two = fixture.run(&["--contract-generation", "2", "status", "--compact"]);
+    assert_eq!(generation_two["result"], compact["result"]);
 }
 
 #[test]
@@ -136,7 +273,7 @@ fn procedure_workspace_and_session_conflicts_leave_no_mutation_or_outcome() {
         &[
             "start",
             "--procedure",
-            "procedure.yaml",
+            BASE_FILE,
             "--expect-procedure-digest",
             &bad_digest,
             "--task",
@@ -154,7 +291,9 @@ fn procedure_workspace_and_session_conflicts_leave_no_mutation_or_outcome() {
         mismatch["details"]["actual_procedure_digest"],
         started["result"]["procedure_digest"]
     );
-    assert_eq!(fixture.run(&["observe"])["result"], before["result"]);
+    let after = fixture.run(&["observe"]);
+    assert_eq!(after["result"], before["result"]);
+    assert_eq!(after["workspace"], before["workspace"]);
     for key in ["bad-digest", "never-recorded"] {
         let lookup = fixture.run(&["outcome", "lookup", "--idempotency-key", key]);
         assert_eq!(
@@ -209,7 +348,11 @@ fn destructive_lifecycle_preserves_user_files_and_config_and_reinitializes_ident
     let user = fixture.0.join("retained.txt");
     fs::write(&user, "preserved outside Podway\n").unwrap();
     let config = fs::read(fixture.0.join(".podway/config.yaml")).unwrap();
-    fixture.run(&["begin", "--idempotency-key", "begin"]);
+    begin(
+        &fixture,
+        "Track the disposable task.",
+        "task=Retain the user files.",
+    );
     let reset = fixture.run(&[
         "reset",
         "--yes",
@@ -218,7 +361,10 @@ fn destructive_lifecycle_preserves_user_files_and_config_and_reinitializes_ident
         "--idempotency-key",
         "session-reset",
     ]);
-    assert_eq!(reset["result"]["schema"], "podway.session-reset-result/v2");
+    assert_eq!(
+        reset["result"]["schema"],
+        "podway.successor-session-reset-result/v1"
+    );
     assert_eq!(reset["result"]["reset"], true);
     failure(&fixture, &["status"], "SESSION_NOT_FOUND", 1);
     let reset = fixture.run(&[
@@ -285,41 +431,29 @@ fn destructive_lifecycle_preserves_user_files_and_config_and_reinitializes_ident
 #[test]
 fn public_goal_flow_preserves_rework_and_stale_attempt_history_across_processes() {
     let fixture = Fixture::new();
-    fixture.run(&["init", "--idempotency-key", "init"]);
-    fs::write(
-        fixture.0.join("public.yaml"),
-        include_str!("../../../tests/fixtures/v2/procedures/public-native-goal.yaml"),
-    )
-    .unwrap();
-    let preview = fixture.run(&["procedure", "preview", "public.yaml"]);
-    let digest = preview["result"]["procedure_digest"].as_str().unwrap();
-    fixture.run(&[
-        "start",
-        "--procedure",
-        "public.yaml",
-        "--expect-procedure-digest",
-        digest,
-        "--task",
-        "Public goal lifecycle",
-        "--idempotency-key",
-        "start",
-    ]);
-    fixture.run(&[
-        "begin",
-        "--goal",
+    let started = prepared(&fixture);
+    let digest = started["result"]["procedure_digest"].as_str().unwrap();
+    let session = started["session"]["id"].as_str().unwrap();
+    begin(
+        &fixture,
         "Verify the public lifecycle.",
-        "--criterion",
-        "qualified=Rework and closeout retain their identities.",
-        "--actor",
-        "owner",
+        "qualified=Rework preserves attempt identities.",
+    );
+    fixture.run(&[
+        "set",
+        "plan-note",
+        "Retain the earlier work.",
         "--idempotency-key",
-        "begin",
+        "plan",
     ]);
-    let initial = fixture.run(&["status"]);
-    let session = initial["result"]["session"]["id"].as_str().unwrap();
-    let first_attempt = initial["result"]["current"]["attempt"]["attempt_id"]
+    let activated = activate(&fixture);
+    let execution = activated["result"]["execution_id"].as_str().unwrap();
+    let first = observe(&fixture);
+    let first_attempt = &first["result"]["cursor"]["attempt"];
+    let group_digest = first["result"]["selection"]["definition_digest"]
         .as_str()
         .unwrap();
+    assert_eq!(first_attempt["scope"]["kind"], "group");
     fixture.run(&[
         "set",
         "result",
@@ -328,6 +462,8 @@ fn public_goal_flow_preserves_rework_and_stale_attempt_history_across_processes(
         "first-result",
     ]);
     fixture.run(&["complete", "--idempotency-key", "first-complete"]);
+    let review = observe(&fixture);
+    let review_attempt = &review["result"]["cursor"]["attempt"];
     let reworked = fixture.run(&[
         "decide",
         "--option",
@@ -339,32 +475,95 @@ fn public_goal_flow_preserves_rework_and_stale_attempt_history_across_processes(
         "--idempotency-key",
         "revise",
     ]);
-    assert_eq!(reworked["result"]["effect"], "rework");
-    assert_eq!(reworked["result"]["target_graph_node_id"], "work");
+    assert_eq!(reworked["result"]["cursor"]["attempt"]["node"], "work");
+
     let cold = fixture.run(&["status", "--verbose"]);
-    assert_eq!(cold["result"]["session"]["id"], session);
-    assert_eq!(cold["result"]["goal_revision"], 1);
-    assert_eq!(cold["result"]["procedure"]["digest"], digest);
-    assert_ne!(
-        cold["result"]["current"]["attempt"]["attempt_id"],
-        first_attempt
-    );
     assert_eq!(
-        cold["result"]["decision_history"]["entries"][0]["option_id"],
-        "revise"
+        cold["result"]["schema"],
+        "podway.scoped-verbose-status-result/v1"
     );
+    let observation = &cold["result"]["observation"];
+    assert_eq!(observation["cursor"]["session"], session);
+    assert_eq!(observation["cursor"]["goal_revision"], 1);
+    assert_eq!(observation["base"]["digest"], digest);
+    assert_ne!(observation["cursor"]["attempt"], *first_attempt);
+    assert_eq!(observation["cursor"], reworked["result"]["cursor"]);
+    let attempts = cold["result"]["attempts"].as_array().unwrap();
     assert!(
-        !cold["result"]["rework_history"]["entries"]
-            .as_array()
-            .unwrap()
-            .is_empty()
+        attempts
+            .windows(2)
+            .all(|pair| pair[0]["trace_sequence"].as_u64().unwrap()
+                > pair[1]["trace_sequence"].as_u64().unwrap())
     );
-    assert!(
-        !cold["result"]["stale_attempt_history"]["entries"]
-            .as_array()
-            .unwrap()
-            .is_empty()
+    let first_row = attempts
+        .iter()
+        .find(|row| row["attempt"] == *first_attempt)
+        .unwrap();
+    assert_eq!(first_row["lifecycle"], "completed");
+    assert_eq!(first_row["validity"], "stale");
+    let recorded_review = attempts
+        .iter()
+        .find(|row| row["attempt"] == *review_attempt)
+        .unwrap();
+    assert_eq!(recorded_review["decision"]["option"], "revise");
+    assert_eq!(recorded_review["actor"], "reviewer");
+    let history = fixture.run(&[
+        "history",
+        "attempts",
+        "--session",
+        session,
+        "--group-execution",
+        execution,
+        "--definition-digest",
+        group_digest,
+    ]);
+    assert_eq!(
+        history["result"]["schema"],
+        "podway.successor-history-attempts-result/v1"
     );
+    assert_eq!(history["result"]["total"], 3);
+    assert_eq!(history["result"]["rows"][0], *first_row);
+    let retained = fixture.run(&[
+        "history",
+        "item",
+        "--session",
+        session,
+        "--attempt",
+        &first_attempt.to_string(),
+        "--item",
+        "result",
+    ]);
+    assert_eq!(
+        retained["result"]["detail"]["source_attempt"]["attempt"],
+        *first_attempt
+    );
+    assert_eq!(retained["result"]["data"], "First evidence.");
+
+    let before_stale = observe(&fixture);
+    failure(
+        &fixture,
+        &[
+            "set",
+            "result",
+            "Obsolete evidence.",
+            "--if-workspace-uuid",
+            first["workspace"]["uuid"].as_str().unwrap(),
+            "--if-cursor",
+            &first["result"]["cursor"].to_string(),
+            "--if-item-revision",
+            "1",
+            "--idempotency-key",
+            "stale-attempt",
+        ],
+        "ATTEMPT_NOT_CURRENT",
+        4,
+    );
+    assert_eq!(observe(&fixture)["result"], before_stale["result"]);
+    assert_eq!(
+        fixture.run(&["outcome", "lookup", "--idempotency-key", "stale-attempt"])["result"]["found"],
+        false
+    );
+
     fixture.run(&[
         "set",
         "result",
@@ -384,8 +583,20 @@ fn public_goal_flow_preserves_rework_and_stale_attempt_history_across_processes(
         "--idempotency-key",
         "accept",
     ]);
-    assert_eq!(accepted["result"]["target_graph_node_id"], "assess");
-    let assessed = fixture.run(&[
+    assert_eq!(accepted["result"]["cursor"]["attempt"]["node"], "export");
+    fixture.run(&[
+        "set",
+        "result",
+        "Replacement evidence.",
+        "--idempotency-key",
+        "export",
+    ]);
+    fixture.run(&["complete", "--idempotency-key", "return"]);
+    assert_eq!(
+        observe(&fixture)["result"]["cursor"]["attempt"]["scope"]["kind"],
+        "base"
+    );
+    fixture.run(&[
         "goal",
         "assess-criterion",
         "qualified",
@@ -394,14 +605,18 @@ fn public_goal_flow_preserves_rework_and_stale_attempt_history_across_processes(
         "--reason",
         "Rework preserved the public state.",
         "--evidence",
-        "work",
+        "@execution-result",
         "--actor",
         "reviewer",
         "--idempotency-key",
         "assess",
     ]);
-    assert_eq!(assessed["result"]["complete"], true);
-    assert_eq!(assessed["result"]["determined_outcome"], "achieved");
+    let assessed = observe(&fixture);
+    assert_eq!(
+        assessed["result"]["goal"]["criteria"][0]["status"],
+        "satisfied"
+    );
+    assert_eq!(assessed["result"]["goal"]["outcome"], "achieved");
     fixture.run(&[
         "decide",
         "--option",
@@ -422,10 +637,10 @@ fn public_goal_flow_preserves_rework_and_stale_attempt_history_across_processes(
     ]);
     fixture.run(&["complete", "--idempotency-key", "finish"]);
     let terminal = fixture.run(&["status"]);
-    assert_eq!(terminal["result"]["session"]["id"], session);
-    assert_eq!(terminal["result"]["session"]["lifecycle"], "completed");
-    assert!(terminal["result"]["current"].is_null());
-    assert_eq!(terminal["result"]["latest_goal_outcome"], "achieved");
+    assert_eq!(terminal["result"]["cursor"]["session"], session);
+    assert_eq!(terminal["result"]["lifecycle"], "completed");
+    assert!(terminal["result"]["cursor"]["attempt"].is_null());
+    assert_eq!(terminal["result"]["goal"]["outcome"], "achieved");
     fixture.run(&[
         "disposition",
         "not-required",

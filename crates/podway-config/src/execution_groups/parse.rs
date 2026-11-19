@@ -127,13 +127,42 @@ pub fn parse_successor_document(
     input: &[u8],
     format: ProcedureDocumentFormat,
 ) -> Result<SuccessorDefinition, ConfigError> {
-    decode_procedure_document(input, format)?;
+    parse_document(input, format, false)
+}
+
+/// Admit authored sources for session start, which accepts only a base definition.
+pub fn parse_successor_base_document(
+    input: &[u8],
+    format: ProcedureDocumentFormat,
+) -> Result<SuccessorDefinition, ConfigError> {
+    parse_document(input, format, true)
+}
+
+fn parse_document(
+    input: &[u8],
+    format: ProcedureDocumentFormat,
+    require_base: bool,
+) -> Result<SuccessorDefinition, ConfigError> {
+    let decoded = decode_procedure_document(input, format)?;
     if format == ProcedureDocumentFormat::Yaml && crate::parser::begins_with_flow_collection(input)
     {
         return Err(invalid(
             "source",
             "JSON-form documents are not accepted by YAML dispatch",
         ));
+    }
+    let schema = decoded
+        .get("schema")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| invalid("schema", "a string is required"))?;
+    match (schema, require_base) {
+        (PROCEDURE_SCHEMA_V3, _) | (EXECUTION_GROUP_SCHEMA_V1, false) => {}
+        (actual, _) => {
+            return Err(ConfigError::InvalidSchema {
+                actual: actual.to_owned(),
+                expected: PROCEDURE_SCHEMA_V3,
+            });
+        }
     }
     let text = std::str::from_utf8(input).map_err(|e| ConfigError::InvalidDocument {
         reason: e.to_string(),

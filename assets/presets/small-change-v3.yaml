@@ -1,0 +1,83 @@
+schema: podway.procedure/v3
+id: small-change-v3
+version: "1"
+name: Small Change v3
+purpose: Deliver a small reviewed change with fresh caller-asserted verification evidence.
+description: The lightweight assertion-only reference Procedure without goal tracking or typed external results.
+node_definitions:
+  inspect-change:
+    type: action
+    title: Inspect the change boundary
+    intent: Establish the exact scope and constraints before editing.
+    instructions:
+      - "Accountable role: Coordinator. Use the current selected evidence and record the declared outputs against that basis."
+      - Inspect the relevant implementation, tests, and authoritative contracts.
+      - Record the bounded scope and constraints in English.
+      - Report actual negative or incomplete results in the declared output fields. If a required result cannot be supplied, record a blocker with the missing facts.
+      - Select a validated group proposal only after recording the planning basis. Activate it explicitly; when revising a plan, reconcile retained work and current evidence before activating a fresh group.
+    items:
+      - id: scope-summary
+        type: text
+        prompt: Summarize the change scope and constraints in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+  closeout-change:
+    type: action
+    title: Record the closeout
+    intent: Record the terminal outcome of the small change.
+    instructions:
+      - "Accountable role: Coordinator. Use the current selected evidence and record the declared outputs against that basis."
+      - Report actual negative or incomplete results in the declared output fields. If a required result cannot be supplied, record a blocker with the missing facts.
+    items:
+      - id: closeout-note
+        type: text
+        prompt: Record the final closeout in English.
+        required: true
+        min_length: 1
+        max_length: 2000
+        multiline: true
+graph:
+  entry: inspect
+  nodes:
+    - id: inspect
+      use: inspect-change
+      next: closeout
+    - id: closeout
+      use: closeout-change
+      evidence_from:
+        - scope: execution_result
+          required: true
+          items:
+            - implementation-summary
+            - verification-command
+            - verification-exit-status
+      terminal: true
+execution_group:
+  anchor: inspect
+  success_return: closeout
+  plan_inputs:
+    - scope-summary
+  result_items:
+    - id: implementation-summary
+      type: text
+      prompt: Summarize the implemented change in English.
+      required: true
+      min_length: 1
+      max_length: 4000
+      multiline: true
+    - id: verification-command
+      type: text
+      prompt: Record the caller-asserted verification command.
+      help: Podway records this assertion and does not execute or attest the command. Use a check_result item when structural operation binding is required.
+      required: true
+      min_length: 1
+      max_length: 2000
+      multiline: true
+    - id: verification-exit-status
+      type: integer
+      prompt: Record the caller-asserted verification exit status.
+      help: Podway records this assertion and does not determine whether the command ran or the status is semantically acceptable.
+      required: true
+  replan_decisions: []

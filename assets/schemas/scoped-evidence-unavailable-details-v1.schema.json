@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:scoped-evidence-unavailable-details:v1",
+  "title": "Podway Scoped Evidence Unavailable Details v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "consumer",
+    "selector",
+    "item"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.scoped-evidence-unavailable-details/v1"
+    },
+    "consumer": {
+      "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+    },
+    "selector": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scope",
+            "node"
+          ],
+          "properties": {
+            "scope": {
+              "const": "local"
+            },
+            "node": {
+              "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scope"
+          ],
+          "properties": {
+            "scope": {
+              "enum": [
+                "plan",
+                "execution_result"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "item": {
+      "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+    }
+  }
+}

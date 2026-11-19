@@ -4,11 +4,11 @@ use super::{Result, corrupt};
 use podway_core::execution_groups::*;
 use podway_core::workflow_v2::parse_item_type;
 use podway_core::{
-    AttemptId, AttemptLifecycle, AttemptValidityV2, BlockerId, BlockerState, BlockerStateV2,
-    CheckResultInputBasisV2, CriterionId, GoalCriterionV2, GoalDefinitionV2, GoalOutcome,
-    GoalRevisionNumberV2, GoalStatementV2, GraphNodeId, ItemId, ItemSlotStateV2, OptionId,
-    ReasonV2, Revision, SessionId, SessionLifecycle, Sha256Digest, UnixMillis,
-    recorded_value_digest_v2,
+    ActorAttributionV2, AttemptId, AttemptLifecycle, AttemptValidityV2, BlockerId, BlockerState,
+    BlockerStateV2, CheckResultInputBasisV2, CriterionAssessmentReasonV2, CriterionId,
+    GoalCriterionV2, GoalDefinitionV2, GoalOutcome, GoalRevisionNumberV2, GoalStatementV2,
+    GraphNodeId, ItemId, ItemSlotStateV2, OptionId, ReasonV2, Revision, SessionId,
+    SessionLifecycle, Sha256Digest, UnixMillis, recorded_value_digest_v2,
 };
 use serde::{Deserialize, Serialize};
 
@@ -284,6 +284,7 @@ impl Activation {
 pub(super) struct GoalChange {
     revision: u64,
     goal: Goal,
+    actor: Option<String>,
     source: ScopedAttemptV1,
     successor: ScopedAttemptV1,
     predecessor: Option<GroupExecutionIdV1>,
@@ -295,6 +296,7 @@ impl From<&GroupGoalRevisionV1> for GoalChange {
         Self {
             revision: value.revision.get(),
             goal: (&value.goal).into(),
+            actor: value.actor.as_ref().map(|value| value.as_str().to_owned()),
             source: value.source.clone(),
             successor: value.successor.clone(),
             predecessor: value.predecessor.clone(),
@@ -307,6 +309,10 @@ impl GoalChange {
         Ok(GroupGoalRevisionV1 {
             revision: GoalRevisionNumberV2::new(self.revision),
             goal: self.goal.admit()?,
+            actor: self
+                .actor
+                .map(podway_core::ActorAttributionV2::new)
+                .transpose()?,
             source: self.source,
             successor: self.successor,
             predecessor: self.predecessor,
@@ -469,6 +475,124 @@ impl Decision {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum CriterionCitation {
+    Local {
+        node: GraphNodeId,
+        target: ScopedAttemptV1,
+    },
+    Plan {
+        target: ScopedAttemptV1,
+    },
+    ExecutionResult {
+        target: ScopedAttemptV1,
+    },
+    Item {
+        item: ItemId,
+    },
+}
+
+impl From<&RetainedCriterionCitationV1> for CriterionCitation {
+    fn from(value: &RetainedCriterionCitationV1) -> Self {
+        match value {
+            RetainedCriterionCitationV1::Evidence { source, target } => match source {
+                EvidenceSourceV3::Local(node) => Self::Local {
+                    node: node.clone(),
+                    target: target.clone(),
+                },
+                EvidenceSourceV3::Plan => Self::Plan {
+                    target: target.clone(),
+                },
+                EvidenceSourceV3::ExecutionResult => Self::ExecutionResult {
+                    target: target.clone(),
+                },
+            },
+            RetainedCriterionCitationV1::Item(item) => Self::Item { item: item.clone() },
+        }
+    }
+}
+
+impl From<CriterionCitation> for RetainedCriterionCitationV1 {
+    fn from(value: CriterionCitation) -> Self {
+        match value {
+            CriterionCitation::Local { node, target } => Self::Evidence {
+                source: EvidenceSourceV3::Local(node),
+                target,
+            },
+            CriterionCitation::Plan { target } => Self::Evidence {
+                source: EvidenceSourceV3::Plan,
+                target,
+            },
+            CriterionCitation::ExecutionResult { target } => Self::Evidence {
+                source: EvidenceSourceV3::ExecutionResult,
+                target,
+            },
+            CriterionCitation::Item { item } => Self::Item(item),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CriterionRow {
+    criterion: CriterionId,
+    status: String,
+    reason: String,
+    citations: Vec<CriterionCitation>,
+    actor: Option<String>,
+    recorded_at: UnixMillis,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CriterionSet {
+    goal_revision: u64,
+    results: Vec<CriterionRow>,
+}
+
+impl From<&SuccessorCriterionSetV1> for CriterionSet {
+    fn from(value: &SuccessorCriterionSetV1) -> Self {
+        Self {
+            goal_revision: value.goal_revision.get(),
+            results: value
+                .results
+                .iter()
+                .map(|row| CriterionRow {
+                    criterion: row.criterion.clone(),
+                    status: row.status.as_str().to_owned(),
+                    reason: row.reason.as_str().to_owned(),
+                    citations: row.citations.iter().map(Into::into).collect(),
+                    actor: row.actor.as_ref().map(|actor| actor.as_str().to_owned()),
+                    recorded_at: row.recorded_at,
+                })
+                .collect(),
+        }
+    }
+}
+
+impl CriterionSet {
+    fn admit(self) -> Result<SuccessorCriterionSetV1> {
+        Ok(SuccessorCriterionSetV1 {
+            goal_revision: GoalRevisionNumberV2::new(self.goal_revision),
+            results: self
+                .results
+                .into_iter()
+                .map(|row| {
+                    Ok(SuccessorCriterionResultV1 {
+                        criterion: row.criterion,
+                        status: row.status.parse()?,
+                        reason: CriterionAssessmentReasonV2::new(row.reason)?,
+                        citations: row.citations.into_iter().map(Into::into).collect(),
+                        actor: row.actor.map(ActorAttributionV2::new).transpose()?,
+                        recorded_at: row.recorded_at,
+                    })
+                })
+                .collect::<Result<_>>()?,
+        })
+    }
+}
+
+#[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Attempt {
     target: ScopedAttemptV1,
@@ -478,12 +602,14 @@ pub(super) struct Attempt {
     validity: AttemptValidityV2,
     opened_at: UnixMillis,
     closed_at: Option<UnixMillis>,
+    closed_actor: Option<String>,
     slots: Vec<Slot>,
     blockers: Vec<Blocker>,
     delegation: Option<ScopedDelegationBindingV1>,
     decision_entry: Option<u64>,
     decision_group: Option<GroupExecutionIdV1>,
     decision: Option<Decision>,
+    criterion_assessments: Option<CriterionSet>,
     reason: Option<String>,
 }
 
@@ -513,6 +639,7 @@ impl Attempt {
             validity: value.validity(),
             opened_at: value.opened_at(),
             closed_at: value.closed_at(),
+            closed_actor: value.closed_actor().map(|actor| actor.as_str().to_owned()),
             slots: value
                 .slots()
                 .iter()
@@ -525,6 +652,7 @@ impl Attempt {
                 .selected_decision_entry()
                 .map(|entry| entry.selected_group().clone()),
             decision: value.decision().map(Into::into),
+            criterion_assessments: value.criterion_assessments().map(Into::into),
             reason: value.reason().map(|reason| reason.as_str().to_owned()),
         })
     }
@@ -546,12 +674,20 @@ impl Attempt {
             validity: self.validity,
             opened_at: self.opened_at,
             closed_at: self.closed_at,
+            closed_actor: self
+                .closed_actor
+                .map(podway_core::ActorAttributionV2::new)
+                .transpose()?,
             slots,
             blockers,
             delegation: self.delegation,
             decision_entry: self.decision_entry,
             decision_group: self.decision_group,
             decision: self.decision.map(Decision::admit).transpose()?,
+            criterion_assessments: self
+                .criterion_assessments
+                .map(CriterionSet::admit)
+                .transpose()?,
             reason: self.reason.map(ReasonV2::new).transpose()?,
         })
     }

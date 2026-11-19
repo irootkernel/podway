@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:mutation-observation-result:v2",
+  "title": "Podway Commit-Bound Successor Observation Result v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "workspace_sequence",
+    "mutation_result",
+    "observation"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.mutation-observation-result/v2"
+    },
+    "workspace_sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "mutation_result": {
+      "oneOf": [
+        {
+          "$ref": "urn:podway:schema:successor-cursor-mutation-result:v1"
+        },
+        {
+          "$ref": "urn:podway:schema:successor-group-boundary-result:v1"
+        },
+        {
+          "$ref": "urn:podway:schema:successor-group-replan-result:v1"
+        },
+        {
+          "$ref": "urn:podway:schema:successor-session-start-result:v1"
+        }
+      ]
+    },
+    "observation": {
+      "$ref": "urn:podway:schema:observation-result:v8"
+    }
+  }
+}

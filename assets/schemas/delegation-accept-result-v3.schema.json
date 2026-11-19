@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:delegation-accept-result:v3",
+  "title": "Podway Scoped Delegation Acceptance Result v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "target",
+    "receipt_id",
+    "session_revision",
+    "package_digest",
+    "result_digest",
+    "acceptance_state"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.delegation-accept-result/v3"
+    },
+    "target": {
+      "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+    },
+    "receipt_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "session_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "package_digest": {
+      "$ref": "urn:podway:schema:delegation-components:v1#/$defs/digest"
+    },
+    "result_digest": {
+      "$ref": "urn:podway:schema:delegation-components:v1#/$defs/digest"
+    },
+    "acceptance_state": {
+      "const": "accepted"
+    }
+  },
+  "x-podway-max-json-bytes": 8192
+}

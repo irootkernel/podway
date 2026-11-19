@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:successor-session-archive-purge-result:v1",
+  "title": "Podway Successor Session Archive Purge Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "purged",
+    "session",
+    "deleted_group_count"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.successor-session-archive-purge-result/v1"
+    },
+    "purged": {
+      "const": true
+    },
+    "session": {
+      "$ref": "urn:podway:schema:session-archive-list-result:v1#/$defs/archiveSummary"
+    },
+    "deleted_group_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 64
+    }
+  }
+}

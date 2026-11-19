@@ -11,6 +11,7 @@ use thiserror::Error;
 pub mod execution_groups;
 mod integration_settings;
 mod parser;
+mod procedure_lint_rules;
 mod procedure_v2_authoring;
 mod procedure_v2_budget;
 mod procedure_v2_canonical;
@@ -92,9 +93,12 @@ pub use integration_settings::{
     parse_user_config_v1_with_limits, resolve_integration_settings_v1,
 };
 /// The complete, explicit v1 workspace configuration written for a new workspace.
-pub const DEFAULT_WORKSPACE_CONFIG_YAML_V1: &[u8] = b"schema: podway.workspace/v1\nprocedure_paths:\n  - .podway/procedures\ndefault_preset: sw-dev-v2\nui:\n  show_stage_in_prompt: false\n";
+pub const DEFAULT_WORKSPACE_CONFIG_YAML_V1: &[u8] = b"schema: podway.workspace/v1\nprocedure_paths:\n  - .podway/procedures\ndefault_preset: sw-dev-v3\nui:\n  show_stage_in_prompt: false\n";
 
-const DEFAULT_PRESET: &str = "sw-dev-v2";
+#[doc(hidden)]
+pub const V15_FIXTURE_WORKSPACE_CONFIG_YAML_V1: &[u8] = b"schema: podway.workspace/v1\nprocedure_paths:\n  - .podway/procedures\ndefault_preset: sw-dev-v2\nui:\n  show_stage_in_prompt: false\n";
+
+const DEFAULT_PRESET: &str = "sw-dev-v3";
 
 #[derive(Clone, Debug, Eq, PartialEq, Error)]
 pub enum ConfigError {

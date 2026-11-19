@@ -266,7 +266,7 @@ impl Fixture {
             .args([
                 "start",
                 "--preset",
-                "small-change-v2",
+                "small-change-v3",
                 "--task",
                 "successor",
             ])
@@ -300,7 +300,7 @@ impl Fixture {
             &[
                 "start",
                 "--preset",
-                "small-change-v2",
+                "small-change-v3",
                 "--task",
                 "successor",
             ],
@@ -403,7 +403,7 @@ impl Fixture {
             &[
                 "start",
                 "--preset",
-                "small-change-v2",
+                "small-change-v3",
                 "--task",
                 "successor",
                 "--if-session-id",

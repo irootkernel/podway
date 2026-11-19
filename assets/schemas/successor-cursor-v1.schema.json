@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:successor-cursor:v1",
+  "title": "Podway Successor Cursor v1",
+  "$ref": "urn:podway:schema:observation-result:v7#/$defs/cursor"
+}

@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:group-activate-input:v1",
+  "title": "Podway Group Activation Input v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "context",
+    "source",
+    "expected_definition",
+    "plan",
+    "working_copy_basis",
+    "prior_work"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.group-activate-input/v1"
+    },
+    "context": {
+      "$ref": "#/$defs/context"
+    },
+    "source": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "default"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "format",
+            "source"
+          ],
+          "properties": {
+            "kind": {
+              "const": "document"
+            },
+            "format": {
+              "enum": [
+                "yaml",
+                "json"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1048576
+            }
+          }
+        }
+      ]
+    },
+    "expected_definition": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "plan": {
+      "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/plan"
+    },
+    "predecessor": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "working_copy_basis": {
+      "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/working_copy_basis"
+    },
+    "prior_work": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/prior_work"
+      }
+    }
+  },
+  "$defs": {
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspace_uuid",
+        "idempotency_key",
+        "cursor"
+      ],
+      "properties": {
+        "workspace_uuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "\\S"
+        },
+        "cursor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "attempt",
+            "session_revision",
+            "goal_revision",
+            "selected_group"
+          ],
+          "properties": {
+            "attempt": {
+              "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+            },
+            "session_revision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "goal_revision": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "selected_group": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -12,14 +12,14 @@ use podway_protocol::{CriterionAssessmentManyInputV1, ItemRecordManyInputV1};
 use super::completion::Shell;
 use super::{LocalFailure, MAX_DIRECT_COMMAND_TIMEOUT_MILLIS_V1, retirement};
 
-pub(super) const OBSERVATION_READ_GUIDANCE: &str = "observe combines compact current status, guidance, active items and mutation templates in one bounded read, replacing repeated narrow current-state reads. Use status for full standard fields such as purpose and item_values; use status --verbose for trace history. Selected evidence values still require evidence read.";
-pub(super) const RECORD_CHECK_GUIDANCE: &str = "Use the observed item.record_many stdin_template when present: keep its identity and revision fences and fill its declared placeholders with a caller-owned key and performed results. A complete check_result record requires type, operation_id, operation_digest, input_basis: {descriptor, digest}, executor: {name, version}, outcome, summary and output_digest. The caller hashes retained exact check-output bytes with SHA-256 for output_digest; describe and hash the actual input basis separately. The operation digest identifies the declared slot, not the output. Podway does not execute, verify or attest the operation and does not store its output bytes.";
-pub(super) const REVISION_GUIDANCE: &str = "Counters are not interchangeable: a single-item result.revision is the session revision, not the next item fence. Re-observe active_items[].revision for --if-item-revision; use result.status.session.revision for the session fence. workspace.latest_workspace_sequence orders newly retained successful mutations, including no-op outcomes; reads and exact replay do not advance it. The init result.revision is a fixed zero initialization marker. archive list/show archived_workspace_revision captures the persisted graph/workspace revision when archived, alongside its separate session_revision; neither is the live workspace sequence. Never substitute these numbers or increment a stale observation to derive a write fence.";
+pub(super) const OBSERVATION_READ_GUIDANCE: &str = "observe returns the current scoped cursor, active item revisions, guidance and available history summaries. Generation 2 adds executable templates. Use group and history queries for retained work and evidence read for current evidence values.";
+pub(super) const RECORD_CHECK_GUIDANCE: &str = "Record typed items through record --stdin using the current scoped cursor and each expected item revision. A check_result records the caller-supplied operation, input basis, executor, outcome and output digest. Podway does not execute or attest that operation or store its output bytes.";
+pub(super) const REVISION_GUIDANCE: &str = "Supply --if-workspace-uuid and the complete result.cursor JSON as --if-cursor when preserving an exact scoped mutation request. Use result.items[].revision as the separate --if-item-revision for a single-item edit. workspace.latest_workspace_sequence orders newly retained successful mutations. Reads and exact replay do not advance it.";
 
 const LIFECYCLE_FENCE_GUIDANCE: &str = "The CLI can fill omitted fences from a fresh status preflight. Automation should retain the observed template fences to preserve its intended workspace, session and revision; do not silently substitute a newer target. Begin and terminal disposition accept no attempt fence. Fence flags remain optional CLI syntax; a caller-owned automation key is still required.";
 const DISPOSITION_GUIDANCE: &str = "handed-off records an actual external result with its summary and reference. The reference identifies that result; it is not an instruction for Podway to run. not-required records why no external handoff is owed. Podway records these caller assertions and does not execute or attest the external result.";
 const REPLACEMENT_GUIDANCE: &str = "Replacement templates named session.start_replace have two variants: --preset selects an embedded preset, while --procedure with --expect-procedure-digest selects a pinned file. Both are variants of the same session.start_replace action, not two different actions. The digest flag remains optional in CLI grammar; the file template supplies it. Keep the observed command identity, policy, authorization requirements and fences; disposed-terminal auto-archive templates named session.start remain that distinct action.";
-const CITATION_GUIDANCE: &str = "--evidence and --item are optional and repeatable, with at most four citations in total across both flags and no duplicate within either kind. Cite only resolved, valid sources declared in the current decision attempt's guidance.references[] with --evidence, or a recorded decision-local item with --item; unrecorded items and undeclared, skipped or stale sources are ineligible. not_applicable carries no citations. The current session, attempt and goal fences still apply; citations are caller assertions, not attestation.";
+const CITATION_GUIDANCE: &str = "--evidence and --item are optional and repeatable, with at most four citations in total across both flags and no duplicate within either kind. Cite only resolved, valid sources declared in the current decision attempt's guidance.evidence with --evidence, or a recorded decision-local item with --item; unrecorded items and undeclared, skipped or stale sources are ineligible. not_applicable carries no citations. The current session, attempt and goal fences still apply; citations are caller assertions, not attestation.";
 const OUTCOME_RECOVERY_GUIDANCE: &str = "After lost output, retain the original key and complete canonical request, including original resolved identities, revision/attempt/item/goal fences, values and options. Use outcome lookup with that same --idempotency-key in the owning worktree before exact replay where supported, after classifying the current workspace and writer. Lookup is read-only and never submits a mutation. A retained success contains the original response; exact replay preserves its request ID, timestamp and fences without a second effect. Changed input under that key fails IDEMPOTENCY_KEY_REUSED; a fresh key or refreshed fence is a new mutation. A found=false miss is retention-bounded and does not prove that an external effect never happened or authorize repeating external work. Session outcomes survive archival and archive purge until session/runtime reset or workspace removal; workspace outcomes retain at most 100 entries or 30 days, pruned on successful writes. Completed workspace removal destroys its Store and converges on absence rather than replaying the original response.";
 
 #[derive(Debug, Parser)]
@@ -76,9 +76,13 @@ pub(super) struct Cli {
     #[arg(long, global = true, value_name = "N")]
     pub(super) if_item_revision: Option<u64>,
 
-    /// Require an exact current Procedure v2 goal revision.
+    /// Require an exact current goal revision.
     #[arg(long, global = true, value_name = "N", value_parser = parse_positive_u64)]
     pub(super) if_goal_revision: Option<u64>,
+
+    /// Require the exact scoped cursor JSON obtained from observe.
+    #[arg(long, global = true, value_name = "JSON")]
+    pub(super) if_cursor: Option<String>,
 
     /// Approve a destructive operation without prompting.
     #[arg(long, global = true, action = ArgAction::SetTrue)]
@@ -88,7 +92,7 @@ pub(super) struct Cli {
     #[arg(long, global = true, value_name = "1|2")]
     pub(super) contract_generation: Option<String>,
 
-    /// Return the committed mutation result and successor v6 observation in one atomic envelope.
+    /// Return the committed mutation result and successor v8 observation in one atomic envelope.
     #[arg(long, global = true, action = ArgAction::SetTrue)]
     pub(super) with_observation: bool,
 
@@ -101,6 +105,8 @@ pub(super) enum StdinFencedRoute {
     RecordMany,
     DelegationAccept,
     GoalAssessCriteria,
+    GroupActivate,
+    GroupReplan,
 }
 
 impl StdinFencedRoute {
@@ -109,6 +115,8 @@ impl StdinFencedRoute {
             "item.record_many" => Some(Self::RecordMany),
             "delegation.accept" => Some(Self::DelegationAccept),
             "goal.assess_criteria" => Some(Self::GoalAssessCriteria),
+            "group.activate" => Some(Self::GroupActivate),
+            "group.replan" => Some(Self::GroupReplan),
             _ => None,
         }
     }
@@ -123,6 +131,9 @@ impl StdinFencedRoute {
             }
             Self::GoalAssessCriteria => {
                 "goal assessment batch identity, revision, and idempotency fences must come only from stdin"
+            }
+            Self::GroupActivate | Self::GroupReplan => {
+                "group identity, revision, and idempotency fences must come only from stdin"
             }
         }
     }
@@ -144,6 +155,7 @@ impl Cli {
             || self.if_attempt.is_some()
             || self.if_item_revision.is_some()
             || self.if_goal_revision.is_some()
+            || self.if_cursor.is_some()
         {
             return Err(LocalFailure::request_invalid(route.conflict_message()));
         }
@@ -212,6 +224,16 @@ pub(super) enum Command {
     Goal {
         #[command(subcommand)]
         command: GoalCommand,
+    },
+    /// Read retained execution or decision records.
+    History {
+        #[command(subcommand)]
+        command: HistoryCommand,
+    },
+    /// Activate, return from, or replan an execution group.
+    Group {
+        #[command(subcommand)]
+        command: GroupCommand,
     },
     Skip {
         #[arg(long, value_name = "TEXT")]
@@ -307,6 +329,102 @@ pub(super) enum IntegrationCommand {
 #[derive(Debug, Subcommand)]
 pub(super) enum OutcomeCommand {
     Lookup,
+}
+
+#[derive(Debug, Subcommand)]
+pub(super) enum GroupCommand {
+    /// Activate one group from the current approved design.
+    Activate {
+        #[arg(long, required = true, action = ArgAction::SetTrue)]
+        stdin: bool,
+    },
+    /// Return from the current group's terminal placement to its declared base successor.
+    Return,
+    /// List retained activations.
+    List(HistoryPageArgs),
+    /// Read one retained activation and its decisions.
+    Show {
+        #[command(flatten)]
+        page: HistoryPageArgs,
+        #[arg(long, value_name = "UUID")]
+        execution: String,
+    },
+    /// List the prior work bound to a retained activation.
+    PriorWork {
+        #[command(flatten)]
+        page: HistoryPageArgs,
+        #[arg(long, value_name = "UUID")]
+        execution: String,
+        #[arg(long, value_name = "SHA256")]
+        definition_digest: String,
+    },
+    /// Record a guarded replan and return to the base design anchor.
+    Replan {
+        #[arg(long, required = true, action = ArgAction::SetTrue)]
+        stdin: bool,
+    },
+}
+
+#[derive(Debug, Args)]
+pub(super) struct HistoryPageArgs {
+    /// Exact current or archived session to read.
+    #[arg(long, value_name = "UUID")]
+    pub(super) session: String,
+    /// Select the archived session namespace.
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub(super) archived: bool,
+    /// Maximum number of rows to return.
+    #[arg(long, default_value_t = 32, value_parser = clap::value_parser!(u8).range(1..=64))]
+    pub(super) limit: u8,
+    /// Continuation returned by the same history query.
+    #[arg(long, value_name = "TOKEN")]
+    pub(super) page_token: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(super) struct HistoryDefinitionArgs {
+    /// Exact definition digest. With no group execution, this selects the base.
+    #[arg(long, value_name = "SHA256")]
+    pub(super) definition_digest: String,
+    /// Exact retained execution UUID when selecting a group definition.
+    #[arg(long, value_name = "UUID")]
+    pub(super) group_execution: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+pub(super) enum HistoryCommand {
+    /// Read a retained graph definition.
+    Dag {
+        #[command(flatten)]
+        page: HistoryPageArgs,
+        #[command(flatten)]
+        scope: HistoryDefinitionArgs,
+    },
+    /// List retained attempts in a particular definition.
+    Attempts {
+        #[command(flatten)]
+        page: HistoryPageArgs,
+        #[command(flatten)]
+        scope: HistoryDefinitionArgs,
+    },
+    /// List blockers for an exact retained attempt.
+    Blockers {
+        #[command(flatten)]
+        page: HistoryPageArgs,
+        #[arg(long, value_name = "JSON")]
+        attempt: String,
+    },
+    /// Read an exact retained item and its bounded value pages.
+    Item {
+        #[command(flatten)]
+        page: HistoryPageArgs,
+        #[arg(long, value_name = "JSON")]
+        attempt: String,
+        #[arg(long, value_name = "ITEM_ID")]
+        item: String,
+    },
+    /// List goal revisions and their selection lineage.
+    GoalRevisions(HistoryPageArgs),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -490,6 +608,12 @@ pub(super) struct GoalReviseArgs {
     pub(super) rework_to: String,
     #[arg(long, value_name = "TEXT")]
     pub(super) reason: String,
+    #[arg(long, value_name = "TEXT")]
+    pub(super) basis_description: String,
+    #[arg(long, value_name = "SHA256")]
+    pub(super) basis_digest: String,
+    #[arg(long, value_name = "TEXT")]
+    pub(super) feedback: String,
     #[arg(long, value_name = "TEXT")]
     pub(super) actor: Option<String>,
     #[arg(long, action = ArgAction::SetTrue)]
@@ -747,6 +871,21 @@ impl Command {
             Self::Goal {
                 command: GoalCommand::AssessCriteria(_),
             } => Some("goal.assess_criteria"),
+            Self::Group { command } => Some(match command {
+                GroupCommand::Activate { .. } => "group.activate",
+                GroupCommand::Return => "group.return",
+                GroupCommand::List(_) => "group.list",
+                GroupCommand::Show { .. } => "group.show",
+                GroupCommand::PriorWork { .. } => "group.prior_work",
+                GroupCommand::Replan { .. } => "group.replan",
+            }),
+            Self::History { command } => Some(match command {
+                HistoryCommand::Dag { .. } => "history.dag",
+                HistoryCommand::Attempts { .. } => "history.attempts",
+                HistoryCommand::Blockers { .. } => "history.blockers",
+                HistoryCommand::Item { .. } => "history.item",
+                HistoryCommand::GoalRevisions(_) => "history.goal_revisions",
+            }),
             Self::Skip { .. } => Some("session.skip"),
             Self::Retry { .. } => Some("session.retry"),
             Self::Block { .. } => Some("session.block"),
@@ -847,6 +986,10 @@ impl Command {
             | Self::Decide(_)
             | Self::Rework(_)
             | Self::Goal { .. }
+            | Self::Group {
+                command:
+                    GroupCommand::Activate { .. } | GroupCommand::Return | GroupCommand::Replan { .. },
+            }
             | Self::Skip { .. }
             | Self::Retry { .. }
             | Self::Block { .. }
@@ -884,6 +1027,9 @@ impl Command {
             | Self::Decide(_)
             | Self::Rework(_)
             | Self::Goal { .. }
+            | Self::Group {
+                command: GroupCommand::Return,
+            }
             | Self::Skip { .. }
             | Self::Retry { .. }
             | Self::Block { .. }
@@ -939,6 +1085,8 @@ impl Command {
                 | Self::Decide(_)
                 | Self::Rework(_)
                 | Self::Goal { .. }
+                | Self::Group { .. }
+                | Self::History { .. }
                 | Self::Skip { .. }
                 | Self::Retry { .. }
                 | Self::Block { .. }
@@ -978,6 +1126,9 @@ impl Command {
             | Self::Decide(_)
             | Self::Rework(_)
             | Self::Goal { .. }
+            | Self::Group {
+                command: GroupCommand::Return,
+            }
             | Self::Skip { .. }
             | Self::Retry { .. }
             | Self::Block { .. }
@@ -1162,6 +1313,34 @@ fn parse_failure_command_context_from_matches(
             .route;
             ParseFailureCommandContext::new(route, true)
         }
+        "group" => {
+            let route = nested_parse_failure_context(
+                matches,
+                &[
+                    ("activate", "group.activate"),
+                    ("return", "group.return"),
+                    ("replan", "group.replan"),
+                    ("list", "group.list"),
+                    ("show", "group.show"),
+                    ("prior-work", "group.prior_work"),
+                ],
+            )?
+            .route;
+            ParseFailureCommandContext::new(
+                route,
+                matches!(route, "group.activate" | "group.return" | "group.replan"),
+            )
+        }
+        "history" => nested_parse_failure_context(
+            matches,
+            &[
+                ("dag", "history.dag"),
+                ("attempts", "history.attempts"),
+                ("blockers", "history.blockers"),
+                ("item", "history.item"),
+                ("goal-revisions", "history.goal_revisions"),
+            ],
+        )?,
         "skip" => ParseFailureCommandContext::new("session.skip", true),
         "retry" => ParseFailureCommandContext::new("session.retry", true),
         "block" => ParseFailureCommandContext::new("session.block", true),
@@ -1460,7 +1639,7 @@ fn overview_topic_lines(grammar: &clap::Command) -> Vec<String> {
 }
 
 fn overview_text() -> String {
-    let preset_ids = podway_presets::list()
+    let preset_ids = podway_presets::list_v3()
         .iter()
         .map(|preset| preset.metadata.id)
         .collect::<Vec<_>>()
@@ -1469,7 +1648,7 @@ fn overview_text() -> String {
     grammar.build();
     let topics = overview_topic_lines(&grammar).join("\n");
     format!(
-        "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes reading and writing local workspace state.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDirect execution:\n  Worktree commands execute in this process.\n  Use --worktree <path> to select a Git worktree and --timeout <duration> to bound lock waiting.\n  Worktree request options apply to workspace routes only; help, version, completions, preset and procedure run locally, open no workspace and accept none of them.\n  Local commands also accept --contract-generation.\n  Automation mutations require an explicit --idempotency-key; recover lost output with outcome lookup.\n\nContract generations:\n  --contract-generation <1|2> selects the contract generation for one invocation.\n  Generation 1 is the default and is deprecated; no runtime warning is emitted.\n  Generation 2 serves observe as podway.observation-result/v6 and the\n  generation-2 error details of CRITERION_CITATION_INVALID and\n  WORKSPACE_CONTRACT_MISMATCH.\n\nUsage:\n  podway help [<topic>...]\n  podway -h\n  podway --help\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff' --idempotency-key start-example\n  podway begin --idempotency-key begin-example\n  podway status --json\n  podway observe --json\n\nTopics:\n{topics}\n\nShipped presets: {preset_ids}. Start prepares a session; begin creates its first active attempt. Contributors use disposable Git worktrees for isolated development; see help workflow."
+        "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes reading and writing local workspace state.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDirect execution:\n  Worktree commands execute in this process.\n  Use --worktree <path> to select a Git worktree and --timeout <duration> to bound lock waiting.\n  Worktree request options apply to workspace routes only; help, version, completions, preset and procedure run locally, open no workspace and accept none of them.\n  Local commands also accept --contract-generation.\n  Automation mutations require an explicit --idempotency-key; recover lost output with outcome lookup.\n\nContract generations:\n  --contract-generation <1|2> selects the contract generation for one invocation.\n  Generation 1 is the default and is deprecated; no runtime warning is emitted.\n  Generation 2 serves observe as podway.observation-result/v8 and the\n  generation-2 error details of CRITERION_CITATION_INVALID and\n  WORKSPACE_CONTRACT_MISMATCH.\n\nUsage:\n  podway help [<topic>...]\n  podway -h\n  podway --help\n\nExamples:\n  podway start --preset sw-dev-v3 --task 'add retry backoff' --idempotency-key start-example\n  podway begin --idempotency-key begin-example\n  podway status --json\n  podway observe --json\n\nTopics:\n{topics}\n\nShipped presets: {preset_ids}. Start prepares a session; begin creates its first active attempt. Contributors use disposable Git worktrees for isolated development; see help workflow."
     )
 }
 
@@ -1652,19 +1831,19 @@ fn route_help(topic: &str) -> Option<String> {
 fn route_topic(topic: &str) -> Option<&'static str> {
     let text = match topic {
         "workflow" => {
-            "Procedure v2 workflow:\n  podway init --idempotency-key init-example\n  podway --json preset show bug-fix-v2\n  podway --json start --preset bug-fix-v2 --task 'inspect the workflow' --idempotency-key start-example\n  podway --json begin --goal 'Verify the requested behavior.' --criterion verified='Relevant checks pass.' --actor developer --idempotency-key begin-example\n  podway --json observe\n\nAdd --dry-run to start for read-only Procedure inspection without creating a session. A successful start creates a prepared session; begin atomically creates the first attempt and optional goal. Follow the allowed item, option, evidence, and rework identifiers returned by observe. Contributors use a disposable Git worktree with its own .podway state. See docs/examples/v2-workflow.md for the complete executable sequence. Podway records caller assertions; it does not establish their semantic truth."
+            "Procedure v3 workflow:\n  podway init --idempotency-key init-example\n  podway --json preset show bug-fix-v3\n  podway --json start --preset bug-fix-v3 --task 'inspect the workflow' --idempotency-key start-example\n  podway --json begin --goal 'Verify the requested behavior.' --criterion verified='Relevant checks pass.' --actor developer --idempotency-key begin-example\n  podway --json observe\n\nAdd --dry-run to start for read-only Procedure inspection without creating a session. A successful start creates a prepared session; begin atomically creates the first attempt and optional goal. Follow the allowed item, option, evidence, and rework identifiers returned by observe. Contributors use a disposable Git worktree with its own .podway state. Use generation 2 observe to read the current plan binding and group activation template. Podway records caller assertions; it does not establish their semantic truth."
         }
         "automation" => {
             "Automation:\n  podway complete --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 12 --if-attempt <uuid> --idempotency-key task-42 --json"
         }
         "procedures" => {
-            "Procedures:\n  podway procedure scaffold > .podway/procedures/custom.yaml\n  podway procedure format .podway/procedures/custom.yaml --write\n  podway procedure check .podway/procedures/custom.yaml --warnings-as-errors\n  podway procedure preview .podway/procedures/custom.yaml\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'perform work'\n\nOther Procedure v2 authoring routes are procedure validate, vet, lint, and graph."
+            "Procedures:\n  podway procedure scaffold > .podway/procedures/custom.yaml\n  podway procedure format .podway/procedures/custom.yaml --write\n  podway procedure check .podway/procedures/custom.yaml --warnings-as-errors\n  podway procedure preview .podway/procedures/custom.yaml\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'perform work'\n\nOther Procedure v3 authoring routes are procedure validate, vet, lint, and graph."
         }
         "artifacts" => {
             "Artifacts:\n  podway attach verification-reference report.md --media-type text/markdown\n  podway attach verification-reference --reference build:42 --digest sha256:<hex> --size 42 --media-type text/plain"
         }
         "contract-generations" => {
-            "Contract generations:\n  podway --contract-generation <1|2> <command>\n  Generation 1 is the default and is deprecated; no runtime warning is emitted.\n  Generation 2 serves session.observe as podway.observation-result/v6 with\n  executable fenced lifecycle and archive templates, and serves the\n  generation-2 error details of CRITERION_CITATION_INVALID and\n  WORKSPACE_CONTRACT_MISMATCH.\n  Selection applies to one invocation only and never changes request identity,\n  idempotency, stored outcomes, replay, outcome lookup, Store state or writer\n  identity. No environment or configuration channel selects a generation."
+            "Contract generations:\n  podway --contract-generation <1|2> <command>\n  Generation 1 is the default and is deprecated; no runtime warning is emitted.\n  Generation 2 serves session.observe as podway.observation-result/v8 with\n  executable scoped mutation templates, and serves the\n  generation-2 error details of CRITERION_CITATION_INVALID and\n  WORKSPACE_CONTRACT_MISMATCH.\n  Selection applies to one invocation only and never changes request identity,\n  idempotency, stored outcomes, replay, outcome lookup, Store state or writer\n  identity. No environment or configuration channel selects a generation."
         }
         "help" => "Usage:\n  podway help [<topic>...]\n\nExample:\n  podway help session.start",
         "version" => {
@@ -1680,35 +1859,35 @@ fn route_topic(topic: &str) -> Option<&'static str> {
             "Usage:\n  podway procedure show <file> [--canonical]\n\nExample:\n  podway procedure show .podway/procedures/custom.yaml --canonical"
         }
         "procedure.format" => {
-            "Usage:\n  podway procedure format <file> [--check] [--write]\n\nRenders a Procedure v2 document in canonical authoring form on stdout. --check\nreports drift and writes nothing; --write replaces the named file atomically.\n\nExample:\n  podway procedure format .podway/procedures/custom.yaml"
+            "Usage:\n  podway procedure format <file> [--check] [--write]\n\nRenders a Procedure v3 document in canonical authoring form on stdout. --check\nreports drift and writes nothing; --write replaces the named file atomically.\n\nExample:\n  podway procedure format .podway/procedures/custom.yaml"
         }
         "procedure.vet" => {
             "Usage:\n  podway procedure vet <file>\n\nRuns mandatory graph-wide semantic and resource-budget checks over a Procedure\nv2 document without writing anything.\n\nExample:\n  podway procedure vet .podway/procedures/custom.yaml"
         }
         "procedure.graph" => {
-            "Usage:\n  podway procedure graph <file> --format <json|mermaid|puml|dot>\n\nEmits a deterministic JSON, Mermaid, PlantUML, or DOT projection of a validated\nand vetted Procedure v2 graph without writing anything.\n\nExample:\n  podway procedure graph .podway/procedures/custom.yaml --format dot"
+            "Usage:\n  podway procedure graph <file> --format <json|mermaid|puml|dot>\n\nEmits a deterministic JSON, Mermaid, PlantUML, or DOT projection of a validated\nand vetted Procedure v3 graph without writing anything.\n\nExample:\n  podway procedure graph .podway/procedures/custom.yaml --format dot"
         }
         "procedure.preview" => {
-            "Usage:\n  podway procedure preview <worktree-relative-file>\n\nRuns validation, graph vetting, and advisory lint in memory, then prints the\nnormalized graph, Mermaid review projection, and an exact session start suggestion\nwhen the Procedure v2 document is admissible. The file must use the same UTF-8,\nworktree-relative, no-parent spelling accepted by start. Reads only and never\nopens workspace runtime state.\n\nExample:\n  podway procedure preview .podway/procedures/custom.yaml"
+            "Usage:\n  podway procedure preview <worktree-relative-file>\n\nRuns validation, graph vetting, and advisory lint in memory, then prints the\nnormalized graph, Mermaid review projection, and an exact session start suggestion\nwhen the Procedure v3 document is admissible. The file must use the same UTF-8,\nworktree-relative, no-parent spelling accepted by start. Reads only and never\nopens workspace runtime state.\n\nExample:\n  podway procedure preview .podway/procedures/custom.yaml"
         }
         "procedure.lint" => {
-            "Usage:\n  podway procedure lint <file> [--warnings-as-errors]\n\nReports advisory authoring findings for a Procedure v2 document. Every finding is\na warning, so the file stays valid and the exit code stays 0 unless\n--warnings-as-errors makes any finding fatal.\n\nExample:\n  podway procedure lint .podway/procedures/custom.yaml --warnings-as-errors"
+            "Usage:\n  podway procedure lint <file> [--warnings-as-errors]\n\nReports advisory authoring findings for a Procedure v3 document. Every finding is\na warning, so the file stays valid and the exit code stays 0 unless\n--warnings-as-errors makes any finding fatal.\n\nExample:\n  podway procedure lint .podway/procedures/custom.yaml --warnings-as-errors"
         }
         "procedure.check" => {
-            "Usage:\n  podway procedure check <file> [--warnings-as-errors]\n\nRuns every authoring stage over a Procedure v2 document — canonical formatting,\nvalidation, graph vetting, and lint — and reports one merged result. Exits 1 on\nany error, including formatting drift; --warnings-as-errors also fails on\nadvisory findings.\n\nExample:\n  podway procedure check .podway/procedures/custom.yaml --warnings-as-errors"
+            "Usage:\n  podway procedure check <file> [--warnings-as-errors]\n\nRuns every authoring stage over a Procedure v3 document — canonical formatting,\nvalidation, graph vetting, and lint — and reports one merged result. Exits 1 on\nany error, including formatting drift; --warnings-as-errors also fails on\nadvisory findings.\n\nExample:\n  podway procedure check .podway/procedures/custom.yaml --warnings-as-errors"
         }
         "procedure.scaffold" => {
-            "Usage:\n  podway procedure scaffold [--template minimal]\n\nWrites a minimal Procedure v2 authoring starting point to stdout and reads\nnothing. The emitted document is already in canonical authoring form and already\npasses every authoring stage, so redirecting it to a file and running\nprocedure check on that file reports nothing.\n\nExample:\n  podway procedure scaffold --template minimal > .podway/procedures/custom.yaml"
+            "Usage:\n  podway procedure scaffold [--template minimal]\n\nWrites a minimal Procedure v3 authoring starting point to stdout and reads\nnothing. The emitted document is already in canonical authoring form and already\npasses every authoring stage, so redirecting it to a file and running\nprocedure check on that file reports nothing.\n\nExample:\n  podway procedure scaffold --template minimal > .podway/procedures/custom.yaml"
         }
         "preset.list" => "Usage:\n  podway preset list\n\nExample:\n  podway preset list",
         "preset.show" => {
-            "Usage:\n  podway preset show <name>\n\nExample:\n  podway preset show sw-dev-v2"
+            "Usage:\n  podway preset show <name>\n\nExample:\n  podway preset show sw-dev-v3"
         }
         "preset.explain" => {
-            "Usage:\n  podway preset explain <name>\n\nExample:\n  podway preset explain sw-dev-v2"
+            "Usage:\n  podway preset explain <name>\n\nExample:\n  podway preset explain sw-dev-v3"
         }
         "workspace.init" => {
-            "Usage:\n  podway init [--repair]\n\nCreates the worktree-local Podway workspace. Tracked files:\n  .podway/config.yaml, .podway/procedures/ and .podway/.gitignore, which\n  ignores runtime/ so the worktree-local runtime stays untracked. Authoritative\n  task state and maintenance locks live under .podway/runtime/ and are never\n  tracked.\n\nExamples:\n  podway init\n  podway init --repair"
+            "Usage:\n  podway init [--repair]\n\nCreates the worktree-local Podway workspace. Tracked files:\n  .podway/config.yaml, .podway/procedures/ and .podway/.gitignore, which\n  ignores runtime/ so the worktree-local runtime stays untracked. Authoritative\n  task state and maintenance locks live under .podway/runtime/ and are never\n  tracked.\n\nWhen initialization is interrupted, the initialization marker retains the operation. Use the recovery recipe to resume the original workspace and idempotency key. A successful initialization reports latest_workspace_sequence.\n\nExamples:\n  podway init\n  podway init --repair"
         }
         "workspace.doctor" => {
             "Usage:\n  podway doctor [--deep]\n\nExample:\n  podway doctor --deep"
@@ -1720,11 +1899,44 @@ fn route_topic(topic: &str) -> Option<&'static str> {
         "workspace.remove" => {
             "Usage:\n  podway [--worktree <path>] workspace remove [--force] [--if-workspace-uuid <uuid>] [--yes]\n\nUnfenced interactive use requires the exact resolved absolute worktree root as confirmation, including with --yes. JSON use also requires --force. JSON and non-interactive use require --yes and --if-workspace-uuid. Success removes all .podway content, including tracked files, while preserving the Git worktree."
         }
+        "group.activate" => {
+            "Usage:\n  podway group activate --stdin\n\nSubmit a closed group activation input from the current anchor. Include the exact base/attempt/goal/selection fences, plan binding, group digest, working-copy basis and required prior-work dispositions. Read generation 2 observe for a template."
+        }
+        "group.replan" => {
+            "Usage:\n  podway group replan --stdin\n\nSubmit the declared guarded replan option and closure feedback for the current scoped decision. Keep the original key and input after response loss."
+        }
+        "group.return" => {
+            "Usage:\n  podway group return --if-workspace-uuid <uuid> --if-cursor <json> --idempotency-key <key>\n\nComplete the selected group's terminal action and open the declared base successor atomically."
+        }
+        "group.list" => {
+            "Usage:\n  podway group list --session <uuid> [--archived] [--limit <rows>] [--page-token <token>]\n\nList retained group executions in activation order."
+        }
+        "group.show" => {
+            "Usage:\n  podway group show --session <uuid> --execution <uuid> [--archived] [--limit <rows>] [--page-token <token>]\n\nRead a retained execution, its design binding, closure and decision records."
+        }
+        "group.prior_work" => {
+            "Usage:\n  podway group prior-work --session <uuid> --execution <uuid> --definition-digest <sha256> [--archived] [--limit <rows>] [--page-token <token>]\n\nRead the prior-work dispositions bound to the selected execution."
+        }
+        "history.goal_revisions" => {
+            "Usage:\n  podway history goal-revisions --session <uuid> [--archived] [--limit <rows>] [--page-token <token>]\n\nRead retained goal revisions and their selection closures."
+        }
+        "history.dag" => {
+            "Usage:\n  podway history dag --session <uuid> --definition-digest <sha256> [--group-execution <uuid>] [--archived] [--page-token <token>]\n\nRead a retained base or group definition page."
+        }
+        "history.attempts" => {
+            "Usage:\n  podway history attempts --session <uuid> --definition-digest <sha256> [--group-execution <uuid>] [--archived] [--limit <rows>] [--page-token <token>]\n\nList attempts in the selected retained definition."
+        }
+        "history.blockers" => {
+            "Usage:\n  podway history blockers --session <uuid> --attempt <scoped-attempt-json> [--archived] [--limit <rows>] [--page-token <token>]\n\nRead blockers retained for the exact scoped attempt."
+        }
+        "history.item" => {
+            "Usage:\n  podway history item --session <uuid> --attempt <scoped-attempt-json> --item <item-id> [--archived] [--page-token <token>]\n\nRead a bounded retained value page. Use evidence read to inspect evidence for the current attempt."
+        }
         "session.start" => {
-            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--on-existing <preserve|delete>] [--supersede-reason <text>] [--actor <text>] [--progress-summary <text>] [--dry-run] [--with-observation] [--if-session-id <uuid> --if-session-revision <n>]\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'implement feature'\n  podway start --preset sw-dev-v2 --task 'start successor' --on-existing preserve --supersede-reason 'The successor has priority.'\n  podway start --preset sw-dev-v2 --task 'replace running work' --on-existing delete --progress-summary 'The current progress was reviewed.' --yes\n  podway start --preset bug-fix-v2 --task 'preview deletion' --dry-run --on-existing delete\n\nThe paired optional --if-session-id and --if-session-revision fences are verified against the observed current session inside the start transaction and never prompt; supply both or neither, and --if-attempt does not apply. Plain start does not auto-fill omitted fences; the replacement path keeps its preflight-derived fences. Unfenced human TTY mode interviews when a nonterminal session already exists; Enter continues it and creates nothing. Noninteractive callers must choose preserve or delete. Disposed terminal sessions archive automatically. A successful start creates a prepared session at revision 0 without a cursor, attempt, or goal. Plain non-dry-run start also accepts --with-observation to return podway.mutation-observation-result/v1 with an embedded v6 observation."
+            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--on-existing <preserve|delete>] [--supersede-reason <text>] [--actor <text>] [--progress-summary <text>] [--dry-run] [--with-observation] [--if-session-id <uuid> --if-session-revision <n>]\n\nExamples:\n  podway start --preset sw-dev-v3 --task 'implement feature'\n  podway start --preset sw-dev-v3 --task 'start successor' --on-existing preserve --supersede-reason 'The successor has priority.'\n  podway start --preset sw-dev-v3 --task 'replace running work' --on-existing delete --progress-summary 'The current progress was reviewed.' --yes\n  podway start --preset bug-fix-v3 --task 'preview deletion' --dry-run --on-existing delete\n\nThe paired optional --if-session-id and --if-session-revision fences are verified against the observed current session inside the start transaction and never prompt; supply both or neither, and --if-attempt does not apply. Plain start does not auto-fill omitted fences; the replacement path keeps its preflight-derived fences. Unfenced human TTY mode interviews when a nonterminal session already exists; Enter continues it and creates nothing. Noninteractive callers must choose preserve or delete. Disposed terminal sessions archive automatically. A successful start creates a prepared session at revision 0 without a cursor, attempt, or goal. Plain non-dry-run start also accepts --with-observation to return podway.mutation-observation-result/v2 with an embedded v8 observation."
         }
         "session.begin" => {
-            "Usage:\n  podway begin [--goal <text> --criterion <id>=<statement>...] [--actor <text>] [--with-observation] [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision 0]\n\nExamples:\n  podway begin\n  podway begin --goal 'Ship safely.' --criterion tested='Tests pass.' --actor developer --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 0\n\nBegin atomically creates attempt 1 at the entry node, optionally creates goal revision 1, and changes the prepared session to running. Omitted fences are filled from a fresh status preflight. Add --with-observation to return podway.mutation-observation-result/v1 with an embedded v6 observation."
+            "Usage:\n  podway begin [--goal <text> --criterion <id>=<statement>...] [--actor <text>] [--with-observation] [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision 0]\n\nExamples:\n  podway begin\n  podway begin --goal 'Ship safely.' --criterion tested='Tests pass.' --actor developer --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 0\n\nBegin atomically creates attempt 1 at the entry node, optionally creates goal revision 1, and changes the prepared session to running. Omitted fences are filled from a fresh status preflight. Add --with-observation to return podway.mutation-observation-result/v2 with an embedded v8 observation."
         }
         "session.decide" => {
             "Usage:\n  podway decide --option <id> --reason <text> [--actor <text>] [--with-observation] --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> --if-attempt <uuid> [--if-goal-revision <n>]\n\nThe goal revision fence is required for a session-goal assessment decision and, when supplied for a general decision, must match the current goal.\n\nExample:\n  podway decide --option approve --reason 'The evidence supports this route.' --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --if-attempt <uuid>"
@@ -1736,25 +1948,36 @@ fn route_topic(topic: &str) -> Option<&'static str> {
             "Usage:\n  podway goal define --goal <text> --criterion <id>=<statement>... [--actor <text>] --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n>\n\nExample:\n  podway goal define --goal 'Ship safely.' --criterion tested='Tests pass.' --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7"
         }
         "goal.revise" => {
-            "Usage:\n  podway goal revise --goal <text> --criterion <id>=<statement>... --rework-to <graph-node-id> --reason <text> [--actor <text>] [--reactivate] --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> --if-goal-revision <n> [--if-attempt <uuid>]\n\nExample:\n  podway goal revise --goal 'Ship after restart.' --criterion restart-safe='Restart passes.' --rework-to implement --reason 'Scope changed.' --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --if-goal-revision 1"
+            "Usage:\n  podway goal revise --goal <text> --criterion <id>=<statement>... --rework-to <base-anchor> --reason <text> --basis-description <text> --basis-digest <sha256> --feedback <text> [--actor <text>] [--reactivate] --if-workspace-uuid <uuid> --if-cursor <json> --idempotency-key <key>\n\nUse the base's design anchor as the rework target after group activation. Copy the scoped cursor from generation-2 observe. Record the working-copy basis, why the goal changed, and how to treat prior work. Use --reactivate only for a completed goal requiring a new attempt."
         }
         "goal.assess_criterion" => {
-            "Usage:\n  podway goal assess-criterion <criterion-id> --status <satisfied|unsatisfied|not_applicable> --reason <text> [--evidence <graph-node-id>]... [--item <item-id>]... [--actor <text>] --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> --if-attempt <uuid> --if-goal-revision <n>\n\nExample:\n  podway goal assess-criterion tested --status satisfied --reason 'The test passed.' --evidence test --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --if-attempt <uuid> --if-goal-revision 1"
+            "Usage:\n  podway goal assess-criterion <criterion-id> --status <satisfied|unsatisfied|not_applicable> --reason <text> [--evidence <selector>]... [--item <item-id>]... [--actor <text>] --if-workspace-uuid <uuid> --if-cursor <json> --idempotency-key <key>\n\nUse a currently resolved local node ID, @plan or @execution-result as an evidence selector. Copy the whole current result.cursor from observe when supplying a fence."
         }
         "goal.assess_criteria" => {
-            "Usage:\n  podway goal assess-criteria --stdin [--with-observation] [--worktree <path>] [--json]\n\nOne atomic batch: either every assessment entry commits with one session revision\nbump, or nothing changes. The closed stdin document is\npodway.criterion-assessment-many-input/v1; each field's observation source:\n  schema                  the constant podway.criterion-assessment-many-input/v1\n  workspace_uuid          workspace.uuid\n  session_id              result.status.session (id)\n  session_revision        result.status.session (revision)\n  attempt_id              result.status.current.attempt.attempt_id\n  goal_revision           result.status.goal_revision\n  idempotency_key         a new caller-owned key\n  actor                   optional batch-wide attribution (1..256 Unicode scalars)\nEach of the 1..16 unique assessments carries criterion_id, status (satisfied,\nunsatisfied, or not_applicable), reason, and optional evidence and items arrays.\n\nExample stdin document (one line):\n  {\"schema\":\"podway.criterion-assessment-many-input/v1\",\"workspace_uuid\":\"00000000-0000-4000-8000-000000000001\",\"session_id\":\"00000000-0000-4000-8000-000000000002\",\"session_revision\":7,\"attempt_id\":\"00000000-0000-4000-8000-000000000003\",\"goal_revision\":1,\"idempotency_key\":\"assess-example\",\"assessments\":[{\"criterion_id\":\"tested\",\"status\":\"satisfied\",\"reason\":\"The test passed.\",\"evidence\":[\"test\"]}]}\n\nExample:\n  podway goal assess-criteria --stdin < assessments.json"
+            r#"Usage:
+  podway goal assess-criteria --stdin [--with-observation] [--worktree <path>] [--json]
+
+Submit one podway.scoped-criterion-assessment-input/v1 JSON document. Use the
+generation-2 observe stdin_template, supply the caller-owned key and assessments,
+and keep the current workspace and cursor fences. The goal revision comes from
+result.cursor.goal_revision. Each of 1..16 assessments supplies criterion,
+status, reason, and up to four scoped citations. The batch commits one revision
+or leaves the session unchanged.
+
+Example stdin document:
+  {"schema":"podway.scoped-criterion-assessment-input/v1","context":{"workspace_uuid":"00000000-0000-4000-8000-000000000001","idempotency_key":"assess-example","cursor":{"attempt":{"session":"00000000-0000-4000-8000-000000000002","scope":{"kind":"base"},"base_digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","node":"assessment","attempt":"00000000-0000-4000-8000-000000000003"},"session_revision":7,"goal_revision":1,"selected_group":null}},"assessments":[{"criterion":"tested","status":"satisfied","reason":"The test passed.","citations":[{"kind":"execution_result"}]}]}"#
         }
         "session.start_replace" => {
-            "The session.start_replace wire route remains available for compatible automation, but the CLI has no replace command or replace flags. Use `podway start --on-existing preserve|delete`; see `podway help session.start`."
+            "Use `podway start --on-existing preserve|delete` for session.start_replace. See `podway help session.start` for source and concurrency fences."
         }
         "session.status" => {
-            "Usage:\n  podway status [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--verbose [--history-before <trace-sequence>]] [--compact]\n\nExamples:\n  podway status --verbose\n  podway status --verbose --history-before 42\n  podway status --compact"
+            "Usage:\n  podway status [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--verbose [--history-before <trace-sequence>]] [--compact]\n\nUse --compact for bounded cursor and item metadata. Use --verbose for the current observation with retained attempts in descending trace order. Pass its history_before to request the next page."
         }
         "session.next" => {
             "Usage:\n  podway next [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nExample:\n  podway next"
         }
         "session.observe" => {
-            "Usage:\n  podway observe [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nReturns one bounded, self-contained status and guidance observation with typed active-item descriptors and fenced mutation templates.\nObservation fields map to mutation fences: workspace.uuid feeds --if-workspace-uuid; result.status.session (id, revision) feeds --if-session-id and --if-session-revision; result.status.current.attempt.attempt_id feeds --if-attempt; active_items[].revision feeds --if-item-revision.\nguidance is null once the session is terminal (completed or cancelled).\nIn generation 1, lifecycle templates are guidance, not runnable commands: copy preconditions into the matching --if-* flags, supply required arguments a template omits (for example the disposition subcommand), and add your own --idempotency-key; running templates embed fenced argv with placeholders such as <idempotency-key> and <text> to replace; an item.record_many template adds a stdin_template whose expected_item_revision equals preconditions.item_revision — fill it and pass it on stdin. Under --contract-generation 2, lifecycle templates carry their command syntax and fence tail. Templates never embed --contract-generation, so add it, keep every supplied option and fence, and fill only the declared placeholders.\nSESSION_NOT_FOUND means this workspace has no current task session; a fenced session id that differs from the current session fails as SESSION_ID_MISMATCH, and a stale fenced session revision fails as SESSION_REVISION_CONFLICT.\nWORKSPACE_NOT_INITIALIZED means this worktree has no workspace, so report it and run init only with explicit intent.\n\nExample:\n  podway --json observe"
+            "Usage:\n  podway --json observe [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nRead the current scoped cursor, active guidance, item revisions and group summary. Generation 1 serves observation-result/v7. Generation 2 serves observation-result/v8 with executable templates. Copy the exact cursor and workspace UUID for a fenced mutation. Retained decisions and former attempts are available through group and history queries. A template carries concurrency fences and placeholders for caller-owned data."
         }
         "evidence.read" => {
             "Usage:\n  podway evidence read --source <graph-node-id> --item <item-id> [--page-token <token>] [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nReturns one bounded page of an item selected by a currently resolved, declared evidence reference of the current attempt. It changes no session revision. Text offsets count Unicode scalars, list offsets count entries, and other item types return one terminal page. The page token is opaque and is not an authorization credential.\n\nExample:\n  podway --json evidence read --source implement --item notes"
@@ -1829,7 +2052,27 @@ fn route_topic(topic: &str) -> Option<&'static str> {
             "Usage:\n  podway clear <item-id> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-attempt <uuid>] [--if-item-revision <n>]\n\nExample:\n  podway clear constraints"
         }
         "item.record_many" => {
-            "Usage:\n  podway record --stdin [--with-observation] [--worktree <path>] [--json]\n\nOne atomic batch: either every operation commits with one session revision\nbump, or nothing changes. The closed stdin document is\npodway.item-record-many-input/v1; each field's observation source:\n  schema                  the constant podway.item-record-many-input/v1\n  workspace_uuid          workspace.uuid\n  session_id              result.status.session (id)\n  session_revision        result.status.session (revision)\n  attempt_id              result.status.current.attempt.attempt_id\n  idempotency_key         a new caller-owned key\nEach of the 1..128 unique operations carries:\n  item_id\n  expected_item_revision  that item's active_items[].revision, also shown as\n                          preconditions.item_revision in record templates\n  exactly one of record (a type and its value fields) or clear: true\nRecord value fields follow the input schema: confirm value; text value; choice value; integer value; list value; artifact in path form (type, path, optional media_type) or reference form (type, reference, digest, size_bytes, media_type); check_result operation_id, operation_digest, input_basis, executor, outcome, summary and output_digest. A check_result is caller supplied and structurally bound; Podway does not execute, verify, or attest the named external operation.\n\nExample stdin document (one line):\n  {\"schema\":\"podway.item-record-many-input/v1\",\"workspace_uuid\":\"00000000-0000-4000-8000-000000000001\",\"session_id\":\"00000000-0000-4000-8000-000000000002\",\"session_revision\":3,\"attempt_id\":\"00000000-0000-4000-8000-000000000003\",\"idempotency_key\":\"record-example\",\"operations\":[{\"item_id\":\"summary\",\"expected_item_revision\":1,\"record\":{\"type\":\"text\",\"value\":\"Recorded.\"}}]}\n\nExample:\n  podway record --stdin < record.json"
+            r#"Usage:
+  podway record --stdin [--with-observation] [--worktree <path>] [--json]
+
+Submit one podway.scoped-item-record-many-input/v1 document. Use the
+generation-2 observe stdin_template. Preserve context.workspace_uuid and the
+exact scoped attempt, session revision, goal revision, and selected group in
+context.cursor. Supply a caller-owned context.idempotency_key and 1..128
+distinct operations. Copy each expected_item_revision from result.items.
+Supply either a typed record or clear: true for each operation.
+
+The artifact record accepts path with optional media_type, or reference with
+digest, size_bytes and media_type. A check_result carries the declared
+operation_id and operation_digest, input_basis: {descriptor, digest},
+executor: {name, version}, outcome, summary, and a digest of the exact check-output bytes.
+The batch commits atomically. Podway records caller assertions.
+
+Example stdin document:
+  {"schema":"podway.scoped-item-record-many-input/v1","context":{"workspace_uuid":"00000000-0000-4000-8000-000000000001","idempotency_key":"record-example","cursor":{"attempt":{"session":"00000000-0000-4000-8000-000000000002","scope":{"kind":"base"},"base_digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","node":"plan","attempt":"00000000-0000-4000-8000-000000000003"},"session_revision":3,"goal_revision":null,"selected_group":null}},"operations":[{"item_id":"summary","expected_item_revision":1,"record":{"type":"text","value":"Recorded."}}]}
+
+Example:
+  podway record --stdin < record.json"#
         }
         "integration.show" => {
             "Usage:\n  podway integration show dolgorae [--json]\n\nRead effective integration permission and its source (project > user > false). Works before init and never opens SQLite or a maintenance lease. Only this query reads $HOME/.config/podway/config.yaml. Enabled permission does not establish connection readiness, capability or execution. An external adapter must adopt this query before new assignments. Disabled permission does not cancel accepted work or disable result lookup, reconciliation, receipts, acceptance or explicit completion. No stdin document is read. Idempotency keys, workspace/session identities, revision/attempt/item/goal fences and destructive flags are rejected."
@@ -1940,6 +2183,17 @@ mod tests {
         (&["goal", "revise"], "goal.revise"),
         (&["goal", "assess-criterion"], "goal.assess_criterion"),
         (&["goal", "assess-criteria"], "goal.assess_criteria"),
+        (&["group", "activate"], "group.activate"),
+        (&["group", "return"], "group.return"),
+        (&["group", "replan"], "group.replan"),
+        (&["group", "list"], "group.list"),
+        (&["group", "show"], "group.show"),
+        (&["group", "prior-work"], "group.prior_work"),
+        (&["history", "dag"], "history.dag"),
+        (&["history", "attempts"], "history.attempts"),
+        (&["history", "blockers"], "history.blockers"),
+        (&["history", "item"], "history.item"),
+        (&["history", "goal-revisions"], "history.goal_revisions"),
         (&["skip"], "session.skip"),
         (&["retry"], "session.retry"),
         (&["block"], "session.block"),
@@ -1977,6 +2231,8 @@ mod tests {
         "evidence",
         "delegation",
         "goal",
+        "history",
+        "group",
         "disposition",
         "integration",
         "outcome",
@@ -2144,7 +2400,7 @@ mod tests {
         let topic = help_text(&["contract-generations".to_owned()]).unwrap();
         assert!(topic.contains("Contract generations:"));
         assert!(topic.contains("--contract-generation <1|2>"));
-        assert!(topic.contains("podway.observation-result/v6"));
+        assert!(topic.contains("podway.observation-result/v8"));
         // The generation-2 error details are emitted (GUIDE-010); pin the
         // wrap-safe tokens and the absence of the retired interim sentence.
         assert!(topic.contains("CRITERION_CITATION_INVALID"));
@@ -2155,7 +2411,7 @@ mod tests {
         let overview = help_text(&[]).unwrap();
         assert!(overview.contains("Contract generations:"));
         assert!(overview.contains("Local commands also accept --contract-generation."));
-        assert!(overview.contains("observation-result/v6"));
+        assert!(overview.contains("observation-result/v8"));
         assert!(overview.contains("CRITERION_CITATION_INVALID"));
         assert!(overview.contains("WORKSPACE_CONTRACT_MISMATCH"));
         assert!(!overview.contains("currently keep their"));
@@ -2210,73 +2466,46 @@ mod tests {
         assert!(!overview.contains("the default is 1."));
 
         let observation = help_text(&["session.observe".to_owned()]).unwrap();
-        assert!(observation.contains("In generation 1, lifecycle templates are guidance"));
-        assert!(observation.contains(
-            "Under --contract-generation 2, lifecycle templates carry their command syntax and fence tail"
-        ));
+        assert!(observation.contains("Generation 1 serves observation-result/v7"));
+        assert!(
+            observation
+                .contains("Generation 2 serves observation-result/v8 with executable templates")
+        );
     }
 
     #[test]
     fn guide004_record_help_documents_sources_and_decodes_example() {
         let text = help_text(&owned(&["record"])).unwrap();
         assert_eq!(text, help_text(&["item.record_many".to_owned()]).unwrap());
-        assert!(text.contains("Usage:"));
         for phrase in [
-            "workspace_uuid          workspace.uuid",
-            "session_id              result.status.session (id)",
-            "session_revision        result.status.session (revision)",
-            "attempt_id              result.status.current.attempt.attempt_id",
-            "active_items[].revision, also shown as",
-            "preconditions.item_revision in record templates",
-            "exactly one of record (a type and its value fields) or clear: true",
-            "artifact in path form (type, path, optional media_type) or reference form (type, reference, digest, size_bytes, media_type)",
+            "context.workspace_uuid",
+            "context.cursor",
+            "context.idempotency_key",
+            "expected_item_revision from result.items",
+            "typed record or clear: true",
+            "exact check-output bytes",
         ] {
-            assert!(text.contains(phrase), "missing: {phrase}");
+            assert!(text.contains(phrase), "missing {phrase}");
         }
         let example = text
             .lines()
-            .find(|line| {
-                line.trim_start()
-                    .starts_with("{\"schema\":\"podway.item-record-many-input/v1\"")
-            })
-            .expect("the record help carries the one-line example document")
-            .trim();
-        let decoded = podway_protocol::decode_item_record_many_input_v1(example.as_bytes())
-            .expect("the example document decodes through the real stdin decoder");
-        let value = serde_json::to_value(&decoded).unwrap();
+            .map(str::trim_start)
+            .find(|line| line.starts_with(r#"{"schema":"#))
+            .unwrap();
+        let decoded =
+            podway_protocol::decode_scoped_item_record_many_input_v1(example.as_bytes()).unwrap();
         assert_eq!(
-            value["schema"],
-            serde_json::json!("podway.item-record-many-input/v1")
+            decoded.context.workspace_uuid.as_str(),
+            "00000000-0000-4000-8000-000000000001"
         );
+        assert_eq!(decoded.context.idempotency_key.as_str(), "record-example");
+        assert_eq!(decoded.context.cursor.session_revision.get(), 3);
         assert_eq!(
-            value["workspace_uuid"],
-            serde_json::json!("00000000-0000-4000-8000-000000000001")
+            decoded.context.cursor.attempt.attempt().as_str(),
+            "00000000-0000-4000-8000-000000000003"
         );
-        assert_eq!(
-            value["session_id"],
-            serde_json::json!("00000000-0000-4000-8000-000000000002")
-        );
-        assert_eq!(
-            value["attempt_id"],
-            serde_json::json!("00000000-0000-4000-8000-000000000003")
-        );
-        assert_eq!(value["session_revision"], serde_json::json!(3));
-        assert_eq!(
-            value["idempotency_key"],
-            serde_json::json!("record-example")
-        );
-        assert_eq!(
-            value["operations"],
-            serde_json::json!([{
-                "item_id": "summary",
-                "expected_item_revision": 1,
-                "record": {"type": "text", "value": "Recorded."},
-            }])
-        );
-        assert_eq!(
-            value,
-            serde_json::from_str::<serde_json::Value>(example).unwrap()
-        );
+        assert_eq!(decoded.operations[0].item_id.as_str(), "summary");
+        assert_eq!(decoded.operations[0].expected_item_revision.get(), 1);
     }
 
     #[test]
@@ -2285,21 +2514,14 @@ mod tests {
         assert_eq!(text, help_text(&["session.observe".to_owned()]).unwrap());
         assert!(text.contains("Usage:"));
         for phrase in [
-            "workspace.uuid feeds --if-workspace-uuid",
-            "result.status.session (id, revision) feeds --if-session-id and --if-session-revision",
-            "result.status.current.attempt.attempt_id feeds --if-attempt",
-            "active_items[].revision feeds --if-item-revision",
-            "guidance is null once the session is terminal (completed or cancelled)",
-            "copy preconditions into the matching --if-* flags",
-            "the disposition subcommand",
-            "add your own --idempotency-key",
-            "stdin_template whose expected_item_revision equals preconditions.item_revision",
-            "fill it and pass it on stdin",
-            "SESSION_NOT_FOUND means this workspace has no current task session",
-            "a fenced session id that differs from the current session fails as SESSION_ID_MISMATCH",
-            "a stale fenced session revision fails as SESSION_REVISION_CONFLICT",
-            "WORKSPACE_NOT_INITIALIZED means this worktree has no workspace",
-            "run init only with explicit intent",
+            "current scoped cursor",
+            "--if-workspace-uuid",
+            "--if-cursor",
+            "--if-item-revision",
+            "Generation 1 serves observation-result/v7",
+            "Generation 2 serves observation-result/v8 with executable templates",
+            "Retained decisions and former attempts are available through group and history queries",
+            "concurrency fences and placeholders for caller-owned data",
         ] {
             assert!(text.contains(phrase), "missing: {phrase}");
         }
@@ -2328,48 +2550,27 @@ mod tests {
             text,
             help_text(&["goal.assess_criteria".to_owned()]).unwrap()
         );
-        assert!(text.contains("result.status.goal_revision"));
-        assert!(!text.contains("result.status.current.goal_revision"));
+        assert!(text.contains("result.cursor.goal_revision"));
         let example = text
             .lines()
-            .find(|line| line.trim_start().starts_with("{\"schema\":"))
-            .expect("example stdin document line present")
-            .trim();
-        let decoded =
-            podway_protocol::decode_criterion_assessment_many_input_v1(example.as_bytes())
-                .expect("the example document decodes through the real stdin decoder");
-        let value = serde_json::to_value(&decoded).unwrap();
+            .map(str::trim_start)
+            .find(|line| line.starts_with(r#"{"schema":"#))
+            .expect("example stdin document line");
+        let decoded = podway_protocol::decode_scoped_criterion_input_v1(example.as_bytes())
+            .expect("the help example decodes with the current stdin decoder");
         assert_eq!(
-            value["schema"],
-            serde_json::json!("podway.criterion-assessment-many-input/v1")
+            decoded.context.workspace_uuid.as_str(),
+            "00000000-0000-4000-8000-000000000001"
         );
+        assert_eq!(decoded.context.idempotency_key.as_str(), "assess-example");
+        assert_eq!(decoded.context.cursor.session_revision.get(), 7);
+        assert_eq!(decoded.context.cursor.goal_revision, Some(1));
         assert_eq!(
-            value["workspace_uuid"],
-            serde_json::json!("00000000-0000-4000-8000-000000000001")
+            decoded.context.cursor.attempt.attempt().as_str(),
+            "00000000-0000-4000-8000-000000000003"
         );
-        assert_eq!(
-            value["session_id"],
-            serde_json::json!("00000000-0000-4000-8000-000000000002")
-        );
-        assert_eq!(value["session_revision"], serde_json::json!(7));
-        assert_eq!(
-            value["attempt_id"],
-            serde_json::json!("00000000-0000-4000-8000-000000000003")
-        );
-        assert_eq!(value["goal_revision"], serde_json::json!(1));
-        assert_eq!(
-            value["idempotency_key"],
-            serde_json::json!("assess-example")
-        );
-        assert_eq!(
-            value["assessments"],
-            serde_json::json!([{
-                "criterion_id": "tested",
-                "status": "satisfied",
-                "reason": "The test passed.",
-                "evidence": ["test"],
-                "items": [],
-            }])
-        );
+        assert_eq!(decoded.entries[0].criterion.as_str(), "tested");
+        assert_eq!(decoded.entries[0].status.as_str(), "satisfied");
+        assert_eq!(decoded.entries[0].citations.len(), 1);
     }
 }

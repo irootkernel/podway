@@ -122,7 +122,12 @@ pub(crate) fn start_session_with_context_v1<R: GitResolverContractV1>(
                     })
                 });
                 verify_start_fences(&request.command, view.graph())?;
-                let policy = current_policy(&request.command, view.graph(), disposed, true)?;
+                let policy = current_policy(
+                    &request.command,
+                    view.graph().map(StartCurrent::from),
+                    disposed,
+                    true,
+                )?;
                 let mut body = prepared_start_result(&source, true);
                 if let (Some(graph), Some(policy)) = (view.graph(), policy) {
                     body["existing_session"] = existing_session(graph, policy);
@@ -233,7 +238,12 @@ pub(crate) fn start_session_with_context_v1<R: GitResolverContractV1>(
                     .iter()
                     .any(|record| record.terminal_session_revision() == graph.trace().revision())
             });
-            let policy = current_policy(&request.command, prior, disposed, false)?;
+            let policy = current_policy(
+                &request.command,
+                prior.map(StartCurrent::from),
+                disposed,
+                false,
+            )?;
             let source = source
                 .borrow_mut()
                 .take()
@@ -378,7 +388,7 @@ pub(crate) fn start_session_with_context_v1<R: GitResolverContractV1>(
         .map_err(|_| DirectStoreErrorV1::Unreadable.into())
 }
 
-fn validate_title(input: &SessionStartV1) -> Result<(), DirectStoreErrorV1> {
+pub(crate) fn validate_title(input: &SessionStartV1) -> Result<(), DirectStoreErrorV1> {
     if input.task_title.trim().is_empty()
         || input.task_title.chars().count() > podway_protocol::MAX_SLICE_TASK_TITLE_SCALARS_V1
     {
@@ -429,7 +439,7 @@ fn revalidate_source(
 }
 
 #[derive(Clone, Copy)]
-enum Policy {
+pub(crate) enum Policy {
     Delete,
     Archive,
     Supersede,
@@ -465,13 +475,30 @@ fn verify_start_fences(
     }
 }
 
-fn current_policy(
+#[derive(Clone, Copy)]
+pub(crate) struct StartCurrent<'a> {
+    pub session_id: &'a podway_core::SessionId,
+    pub revision: Revision,
+    pub lifecycle: SessionLifecycle,
+}
+
+impl<'a> From<&'a GraphSessionStateV2> for StartCurrent<'a> {
+    fn from(graph: &'a GraphSessionStateV2) -> Self {
+        Self {
+            session_id: graph.trace().session_id(),
+            revision: graph.trace().revision(),
+            lifecycle: graph.trace().lifecycle(),
+        }
+    }
+}
+
+pub(crate) fn current_policy(
     command: &DirectStartCommandV1,
-    graph: Option<&GraphSessionStateV2>,
+    current: Option<StartCurrent<'_>>,
     disposed: bool,
     dry_run: bool,
 ) -> Result<Option<Policy>, DirectExecutionErrorV1> {
-    let Some(graph) = graph else {
+    let Some(current) = current else {
         if let DirectStartCommandV1::Replace(input) = command {
             return Err(DirectExecutionErrorV1::Domain(
                 podway_core::DomainError::SessionIdentityMismatch {
@@ -482,7 +509,7 @@ fn current_policy(
         }
         return Ok(None);
     };
-    let lifecycle = graph.trace().lifecycle();
+    let lifecycle = current.lifecycle;
     if let DirectStartCommandV1::Start(_) = command {
         if matches!(
             lifecycle,
@@ -492,8 +519,8 @@ fn current_policy(
             return Ok(Some(Policy::Archive));
         }
         return Err(DirectExecutionErrorV1::StartDecisionRequired {
-            session_id: graph.trace().session_id().clone(),
-            revision: graph.trace().revision(),
+            session_id: current.session_id.clone(),
+            revision: current.revision,
             lifecycle,
             current_terminal_disposition: disposed,
         });
@@ -501,11 +528,7 @@ fn current_policy(
     let DirectStartCommandV1::Replace(input) = command else {
         unreachable!("plain start was handled above");
     };
-    check_session_fences(
-        graph,
-        &input.preconditions.expected_session_id,
-        input.preconditions.expected_session_revision,
-    )?;
+    require_start_identity(current, &input.preconditions)?;
     let conflict = || {
         DirectExecutionErrorV1::Store(DirectStoreErrorV1::State(
             StoreErrorV1::SessionStartStateConflictV1 {
@@ -603,6 +626,30 @@ fn current_policy(
     Ok(Some(policy))
 }
 
+pub(crate) fn require_start_identity(
+    current: StartCurrent<'_>,
+    expected: &podway_protocol::SessionIdentityPreconditionsWireV1,
+) -> Result<(), DirectExecutionErrorV1> {
+    use podway_store::GraphMutationErrorV2;
+    if current.session_id != &expected.expected_session_id {
+        return Err(GraphMutationErrorV2::Domain(
+            podway_core::DomainError::SessionIdentityMismatch {
+                expected: expected.expected_session_id.clone(),
+                actual: Some(current.session_id.clone()),
+            },
+        )
+        .into());
+    }
+    if current.revision != expected.expected_session_revision {
+        return Err(GraphMutationErrorV2::SessionRevisionConflict {
+            expected: expected.expected_session_revision,
+            actual: current.revision,
+        }
+        .into());
+    }
+    Ok(())
+}
+
 fn prepared_start_result(source: &PreparedProcedureSourceV2, dry_run: bool) -> Value {
     // Metadata comes from the already admitted canonical source, without a synthetic identity.
     json!({"schema":"podway.session-start-result/v4", "procedure_schema":"podway.procedure/v2", "procedure_digest":source.digest(),
@@ -623,24 +670,36 @@ fn make_disposition(
     actor: Option<ActorAttributionV2>,
     now: UnixMillis,
 ) -> Result<TerminalDispositionV2, DirectStoreErrorV1> {
+    make_bound_disposition(
+        graph.trace().session_id(),
+        graph.trace().revision(),
+        input,
+        actor,
+        now,
+    )
+}
+
+pub(crate) fn make_bound_disposition(
+    session: &podway_core::SessionId,
+    revision: Revision,
+    input: &TerminalDispositionInputV1,
+    actor: Option<ActorAttributionV2>,
+    now: UnixMillis,
+) -> Result<TerminalDispositionV2, DirectStoreErrorV1> {
     Ok(match input {
         TerminalDispositionInputV1::HandedOff { summary, reference } => {
             TerminalDispositionV2::handed_off(
-                graph.trace().session_id().clone(),
-                graph.trace().revision(),
+                session.clone(),
+                revision,
                 summary,
                 reference,
                 actor,
                 now,
             )
         }
-        TerminalDispositionInputV1::NotRequired { reason } => TerminalDispositionV2::not_required(
-            graph.trace().session_id().clone(),
-            graph.trace().revision(),
-            reason,
-            actor,
-            now,
-        ),
+        TerminalDispositionInputV1::NotRequired { reason } => {
+            TerminalDispositionV2::not_required(session.clone(), revision, reason, actor, now)
+        }
     }
     .map_err(GraphMutationErrorV2::Domain)?)
 }

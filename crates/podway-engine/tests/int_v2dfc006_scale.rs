@@ -275,8 +275,10 @@ impl Harness {
             .resolve(selector.clone())
             .unwrap();
         let store = DirectStoreV1::new(
-            DirectWorkspaceLayoutV1::new(ValidatedWorkspaceRootV1::from_path(root).unwrap())
-                .unwrap(),
+            DirectWorkspaceLayoutV1::for_v15_fixture(
+                ValidatedWorkspaceRootV1::from_path(root).unwrap(),
+            )
+            .unwrap(),
             digest(),
             worktree.identity().common_directory_fingerprint().clone(),
             worktree
@@ -287,7 +289,10 @@ impl Harness {
         Self {
             selector,
             store,
-            resolver: DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest()),
+            resolver: DirectWorkspaceResolverV1::for_v15_fixture(
+                NativeGitResolverV1::new(),
+                digest(),
+            ),
         }
     }
     fn request(&self, command: DirectCommandV1, key: &str) -> DirectRequestV1 {

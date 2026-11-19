@@ -425,16 +425,28 @@ pub enum DirectExecutionErrorV1 {
     View(GraphViewErrorV2),
     Evidence(EvidenceReadErrorV2),
     Domain(DomainError),
+    Successor(crate::successor_execution::SuccessorExecutionError),
     Boundary(ExecutionBoundaryErrorV1),
     Preparation(ExecutionErrorV1),
     Delegation(DirectDelegationFailureV1),
     Start(crate::execution::ProcedureV2StartPreparationErrorV1),
+    SuccessorSource(DirectSuccessorSourceErrorV1),
     StartDecisionRequired {
         session_id: SessionId,
         revision: podway_core::Revision,
         lifecycle: SessionLifecycle,
         current_terminal_disposition: bool,
     },
+}
+
+#[derive(Debug)]
+pub enum DirectSuccessorSourceErrorV1 {
+    InvalidDocument,
+    InvalidDefinition,
+    ResourceLimit,
+    UnsupportedFormat,
+    UnsupportedSchema { known_schema: Option<&'static str> },
+    InvalidAdmittedDefinition,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -519,6 +531,29 @@ pub fn execute_read_v1<R: GitResolverContractV1>(
     request: DirectReadRequestV1,
     clock: &impl ExecutionClockV1,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
+    if resolver.uses_execution_groups() {
+        match &request.command {
+            DirectReadCommandV1::Observe
+            | DirectReadCommandV1::Next
+            | DirectReadCommandV1::Status { .. } => {
+                return crate::successor_execution::dispatch_successor_observation(
+                    resolver, request, clock,
+                );
+            }
+            DirectReadCommandV1::ArchiveList | DirectReadCommandV1::ArchiveShow { .. } => {
+                return crate::successor_execution::dispatch_successor_archive_read(
+                    resolver, request, clock,
+                );
+            }
+            DirectReadCommandV1::DelegationPackage
+            | DirectReadCommandV1::DelegationReceipt { .. } => {
+                return crate::successor_execution::dispatch_successor_delegation_read(
+                    resolver, request, clock,
+                );
+            }
+            _ => {}
+        }
+    }
     let token_read = matches!(
         &request.command,
         DirectReadCommandV1::Evidence { token: Some(_), .. }
@@ -722,6 +757,7 @@ pub struct DirectPreflightFactsRequestV1 {
 #[derive(Clone, Debug)]
 pub struct DirectPreflightFactsV1 {
     pub workspace_id: WorkspaceId,
+    pub successor_cursor: Option<Box<crate::successor_execution::SuccessorCursor>>,
     pub session_id: SessionId,
     pub session_revision: Revision,
     pub attempt_id: Option<AttemptId>,
@@ -966,6 +1002,7 @@ pub(crate) fn preflight_facts_with_view_v1<R: GitResolverContractV1>(
                 .unwrap_or_default();
             let facts = DirectPreflightFactsV1 {
                 workspace_id: workspace_uuid,
+                successor_cursor: None,
                 session_id: trace.session_id().clone(),
                 session_revision: trace.revision(),
                 attempt_id: attempt.map(|attempt| attempt.attempt_id().clone()),

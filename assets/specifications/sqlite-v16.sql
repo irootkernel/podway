@@ -56,6 +56,29 @@ CREATE TABLE successor_sessions (
     FOREIGN KEY (base_digest, base_kind) REFERENCES successor_definitions (digest, kind)
 ) STRICT;
 
+CREATE UNIQUE INDEX ix_successor_sessions_current
+ON successor_sessions(archived) WHERE archived = 0;
+
+CREATE TABLE successor_session_metadata (
+    session_id                TEXT PRIMARY KEY REFERENCES successor_sessions (session_id) ON DELETE CASCADE,
+    task_title                TEXT NOT NULL CHECK (length(task_title) BETWEEN 1 AND 500),
+    archive_slot              INTEGER UNIQUE CHECK (archive_slot BETWEEN 1 AND 4294967295),
+    archived_at_ms            INTEGER CHECK (archived_at_ms >= 0),
+    archived_sequence         INTEGER CHECK (archived_sequence >= 1),
+    CHECK ((archive_slot IS NULL) = (archived_at_ms IS NULL)),
+    CHECK ((archive_slot IS NULL) = (archived_sequence IS NULL))
+) STRICT;
+
+CREATE TABLE successor_terminal_dispositions (
+    session_id                TEXT NOT NULL REFERENCES successor_session_metadata (session_id) ON DELETE CASCADE,
+    terminal_revision         INTEGER NOT NULL CHECK (terminal_revision >= 1),
+    record_json               TEXT NOT NULL CHECK (
+        json_valid(record_json) AND length(CAST(record_json AS BLOB)) <= 65536
+    ),
+    record_digest             TEXT NOT NULL,
+    PRIMARY KEY (session_id, terminal_revision)
+) STRICT;
+
 CREATE TABLE successor_activations (
     session_id                TEXT NOT NULL REFERENCES successor_sessions (session_id) ON DELETE CASCADE,
     ordinal                   INTEGER NOT NULL CHECK (ordinal BETWEEN 1 AND 64),
@@ -94,6 +117,18 @@ CREATE TABLE successor_attempts (
         REFERENCES successor_activations (session_id, execution_id, definition_digest)
         DEFERRABLE INITIALLY DEFERRED,
     CHECK ((execution_id IS NULL) = (definition_digest IS NULL))
+) STRICT;
+
+CREATE TABLE successor_delegation_receipts (
+    session_id                TEXT NOT NULL,
+    attempt_id                TEXT NOT NULL,
+    receipt_id                TEXT NOT NULL UNIQUE,
+    record_json               TEXT NOT NULL CHECK (
+        json_valid(record_json) AND length(CAST(record_json AS BLOB)) <= 45000
+    ),
+    record_digest             TEXT NOT NULL,
+    PRIMARY KEY (session_id, attempt_id),
+    FOREIGN KEY (session_id, attempt_id) REFERENCES successor_attempts (session_id, attempt_id) ON DELETE CASCADE
 ) STRICT;
 
 CREATE TABLE successor_goal_revisions (

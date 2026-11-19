@@ -1,34 +1,59 @@
 //! Candidate Store persistence for isolated execution-group integration fixtures.
 //! Transaction callers own commit and success-only outcome publication.
 
+mod delegation;
+mod lifecycle;
+pub(crate) use delegation::{read_receipt, record_receipt, verify_receipts};
+mod native;
 mod records;
 mod transaction;
+pub use lifecycle::{
+    SuccessorArchiveMetadata, SuccessorArchivePage, SuccessorArchiveSummary,
+    SuccessorSessionMetadata,
+};
+pub(crate) use lifecycle::{
+    archive_session, create_session_metadata, delete_current_session, list_archives, purge_archive,
+    record_disposition, session_metadata, terminal_disposition, verify_integrity,
+};
+pub use native::{
+    NativeSuccessorStore, SuccessorMutationStore, SuccessorProgressVerifier, SuccessorReadStore,
+};
 pub use transaction::*;
 
-use crate::StoreErrorV1;
+#[cfg(feature = "test-support")]
+use crate::direct_store::{EXECUTION_GROUP_STORE_DDL_V1, EXECUTION_GROUP_STORE_GENERATION_V1};
+use crate::{StoreErrorV1, direct_store::MAX_EXECUTION_GROUP_ATTEMPT_ROW_BYTES_V1};
 use podway_core::execution_groups::*;
 use podway_core::{
     DomainError, MAX_PROCEDURE_DOCUMENT_BYTES, Revision, SessionId, SessionLifecycle, Sha256Digest,
     UnixMillis, canonicalize_json_v1, verify_canonical_json_v1,
 };
+#[cfg(feature = "test-support")]
+use rusqlite::OpenFlags;
+#[cfg(feature = "test-support")]
 use rusqlite::limits::Limit;
 use rusqlite::types::ValueRef;
-use rusqlite::{Connection, OpenFlags, Params, Row, Transaction, params};
+use rusqlite::{Connection, Params, Row, Transaction, params};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+#[cfg(feature = "test-support")]
 use std::path::Path;
 
-const CANDIDATE_DDL: &str = include_str!("../../../assets/specifications/sqlite-v16.sql");
-const CANDIDATE_GENERATION: u32 = 16;
+#[cfg(feature = "test-support")]
+const CANDIDATE_DDL: &str = EXECUTION_GROUP_STORE_DDL_V1;
+#[cfg(feature = "test-support")]
+const CANDIDATE_GENERATION: u32 = EXECUTION_GROUP_STORE_GENERATION_V1;
+#[cfg(feature = "test-support")]
 const CANDIDATE_WRITER: &str = "execution-groups-candidate";
 // Match the canonical v16 row bounds. The activation budget covers 128 ×
 // 2,000 rationale scalars at six JSON bytes each, their retained references,
 // and the bounded plan items, closure feedback, and activation metadata.
 const MAX_SESSION_JSON_BYTES: usize = 1_048_576;
 const MAX_ACTIVATION_JSON_BYTES: usize = 2_097_152;
-const MAX_ATTEMPT_JSON_BYTES: usize = 150_994_944;
+const MAX_ATTEMPT_JSON_BYTES: usize = MAX_EXECUTION_GROUP_ATTEMPT_ROW_BYTES_V1;
 const MAX_GOAL_JSON_BYTES: usize = 1_048_576;
+#[cfg(feature = "test-support")]
 const SQLITE_RECORD_METADATA_HEADROOM: i32 = 16_384;
 const UUID_BYTES: usize = 36;
 const DIGEST_BYTES: usize = 71;
@@ -96,6 +121,7 @@ pub enum CandidateDefinition {
 pub type CandidateSources = BTreeMap<Sha256Digest, String>;
 
 /// Create a new candidate file exclusively inside a caller-owned fixture directory.
+#[cfg(feature = "test-support")]
 pub fn create_candidate_fixture(path: &Path) -> Result<Connection> {
     std::fs::OpenOptions::new()
         .write(true)
@@ -113,12 +139,14 @@ pub fn create_candidate_fixture(path: &Path) -> Result<Connection> {
 }
 
 /// Read an isolated fixture through an explicitly read-only connection and validate its identity.
+#[cfg(feature = "test-support")]
 pub fn reopen_candidate_fixture(path: &Path) -> Result<Connection> {
     let connection = open_candidate(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     admit_writer(&connection)?;
     Ok(connection)
 }
 
+#[cfg(feature = "test-support")]
 fn open_candidate(path: &Path, flags: OpenFlags) -> Result<Connection> {
     let connection = Connection::open_with_flags(path, flags | OpenFlags::SQLITE_OPEN_NOFOLLOW)?;
     // Bound SQLite row materialization as well as the individual Rust field reads.
@@ -133,6 +161,7 @@ fn open_candidate(path: &Path, flags: OpenFlags) -> Result<Connection> {
     Ok(connection)
 }
 
+#[cfg(feature = "test-support")]
 fn admit_writer(connection: &Connection) -> Result<()> {
     let generation: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if generation != CANDIDATE_GENERATION {
@@ -167,20 +196,31 @@ struct Session {
     base_digest: Sha256Digest,
     selected: Option<GroupExecutionIdV1>,
     initial_goal: Option<records::Goal>,
+    initial_goal_actor: Option<String>,
     #[serde(with = "records::Lifecycle")]
     lifecycle: SessionLifecycle,
     revision: Revision,
+    created_at: UnixMillis,
     updated_at: UnixMillis,
 }
 
 /// Store one retained successor inside the caller's transaction. The operation changes only
 /// affected rows. Definitions already retained under a digest must have identical bytes.
+#[cfg(feature = "test-support")]
 pub fn persist_candidate_execution(
     transaction: &Transaction<'_>,
     state: &ExecutionSessionV3,
     sources: &CandidateSources,
 ) -> Result<()> {
     admit_writer(transaction)?;
+    persist_execution(transaction, state, sources)
+}
+
+pub(crate) fn persist_execution(
+    transaction: &Transaction<'_>,
+    state: &ExecutionSessionV3,
+    sources: &CandidateSources,
+) -> Result<()> {
     let fence = state.fence();
     let session_id = fence.session.as_str();
     if transaction.query_row(
@@ -213,8 +253,12 @@ pub fn persist_candidate_execution(
             .selected()
             .map(|entry| entry.identity().execution().clone()),
         initial_goal: state.initial_goal().map(Into::into),
+        initial_goal_actor: state
+            .initial_goal_actor()
+            .map(|value| value.as_str().to_owned()),
         lifecycle: state.lifecycle(),
         revision: fence.revision,
+        created_at: state.created_at(),
         updated_at: state.updated_at(),
     };
     let (record, checksum) = encode(&header)?;
@@ -229,6 +273,7 @@ pub fn persist_candidate_execution(
         exact_revision = previous.revision == fence.revision;
         if previous.id != fence.session
             || previous.base_digest != *state.base_digest()
+            || previous.created_at != state.created_at()
             || previous.revision > fence.revision
             || (exact_revision && digest != checksum.as_str())
         {
@@ -424,6 +469,7 @@ fn persist_definition(
 ///
 /// The caller must fully admit the canonical definition bytes and return the corresponding typed
 /// definition. The candidate integration harness supplies Config's successor parser and validator.
+#[cfg(feature = "test-support")]
 pub fn load_candidate_execution(
     transaction: &Transaction<'_>,
     session_id: &SessionId,
@@ -432,14 +478,108 @@ pub fn load_candidate_execution(
     load_candidate_content(transaction, session_id, admit_definition, None)
 }
 
+#[cfg(feature = "test-support")]
 fn load_candidate_content(
     transaction: &Transaction<'_>,
     session_id: &SessionId,
     admit_definition: impl Fn(&str) -> Result<CandidateDefinition>,
     checksums: Option<&mut Sha256>,
 ) -> Result<(ExecutionSessionV3, CandidateSources)> {
-    let mut history = HistoryChecksums(checksums);
     admit_writer(transaction)?;
+    load_execution(transaction, session_id, admit_definition, checksums)
+}
+
+fn current_session_header(connection: &Connection) -> Result<Option<Session>> {
+    let mut statement = connection.prepare(
+        "SELECT session_id, record_json, record_digest FROM successor_sessions WHERE archived = 0",
+    )?;
+    let mut rows = statement.query([])?;
+    let Some(row) = rows.next()? else {
+        return Ok(None);
+    };
+    let header: Session = decode_row(row, 1, MAX_SESSION_JSON_BYTES)?;
+    if bounded_text(row, 0, UUID_BYTES)? != header.id.as_str() {
+        return Err(corrupt("current session identity differs"));
+    }
+    Ok(Some(header))
+}
+
+pub(crate) fn current_execution(connection: &Connection) -> Result<Option<(SessionId, Revision)>> {
+    Ok(current_session_header(connection)?.map(|header| (header.id, header.revision)))
+}
+
+pub(crate) fn load_current_execution(
+    connection: &Connection,
+    admit: impl Fn(&str) -> Result<CandidateDefinition>,
+) -> Result<Option<(ExecutionSessionV3, CandidateSources)>> {
+    let Some((id, _)) = current_execution(connection)? else {
+        return Ok(None);
+    };
+    session_metadata(connection, &id)?
+        .ok_or_else(|| corrupt("current session metadata is absent"))?;
+    let (state, sources) = load_execution(connection, &id, admit, None)?;
+    require_settled_goal_assessments(&state)?;
+    verify_receipts(connection, &state)?;
+    Ok(Some((state, sources)))
+}
+
+pub(crate) fn load_archived_execution(
+    connection: &Connection,
+    session: &SessionId,
+    admit: impl Fn(&str) -> Result<CandidateDefinition>,
+) -> Result<Option<(ExecutionSessionV3, CandidateSources)>> {
+    let Some(metadata) = session_metadata(connection, session)? else {
+        return Ok(None);
+    };
+    let Some(archive) = metadata.archived else {
+        return Ok(None);
+    };
+    let (state, sources) = load_execution(connection, session, admit, None)?;
+    require_settled_goal_assessments(&state)?;
+    verify_receipts(connection, &state)?;
+    check_archived_state(connection, &state, &archive)?;
+    Ok(Some((state, sources)))
+}
+
+pub(crate) fn require_settled_goal_assessments(state: &ExecutionSessionV3) -> Result<()> {
+    if state.attempt_history().iter().any(|attempt| {
+        attempt.criterion_assessments().is_none()
+            && attempt
+                .decision()
+                .is_some_and(|decision| decision.goal_assessment.is_some())
+    }) {
+        return Err(corrupt(
+            "goal decision has no retained criterion assessment set",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn check_archived_state(
+    connection: &Connection,
+    state: &ExecutionSessionV3,
+    archive: &SuccessorArchiveMetadata,
+) -> Result<()> {
+    let fence = state.fence();
+    let disposition = terminal_disposition(connection, &fence.session, fence.revision)?;
+    if !matches!(
+        state.lifecycle(),
+        SessionLifecycle::Completed | SessionLifecycle::Cancelled
+    ) || disposition.is_none_or(|disposition| {
+        disposition.recorded_at() < state.updated_at() || disposition.recorded_at() > archive.at
+    }) {
+        return Err(corrupt("archived session and its disposition disagree"));
+    }
+    Ok(())
+}
+
+fn load_execution(
+    transaction: &Connection,
+    session_id: &SessionId,
+    admit_definition: impl Fn(&str) -> Result<CandidateDefinition>,
+    checksums: Option<&mut Sha256>,
+) -> Result<(ExecutionSessionV3, CandidateSources)> {
+    let mut history = HistoryChecksums(checksums);
     let mut header_query = transaction.prepare(
         "SELECT base_digest, record_json, record_digest FROM successor_sessions WHERE session_id = ?1",
     )?;
@@ -517,16 +657,21 @@ fn load_candidate_content(
         selected: header.selected,
         attempts,
         initial_goal: header.initial_goal.map(records::Goal::admit).transpose()?,
+        initial_goal_actor: header
+            .initial_goal_actor
+            .map(podway_core::ActorAttributionV2::new)
+            .transpose()?,
         goal_revisions,
         lifecycle: header.lifecycle,
         revision: header.revision,
+        created_at: header.created_at,
         updated_at: header.updated_at,
     })?;
     Ok((state, sources))
 }
 
 fn load_definition(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     identity: &Sha256Digest,
     expected: &str,
     sources: &mut CandidateSources,
@@ -552,7 +697,7 @@ fn load_definition(
 }
 
 fn load_attempts(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     session_id: &SessionId,
     history: &mut HistoryChecksums<'_>,
 ) -> Result<Vec<RetainedAttemptV3>> {
@@ -582,7 +727,7 @@ fn load_attempts(
 }
 
 fn load_goals(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     session_id: &SessionId,
     history: &mut HistoryChecksums<'_>,
 ) -> Result<Vec<GroupGoalRevisionV1>> {

@@ -27,6 +27,24 @@ keeps both Primary-host mappings, trusted controller/configuration ownership,
 complete byte domains, response-loss recovery and live comparative acceptance.
 A permission query or metadata observation supplies none of those external facts.
 
+## Scoped packages and receipts
+
+In the generation 16 runtime,
+[the scoped work package](../../../assets/schemas/delegation-work-package-v2.schema.json)
+binds the workspace and exact base or group attempt. A group attempt binds
+both the group execution and the immutable definition digest. Resolve the
+current package, record final items and settle the external assignment before
+submitting the [scoped acceptance](../../../assets/schemas/delegation-accept-input-v2.schema.json).
+It carries its own cursor and idempotency key. The immutable
+[receipt](../../../assets/schemas/delegation-receipt-v2.schema.json) retains
+the original package binding and accepted item digest. The
+[receipt query](../../../assets/schemas/delegation-receipt-result-v2.schema.json)
+reports its applicability. Only an applicable accepted receipt can satisfy
+the active attempt's delegation gate.
+
+The following host-neutral requirements remain applicable. Descriptions of
+unscoped v1 inputs and results apply to the original Procedure v2 writer.
+
 ## Admission ownership
 
 Parsed delegation is a property of an action placement, never a decision option
@@ -42,13 +60,13 @@ existing successful-outcome replay, caller fences, lifecycle and native
 revalidation checks. It does not make malformed direct input outrank a stale
 session fence. Store keeps independent closed-shape, persisted-value and
 input-to-receipt admission, sharing only Core Role construction, round bounds
-and the declared after-accept disposition predicate. No public field or wire
-representation changes.
+and the declared after-accept disposition predicate. Use the scoped schemas
+above for the current wire representation.
 
 ## SDG-001: Responsibilities and scope
 
-Keep the Procedure v2 Action/Decision distinction and exactly one authoritative
-outer cursor and active attempt. A Direct action is performed by the Primary;
+Keep the Action/Decision distinction and exactly one authoritative cursor and
+active attempt across the base and selected group. A Direct action is performed by the Primary;
 a Delegated action is performed by a Specialist under that Primary's
 supervision. A Primary may be externally hosted or runtime-managed. Supervisor
 is a responsibility, not a separately required agent. No placement creates a
@@ -425,6 +443,10 @@ not permit reuse, cross-aggregate transfer, or a write escalation. Podway never
 selects the worker itself.
 
 ## SDG-008: Public contract generations
+
+The current result and input families are listed under
+[Scoped packages and receipts](#scoped-packages-and-receipts). This section
+retains the previous writer's wire versions and their release basis.
 
 Canonical assets and the manifest/catalog workflow own current identifiers. The
 output envelope is `podway.output/v4`; failures use `podway.error/v2`. Result

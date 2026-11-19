@@ -58,7 +58,7 @@ Target release: `v0.2.18` (planning only).
 | id | title | status | goal | references |
 |---|---|---|---|---|
 | `FRAME-001` | Establish successor schemas and domain types | Completed | Define base/group ports, immutable identity, declared replan options, assessment records and decision counters. | [Successor schemas and identity](../specs/domain/execution-groups.md#identity-and-retained-assertions) |
-| `FRAME-002` | Validate and project bounded execution groups | Completed | Validate anchors, references, guarded failure/replan routes (reject unguarded custom options), rework and termination; canonicalize, digest and project the graph. | [Internal source admission and projections](../specs/domain/execution-groups.md#internal-source-admission-and-projections) |
+| `FRAME-002` | Validate and project bounded execution groups | Completed | Validate anchors, references, guarded failure/replan routes (reject unguarded custom options), rework and termination; canonicalize, digest and project the graph. | [Source admission and projections](../specs/domain/execution-groups.md#source-admission-and-projections) |
 | `FRAME-003` | Implement pure group lifecycle rules | Completed | Derive activation, return, decision-only scored replan, entry counts, goal and evidence-currentness transitions. | [Pure execution lifecycle](../specs/domain/execution-groups.md#pure-execution-lifecycle) |
 | `FRAME-004` | Qualify the model and finish the Epic | Completed | Verify model failures, architecture and development gate; promote durable model ownership. | [Execution group integration checks](../implementation-tips/testing.md#execution-group-integration-checks) |
 
@@ -93,14 +93,14 @@ Target release: `v0.2.18` (planning only).
 
 ## ADOPT — Product Adoption and Qualification
 
-Dependencies: Completed TRACE. Status: Planned.
+Dependencies: Completed TRACE. Status: In Progress.
 Execution owner: `aquarium:epic-handler` when explicitly invoked.
 Detailed SOT: [Execution-group continuation](../todo/TODO-podway-continuation-groups.md).
 Target release: `v0.2.18` (planning only).
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `ADOPT-001` | Expose the atomic successor product cutover | Planned | Switch CLI/parser/runtime, Store/writer/manifests, successor presets with complete node/failure guidance and scoped delegation contracts together. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `ADOPT-001` | Expose the atomic successor product cutover | Completed | Switch CLI/parser/runtime, Store/writer/manifests, successor presets with complete node/failure guidance and scoped delegation contracts together. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
 | `ADOPT-002` | Align successor guidance and additional examples | Planned | Provide normal, staged-failure and justified-replan authoring examples without artificial loops; align paired source skills; preserve installed copies and managed Procedures. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
 | `ADOPT-003` | Specify external role and assignment consumption | Planned | Provide executor-neutral assignment, affected Evaluator/CO decisions, assessment reuse, settlement and late-result examples. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
 | `ADOPT-004` | Qualify the single-model cutover | Planned | Verify unchanged refusal of authentic v2/previous-writer fixtures and explicit safe recovery. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |

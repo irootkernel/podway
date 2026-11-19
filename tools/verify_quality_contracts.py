@@ -308,7 +308,12 @@ def validate_crash_registry() -> int:
         or coverage.get("percent") != 100
         or observed != expected
     ):
-        fail("crash registry must provide exact ordered 100% coverage")
+        fail("crash registry must provide exact ordered 100% locator coverage")
+    if (
+        coverage.get("scope") != "registered_current_and_historical_proof_locators"
+        or coverage.get("historical_only") != ["DS01", "DS02", "DS03", "DS04", "DS05", "DE05"]
+    ):
+        fail("crash registry must identify the historical-only exact proof locators")
     required_proof = {
         "failpoint",
         "test",

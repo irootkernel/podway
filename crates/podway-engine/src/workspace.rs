@@ -1569,12 +1569,14 @@ pub struct ResolvedWorkspaceV1 {
     workspace_root: ValidatedWorkspaceRootV1,
     database_path: PathBuf,
     move_metadata: WorktreeMoveMetadataV1,
+    schema_generation: u32,
 }
 
 impl ResolvedWorkspaceV1 {
     fn new(
         worktree: ValidatedWorktreeV1,
         database_path: PathBuf,
+        schema_generation: u32,
     ) -> Result<Self, WorkspaceResolutionErrorV1> {
         let store_identity = store_identity_from_git(worktree.identity());
         let workspace_root = store_root_from_worktree(&worktree)?;
@@ -1585,6 +1587,7 @@ impl ResolvedWorkspaceV1 {
             workspace_root,
             database_path,
             move_metadata,
+            schema_generation,
         })
     }
 
@@ -1604,6 +1607,10 @@ impl ResolvedWorkspaceV1 {
         &self.database_path
     }
 
+    pub(crate) fn schema_generation(&self) -> u32 {
+        self.schema_generation
+    }
+
     pub fn move_metadata(&self) -> &WorktreeMoveMetadataV1 {
         &self.move_metadata
     }
@@ -1618,6 +1625,7 @@ pub struct DirectWorkspaceResolverV1<R> {
     manifest: podway_core::Sha256Digest,
     store_boundary_observer: Option<DirectStoreBoundaryObserverV1>,
     artifact_hash_observer: Option<crate::native_execution::NativeArtifactHashObserverV1>,
+    execution_groups: bool,
 }
 
 #[derive(Debug)]
@@ -1663,7 +1671,40 @@ impl<R: GitResolverContractV1> DirectWorkspaceResolverV1<R> {
             manifest,
             store_boundary_observer: None,
             artifact_hash_observer: None,
+            execution_groups: true,
         }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn for_v15_fixture(git_resolver: R, manifest: podway_core::Sha256Digest) -> Self {
+        let mut resolver = Self::new(git_resolver, manifest);
+        resolver.execution_groups = false;
+        resolver
+    }
+
+    pub(crate) const fn uses_execution_groups(&self) -> bool {
+        self.execution_groups
+    }
+
+    fn store_layout(
+        &self,
+        worktree: &ValidatedWorktreeV1,
+    ) -> Result<DirectWorkspaceLayoutV1, DirectWorkspaceResolutionErrorV1> {
+        let root = store_root_from_worktree(worktree)?;
+        #[cfg(any(test, feature = "test-support"))]
+        if !self.execution_groups {
+            return Ok(DirectWorkspaceLayoutV1::for_v15_fixture(root)?);
+        }
+        Ok(DirectWorkspaceLayoutV1::new(root)?)
+    }
+
+    pub(crate) fn initial_workspace_config(&self) -> &'static [u8] {
+        #[cfg(any(test, feature = "test-support"))]
+        if !self.execution_groups {
+            return podway_config::V15_FIXTURE_WORKSPACE_CONFIG_YAML_V1;
+        }
+        podway_config::DEFAULT_WORKSPACE_CONFIG_YAML_V1
     }
 
     /// Explicit instrumentation of actual Store boundaries; no product flags.
@@ -1746,7 +1787,7 @@ impl<R: GitResolverContractV1> DirectWorkspaceResolverV1<R> {
     ) -> Result<(ValidatedWorktreeV1, DirectStoreV1), DirectWorkspaceResolutionErrorV1> {
         let worktree = self.resolve_preliminary(&selector)?;
         require_candidate_identity(&worktree)?;
-        let layout = DirectWorkspaceLayoutV1::new(store_root_from_worktree(&worktree)?)?;
+        let layout = self.store_layout(&worktree)?;
         let store = DirectStoreV1::new(
             layout,
             self.manifest.clone(),
@@ -1928,7 +1969,7 @@ impl<R: GitResolverContractV1> DirectWorkspaceResolverV1<R> {
             error
         })?;
         require_candidate_identity(&preliminary)?;
-        let layout = DirectWorkspaceLayoutV1::new(store_root_from_worktree(&preliminary)?)?;
+        let layout = self.store_layout(&preliminary)?;
         if let Err(error) = self.validate_workspace_config(&preliminary) {
             // Removal can invalidate a config read while its marker still owns admission.
             // Classify without opening SQLite; unmarked invalid config remains rejected.
@@ -1969,7 +2010,11 @@ impl<R: GitResolverContractV1> DirectWorkspaceResolverV1<R> {
         }
         let revalidated = self.revalidate_worktree(preliminary, binding, selector)?;
         let path = require_stable_database_path(database_path, &revalidated)?;
-        Ok(ResolvedWorkspaceV1::new(revalidated, path)?)
+        Ok(ResolvedWorkspaceV1::new(
+            revalidated,
+            path,
+            binding.schema_version(),
+        )?)
     }
 
     /// The caller supplies its transaction's validated binding. No nested Store open occurs.

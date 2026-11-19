@@ -1,0 +1,776 @@
+schema: podway.execution-group/v1
+id: analysis-default-v3
+version: "1"
+name: Analysis default execution group
+purpose: Produce a reviewed decision-ready analysis from bounded sources, explicit assumptions, counterarguments, and uncertainty.
+node_definitions:
+  collection:
+    type: action
+    title: Collect the evidence
+    intent: Gather bounded sources and make their material limitations explicit.
+    instructions:
+      - "Accountable role: Task Operator. Use the current selected evidence and record the declared outputs against that basis."
+      - Gather sources relevant to the recorded question and decision context.
+      - Record limitations as an explicit list, including an empty list when none is known.
+      - Report actual negative or incomplete results in the declared output fields. If a required result cannot be supplied, record a blocker with the missing facts.
+    items:
+      - id: sources
+        type: list
+        prompt: List the authoritative sources or stable inputs used by the analysis.
+        required: true
+        min_items: 2
+        max_items: 40
+        max_item_length: 1000
+        max_total_length: 40000
+        unique: true
+      - id: source-limitations
+        type: list
+        prompt: List material source limitations in English, or record an empty list when none is known.
+        required: true
+        min_items: 0
+        max_items: 20
+        max_item_length: 1000
+        max_total_length: 20000
+        unique: true
+  analysis:
+    type: action
+    title: Analyze the evidence
+    intent: Derive bounded findings from the collected evidence and expose material assumptions.
+    instructions:
+      - "Accountable role: Task Operator. Use the current selected evidence and record the declared outputs against that basis."
+      - Analyze the selected sources against the defined question and constraints.
+      - Separate supported findings from assumptions and summarize the reasoning in English.
+      - Report actual negative or incomplete results in the declared output fields. If a required result cannot be supplied, record a blocker with the missing facts.
+    items:
+      - id: analysis-summary
+        type: text
+        prompt: Summarize the analysis and reasoning in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: key-findings
+        type: list
+        prompt: List the supported key findings in English.
+        required: true
+        min_items: 1
+        max_items: 20
+        max_item_length: 1000
+        max_total_length: 20000
+        unique: true
+      - id: assumptions
+        type: list
+        prompt: List material assumptions in English, or record an empty list when none is needed.
+        required: true
+        min_items: 0
+        max_items: 20
+        max_item_length: 500
+        max_total_length: 10000
+        unique: true
+  challenge:
+    type: action
+    title: Challenge the analysis
+    intent: Test the findings against counterarguments, uncertainty, and missing evidence.
+    instructions:
+      - "Accountable role: independent Evaluator. Use the current selected evidence and record the declared outputs against that basis."
+      - Challenge the analysis with credible alternatives and counterarguments.
+      - Record every evidence gap that blocks decision-ready synthesis, or an empty list when none remains.
+      - Report actual negative or incomplete results in the declared output fields. If a required result cannot be supplied, record a blocker with the missing facts.
+    items:
+      - id: counterarguments
+        type: list
+        prompt: List the material counterarguments or alternative explanations in English.
+        required: true
+        min_items: 1
+        max_items: 20
+        max_item_length: 1000
+        max_total_length: 20000
+        unique: true
+      - id: uncertainty
+        type: text
+        prompt: Explain the material uncertainty and what could change the conclusion in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: blocking-gaps
+        type: list
+        prompt: List evidence gaps that block synthesis, or record an empty list when the evidence is sufficient.
+        required: true
+        min_items: 0
+        max_items: 20
+        max_item_length: 1000
+        max_total_length: 20000
+        unique: true
+  assess-evaluate-evidence:
+    type: action
+    title: Assess evaluate evidence readiness
+    intent: Report the current positive or negative basis for the Coordinator decision.
+    instructions:
+      - "Accountable role: affected Evaluator. Read selected checks, work and findings, identify any actual failure, and record the current verdict and stage."
+      - Success advances immediately. Record not-scored and a zero placeholder for success at any entry.
+      - Use the upcoming entry ordinal for this decision and selected group. First-entry failure receives ordinary local rework, the second receives lightweight screening, and each third or later failure receives scored assessment.
+      - A concrete serious structural defect may receive an earlier scored assessment. Support every score with current facts, scope and provenance.
+      - "Need to change DAG structure (50): 0 no structural defect, 10/20 preference or inefficiency, 30 unsuitable boundaries, 40 missing required dependency or verification route, 50 required delivery is impossible."
+      - "Difficulty of local correction (30): 0 a viable local correction exists, 10 alternatives remain uninvestigated, 20 tried corrections failed but alternatives remain, 30 no viable local correction."
+      - "Lack of progress (20): 0 no repeat or meaningful improvement, 10 repeated cause with partial progress, 20 three or more failure results without meaningful progress."
+      - Scores below 80 prohibit replan. At or above 80, the Coordinator may replan, continue with a viable correction, or retain a blocker.
+      - Reuse a prior applicable assessment only by recording current applicability and provenance. Report unavailable facts as a blocker if required output cannot be recorded.
+      - Never manufacture a failure, inflate a score, or repeat a decision to increase its ordinal.
+    items:
+      - id: assessment-verdict
+        type: choice
+        prompt: Record success only when the selected evidence satisfies the next decision.
+        required: true
+        choices:
+          - success
+          - failure
+      - id: assessment-stage
+        type: choice
+        prompt: Record the stage actually used on the current evidence.
+        required: true
+        choices:
+          - not-scored
+          - lightweight
+          - scored
+      - id: assessment-score
+        type: integer
+        prompt: Record the scored total, or a zero placeholder for an unscored assessment.
+        required: true
+        minimum: 0
+        maximum: 100
+      - id: screening
+        type: text
+        prompt: Record repeated cause, actual progress and remaining local alternatives.
+        required: false
+        required_when:
+          - item: assessment-stage
+            equals: lightweight
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: scored-basis
+        type: text
+        prompt: Record each component in increments of 10, its factual reason, and the current report reference or reuse basis.
+        required: false
+        required_when:
+          - item: assessment-stage
+            equals: scored
+        min_length: 1
+        max_length: 4000
+        multiline: true
+  evidence-decision:
+    type: decision
+    title: Evaluate evidence readiness
+    objective: Route the analysis according to whether blocking evidence gaps remain.
+    prompt: Is the current evidence sufficient for decision-ready synthesis?
+    evidence_guidance:
+      - Read the selected blocking evidence gaps from the current challenge attempt.
+      - "Coordinator: read the current verdict, stage, ordinal and supporting evidence. Advance immediately on success."
+      - On failure, use a viable local correction or the current guarded replan option. For every third or later failure, record the scored basis and explain the current route choice.
+      - Settle modifying descendants and uncertain external operations before replanning. Record why and what work is retained. Block with concrete missing facts if no admitted route is viable.
+      - Do not manufacture failures, repeat a decision without new evidence, inflate scores or replan to demonstrate the feature.
+    options:
+      - id: sufficient
+        label: Evidence sufficient
+        criteria: The selected blocking-gaps list is empty.
+        guards:
+          - evidence:
+              scope: local
+              node: challenge
+              item: blocking-gaps
+            empty: true
+          - evidence:
+              scope: local
+              node: assess-evaluate-evidence
+              item: assessment-verdict
+            equals: success
+      - id: more-research
+        label: More research required
+        criteria: The selected blocking-gaps list is non-empty.
+        guards:
+          - evidence:
+              scope: local
+              node: challenge
+              item: blocking-gaps
+            non_empty: true
+          - evidence:
+              scope: local
+              node: assess-evaluate-evidence
+              item: assessment-verdict
+            equals: failure
+      - id: replan
+        label: Return for a new plan
+        criteria: The current failure has a scored assessment of at least 80 and the Coordinator justifies changing topology.
+        guards:
+          - evidence:
+              scope: local
+              node: assess-evaluate-evidence
+              item: assessment-verdict
+            equals: failure
+          - evidence:
+              scope: local
+              node: assess-evaluate-evidence
+              item: assessment-stage
+            equals: scored
+          - evidence:
+              scope: local
+              node: assess-evaluate-evidence
+              item: assessment-score
+            at_least: 80
+    reason:
+      required: true
+      prompt: Explain the selection using the recorded evidence gaps in English.
+  synthesis:
+    type: action
+    title: Synthesize the conclusion
+    intent: Produce a bounded conclusion and recommendation that preserve uncertainty and residual risk.
+    instructions:
+      - "Accountable role: Task Operator. Use the current selected evidence and record the declared outputs against that basis."
+      - Synthesize the fresh evidence, findings, counterarguments, and uncertainty.
+      - Record a decision-ready conclusion, recommendation, confidence, and residual risks in English.
+      - Report actual negative or incomplete results in the declared output fields. If a required result cannot be supplied, record a blocker with the missing facts.
+    items:
+      - id: conclusion
+        type: text
+        prompt: Record the supported conclusion in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: recommendation
+        type: text
+        prompt: Record the recommended decision or next action in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: confidence
+        type: choice
+        prompt: Select the confidence in the conclusion.
+        required: true
+        choices:
+          - low
+          - medium
+          - high
+      - id: residual-risks
+        type: list
+        prompt: List residual risks in English, or record an empty list when none remains.
+        required: true
+        min_items: 0
+        max_items: 20
+        max_item_length: 1000
+        max_total_length: 20000
+        unique: true
+  review-work:
+    type: action
+    title: Review the analysis
+    intent: Record source-owned and analysis-owned findings for deterministic rework routing.
+    instructions:
+      - "Accountable role: independent Reviewer. Use the current selected evidence and record the declared outputs against that basis."
+      - Review the source basis, reasoning, challenge, conclusion, recommendation, and trust claims.
+      - Record separate unresolved counts and the corresponding bounded findings in English.
+      - Report actual negative or incomplete results in the declared output fields. If a required result cannot be supplied, record a blocker with the missing facts.
+    items:
+      - id: review-summary
+        type: text
+        prompt: Summarize the review result in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: unresolved-source-findings
+        type: integer
+        prompt: Record the number of unresolved source or evidence findings.
+        required: true
+        minimum: 0
+      - id: unresolved-analysis-findings
+        type: integer
+        prompt: Record the number of unresolved reasoning, synthesis, or trust-claim findings.
+        required: true
+        minimum: 0
+      - id: source-findings
+        type: list
+        prompt: List unresolved source or evidence findings in English.
+        required: false
+        required_when:
+          - item: unresolved-source-findings
+            at_least: 1
+        min_items: 1
+        max_items: 20
+        max_item_length: 1000
+        max_total_length: 20000
+        unique: true
+      - id: analysis-findings
+        type: list
+        prompt: List unresolved reasoning, synthesis, or trust-claim findings in English.
+        required: false
+        required_when:
+          - item: unresolved-analysis-findings
+            at_least: 1
+        min_items: 1
+        max_items: 20
+        max_item_length: 1000
+        max_total_length: 20000
+        unique: true
+  assess-evaluate-review:
+    type: action
+    title: Assess evaluate the analysis review
+    intent: Report the current positive or negative basis for the Coordinator decision.
+    instructions:
+      - "Accountable role: affected Evaluator. Read selected checks, work and findings, identify any actual failure, and record the current verdict and stage."
+      - Success advances immediately. Record not-scored and a zero placeholder for success at any entry.
+      - Use the upcoming entry ordinal for this decision and selected group. First-entry failure receives ordinary local rework, the second receives lightweight screening, and each third or later failure receives scored assessment.
+      - A concrete serious structural defect may receive an earlier scored assessment. Support every score with current facts, scope and provenance.
+      - "Need to change DAG structure (50): 0 no structural defect, 10/20 preference or inefficiency, 30 unsuitable boundaries, 40 missing required dependency or verification route, 50 required delivery is impossible."
+      - "Difficulty of local correction (30): 0 a viable local correction exists, 10 alternatives remain uninvestigated, 20 tried corrections failed but alternatives remain, 30 no viable local correction."
+      - "Lack of progress (20): 0 no repeat or meaningful improvement, 10 repeated cause with partial progress, 20 three or more failure results without meaningful progress."
+      - Scores below 80 prohibit replan. At or above 80, the Coordinator may replan, continue with a viable correction, or retain a blocker.
+      - Reuse a prior applicable assessment only by recording current applicability and provenance. Report unavailable facts as a blocker if required output cannot be recorded.
+      - Never manufacture a failure, inflate a score, or repeat a decision to increase its ordinal.
+    items:
+      - id: assessment-verdict
+        type: choice
+        prompt: Record success only when the selected evidence satisfies the next decision.
+        required: true
+        choices:
+          - success
+          - failure
+      - id: assessment-stage
+        type: choice
+        prompt: Record the stage actually used on the current evidence.
+        required: true
+        choices:
+          - not-scored
+          - lightweight
+          - scored
+      - id: assessment-score
+        type: integer
+        prompt: Record the scored total, or a zero placeholder for an unscored assessment.
+        required: true
+        minimum: 0
+        maximum: 100
+      - id: screening
+        type: text
+        prompt: Record repeated cause, actual progress and remaining local alternatives.
+        required: false
+        required_when:
+          - item: assessment-stage
+            equals: lightweight
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: scored-basis
+        type: text
+        prompt: Record each component in increments of 10, its factual reason, and the current report reference or reuse basis.
+        required: false
+        required_when:
+          - item: assessment-stage
+            equals: scored
+        min_length: 1
+        max_length: 4000
+        multiline: true
+  review-decision:
+    type: decision
+    title: Evaluate the analysis review
+    objective: Route each unresolved finding to the phase that owns its correction.
+    prompt: Which phase owns the current review outcome?
+    evidence_guidance:
+      - Read the selected summary, unresolved counts, and conditional finding lists.
+      - Source findings take precedence over analysis findings.
+      - "Coordinator: read the current verdict, stage, ordinal and supporting evidence. Advance immediately on success."
+      - On failure, use a viable local correction or the current guarded replan option. For every third or later failure, record the scored basis and explain the current route choice.
+      - Settle modifying descendants and uncertain external operations before replanning. Record why and what work is retained. Block with concrete missing facts if no admitted route is viable.
+      - Do not manufacture failures, repeat a decision without new evidence, inflate scores or replan to demonstrate the feature.
+    options:
+      - id: approved
+        label: Analysis approved
+        criteria: No unresolved source or analysis finding remains.
+        guards:
+          - evidence:
+              scope: local
+              node: review
+              item: unresolved-source-findings
+            equals: 0
+          - evidence:
+              scope: local
+              node: review
+              item: unresolved-analysis-findings
+            equals: 0
+          - evidence:
+              scope: local
+              node: assess-evaluate-review
+              item: assessment-verdict
+            equals: success
+      - id: source-changes
+        label: Source changes required
+        criteria: At least one unresolved source or evidence finding remains.
+        guards:
+          - evidence:
+              scope: local
+              node: review
+              item: unresolved-source-findings
+            at_least: 1
+          - evidence:
+              scope: local
+              node: assess-evaluate-review
+              item: assessment-verdict
+            equals: failure
+      - id: analysis-changes
+        label: Analysis changes required
+        criteria: No source finding remains and at least one reasoning, synthesis, or trust-claim finding remains.
+        guards:
+          - evidence:
+              scope: local
+              node: review
+              item: unresolved-source-findings
+            equals: 0
+          - evidence:
+              scope: local
+              node: review
+              item: unresolved-analysis-findings
+            at_least: 1
+          - evidence:
+              scope: local
+              node: assess-evaluate-review
+              item: assessment-verdict
+            equals: failure
+      - id: replan
+        label: Return for a new plan
+        criteria: The current failure has a scored assessment of at least 80 and the Coordinator justifies changing topology.
+        guards:
+          - evidence:
+              scope: local
+              node: assess-evaluate-review
+              item: assessment-verdict
+            equals: failure
+          - evidence:
+              scope: local
+              node: assess-evaluate-review
+              item: assessment-stage
+            equals: scored
+          - evidence:
+              scope: local
+              node: assess-evaluate-review
+              item: assessment-score
+            at_least: 80
+    reason:
+      required: true
+      prompt: Explain the selected phase-owner route in English.
+  return-group-result:
+    type: action
+    title: Return the completed group result
+    intent: Return the declared current results for the base Procedure.
+    instructions:
+      - "Accountable role: Task Operator. Copy each bound result from the selected fresh evidence of this group and record the exact outputs for the base."
+      - Do not turn a missing or failed result into success. If a declared result is unavailable, record the missing evidence and remain blocked.
+    items:
+      - id: sources
+        type: list
+        prompt: List the authoritative sources or stable inputs used by the analysis.
+        required: true
+        min_items: 2
+        max_items: 40
+        max_item_length: 1000
+        max_total_length: 40000
+        unique: true
+      - id: conclusion
+        type: text
+        prompt: Record the supported conclusion in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: recommendation
+        type: text
+        prompt: Record the recommended decision or next action in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: confidence
+        type: choice
+        prompt: Select the confidence in the conclusion.
+        required: true
+        choices:
+          - low
+          - medium
+          - high
+      - id: residual-risks
+        type: list
+        prompt: List residual risks in English, or record an empty list when none remains.
+        required: true
+        min_items: 0
+        max_items: 20
+        max_item_length: 1000
+        max_total_length: 20000
+        unique: true
+      - id: review-summary
+        type: text
+        prompt: Summarize the review result in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: unresolved-source-findings
+        type: integer
+        prompt: Record the number of unresolved source or evidence findings.
+        required: true
+        minimum: 0
+      - id: unresolved-analysis-findings
+        type: integer
+        prompt: Record the number of unresolved reasoning, synthesis, or trust-claim findings.
+        required: true
+        minimum: 0
+graph:
+  entry: collect
+  nodes:
+    - id: collect
+      use: collection
+      evidence_from:
+        - scope: plan
+          required: true
+          items:
+            - analysis-question
+            - decision-context
+            - scope-and-constraints
+      next: analyze
+    - id: analyze
+      use: analysis
+      evidence_from:
+        - scope: plan
+          required: true
+          items:
+            - analysis-question
+            - scope-and-constraints
+        - scope: local
+          node: collect
+          required: true
+          items:
+            - sources
+            - source-limitations
+      next: challenge
+    - id: challenge
+      use: challenge
+      evidence_from:
+        - scope: local
+          node: analyze
+          required: true
+          items:
+            - analysis-summary
+            - key-findings
+            - assumptions
+      next: assess-evaluate-evidence
+    - id: assess-evaluate-evidence
+      use: assess-evaluate-evidence
+      evidence_from:
+        - scope: local
+          node: challenge
+          required: true
+          items:
+            - blocking-gaps
+      next: evaluate-evidence
+    - id: evaluate-evidence
+      use: evidence-decision
+      evidence_from:
+        - scope: local
+          node: challenge
+          required: true
+          items:
+            - blocking-gaps
+        - scope: local
+          node: assess-evaluate-evidence
+          required: true
+          items:
+            - assessment-verdict
+            - assessment-stage
+            - assessment-score
+            - screening
+            - scored-basis
+      routes:
+        sufficient:
+          to: synthesize
+          effect: advance
+        more-research:
+          to: collect
+          effect: rework
+        replan:
+          effect: replan
+    - id: synthesize
+      use: synthesis
+      evidence_from:
+        - scope: plan
+          required: true
+          items:
+            - analysis-question
+            - decision-context
+            - scope-and-constraints
+        - scope: local
+          node: collect
+          required: true
+          items:
+            - sources
+            - source-limitations
+        - scope: local
+          node: analyze
+          required: true
+          items:
+            - analysis-summary
+            - key-findings
+            - assumptions
+        - scope: local
+          node: challenge
+          required: true
+          items:
+            - counterarguments
+            - uncertainty
+            - blocking-gaps
+        - scope: local
+          node: evaluate-evidence
+          required: true
+      next: review
+    - id: review
+      use: review-work
+      evidence_from:
+        - scope: plan
+          required: true
+          items:
+            - analysis-question
+            - decision-context
+            - scope-and-constraints
+        - scope: local
+          node: collect
+          required: true
+          items:
+            - sources
+            - source-limitations
+        - scope: local
+          node: analyze
+          required: true
+          items:
+            - analysis-summary
+            - key-findings
+            - assumptions
+        - scope: local
+          node: challenge
+          required: true
+          items:
+            - counterarguments
+            - uncertainty
+            - blocking-gaps
+        - scope: local
+          node: evaluate-evidence
+          required: true
+        - scope: local
+          node: synthesize
+          required: true
+          items:
+            - conclusion
+            - recommendation
+            - confidence
+            - residual-risks
+      next: assess-evaluate-review
+    - id: assess-evaluate-review
+      use: assess-evaluate-review
+      evidence_from:
+        - scope: local
+          node: review
+          required: true
+          items:
+            - review-summary
+            - unresolved-source-findings
+            - unresolved-analysis-findings
+            - source-findings
+            - analysis-findings
+      next: evaluate-review
+    - id: evaluate-review
+      use: review-decision
+      evidence_from:
+        - scope: local
+          node: review
+          required: true
+          items:
+            - review-summary
+            - unresolved-source-findings
+            - unresolved-analysis-findings
+            - source-findings
+            - analysis-findings
+        - scope: local
+          node: assess-evaluate-review
+          required: true
+          items:
+            - assessment-verdict
+            - assessment-stage
+            - assessment-score
+            - screening
+            - scored-basis
+      routes:
+        approved:
+          to: return-group-result
+          effect: advance
+        source-changes:
+          to: collect
+          effect: rework
+        analysis-changes:
+          to: analyze
+          effect: rework
+        replan:
+          effect: replan
+    - id: return-group-result
+      use: return-group-result
+      evidence_from:
+        - scope: local
+          node: collect
+          required: true
+          items:
+            - sources
+        - scope: local
+          node: synthesize
+          required: true
+          items:
+            - conclusion
+            - recommendation
+            - confidence
+            - residual-risks
+        - scope: local
+          node: review
+          required: true
+          items:
+            - review-summary
+            - unresolved-source-findings
+            - unresolved-analysis-findings
+        - scope: local
+          node: evaluate-review
+          required: true
+      terminal: true
+manual_rework:
+  allowed_targets:
+    - collect
+    - analyze
+    - challenge
+    - synthesize
+    - review
+plan_inputs:
+  - id: analysis-question
+    type: text
+    prompt: Record the focused analysis question in English.
+    required: true
+    min_length: 1
+    max_length: 4000
+    multiline: true
+  - id: decision-context
+    type: text
+    prompt: Record the decision or use that this analysis must support in English.
+    required: true
+    min_length: 1
+    max_length: 2000
+    multiline: true
+  - id: scope-and-constraints
+    type: list
+    prompt: List the analysis scope and material constraints in English.
+    required: true
+    min_items: 1
+    max_items: 20
+    max_item_length: 500
+    max_total_length: 10000
+    unique: true

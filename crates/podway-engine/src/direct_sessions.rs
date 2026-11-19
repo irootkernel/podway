@@ -63,6 +63,9 @@ pub(crate) fn execute_session_with_context_v1<R: GitResolverContractV1>(
     clock: &impl ExecutionClockV1,
     context: Option<&mut crate::direct_api::DirectInvocationContextV1>,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
+    if resolver.uses_execution_groups() {
+        return crate::successor_execution::dispatch_successor_session(resolver, request, clock);
+    }
     if let DirectSessionCommandV1::Reset(input) = &request.command
         && input.dry_run
     {
@@ -240,7 +243,25 @@ fn reset_result(
     disposed: bool,
     dry_run: bool,
 ) -> Result<serde_json::Value, DirectStoreErrorV1> {
-    let (eligible, action) = match graph.trace().lifecycle() {
+    reset_result_for_session(
+        graph.trace().session_id(),
+        graph.trace().revision(),
+        graph.trace().lifecycle(),
+        mode,
+        disposed,
+        dry_run,
+    )
+}
+
+pub(crate) fn reset_result_for_session(
+    session: &podway_core::SessionId,
+    revision: podway_core::Revision,
+    current_lifecycle: SessionLifecycle,
+    mode: &SessionDeletionModeV1,
+    disposed: bool,
+    dry_run: bool,
+) -> Result<serde_json::Value, DirectStoreErrorV1> {
+    let (eligible, action) = match current_lifecycle {
         SessionLifecycle::Prepared => (true, "none"),
         SessionLifecycle::Running => (false, "force"),
         SessionLifecycle::Completed | SessionLifecycle::Cancelled => (
@@ -279,14 +300,14 @@ fn reset_result(
     };
     if !dry_run && mode == "eligible" && !eligible {
         return Err(StoreErrorV1::SessionResetNotEligibleV1 {
-            lifecycle: graph.trace().lifecycle(),
+            lifecycle: current_lifecycle,
             current_terminal_disposition: disposed,
         }
         .into());
     }
     Ok(
         json!({"schema":"podway.session-reset-result/v2", "dry_run":dry_run, "mode":mode,
-        "session_id":graph.trace().session_id(), "session_revision":graph.trace().revision(), "lifecycle":lifecycle(graph.trace().lifecycle()),
+        "session_id":session, "session_revision":revision, "lifecycle":lifecycle(current_lifecycle),
         "current_terminal_disposition":disposed, "eligible":eligible, "required_action":if dry_run { action } else { "none" }, "reset":!dry_run}),
     )
 }

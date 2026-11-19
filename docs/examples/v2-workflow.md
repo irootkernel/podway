@@ -1,8 +1,10 @@
 # Procedure v2 Workflow
 
-This walkthrough exercises the shipped `bug-fix-v2` preset through the normal
-in-process Direct Engine. Run it in the Git worktree whose task Podway should guard. The
-canonical preset records a caller's evidence and decisions. Podway enforces the
+This historical walkthrough uses the `bug-fix-v2` preset and the previous
+Direct writer. For current commands and admitted sources, see the
+[CLI specification](../specs/interfaces/cli-specification.md) and
+[built-in presets](../specs/domain/built-in-presets.md). The previous preset
+records a caller's evidence and decisions. Podway enforces the
 declared progression rules, but it does not run checks or decide whether recorded
 claims are true. The local worktree trusts same-user processes; actor labels
 provide correlation, not authentication or authorization.

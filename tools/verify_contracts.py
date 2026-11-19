@@ -199,7 +199,18 @@ APPROVED_COMMANDS = frozenset(
         "goal.assess_criterion",
         "goal.define",
         "goal.revise",
+        "group.activate",
+        "group.list",
+        "group.prior_work",
+        "group.replan",
+        "group.return",
+        "group.show",
         "help",
+        "history.attempts",
+        "history.blockers",
+        "history.dag",
+        "history.goal_revisions",
+        "history.item",
         "item.add",
         "item.attach",
         "item.check",
@@ -386,6 +397,15 @@ GENERATION_VARIABLE_POINTS = (
     *GENERATION_RESULT_VARIABLE_POINTS,
     *GENERATION_DETAILS_VARIABLE_POINTS,
 )
+HISTORICAL_GENERATION_DETAILS = {
+    "CRITERION_CITATION_INVALID": [
+        {
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {"kind": {"const": "CRITERION_CITATION_INVALID"}},
+        },
+        {"$ref": "urn:podway:schema:criterion-citation-invalid-details:v1"},
+    ],
+}
 
 
 class VerificationError(Exception):
@@ -573,12 +593,19 @@ def validate_catalog_inventory(root: Path) -> int:
         "DELEGATION_BINDING_MISMATCH",
         "DELEGATION_ALREADY_ACCEPTED",
     }
-    if not isinstance(entries, list) or len(entries) != 98:
-        fail("runtime error catalog must contain the exact 98 direct errors")
+    if not isinstance(entries, list):
+        fail("runtime error catalog must contain the exact canonical direct errors")
     runtime_codes = [entry.get("code") for entry in entries if isinstance(entry, dict)]
     if len(runtime_codes) != len(entries) or len(set(runtime_codes)) != len(runtime_codes):
         fail("runtime error catalog codes must be unique strings")
-    expected_codes = set(PROCEDURE_INDEPENDENT_RUNTIME_ERROR_CODES) | V2_RUNTIME_ERROR_CODES | delegation_errors | {
+    scoped_rejections = {
+        "GROUP_SELECTION_STALE", "GROUP_DEFINITION_MISMATCH",
+        "GROUP_ACTIVATION_NOT_ALLOWED", "GROUP_RETURN_NOT_ALLOWED", "GROUP_PLAN_STALE",
+        "GROUP_EXECUTION_NOT_FOUND", "HISTORY_PAGE_TOKEN_STALE",
+        "OUTCOME_LOOKUP_BUDGET_EXCEEDED", "RESPONSE_BUDGET_EXCEEDED",
+        "SESSION_TERMINAL_DISPOSITION_ALREADY_RECORDED",
+    }
+    expected_codes = set(PROCEDURE_INDEPENDENT_RUNTIME_ERROR_CODES) | V2_RUNTIME_ERROR_CODES | delegation_errors | scoped_rejections | {
         "WORKSPACE_BUSY", "LEGACY_RUNTIME_STATE_UNSUPPORTED",
         "WORKSPACE_CONTRACT_MISMATCH", "COMMAND_RETIRED",
     }
@@ -603,15 +630,21 @@ def validate_catalog_inventory(root: Path) -> int:
         rule = rules[entry["code"]]
         if (entry.get("exit_code"), entry.get("retryable")) != (rule["exit_code"]["const"], rule["retryable"]["const"]):
             fail("direct error catalog metadata disagrees with its schema")
+        if entry["code"] in scoped_rejections:
+            if rule["details"] != {"type": "object", "additionalProperties": False} or "details_schema" in entry:
+                fail("scoped execution rejection must have closed empty details")
+            continue
         branches = rule["details"].get("oneOf")
+        historical = HISTORICAL_GENERATION_DETAILS.get(entry["code"], [])
         if branches is None:
             reference = rule["details"].get("$ref", "")
         elif (
             isinstance(branches, list)
-            and len(branches) == 2
+            and len(branches) == 2 + len(historical)
+            and branches[2:] == historical
             and all(isinstance(branch, dict) for branch in branches)
         ):
-            first, second = branches
+            first, second = branches[:2]
             reference = first.get("$ref", "")
             if (
                 set(first) - {"$ref", "properties"}
@@ -709,6 +742,14 @@ def generation_successor_details(root: Path) -> dict[str, set[str]]:
             continue
         for code in GENERATION_DETAILS_VARIABLE_POINTS:
             successors[code].add(generation["selections"][code])
+    successors.update({
+        "LEGACY_RUNTIME_STATE_UNSUPPORTED": {"podway.legacy-runtime-state-unsupported-details/v1"},
+        "EVIDENCE_NOT_AVAILABLE": {"podway.scoped-evidence-unavailable-details/v1"},
+        "OPTION_GUARD_UNSATISFIED": {"podway.scoped-option-guard-unsatisfied-details/v1"},
+        "OPTION_NOT_ALLOWED": {"podway.scoped-option-not-allowed-details/v1"},
+        "ROUTE_NOT_ALLOWED": {"podway.scoped-group-replan-required-details/v1"},
+        "WORKSPACE_SCHEMA_UNSUPPORTED": {"podway.workspace-schema-unsupported-details/v1"},
+    })
     return successors
 
 
@@ -753,15 +794,21 @@ def validate_contract_generations(root: Path) -> int:
     ]
 
     output = read_json(root, Path("assets/schemas/output-v4.schema.json"), "direct output schema")
-    result = output["$defs"]["observation"]["properties"]["result"]
-    branches = result.get("oneOf")
+    observation = output["$defs"]["successorObservation"]["properties"]
+    branches = observation["result"].get("oneOf")
     if (
-        not isinstance(branches, list)
+        observation["command"] != {"const": "session.observe"}
+        or not isinstance(branches, list)
         or len(branches) != len(generations)
         or any(set(branch) != {"$ref"} for branch in branches)
         or [branch["$ref"] for branch in branches] != [family_urn(family) for family in observation_families]
     ):
         fail("Output v4 session.observe selection disagrees with the contract generations declaration")
+    if output["$defs"]["successorObservationSummary"]["properties"] != {
+        "command": {"enum": ["session.next", "session.status"]},
+        "result": {"$ref": family_urn(observation_families[0])},
+    }:
+        fail("Output v4 next and standard status must retain the generation-invariant observation")
 
     error_schema = read_json(root, Path("assets/schemas/error-v2.schema.json"), "direct error schema")
     code_rules = [
@@ -777,9 +824,14 @@ def validate_contract_generations(root: Path) -> int:
         expected = [generation["selections"][code] for generation in generations]
         details = rules.get(code, {}).get("details", {})
         branches = details.get("oneOf")
-        if not isinstance(branches, list) or len(branches) != len(generations):
+        historical = HISTORICAL_GENERATION_DETAILS.get(code, [])
+        if (
+            not isinstance(branches, list)
+            or len(branches) != len(generations) + len(historical)
+            or branches[len(generations):] != historical
+        ):
             fail("Error v2 details selection disagrees with the contract generations declaration")
-        for index, branch in enumerate(branches):
+        for index, branch in enumerate(branches[:len(generations)]):
             reference = branch.get("$ref", "")
             match = re.fullmatch(r"urn:podway:schema:(.+):v([1-9][0-9]*)", reference)
             extra_keys = set(branch) - {"$ref"} if index else set(branch) - {"$ref", "properties"}
@@ -850,8 +902,14 @@ def validate_contract_identifiers(root: Path) -> int:
     for relative_name in preset_files:
         path = repository_assets.checked_path(root, Path(relative_name), "preset")
         text = path.read_text(encoding="utf-8")
-        if not re.search(r"^schema: podway\.procedure/v[12]$", text, flags=re.MULTILINE):
-            fail(f"preset does not declare a supported procedure schema: {relative_name}")
+        if path.name.endswith("-default-v3.yaml"):
+            expected_schema = r"podway\.execution-group/v1"
+        elif path.name.endswith("-v3.yaml"):
+            expected_schema = r"podway\.procedure/v3"
+        else:
+            expected_schema = r"podway\.procedure/v[12]"
+        if not re.search(rf"^schema: {expected_schema}$", text, flags=re.MULTILINE):
+            fail(f"preset filename and declared schema disagree: {relative_name}")
     return len(schema_files) + len(preset_files) + 5
 
 
@@ -1022,11 +1080,11 @@ def validate_direct_contracts(root: Path) -> int:
     if generation_match is None:
         fail("current Store generation is missing or ambiguous")
     generation = int(generation_match[1])
-    unsupported = read_json(root, Path("assets/schemas/workspace-schema-unsupported-details-v1.schema.json"), "newer generation contract")
+    unsupported = read_json(root, Path("assets/schemas/workspace-schema-unsupported-details-v2.schema.json"), "newer generation contract")
     if unsupported["properties"]["supported_store_schema_version"] != {"const": generation} \
             or unsupported["properties"]["store_schema_version"]["minimum"] != generation + 1:
         fail("newer generation contract disagrees with the current Store generation")
-    older = read_json(root, Path("assets/schemas/legacy-runtime-state-unsupported-details-v1.schema.json"), "older generation contract")
+    older = read_json(root, Path("assets/schemas/legacy-runtime-state-unsupported-details-v2.schema.json"), "older generation contract")
     if older["properties"]["store_schema_version"]["maximum"] != generation - 1:
         fail("older generation contract disagrees with the current Store generation")
     retired = read_json(root, Path("assets/specifications/retired-commands-v1.json"), "retired command table")
@@ -1041,7 +1099,7 @@ def validate_direct_contracts(root: Path) -> int:
     if retired != expected:
         fail("retired command table must match the exact active cutover guidance surface")
     answers = read_json(root, Path("tests/fixtures/v2/protocol/current-contracts.json"), "direct known answers")
-    unsupported_answer = answers["fixtures"]["podway.workspace-schema-unsupported-details/v1"]
+    unsupported_answer = answers["fixtures"]["podway.workspace-schema-unsupported-details/v2"]
     if unsupported_answer["supported_store_schema_version"] != generation \
             or unsupported_answer["store_schema_version"] <= generation:
         fail("newer generation known answer disagrees with the current Store generation")
@@ -1063,12 +1121,9 @@ def validate_direct_contracts(root: Path) -> int:
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")}
             expected_tables = {
                 "workspace_state", "operational_journal", "writer_contract", "mutation_outcomes",
-                "v2_workspace_state", "v2_procedure_snapshots", "v2_graph_nodes", "v2_task_sessions",
-                "v2_graph_node_counters", "v2_attempts", "v2_item_slots", "v2_blockers",
-                "v2_resolved_evidence_references", "v2_decision_records", "v2_rework_records",
-                "v2_goal_revisions", "v2_goal_criteria", "v2_criterion_assessment_results",
-                "v2_criterion_citations", "v2_goal_assessments", "v2_terminal_dispositions",
-                "v2_delegation_receipts",
+                "successor_definitions", "successor_sessions", "successor_session_metadata",
+                "successor_terminal_dispositions", "successor_activations", "successor_attempts",
+                "successor_goal_revisions", "successor_delegation_receipts",
             }
             if tables != expected_tables or connection.execute("PRAGMA user_version").fetchone() != (generation,):
                 fail("Current Store baseline has an unexpected table inventory or generation")
@@ -1351,7 +1406,7 @@ def run_sentinels(root: Path) -> list[str]:
         answer_path = examples / known_answers.name
         shutil.copy2(known_answers, answer_path)
         validate_direct_contracts(reservation_fixture)
-        unsupported_path = reservation_fixture / "assets/schemas/workspace-schema-unsupported-details-v1.schema.json"
+        unsupported_path = reservation_fixture / "assets/schemas/workspace-schema-unsupported-details-v2.schema.json"
         unsupported = json.loads(unsupported_path.read_text(encoding="utf-8"))
         for field in ["supported_store_schema_version", "store_schema_version"]:
             original = dict(unsupported["properties"][field])
@@ -1361,12 +1416,12 @@ def run_sentinels(root: Path) -> list[str]:
             require_known_failure("current Store versus newer-generation contract drift", lambda: validate_direct_contracts(reservation_fixture))
             unsupported["properties"][field] = original
         unsupported_path.write_text(json.dumps(unsupported) + "\n", encoding="utf-8")
-        older_path = reservation_fixture / "assets/schemas/legacy-runtime-state-unsupported-details-v1.schema.json"
+        older_path = reservation_fixture / "assets/schemas/legacy-runtime-state-unsupported-details-v2.schema.json"
         older = json.loads(older_path.read_text(encoding="utf-8"))
         older["properties"]["store_schema_version"]["maximum"] -= 1
         older_path.write_text(json.dumps(older) + "\n", encoding="utf-8")
         require_known_failure("current Store versus older-generation contract drift", lambda: validate_direct_contracts(reservation_fixture))
-        shutil.copy2(root / "assets/schemas/legacy-runtime-state-unsupported-details-v1.schema.json", older_path)
+        shutil.copy2(root / "assets/schemas/legacy-runtime-state-unsupported-details-v2.schema.json", older_path)
         completed.append("direct_generation_contract_drift")
         answer = json.loads(answer_path.read_text(encoding="utf-8"))
         answer["fixtures"]["podway.command-retired-details/v1"]["replacement"] = None
@@ -1379,12 +1434,12 @@ def run_sentinels(root: Path) -> list[str]:
         retired_path.write_text(json.dumps(retired) + "\n", encoding="utf-8")
         require_known_failure("missing retired flag", lambda: validate_direct_contracts(reservation_fixture))
         shutil.copy2(root / "assets/specifications/retired-commands-v1.json", retired_path)
-        ddl_path = reservation_fixture / "assets/specifications/sqlite-v15.sql"
+        ddl_path = reservation_fixture / "assets/specifications/sqlite-v16.sql"
         ddl_path.write_text(ddl_path.read_text(encoding="utf-8") + "\nCREATE TABLE jobs (job_id TEXT);\n", encoding="utf-8")
         require_known_failure("daemon table in direct baseline", lambda: validate_direct_contracts(reservation_fixture))
-        shutil.copy2(root / "assets/specifications/sqlite-v15.sql", ddl_path)
+        shutil.copy2(root / "assets/specifications/sqlite-v16.sql", ddl_path)
         ddl = ddl_path.read_text(encoding="utf-8")
-        ddl_path.write_text(ddl.replace('REFERENCES "v2_task_sessions"', 'REFERENCES "v2_task_sessions_missing"', 1), encoding="utf-8")
+        ddl_path.write_text(ddl.replace('REFERENCES successor_sessions', 'REFERENCES successor_sessions_missing', 1), encoding="utf-8")
         require_known_failure("missing direct session foreign-key parent", lambda: validate_direct_contracts(reservation_fixture))
         completed.append("direct_contract_drift")
 
@@ -1527,7 +1582,7 @@ def run_sentinels(root: Path) -> list[str]:
         completed.append("contract_generations_schema_selection_drift")
         mutate_generation_schema(
             "assets/schemas/output-v4.schema.json",
-            lambda schema: schema["$defs"]["observation"]["properties"]["result"]["oneOf"].pop(),
+            lambda schema: schema["$defs"]["successorObservation"]["properties"]["result"]["oneOf"].pop(),
             "contract generations observation selection drift",
         )
         completed.append("contract_generations_observation_selection_drift")
@@ -1570,7 +1625,7 @@ def run_sentinels(root: Path) -> list[str]:
             "catalog inventory oneOf family drift",
             lambda: validate_catalog_inventory(generations_fixture),
         )
-        citation_branches(error_schema)[0]["$ref"] = "urn:podway:schema:v2-runtime-error-details:v2"
+        citation_branches(error_schema)[0]["$ref"] = "urn:podway:schema:scoped-criterion-citation-invalid-details:v1"
         citation_branches(error_schema)[1]["$ref"] = (
             "urn:podway:schema:criterion-citation-invalid-details/v2"
         )

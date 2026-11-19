@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:delegation-accept-input:v2",
+  "title": "Podway Scoped Delegation Acceptance Input v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "context",
+    "package_digest",
+    "execution",
+    "rounds_used",
+    "result_digest",
+    "summary",
+    "worker_disposition",
+    "accepted"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.delegation-accept-input/v2"
+    },
+    "context": {
+      "$ref": "urn:podway:schema:group-activate-input:v1#/$defs/context"
+    },
+    "package_digest": {
+      "$ref": "urn:podway:schema:delegation-components:v1#/$defs/digest"
+    },
+    "execution": {
+      "$ref": "urn:podway:schema:delegation-components:v1#/$defs/execution"
+    },
+    "rounds_used": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 32
+    },
+    "result_digest": {
+      "$ref": "urn:podway:schema:delegation-components:v1#/$defs/digest"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[^\\x00]+$",
+      "x-podway-max-utf8-bytes": 4096
+    },
+    "worker_disposition": {
+      "enum": [
+        "idle",
+        "released"
+      ]
+    },
+    "accepted": {
+      "const": true
+    }
+  },
+  "x-podway-max-json-bytes": 32768
+}

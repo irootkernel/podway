@@ -1,7 +1,8 @@
 # Testing and Conformance
 
-Podway conformance binds the Procedure v2 domain, direct in-process execution,
-worktree-local persistence, filesystem exclusion, and closed public contracts.
+Podway conformance binds the Procedure v3 and Execution Group v1 domain, direct
+in-process execution, worktree-local persistence, filesystem exclusion and closed
+public contracts.
 A test locator identifies an executable proof surface; its presence does not
 establish that the check passed for a particular candidate.
 
@@ -10,7 +11,7 @@ establish that the check passed for a particular candidate.
 1. Pure graph, goal, item, decision, retry, rework, and delegation domain tests.
 2. Procedure parsing, semantic validation, canonicalization, package digests,
    source containment, and shipped preset identity tests.
-3. Generation-15 Store initialization, reconstruction, identity classification,
+3. Generation-16 Store initialization, reconstruction, identity classification,
    atomic success outcomes, retention, corruption, and legacy refusal tests.
 4. Typed Engine execution, preparation/revalidation races, coherent read
    snapshots, bounded lock contention, maintenance, and crash recovery tests.
@@ -25,8 +26,9 @@ must preserve one current cursor and active attempt, prepared and terminal
 states, required-item and blocker gates, conditional requirements, guarded
 options, goal outcomes, and immutable stale attempt history.
 
-The scale envelope accepts 1,024 node definitions and graph placements and
-rejects 1,025. Graph analysis must cross the first 64-bit word and handle a
+Each definition's scale envelope accepts 1,024 node definitions and placements
+and rejects 1,025. The composed base and group also meet current response
+budgets. Graph analysis must cross the first 64-bit word and handle a
 full-length chain iteratively. Unicode-scalar item limits, total recorded-content
 limits, compact output ceilings, bounded evidence pages, exact collection totals,
 and truncation flags remain cross-layer requirements. Maximum-size and escaped
@@ -51,11 +53,9 @@ Registered `podway-cli` E2E owners bind CALLS-003 guidance to real behavior:
 - `e2e_v2dfc007_runtime_cli::calls003_help_and_human_observation_explain_reads_records_and_counters`
   covers help/human guidance and write-free observation.
 - `e2e_v2dfc007_direct_cli::calls003_documented_check_result_decodes_and_records_with_observed_fences`
-  extracts the existing nested JSON block from `docs/examples/v2-workflow.md`,
-  decodes it canonically, fills observed fences, retains actual Procedure-check
-  output bytes, hashes them, records the document and verifies original lookup,
-  exact replay, separate session/item/init/success counters and unchanged running
-  generation-1/2 bodies, templates and actions apart from their schema selector.
+  runs a Procedure check, hashes its output and records a typed check with the
+  current scoped fences. It verifies lookup, replay, scope and visibility under
+  both presentation selectors.
 - `record_stdin_preserves_identity_applies_one_atomic_batch_and_replays_without_preflight`
   in the same direct CLI owner proves stale session/item refusal and whole-batch
   atomicity with no rejected outcome.
@@ -90,38 +90,35 @@ CALLS-004 uses registered `podway-cli` E2E owners:
   `guide010_generation2_citation_details_list_citable_sources`, runtime lifecycle
   owners and `e2e_guide009_generation2_lifecycle::generation2_lifecycle_conformance`
   retain actor, stale-fence, optional grammar, generation and template coverage.
-- `e2e_guide009_generation2_lifecycle::agent006_small_change_v2_integrated_caller_workflow_and_call_counts`,
-  `agent006_bug_fix_v2_integrated_caller_workflow_and_batch_goal_assessment`, and
-  `agent006_integrated_caller_recovery_contention_and_fallback_paths` qualify the
-  integrated `--with-observation` and `goal assess-criteria --stdin` caller
-  workflows across unchanged `small-change-v2` and `bug-fix-v2` presets, proving
-  two-call action recording+completion (`record --stdin --with-observation` +
-  `complete --with-observation`), two-call three-criterion batch assessment+decision
-  (`goal assess-criteria --stdin --with-observation` + `decide --with-observation`)
-  with single session-revision/workspace-sequence advancement and stable goal
-  definition revision, observed `check_result` operation-contract binding with
-  hashed bounded fixture check facts, generation-1 `--with-observation` embedded
-  `podway.observation-result/v6` consumption on known first submission,
-  partitioned normal versus excluded call traces, and mandatory
-  fresh `observe` recovery after replay, `outcome lookup`, lost stdout,
-  `WORKSPACE_BUSY` SQLite write-lock contention, competing-advancement
-  stale-fence refusal, or unwrapped/unsupported responses (`AGENT-003`
-  owners in `goal_state_v2::tests`, `int_v2_goal_state`,
-  `int_v2dfc006_goal_ports`, `e2e_v2dfc007_direct_cli`, and
-  `e2e_v2dfc007_runtime_cli` cover `not_achieved`/`not_applicable` outcome and
-  zero-citation rules, combined four-citation bounds, and duplicate/already-assessed
-  `REQUEST_INVALID` batch rejections; `AGENT-005`
+- The `agent006_*` cases in `e2e_guide009_generation2_lifecycle` cover the
+  `small-change-v3` caller path and call counts, scoped goal assessment and
+  closeout, and recovery after contention or missing output. The record/complete
+  and assessment/decision pairs use separate transactions and consume the
+  commit-bound v8 observation on a known first submission. Runtime and direct
+  CLI cases add stale, duplicate and ineligible criterion citation controls.
   `agent005_with_observation_lifecycle_replay_lookup_and_conflicts` covers the
-  six-route `--with-observation` admission and mode-conflict matrices).
+  six supported wrapper routes and mode conflicts.
 
 No result above makes Podway an external effect executor or attestor. Lookup is
 bounded by retention; exact replay uses the original canonical request and key.
 
 ### Shipped reference-path evidence
 
-`e2e_v2dfc007_local_cli::calls005_preset_explain_reports_admitted_goal_tracking_only_in_human_output`
-checks all four admitted presets through the real CLI, including enabled and
-disabled policy and identical existing generation-1/2 JSON result fields.
+`e2e_v2dfc007_local_cli::calls005_preset_explain_reports_admitted_goal_tracking_and_both_definition_pins`
+checks the four Procedure v3 bases and their default groups through the real
+CLI. It covers goal policy, both canonical identities and both presentation
+selectors. `int_adopt001_presets` checks embedded identity, port compatibility
+and the declared failure and replan routes. `e2e_adopt001_scoped_cli` covers
+actual activation, the 79/80 replan boundary, current/retained readback and
+scoped delegation. The actual CLI case
+`e2e_v2dfc007_runtime_cli::agent003_goal_assess_criteria_partial_full_decide_and_if_goal_revision_flag_gate`
+also covers explicit return, original-key lookup, group detail, scoped prior
+work and goal revision history.
+
+#### Prior writer reference paths
+
+The v2 proof below retains its original Procedure and writer basis.
+
 `int_v2dog002_bug_fix_preset::bug_fix_v2_is_canonical_clean_and_covers_the_full_defect_workflow`
 pins version `4`, the exact reproduction-record prompt and unchanged item bounds,
 graph and later verification contract. Preset embedding/digest tests remain the
@@ -132,7 +129,7 @@ also require unchanged refusal for an unaffected preset and a fresh candidate
 fixture, without migration, reset or an installed-runtime change.
 
 [The reference-path fixture](../../../tests/fixtures/v2/presets/reference-paths.json)
-owns the accepted inventory for the four shipped presets. Every `runtime_proofs`
+owns the accepted inventory for the four previous-writer presets. Every `runtime_proofs`
 entry currently resolves to a registered test in
 [the direct Engine reference ports](../../../crates/podway-engine/tests/int_v2dfc006_reference_ports.rs).
 `tools/verify_quality_contracts.py` checks exact case inventory and proof locators.
@@ -158,9 +155,12 @@ daemon dogfood is retired; it is not a current proof locator.
 Current Store tests are registered in `podway-store`'s `int_suite`, including
 `int_v2dfc005_direct_store`, `_legacy`, `_maintenance`, `_relational`, `_scale`,
 `int_v2dfc006_execution_boundary`, and `int_v2dfc008_persistence`. They bind
-canonical [generation-15 DDL](../../../assets/specifications/sqlite-v15.sql),
-workspace and Git binding, schema object identity, writer-contract identity,
-current and archived reconstruction, rollback, and success-only outcome lookup.
+workspace and Git binding, schema and writer identity, current and archived
+reconstruction, rollback, and success-only outcome lookup. The production
+[generation-16 DDL](../../../assets/specifications/sqlite-v16.sql) is selected
+by native Direct admission. Targeted Store and Engine tests exercise it through
+scoped rows, atomic group transitions and cold replay. The explicit prior-writer
+fixture still uses [generation 15](../../../assets/specifications/sqlite-v15.sql).
 
 Ordinary domain mutations must preserve a single IMMEDIATE transaction containing
 their state, validated original success envelope, outcome identity, sequence,
@@ -214,20 +214,24 @@ The [frozen Direct control](../../../tests/fixtures/v2/compatibility/supervised-
 canonical Procedure known answers, shipped preset digests, and current/inactive
 snapshot preservation remain continuity controls.
 
-SDG-001 through SDG-010 retain the following acceptance obligations:
+SDG-001 through SDG-010 retain the following acceptance obligations.
+The [current scoped receipt and package fixtures](../../../crates/podway-cli/tests/e2e_adopt001_scoped_cli.rs)
+and [native CLI recovery case](../../../crates/podway-cli/tests/e2e_v2sdg008_qualification.rs)
+exercise the successor writer. Earlier Engine and Store fixtures retain the
+applicability shown below.
 
-| Boundary | Required result | Current proof surface |
+| Boundary | Required result | Executable proof and applicability |
 | --- | --- | --- |
 | Declaration and result fields | Reject unknown, mistyped, oversized, secret-shaped, duplicate, or mismatched fields; keep variants closed | Config `int_v2sdg003_package`; protocol `int_v2_result_contract` |
-| Unsupported placement or partial declaration | Refuse decision/skip-enabled delegation and incomplete admission | Config package tests; Engine `int_v2dfc006_delegation_ports` |
-| Package reread and final recording | Preserve attempt-bound input identity; changed frozen input changes the digest | Config package tests; Engine delegation ports |
+| Unsupported placement or partial declaration | Refuse decision/skip-enabled delegation and incomplete admission | Config package tests; historical v15 Engine `int_v2dfc006_delegation_ports` |
+| Package reread and final recording | Preserve attempt-bound input identity; changed frozen input changes the digest | Config package tests and current scoped CLI; historical v15 delegation ports |
 | Receipt acceptance, rollback, response loss | Commit receipt and original success atomically, or commit neither | Store `int_v2sdg004_receipt`; direct outcome and native recovery tests |
 | Declaration, package, Role, task, rounds, disposition, item readiness, blockers | Reject invalid acceptance/completion without cursor or receipt change | Store `int_v2sdg005_semantics`; native fixture |
-| Reads, true no-op, unrelated revision, failed edit, block/unblock | Preserve receipt applicability; an open blocker still gates completion | Store semantics; Engine delegation ports |
+| Reads, true no-op, unrelated revision, failed edit, block/unblock | Preserve receipt applicability; an open blocker still gates completion | Store semantics; historical v15 Engine delegation ports |
 | Required/optional/cosmetic edit and edit/revert | Keep historic receipt stale and require a fresh attempt | Store semantics; native correction matrix |
 | Replay and changed-key duplicate | Return historic original success or reject duplicate; never relabel current currency | Store semantics; CLI stdin/replay and native fixture |
-| Retry, rework, goal revision, cancellation, reset, archive/purge | Preserve historical attempt ownership and defined retention | Store semantics; Engine lifecycle/readback ports |
-| Prepared, running, terminal, archived observation | Emit bounded truthful current result generations | Engine `int_v2run002_views` and readback ports |
+| Retry, rework, goal revision, cancellation, reset, archive/purge | Preserve historical attempt ownership and defined retention | Store semantics; historical v15 Engine lifecycle/readback ports |
+| Prepared, running, terminal, archived observation | Emit bounded truthful current result generations | Current scoped CLI observations and archives; earlier Engine `int_v2run002_views` and historical v15 readback ports |
 | External/managed Primary restart and uncertain worker state | Require exact identity and explicit recovery; no automatic redispatch | Deterministic native external-host fixture |
 
 The registered native CLI case is
@@ -249,11 +253,27 @@ is an offline mapping reference, not live adapter qualification.
 
 ## Crash and concurrency coverage
 
-The [crash registry](../../../quality/crash-boundaries-v1.json) binds current
-implementation and proof locators for `D03`, `DS01`–`DS05`, and `DE01`–`DE06`.
-No retired service or daemon boundary counts as current execution evidence.
-`D03` exercises interrupted removal at its actual process-exit boundary; the
-Store and Engine SIGKILL qualifications prove their separately named boundaries.
+The [crash registry](../../../quality/crash-boundaries-v1.json) identifies
+the production basis for each registered locator. Its percentage measures the
+locator inventory, including the historical generation-15 entries.
+
+- `DE01`–`DE04` use the registered generation-16 Direct Engine case
+  `successor_sigkill_at_four_engine_item_boundaries_preserves_effect_once_recovery`
+  in `int_v2dfc006_crashes`. One owned child per boundary is killed before
+  BEGIN, after BEGIN, after state and before outcome, and after COMMIT and before
+  response, respectively. Cold Store and Engine reads verify rollback or one
+  retained success and exact original-key lookup and replay.
+- `D03` and `DE06` use the registered native v16 CLI removal case
+  `removal_resumes_after_sigkill_through_final_marker_retirement`. It covers
+  seven distinct removal windows including the exact after-first-marker window.
+  `reset_all_resumes_after_sigkill_at_real_durable_boundaries` separately tests
+  current reset intent publication, marker publication, runtime clearance and
+  phase advancement.
+- `DS01`–`DS05` retain the generation-15 low-level Store protocol locators.
+  `DE05` retains the generation-15 reset case for the exact private Store
+  publication window. Current reset marker cases are a distinct proof.
+- GROUP-005 and scoped native CLI postcommit recovery are separate evidence. The
+  full current integrated process/fault and history matrix belongs to ADOPT-005.
 
 Cold lookup and exact retry must converge to either no committed effect followed
 by one application, or the original recorded success without a second effect.
@@ -265,17 +285,17 @@ old-generation commits. Native SQLite contention must terminate within the one
 command deadline without inventing a failed outcome or changing request identity.
 There is no FIFO admission promise or background job recovery.
 
-The dossier's long G1–G6/G9 cases are registered ignored tests and require explicit
-execution through `make test-native-qualification` (see the
-[native runner and environment](../../implementation-tips/testing.md#native-runtime-qualification)),
-including:
+The historical generation-15 G1–G6/G9 cases are registered ignored tests.
+They require explicit execution through `make test-native-qualification`. See
+the [native runner and environment](../../implementation-tips/testing.md#native-runtime-qualification)
+for its exact inventory. Cases include:
 
 - Engine `int_v2dfc006_scale::engine_g1_g2_grown_l_300` and
   `engine_g1_g2_grown_l_1024` for native multi-process serial equivalence and
   grown/maximum scale; maximum-scale latency is informational.
 - Engine `int_v2dfc006_crashes::sigkill_at_all_five_engine_boundaries_preserves_effect_once_recovery`,
   `random_sigkills_preserve_success_only_lookup_and_exact_retry`, and
-  `engine_write_deadlines_return_busy_without_effect_or_outcome`.
+  `engine_write_deadlines_return_busy_without_effect_or_outcome` use the historical generation-15 Engine fixture.
 - Engine `int_v2dfc006_races::g6_rejects_500_state_and_500_artifact_preparation_races_without_stale_commits`
   and `int_v2dfc006_exclusion::g5_100_reset_remove_cycles_preserve_all_acknowledged_namespaces_with_four_writers_and_readers`.
 - Store `int_v2dfc005_scale::direct_multi_process_g1_g2_l_and_maximum` and
@@ -301,7 +321,7 @@ actual-binary E2E, and preset tooling checks. Current E2E covers direct lifecycl
 item and delegation stdin, exact replay/lookup, stale fences, legacy refusal,
 writer mismatch, bounded SQLite contention, maintenance recovery, artifact
 paging, native worktree identity, early retired-command classification,
-generation selection with the executable observation-v6 lifecycle templates
+generation selection with the executable observation-v8 lifecycle templates
 (`e2e_guide009_generation2_lifecycle::generation2_lifecycle_conformance`, also
 a registered packaged conformance scenario), and commit-bound `--with-observation`
 plus `goal assess-criteria --stdin` caller journeys and recovery

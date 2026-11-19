@@ -88,7 +88,7 @@ fn qualified_reader_and_output_validator() {
             )
             .unwrap();
             let expected = WorkspaceId::new(workspace_uuid).unwrap();
-            let resolver = DirectWorkspaceResolverV1::new(
+            let resolver = DirectWorkspaceResolverV1::for_v15_fixture(
                 NativeGitResolverV1::new(),
                 Sha256Digest::new(manifest).unwrap(),
             );

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:delegation-receipt:v2",
+  "title": "Podway Immutable Scoped Delegation Receipt v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "workspace_uuid",
+    "receipt_id",
+    "binding",
+    "result",
+    "accepted_items_digest",
+    "accepted_at"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.delegation-receipt/v2"
+    },
+    "workspace_uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "receipt_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "binding": {
+      "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/delegation_binding"
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "execution",
+        "rounds_used",
+        "result_digest",
+        "summary",
+        "worker_disposition"
+      ],
+      "properties": {
+        "execution": {
+          "$ref": "urn:podway:schema:delegation-components:v1#/$defs/execution"
+        },
+        "rounds_used": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        "result_digest": {
+          "$ref": "urn:podway:schema:delegation-components:v1#/$defs/digest"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^[^\\x00]+$",
+          "x-podway-max-utf8-bytes": 4096
+        },
+        "worker_disposition": {
+          "enum": [
+            "idle",
+            "released"
+          ]
+        }
+      }
+    },
+    "accepted_items_digest": {
+      "$ref": "urn:podway:schema:delegation-components:v1#/$defs/digest"
+    },
+    "accepted_at": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    }
+  },
+  "x-podway-max-json-bytes": 45000
+}

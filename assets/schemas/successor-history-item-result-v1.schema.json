@@ -1,0 +1,232 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:successor-history-item-result:v1",
+  "title": "Podway Retained Item Read Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "workspace",
+    "session",
+    "session_location",
+    "session_revision",
+    "truncated",
+    "next_page_token",
+    "detail",
+    "offset",
+    "size",
+    "total",
+    "unit",
+    "data"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.successor-history-item-result/v1"
+    },
+    "workspace": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "session": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "session_location": {
+      "enum": [
+        "current",
+        "archived"
+      ]
+    },
+    "session_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "next_page_token": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}:[0-9a-f]{16}$"
+        }
+      ]
+    },
+    "detail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_attempt",
+        "item",
+        "item_type",
+        "item_revision",
+        "value_digest",
+        "recorded",
+        "artifact_availability"
+      ],
+      "properties": {
+        "source_attempt": {
+          "$ref": "urn:podway:schema:successor-history-records:v1#/$defs/attempt_provenance"
+        },
+        "item": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+        },
+        "item_type": {
+          "enum": [
+            "confirm",
+            "text",
+            "choice",
+            "integer",
+            "list",
+            "artifact",
+            "check_result"
+          ]
+        },
+        "item_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "value_digest": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            }
+          ]
+        },
+        "recorded": {
+          "type": "boolean"
+        },
+        "artifact_availability": {
+          "enum": [
+            "present",
+            "missing",
+            "unverified",
+            null
+          ]
+        }
+      }
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "size": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "unit": {
+      "enum": [
+        "unicode_scalar",
+        "list_entry",
+        "value"
+      ]
+    },
+    "data": {
+      "oneOf": [
+        {
+          "type": "string",
+          "maxLength": 262144
+        },
+        {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "urn:podway:schema:successor-history-records:v1#/$defs/scalar_item"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "unit": {
+            "const": "unicode_scalar"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "type": "string",
+            "maxLength": 262144
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "unit": {
+            "const": "list_entry"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "unit": {
+            "const": "value"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "urn:podway:schema:successor-history-records:v1#/$defs/scalar_item"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

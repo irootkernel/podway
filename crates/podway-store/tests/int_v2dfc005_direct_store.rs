@@ -212,7 +212,7 @@ fn direct_scale_transaction_probe() {
             evidence.join(format!("probe-{nodes}.json")),
             serde_json::to_vec_pretty(&json!({
             "nodes":nodes,"completed_nodes":7,"items_per_node":16,"characters_per_item":55000,
-            "batches_per_node":6,"samples":samples,"schema":podway_store::direct_store::DIRECT_SCHEMA_GENERATION_V1,"path":"production DirectStoreV1"}))
+            "batches_per_node":6,"samples":samples,"schema":FIXTURE_SCHEMA_GENERATION,"path":"DirectStoreV1 using the retained v15 fixture"}))
             .unwrap(),
         )
         .unwrap();
@@ -256,11 +256,16 @@ pub(super) fn deadline() -> Instant {
     Instant::now() + Duration::from_secs(10)
 }
 
+pub(super) const FIXTURE_SCHEMA_GENERATION: u32 = 15;
+
 pub(super) fn store(root: &Path) -> DirectStoreV1 {
     // Positive fixtures supply the same canonical roots as the Engine.
     let root = fs::canonicalize(root).expect("canonical fixture worktree");
     DirectStoreV1::new(
-        DirectWorkspaceLayoutV1::new(ValidatedWorkspaceRootV1::from_path(&root).unwrap()).unwrap(),
+        DirectWorkspaceLayoutV1::for_v15_fixture(
+            ValidatedWorkspaceRootV1::from_path(&root).unwrap(),
+        )
+        .unwrap(),
         digest('c'),
         digest('a'),
         digest('b'),
@@ -821,7 +826,7 @@ fn complete_current_generation_bootstrap_and_cold_read_are_write_free() {
         .read(deadline(), |snapshot| {
             assert_eq!(
                 snapshot.binding().schema_version(),
-                podway_store::direct_store::DIRECT_SCHEMA_GENERATION_V1
+                FIXTURE_SCHEMA_GENERATION
             );
             assert!(snapshot.current_graph()?.is_none());
             assert_eq!(

@@ -48,7 +48,7 @@ pub(crate) fn validate_delegation_package_budget_v1(
             canonical_json_from_serializable(&node_definition_value(definition).into_json())?
                 .as_str()
                 .len();
-        let mut charge = action_bytes.saturating_add(PACKAGE_FIXED_RESERVE_BYTES);
+        let mut item_counts = Vec::new();
         if let Some(references) = action.evidence_from() {
             for reference in references.entries() {
                 let count = if let Some(selected) = reference.selected_items() {
@@ -56,19 +56,33 @@ pub(crate) fn validate_delegation_package_budget_v1(
                 } else {
                     source_items(parsed, reference.source_node())?.len()
                 };
-                charge = charge
-                    .saturating_add(PACKAGE_EVIDENCE_RESERVE_BYTES)
-                    .saturating_add(count.saturating_mul(PACKAGE_ITEM_RESERVE_BYTES));
+                item_counts.push(count);
             }
         }
-        if charge > DELEGATION_WORK_PACKAGE_MAX_BYTES_V1 {
-            return Err(ConfigError::OutOfBounds {
-                field: "delegation work package worst-case JSON bytes",
-                min: 0,
-                max: DELEGATION_WORK_PACKAGE_MAX_BYTES_V1,
-                actual: charge,
-            });
-        }
+        validate_delegation_projection_budget(action_bytes, item_counts)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_delegation_projection_budget(
+    action_bytes: usize,
+    source_items: impl IntoIterator<Item = usize>,
+) -> Result<(), ConfigError> {
+    let charge = source_items.into_iter().fold(
+        action_bytes.saturating_add(PACKAGE_FIXED_RESERVE_BYTES),
+        |charge, count| {
+            charge
+                .saturating_add(PACKAGE_EVIDENCE_RESERVE_BYTES)
+                .saturating_add(count.saturating_mul(PACKAGE_ITEM_RESERVE_BYTES))
+        },
+    );
+    if charge > DELEGATION_WORK_PACKAGE_MAX_BYTES_V1 {
+        return Err(ConfigError::OutOfBounds {
+            field: "delegation work package worst-case JSON bytes",
+            min: 0,
+            max: DELEGATION_WORK_PACKAGE_MAX_BYTES_V1,
+            actual: charge,
+        });
     }
     Ok(())
 }

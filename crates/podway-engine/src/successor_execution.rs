@@ -13,16 +13,16 @@ use podway_core::{
     WorkspaceId, canonicalize_json_v1,
 };
 use podway_protocol::{
-    CommandNameV1, DirectSessionOutputV1, MAX_DIRECT_INPUT_BYTES_V1, OUTPUT_SCHEMA_V4,
-    OutputEnvelopeInputV4, ProtocolError, RequestIdV1, Rfc3339MillisV1, WorkspaceOutputV1,
-    validate_direct_outcome_lookup_headroom_v1,
+    CommandNameV1, DirectSessionOutputV1, MAX_DIRECT_INPUT_BYTES_V1, MAX_DIRECT_OUTPUT_BYTES_V1,
+    OUTPUT_SCHEMA_V4, OutputEnvelopeInputV4, ProtocolError, RequestIdV1, Rfc3339MillisV1,
+    WorkspaceOutputV1, serialized_json_len_v1, validate_direct_outcome_lookup_headroom_v1,
 };
 use podway_store::direct_store::{
     DirectMutationRequestV1, DirectMutationResultV1, DirectOutcomeScopeV1, DirectStoreErrorV1,
 };
 use podway_store::successor_store::{
-    CandidateDefinition, CandidateExecutionStore, CandidateExecutionTransaction, CandidateSources,
-    CandidateStoreError, CandidateSuccess,
+    CandidateDefinition, CandidateExecutionTransaction, CandidateSources, CandidateStoreError,
+    CandidateSuccess, SuccessorMutationStore, SuccessorReadStore,
 };
 use podway_store::{CanonicalExecutionJsonV1, IdempotencyKeyV1};
 use serde_json::{Value, json};
@@ -32,9 +32,41 @@ use std::collections::BTreeMap;
 mod current;
 mod history;
 mod mutations;
+mod native;
+mod native_delegation;
+mod native_history;
+mod native_items;
+mod native_lifecycle;
+mod presentation;
+mod progress;
+mod start;
 pub use current::*;
 pub use history::*;
 pub use mutations::*;
+pub use native::{DirectGroupActivationV1, DirectGroupSourceV1, DirectSuccessorMutationV1};
+pub(crate) use native::{
+    DirectSuccessorMutationRequestV1, dispatch_successor_mutation, dispatch_successor_observation,
+    preflight_successor_facts,
+};
+pub(crate) use native_delegation::{
+    DirectDelegationAcceptRequestV1, dispatch_successor_delegation_accept,
+    dispatch_successor_delegation_read,
+};
+pub use native_history::{
+    DirectHistoryDefinitionV1, DirectSuccessorHistoryCommandV1, DirectSuccessorHistoryV1,
+};
+pub(crate) use native_history::{DirectSuccessorHistoryRequestV1, dispatch_successor_history};
+pub use native_items::DirectSuccessorWriteV1;
+pub(crate) use native_items::{DirectSuccessorWriteRequestV1, dispatch_successor_write};
+pub(crate) use native_lifecycle::dispatch_successor_archive_read;
+pub(crate) use native_lifecycle::{
+    DirectSuccessorDispositionRequestV1, dispatch_successor_disposition, dispatch_successor_session,
+};
+pub(crate) use presentation::{ObservationActivityV1, public_observation};
+pub use progress::*;
+#[cfg(feature = "test-support")]
+pub use start::start_native_successor;
+pub(crate) use start::start_native_successor_with_response;
 
 #[derive(Debug)]
 pub enum SuccessorExecutionError {
@@ -53,17 +85,39 @@ pub enum SuccessorExecutionError {
         actual: Option<GroupExecutionIdV1>,
     },
     ItemMutation(GraphMutationErrorV2),
+    GuardUnsatisfied(Box<GroupOptionGuardUnsatisfiedV1>),
+    ScopedOptionNotAllowed {
+        decision: Box<ScopedAttemptV1>,
+        option: podway_core::OptionId,
+        allowed_option_ids: Vec<podway_core::OptionId>,
+    },
+    GroupReplanRequired {
+        decision: Box<ScopedAttemptV1>,
+        option: podway_core::OptionId,
+    },
+    CriterionCitation(Box<ScopedCriterionCitationErrorV1>),
     Protocol(ProtocolError),
+    Delegation(crate::direct_execution::DirectDelegationFailureV1),
     Invalid(&'static str),
     InvalidHistoryPageLimit,
     InvalidHistoryPageToken,
     StaleHistoryPageToken,
     HistoryGroupNotFound,
-    HistoryDefinitionMismatch,
+    GroupDefinitionMismatch,
+    GroupActivationNotAllowed,
+    GroupActivationPriorWorkInvalid(DomainError),
+    GroupReturnNotAllowed,
+    GroupPlanStale,
     HistoryAttemptNotFound,
     HistoryItemNotFound,
+    CurrentEvidenceUnavailable {
+        consumer: Box<ScopedAttemptV1>,
+        selector: Value,
+        item: podway_core::ItemId,
+    },
     ResponseBudget,
     OutcomeLookupBudget,
+    TerminalDispositionAlreadyRecorded,
 }
 
 impl From<ConfigError> for SuccessorExecutionError {
@@ -73,7 +127,13 @@ impl From<ConfigError> for SuccessorExecutionError {
 }
 impl From<CandidateStoreError> for SuccessorExecutionError {
     fn from(error: CandidateStoreError) -> Self {
-        Self::Store(error)
+        match error {
+            CandidateStoreError::Domain(error) => Self::Domain(error),
+            CandidateStoreError::Item(
+                podway_store::StoreErrorV1::TerminalDispositionAlreadyRecordedV1 { .. },
+            ) => Self::TerminalDispositionAlreadyRecorded,
+            error => Self::Store(error),
+        }
     }
 }
 impl From<DirectStoreErrorV1> for SuccessorExecutionError {
@@ -94,9 +154,39 @@ impl From<GraphMutationErrorV2> for SuccessorExecutionError {
         }
     }
 }
+impl From<GroupDecisionErrorV1> for SuccessorExecutionError {
+    fn from(error: GroupDecisionErrorV1) -> Self {
+        match error {
+            GroupDecisionErrorV1::Graph(error) => error.into(),
+            GroupDecisionErrorV1::GuardUnsatisfied(error) => Self::GuardUnsatisfied(error),
+            GroupDecisionErrorV1::OptionNotAllowed {
+                decision,
+                option,
+                allowed_option_ids,
+            } => Self::ScopedOptionNotAllowed {
+                decision,
+                option,
+                allowed_option_ids,
+            },
+            GroupDecisionErrorV1::ReplanRequired { decision, option } => {
+                Self::GroupReplanRequired { decision, option }
+            }
+        }
+    }
+}
+
 impl From<ProtocolError> for SuccessorExecutionError {
     fn from(error: ProtocolError) -> Self {
         Self::Protocol(error)
+    }
+}
+
+impl From<SuccessorCriterionErrorV1> for SuccessorExecutionError {
+    fn from(error: SuccessorCriterionErrorV1) -> Self {
+        match error {
+            SuccessorCriterionErrorV1::Domain(error) => Self::Domain(error),
+            SuccessorCriterionErrorV1::Citation(error) => Self::CriterionCitation(error),
+        }
     }
 }
 
@@ -108,6 +198,27 @@ pub struct SuccessorMutationRequest {
     pub key: IdempotencyKeyV1,
     pub request_id: RequestIdV1,
     pub cursor: SuccessorCursor,
+    pub response: SuccessorMutationResponseV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SuccessorMutationResponseV1 {
+    #[cfg(feature = "test-support")]
+    Fixture,
+    Public {
+        return_observation: bool,
+    },
+}
+
+impl SuccessorMutationResponseV1 {
+    const fn return_observation(self) -> bool {
+        matches!(
+            self,
+            Self::Public {
+                return_observation: true
+            }
+        )
+    }
 }
 
 /// Base suffix attempts have a Base scope even while a specific group remains selected.
@@ -144,7 +255,7 @@ pub struct GroupActivationRequest {
 /// Prepare the Config-admitted canonical definition and source-side boundary before the writer.
 /// A prepared error against the observed base applies only if this is a new mutation.
 pub fn activate_group(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorMutationStore,
     request: GroupActivationRequest,
     clock: impl FnOnce() -> UnixMillis,
     ids: &impl DirectIdSourceV1,
@@ -163,9 +274,7 @@ pub fn activate_group(
         request.format,
     )?)?;
     if prepared.digest() != &request.expected_definition {
-        return Err(SuccessorExecutionError::Invalid(
-            "prepared group definition digest differs",
-        ));
+        return Err(SuccessorExecutionError::GroupDefinitionMismatch);
     }
     let canonical = prepared.canonical_json().as_str();
     // Retained definitions are reconstructed from normalized canonical bytes, including map order.
@@ -199,7 +308,8 @@ pub fn activate_group(
         }),
     )?;
     let prepared_base = (|| -> Result<Sha256Digest> {
-        let (state, sources) = store.snapshot(
+        let (state, sources) = store.snapshot_for_transition(
+            &mutation.workspace,
             &mutation.cursor.execution.session,
             admit_candidate_definition,
         )?;
@@ -207,132 +317,157 @@ pub fn activate_group(
         validate_group_interface(&base, &normalized)?;
         Ok(base.digest().clone())
     })();
-    store.mutate(&mutation.workspace, &exact_request, |transaction| {
-        let (mut state, mut sources) = transaction.load(admit_candidate_definition)?;
-        verify_cursor(&state, &mutation.cursor)?;
-        let anchor = state
-            .active_attempt()
-            .ok_or(SuccessorExecutionError::Invalid(
-                "candidate activation has no current attempt",
-            ))?;
-        if prepared_base? != *state.base_digest()
-            || anchor.target().scope() != &ExecutionScopeV1::Base
-            || anchor.target().node() != state.base_definition().boundary().anchor()
-        {
-            return Err(SuccessorExecutionError::Invalid(
-                "candidate activation source differs",
-            ));
-        }
-        let identity = ActivationIdentityV1::new(ActivationIdentityInputV1 {
-            execution: GroupExecutionIdV1::new(ids.next_session_id().into_inner())?,
-            session: mutation.cursor.execution.session.clone(),
-            base_digest: state.base_digest().clone(),
-            definition_digest: request.expected_definition.clone(),
-            anchor: anchor.target().node().clone(),
-            goal_revision: mutation.cursor.execution.goal_revision,
-            plan: request.plan,
-            predecessor: request.predecessor,
-            working_copy_basis: request.working_copy_basis,
-            prior_work: request.prior_work,
-        })?;
-        let before = anchor.target().clone();
-        current::verify_delegated_completion(transaction.workspace(), &state)?;
-        let now = clock();
-        state.activate(
-            &mutation.cursor.execution,
-            identity,
-            group.clone(),
-            normalized.digest(),
-            ids.next_attempt_id(),
-            now,
-        )?;
-        sources.insert(normalized.digest().clone(), canonical.to_owned());
-        finish_transition(
-            transaction,
-            mutation,
-            &exact_request,
-            &state,
-            &sources,
-            &before,
-            now,
-        )
-    })
+    store.scoped_mutation(
+        &mutation.workspace,
+        &exact_request,
+        clock,
+        |transaction, now| {
+            let (mut state, mut sources) = transaction.load(admit_candidate_definition)?;
+            verify_cursor(&state, &mutation.cursor)?;
+            let anchor = state
+                .active_attempt()
+                .filter(|anchor| {
+                    anchor.target().scope() == &ExecutionScopeV1::Base
+                        && anchor.target().node() == state.base_definition().boundary().anchor()
+                        && state.selected().is_none()
+                })
+                .ok_or(SuccessorExecutionError::GroupActivationNotAllowed)?;
+            if state.base_definition().goal_tracking().is_some() && state.current_goal().is_none() {
+                return Err(GraphMutationErrorV2::SessionGoalMissing.into());
+            }
+            state.current_readiness()?;
+            let latest = state
+                .group_history()
+                .last()
+                .map(|group| group.identity().execution());
+            if prepared_base? != *state.base_digest()
+                || request.plan != state.plan_binding()?
+                || request.predecessor.as_ref() != latest
+            {
+                return Err(SuccessorExecutionError::GroupPlanStale);
+            }
+            ActivationIdentityV1::validate_prior_work_shape(
+                request.predecessor.as_ref(),
+                request.prior_work.len(),
+            )
+            .map_err(SuccessorExecutionError::GroupActivationPriorWorkInvalid)?;
+            current::verify_delegated_completion(transaction, &state)?;
+            transaction.verify_progress(&state)?;
+            let identity = ActivationIdentityV1::new(ActivationIdentityInputV1 {
+                execution: GroupExecutionIdV1::new(ids.next_session_id().into_inner())?,
+                session: mutation.cursor.execution.session.clone(),
+                base_digest: state.base_digest().clone(),
+                definition_digest: request.expected_definition.clone(),
+                anchor: anchor.target().node().clone(),
+                goal_revision: mutation.cursor.execution.goal_revision,
+                plan: request.plan,
+                predecessor: request.predecessor,
+                working_copy_basis: request.working_copy_basis,
+                prior_work: request.prior_work,
+            })?;
+            let before = anchor.target().clone();
+            let now = now();
+            state
+                .activate_with_admission(
+                    &mutation.cursor.execution,
+                    identity,
+                    group.clone(),
+                    normalized.digest(),
+                    ids.next_attempt_id(),
+                    now,
+                )
+                .map_err(|error| match error {
+                    GroupActivationErrorV1::InvalidPriorWork(error) => {
+                        SuccessorExecutionError::GroupActivationPriorWorkInvalid(error)
+                    }
+                    GroupActivationErrorV1::Domain(error) => error.into(),
+                })?;
+            sources.insert(normalized.digest().clone(), canonical.to_owned());
+            finish_transition(
+                transaction,
+                mutation,
+                &exact_request,
+                &state,
+                &sources,
+                &before,
+                now,
+            )
+        },
+    )
 }
 
 /// Return only from the current selected group's declared terminal to the base successor.
 pub fn return_from_group(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorMutationStore,
     request: SuccessorMutationRequest,
     clock: impl FnOnce() -> UnixMillis,
     ids: &impl DirectIdSourceV1,
 ) -> Result<DirectMutationResultV1> {
     let exact_request = outcome_request(&request, "group.return", json!({}))?;
-    store.mutate(&request.workspace, &exact_request, |transaction| {
-        let (mut state, sources) = transaction.load(admit_candidate_definition)?;
-        verify_cursor(&state, &request.cursor)?;
-        let current = state
-            .active_attempt()
-            .ok_or(SuccessorExecutionError::Invalid(
-                "candidate return has no current attempt",
-            ))?
-            .target();
-        let ExecutionScopeV1::Group {
-            group_execution_id,
-            definition_digest,
-        } = current.scope()
-        else {
-            return Err(SuccessorExecutionError::Invalid(
-                "candidate return requires a group attempt",
-            ));
-        };
-        let selected = state
-            .selected()
-            .filter(|selected| {
-                selected.identity().execution() == group_execution_id
-                    && selected.identity().definition_digest() == definition_digest
-                    && selected.outcome() == GroupExecutionOutcomeV1::Running
-            })
-            .ok_or(SuccessorExecutionError::Invalid(
-                "candidate return requires selected running group",
-            ))?;
-        let group = state
-            .group_definition(selected.identity().definition_digest())
-            .ok_or(SuccessorExecutionError::Invalid(
-                "candidate return group definition is absent",
-            ))?;
-        if !group.graph().nodes().iter().any(|node| {
-            node.id() == current.node()
-                && matches!(
-                    node.kind(),
-                    PlacementKindV3::Action {
-                        outcome: ActionOutcomeV2::Terminal,
-                        ..
-                    },
-                )
-        }) {
-            return Err(SuccessorExecutionError::Invalid(
-                "candidate return requires the group terminal placement",
-            ));
-        }
-        let before = current.clone();
-        current::verify_delegated_completion(transaction.workspace(), &state)?;
-        let now = clock();
-        state.complete(&request.cursor.execution, Some(ids.next_attempt_id()), now)?;
-        finish_transition(
-            transaction,
-            &request,
-            &exact_request,
-            &state,
-            &sources,
-            &before,
-            now,
-        )
-    })
+    store.scoped_mutation(
+        &request.workspace,
+        &exact_request,
+        clock,
+        |transaction, now| {
+            let (mut state, sources) = transaction.load(admit_candidate_definition)?;
+            verify_cursor(&state, &request.cursor)?;
+            let current = state
+                .active_attempt()
+                .ok_or(SuccessorExecutionError::GroupReturnNotAllowed)?
+                .target();
+            let ExecutionScopeV1::Group {
+                group_execution_id,
+                definition_digest,
+            } = current.scope()
+            else {
+                return Err(SuccessorExecutionError::GroupReturnNotAllowed);
+            };
+            let selected = state
+                .selected()
+                .filter(|selected| {
+                    selected.identity().execution() == group_execution_id
+                        && selected.identity().definition_digest() == definition_digest
+                        && selected.outcome() == GroupExecutionOutcomeV1::Running
+                })
+                .ok_or(SuccessorExecutionError::GroupReturnNotAllowed)?;
+            let group = state
+                .group_definition(selected.identity().definition_digest())
+                .ok_or(SuccessorExecutionError::Invalid(
+                    "candidate return group definition is absent",
+                ))?;
+            if !group.graph().nodes().iter().any(|node| {
+                node.id() == current.node()
+                    && matches!(
+                        node.kind(),
+                        PlacementKindV3::Action {
+                            outcome: ActionOutcomeV2::Terminal,
+                            ..
+                        },
+                    )
+            }) {
+                return Err(SuccessorExecutionError::GroupReturnNotAllowed);
+            }
+            let before = current.clone();
+            current::verify_delegated_completion(transaction, &state)?;
+            transaction.verify_progress(&state)?;
+            let now = now();
+            state.complete(&request.cursor.execution, Some(ids.next_attempt_id()), now)?;
+            finish_transition(
+                transaction,
+                &request,
+                &exact_request,
+                &state,
+                &sources,
+                &before,
+                now,
+            )
+        },
+    )
 }
 
 /// Close the current selection through an explicitly guarded ordinary Decision.
 pub fn replan_group(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorMutationStore,
     request: SuccessorMutationRequest,
     feedback: ReplanFeedbackV1,
     clock: impl FnOnce() -> UnixMillis,
@@ -349,78 +484,88 @@ pub fn replan_group(
             "feedback": feedback.feedback(),
         }),
     )?;
-    store.mutate(&request.workspace, &exact_request, |transaction| {
-        let (mut state, sources) = transaction.load(admit_candidate_definition)?;
-        verify_cursor(&state, &request.cursor)?;
-        let decision = feedback.decision().clone();
-        let now = clock();
-        state.replan(
-            &request.cursor.execution,
-            feedback,
-            ids.next_attempt_id(),
-            now,
-        )?;
-        let active = active_target(&state)?;
-        let (execution, closure, feedback) = state
-            .group_history()
-            .last()
-            .and_then(|execution| {
-                let closure = execution.closure()?;
-                Some((execution, closure, closure.feedback.as_ref()?))
-            })
-            .filter(|(_, closure, _)| closure.source == decision)
-            .ok_or(SuccessorExecutionError::Invalid(
-                "candidate replan did not retain closure feedback",
-            ))?;
-        let record = state
-            .attempt_history()
-            .iter()
-            .rev()
-            .nth(1)
-            .filter(|attempt| attempt.target() == &decision)
-            .and_then(GroupAttemptStateV1::decision)
-            .ok_or(SuccessorExecutionError::Invalid(
-                "candidate replan did not retain the decision",
-            ))?;
-        let result = json!({
-            "schema": "podway.successor-group-replan-fixture-result/v1",
-            "revision_before": request.cursor.execution.revision,
-            "revision": state.fence().revision,
-            "closed_attempt": decision,
-            "active_attempt": active,
-            "execution_id": execution.identity().execution(),
-            "group_outcome": execution.outcome(),
-            "group_terminal_attempt": execution.terminal_attempt(),
-            "decision": {
-                "option": record.option,
-                "reason": record.reason,
-                "guard_values": record.guard_values.iter().map(|guard| json!({
-                    "source": guard.source,
-                    "item": guard.item.item(),
-                    "revision": guard.item.revision(),
-                    "value_digest": guard.item.value_digest(),
-                })).collect::<Vec<_>>(),
-            },
-            "closure": {
-                "cause": closure.cause,
-                "source": closure.source,
-                "at_unix_ms": closure.at.get(),
-                "working_copy_basis": feedback.working_copy_basis(),
-                "feedback": feedback.feedback(),
-            },
-            "counters": combined_counters(&state, None),
-            "guidance": current_guidance(&state, &sources, active)?,
-        });
-        persist_transition(
-            transaction,
-            &exact_request,
-            &state,
-            &sources,
-            request.cursor.execution.revision,
-            result,
-            now,
-        )
-    })
+    store.scoped_mutation(
+        &request.workspace,
+        &exact_request,
+        clock,
+        |transaction, now| {
+            let (mut state, sources) = transaction.load(admit_candidate_definition)?;
+            verify_cursor(&state, &request.cursor)?;
+            transaction.verify_progress(&state)?;
+            let decision = feedback.decision().clone();
+            let now = state
+                .replan_with_effects(&request.cursor.execution, feedback, now, || {
+                    ids.next_attempt_id()
+                })
+                .map_err(|error| match error {
+                    GroupReplanErrorV1::Domain(error) => SuccessorExecutionError::Domain(error),
+                    GroupReplanErrorV1::GuardUnsatisfied(error) => {
+                        SuccessorExecutionError::GuardUnsatisfied(error)
+                    }
+                })?;
+            let active = active_target(&state)?;
+            let (execution, closure, feedback) = state
+                .group_history()
+                .last()
+                .and_then(|execution| {
+                    let closure = execution.closure()?;
+                    Some((execution, closure, closure.feedback.as_ref()?))
+                })
+                .filter(|(_, closure, _)| closure.source == decision)
+                .ok_or(SuccessorExecutionError::Invalid(
+                    "candidate replan did not retain closure feedback",
+                ))?;
+            let record = state
+                .attempt_history()
+                .iter()
+                .rev()
+                .nth(1)
+                .filter(|attempt| attempt.target() == &decision)
+                .and_then(GroupAttemptStateV1::decision)
+                .ok_or(SuccessorExecutionError::Invalid(
+                    "candidate replan did not retain the decision",
+                ))?;
+            let result = json!({
+                "schema": "podway.successor-group-replan-fixture-result/v1",
+                "revision_before": request.cursor.execution.revision,
+                "revision": state.fence().revision,
+                "closed_attempt": decision,
+                "active_attempt": active,
+                "execution_id": execution.identity().execution(),
+                "group_outcome": execution.outcome(),
+                "group_terminal_attempt": execution.terminal_attempt(),
+                "decision": {
+                    "option": record.option,
+                    "reason": record.reason,
+                    "guard_values": record.guard_values.iter().map(|guard| json!({
+                        "source": guard.source,
+                        "item": guard.item.item(),
+                        "revision": guard.item.revision(),
+                        "value_digest": guard.item.value_digest(),
+                    })).collect::<Vec<_>>(),
+                },
+                "closure": {
+                    "cause": closure.cause,
+                    "source": closure.source,
+                    "at_unix_ms": closure.at.get(),
+                    "working_copy_basis": feedback.working_copy_basis(),
+                    "feedback": feedback.feedback(),
+                },
+                "counters": combined_counters(&state, None),
+                "guidance": current_guidance(&state, &sources, active)?,
+            });
+            persist_transition(
+                transaction,
+                &exact_request,
+                &state,
+                &sources,
+                request.cursor.execution.revision,
+                result,
+                now,
+                request.response,
+            )
+        },
+    )
 }
 
 fn verify_cursor(state: &ExecutionSessionV3, cursor: &SuccessorCursor) -> Result<()> {
@@ -463,7 +608,12 @@ fn outcome_request(
         request_id: &request.request_id,
         session: &request.cursor.execution.session,
     }
-    .prepare(command, cursor_json(&request.cursor), body)
+    .prepare(
+        command,
+        cursor_json(&request.cursor),
+        body,
+        request.response.return_observation(),
+    )
 }
 
 fn cursor_json(cursor: &SuccessorCursor) -> Value {
@@ -489,6 +639,7 @@ impl MutationIdentity<'_> {
         command: &str,
         fences: Value,
         body: Value,
+        return_observation: bool,
     ) -> Result<DirectMutationRequestV1> {
         let identity = canonicalize_json_v1(&json!({
             "command": command,
@@ -496,6 +647,7 @@ impl MutationIdentity<'_> {
             "session": self.session,
             "fences": fences,
             "body": body,
+            "return_observation": return_observation,
         }))
         .map_err(|_| {
             SuccessorExecutionError::Invalid("candidate request identity is not canonical")
@@ -531,7 +683,7 @@ fn admit_canonical_definition(
     )?)
 }
 
-fn admit_candidate_definition(
+pub(crate) fn admit_candidate_definition(
     canonical: &str,
 ) -> std::result::Result<CandidateDefinition, CandidateStoreError> {
     let admitted = admit_canonical_definition(canonical)
@@ -594,6 +746,7 @@ fn finish_transition(
         request.cursor.execution.revision,
         result,
         now,
+        request.response,
     )
 }
 
@@ -606,6 +759,7 @@ fn active_target(state: &ExecutionSessionV3) -> Result<&ScopedAttemptV1> {
         ))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn persist_transition(
     transaction: &CandidateExecutionTransaction<'_, '_>,
     identity: &DirectMutationRequestV1,
@@ -614,12 +768,52 @@ fn persist_transition(
     revision_before: Revision,
     result: Value,
     now: UnixMillis,
+    response: SuccessorMutationResponseV1,
 ) -> Result<CandidateSuccess> {
+    let sequence = transaction.next_sequence()?;
+    let title = transaction
+        .task_title()
+        .unwrap_or_else(|| state.base_definition().header().name());
+    let mut prospective_wrapper = None;
+    let result = match response {
+        #[cfg(feature = "test-support")]
+        SuccessorMutationResponseV1::Fixture => result,
+        SuccessorMutationResponseV1::Public { return_observation } => {
+            let mutation = presentation::public_mutation_result(
+                identity.command(),
+                state,
+                sources,
+                revision_before,
+                result,
+            )?;
+            let observation = presentation::public_observation(
+                transaction.workspace(),
+                title,
+                state,
+                sources,
+                sequence,
+                podway_protocol::ContractGenerationV1::Generation2,
+                presentation::ObservationActivityV1::Current {
+                    terminal_disposition: false,
+                },
+            )?;
+            let wrapped = json!({
+                "schema": presentation::MUTATION_OBSERVATION_V2,
+                "workspace_sequence": sequence,
+                "mutation_result": mutation,
+                "observation": observation,
+            });
+            if return_observation {
+                wrapped
+            } else {
+                prospective_wrapper = Some(wrapped);
+                mutation
+            }
+        }
+    };
     let Value::Object(result) = result else {
         unreachable!("candidate transition results are objects");
     };
-    // The private result is intentionally absent from the public result catalog.
-    // Serialize the existing typed output fields without enrolling a new command.
     let mut output = serde_json::to_value(OutputEnvelopeInputV4 {
         request_id: RequestIdV1::new(identity.response_id())?,
         command: CommandNameV1::new(identity.command())?,
@@ -627,11 +821,11 @@ fn persist_transition(
         workspace: Some(WorkspaceOutputV1::new(
             transaction.workspace().clone(),
             transaction.root().to_path_buf().display().to_string(),
-            transaction.next_sequence()?,
+            sequence,
         )?),
         session: Some(DirectSessionOutputV1 {
             id: state.fence().session,
-            title: state.base_definition().header().name().to_owned(),
+            title: title.to_owned(),
             lifecycle: state.lifecycle(),
             revision_before,
             revision_after: state.fence().revision,
@@ -641,6 +835,22 @@ fn persist_transition(
     })
     .map_err(|_| SuccessorExecutionError::ResponseBudget)?;
     output["schema"] = json!(OUTPUT_SCHEMA_V4);
+    if matches!(response, SuccessorMutationResponseV1::Public { .. }) {
+        if serialized_json_len_v1(&output).map_err(|_| SuccessorExecutionError::ResponseBudget)?
+            > MAX_DIRECT_OUTPUT_BYTES_V1
+        {
+            return Err(SuccessorExecutionError::ResponseBudget);
+        }
+        output = podway_protocol::OutputEnvelopeV4::from_value(output)?.into_value();
+    }
+    if let Some(wrapped) = prospective_wrapper {
+        // Leave enough response headroom for the committed cursor to stay observable,
+        // including the complete lookup budget, before publishing the transition.
+        let result = std::mem::replace(&mut output["result"], wrapped);
+        validate_direct_outcome_lookup_headroom_v1(&output)
+            .map_err(|_| SuccessorExecutionError::OutcomeLookupBudget)?;
+        output["result"] = result;
+    }
     let response = canonical_response(&output)?;
     validate_direct_outcome_lookup_headroom_v1(&output)
         .map_err(|_| SuccessorExecutionError::OutcomeLookupBudget)?;

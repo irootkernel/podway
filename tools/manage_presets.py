@@ -157,8 +157,8 @@ def validator_result(podway: Path, staged: Path) -> dict[str, Any]:
     result = envelope.get("result")
     if not isinstance(result, dict):
         fail("podway validator result is missing")
-    if result.get("valid") is not True or result.get("procedure_schema") != "podway.procedure/v2":
-        fail("podway validator did not admit the Procedure v2 source")
+    if result.get("valid") is not True or result.get("document_schema") != "podway.procedure/v3":
+        fail("podway validator did not admit the Procedure v3 base source")
     return result
 
 
@@ -233,52 +233,48 @@ def publish_staged(staged: Path, destination: Path) -> None:
         os.close(directory_descriptor)
 
 
-def scaffold(identifier: str, name: str, description: str) -> bytes:
-    quoted_name = json.dumps(name, ensure_ascii=False)
-    quoted_description = json.dumps(description, ensure_ascii=False)
-    return (
-        "schema: podway.procedure/v2\n"
-        f"id: {identifier}\n"
-        'version: "1"\n'
-        f"name: {quoted_name}\n"
-        f"purpose: {quoted_description}\n"
-        f"description: {quoted_description}\n"
-        "node_definitions:\n"
-        "  prepare:\n"
-        "    type: action\n"
-        "    title: Prepare\n"
-        "    intent: Define the work and its completion conditions.\n"
-        "    instructions:\n"
-        "      - Define the work and its completion conditions.\n"
-        "    items:\n"
-        "      - id: preparation-complete\n"
-        "        type: confirm\n"
-        "        prompt: Preparation is complete.\n"
-        "        required: true\n"
-        "  finish:\n"
-        "    type: action\n"
-        "    title: Finish\n"
-        "    intent: Verify the result and record that it is ready.\n"
-        "    instructions:\n"
-        "      - Verify the result and record that it is ready.\n"
-        "    items:\n"
-        "      - id: result-ready\n"
-        "        type: confirm\n"
-        "        prompt: The result is verified and ready.\n"
-        "        required: true\n"
-        "graph:\n"
-        "  entry: prepare\n"
-        "  nodes:\n"
-        "    - id: prepare\n"
-        "      use: prepare\n"
-        "      next: finish\n"
-        "    - id: finish\n"
-        "      use: finish\n"
-        "      terminal: true\n"
-        "manual_rework:\n"
-        "  allowed_targets:\n"
-        "    - prepare\n"
-    ).encode("utf-8")
+def scaffold(podway: Path, identifier: str, name: str, description: str) -> bytes:
+    try:
+        completed = subprocess.run(
+            [podway.as_posix(), "--json", "procedure", "scaffold", "--template", "minimal"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            timeout=VALIDATOR_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        fail(f"podway scaffold exceeded {VALIDATOR_TIMEOUT_SECONDS} seconds")
+    if (
+        completed.returncode != 0
+        or len(completed.stdout) > MAX_VALIDATOR_OUTPUT_BYTES
+        or len(completed.stderr) > MAX_VALIDATOR_OUTPUT_BYTES
+    ):
+        fail("podway could not return a bounded scaffold")
+    try:
+        output = json.loads(completed.stdout.decode("utf-8"), object_pairs_hook=object_no_duplicates)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        fail(f"podway scaffold did not return valid JSON: {error}")
+    if not isinstance(output, dict) or output.get("command") != "procedure.scaffold":
+        fail("podway scaffold returned an unexpected envelope")
+    result = output.get("result")
+    if (
+        not isinstance(result, dict)
+        or result.get("document_schema") != "podway.procedure/v3"
+        or not isinstance(result.get("document"), str)
+    ):
+        fail("podway scaffold did not supply a Procedure v3 base")
+    fields = {"id": identifier, "name": name, "purpose": description, "description": description}
+    document = result["document"]
+    for field, value in fields.items():
+        document, changed = re.subn(
+            rf"^{field}: [^\n]+$",
+            lambda _: f"{field}: {json.dumps(value, ensure_ascii=False)}",
+            document,
+            flags=re.MULTILINE,
+        )
+        if changed != 1:
+            fail(f"podway scaffold did not contain one {field} field")
+    return document.encode("utf-8")
 
 
 def install_content(content: bytes, directory: Path, podway: Path, expected: tuple[str, str, str] | None) -> dict[str, Any]:
@@ -312,7 +308,7 @@ def command_create(arguments: argparse.Namespace) -> dict[str, Any]:
     description = validate_text(arguments.description, "preset description", 4_000)
     directory = output_directory(arguments.output_dir)
     podway = regular_executable(arguments.podway)
-    result = install_content(scaffold(identifier, name, description), directory, podway, (identifier, name, description))
+    result = install_content(scaffold(podway, identifier, name, description), directory, podway, (identifier, name, description))
     return {"mode": "create", "ok": True, "preset": result}
 
 

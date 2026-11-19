@@ -299,6 +299,23 @@ impl AuthoringDiagnostic {
         }
     }
 
+    /// Retain diagnostic details while identifying the successor diagnostic family.
+    #[must_use]
+    pub fn for_successor_authoring(mut self) -> Self {
+        self.schema = "podway.successor-authoring-diagnostic/v1";
+        if self.code == AuthoringDiagnosticCode::AuthoringSchemaInvalid {
+            if let Some(detail) = self
+                .message
+                .strip_prefix("The Procedure source violates the closed v2 authoring schema: ")
+            {
+                self.message =
+                    format!("The document violates the successor authoring schema: {detail}");
+            }
+            self.hint = "Check the field against the Procedure v3 or Execution Group v1 schema for this document.".to_owned();
+        }
+        self
+    }
+
     #[must_use]
     pub fn with_node_definition_id(mut self, node_definition_id: impl Into<String>) -> Self {
         self.node_definition_id = Some(node_definition_id.into());

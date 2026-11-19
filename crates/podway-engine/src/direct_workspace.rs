@@ -127,10 +127,28 @@ pub fn doctor_workspace_v1<R: GitResolverContractV1>(
         request.deadline,
     )?;
     let lease = ExclusiveMaintenanceLeaseV1::acquire(store.layout(), request.deadline, false)?;
-    let checked = store.verify_integrity_under_exclusive_lease(&lease, request.deadline, |snapshot| Ok((|| {
+    let checked = store.verify_integrity_under_exclusive_lease(&lease, request.deadline, |snapshot| {
+        let current = if resolver.uses_execution_groups() {
+            snapshot.verify_successor_integrity(crate::successor_execution::admit_candidate_definition)
+                .map_err(|_| DirectStoreErrorV1::Unreadable)?
+        } else { None };
+        Ok((|| {
         resolver.revalidate(&resolved, snapshot.binding())?;
         let mut checked_artifacts = 0;
-        if deep {
+        if deep && resolver.uses_execution_groups() {
+            if let Some((state, _)) = &current {
+                let native = NativeDirectWorkspaceV1::new(resolved.clone());
+                checked_artifacts = crate::successor_execution::prepare_successor_progress(
+                    &native, snapshot.binding(), state,
+                ).map_err(|error| match error {
+                    podway_store::successor_store::CandidateStoreError::Domain(error) => {
+                        DirectWorkspaceErrorV1::Boundary(ExecutionBoundaryErrorV1::domain(error))
+                    }
+                    podway_store::successor_store::CandidateStoreError::Direct(error) => error.into(),
+                    _ => DirectStoreErrorV1::Unreadable.into(),
+                })?.artifact_count();
+            }
+        } else if deep {
             // The deep rehash reuses the verifier's admitted graph; it still
             // precedes the clock and the view inside this callback.
             checked_artifacts += snapshot.with_admitted_current_graph(
@@ -153,9 +171,25 @@ pub fn doctor_workspace_v1<R: GitResolverContractV1>(
             )?;
         }
         let observed_at = clock.now();
-        let view = snapshot.view(observed_at)?;
-        if view.graph().is_some() && crate::direct_read_service::project_direct_status_v1(
-            &view, crate::v2_read_service::GraphStatusTierV2::Verbose, None).is_err() {
+        let projection_valid = if resolver.uses_execution_groups() {
+            if let Some((state, sources)) = &current {
+                let fence = state.fence();
+                let metadata = snapshot.successor_metadata(&fence.session)
+                    .map_err(|_| DirectStoreErrorV1::Unreadable)?.ok_or(DirectStoreErrorV1::Unreadable)?;
+                let terminal_disposition = snapshot.successor_disposition(&fence.session, fence.revision)
+                    .map_err(|_| DirectStoreErrorV1::Unreadable)?.is_some();
+                crate::successor_execution::public_observation(
+                    snapshot.binding().identity().workspace_uuid(), &metadata.task_title, state,
+                    sources, snapshot.committed_sequence()?, podway_protocol::ContractGenerationV1::Generation2,
+                    crate::successor_execution::ObservationActivityV1::Current { terminal_disposition },
+                ).is_ok_and(|value| validate_daemon_free_document_v1("podway.observation-result/v8", &value))
+            } else { true }
+        } else {
+            let view = snapshot.view(observed_at)?;
+            view.graph().is_none() || crate::direct_read_service::project_direct_status_v1(
+                &view, crate::v2_read_service::GraphStatusTierV2::Verbose, None).is_ok()
+        };
+        if !projection_valid {
             return envelope(&request.request_id, "workspace.doctor", observed_at,
                 snapshot.binding().identity().workspace_uuid(), resolved.worktree(), snapshot.committed_sequence()?,
                 serde_json::json!({"healthy":false, "deep":deep,
@@ -175,7 +209,8 @@ pub fn doctor_workspace_v1<R: GitResolverContractV1>(
                     {"id":"public_status_projection", "status":"pass"},
                     {"id":"current_required_local_artifacts", "status":if deep {"pass"} else {"skipped"}}],
                 "current_required_local_artifacts_checked":checked_artifacts}))
-    })()));
+        })())
+    });
     match checked {
         Ok(output) => output,
         // A readable binding remains useful for diagnosis when persisted domain
@@ -480,7 +515,7 @@ fn initialize_workspace_inner_v1<R: GitResolverContractV1>(
         return Ok(output);
     }
     WorkspaceLayoutInitializerV1::new()
-        .initialize_with_config(&candidate, podway_config::DEFAULT_WORKSPACE_CONFIG_YAML_V1)
+        .initialize_with_config(&candidate, resolver.initial_workspace_config())
         .map_err(DirectWorkspaceErrorV1::Layout)?;
     let (candidate, _) = resolver.resolve_candidate(request.selector.clone())?;
     resolver.revalidate_candidate(&candidate)?;

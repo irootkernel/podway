@@ -3,68 +3,53 @@
 ## Current generation
 
 The sole production baseline is
-[`sqlite-v15.sql`](../../../assets/specifications/sqlite-v15.sql), owned by
-[ADR-0038](../../architecture-decision-records/0038-remove-the-daemon.md).
-`podway_store::direct_store::DirectStoreV1` creates and opens this generation.
-The DDL is a contract-manifest asset: changing it changes writer identity.
-Generation 15 adds a retained runtime-directory exclusion anchor through removal
-and accepts exact recovery from a lone matching removal marker. Generation 14
-was the unreleased direct baseline; this change declares no predecessor or
-automatic migration. Generation 14 is refused unchanged through the older-state
-`LEGACY_RUNTIME_STATE_UNSUPPORTED` contract with an explicitly confirmed reset
-recipe. Public older- and newer-generation bounds are checked against the
-Store constant and instantiated DDL by the standard contract gate.
-There is no production daemon Store, legacy migration chain, runtime-mode
-column, job table, job-backed receipt, linear Procedure v1 state, or global
-workspace registry.
+[`sqlite-v16.sql`](../../../assets/specifications/sqlite-v16.sql).
+[ADR-0044](../../architecture-decision-records/0044-versioned-execution-groups.md)
+defines its Procedure v3 and Execution Group v1 model.
+[ADR-0038](../../architecture-decision-records/0038-remove-the-daemon.md) still
+defines the direct execution boundary. `DirectStoreV1` owns initialization and
+admission. The DDL is a contract-manifest asset, so its bytes bind writer
+identity.
 
-Daemon-era generations 1 through 13 and their markers fail closed without
-writes. Their [frozen rejected-input fixture](../../../tests/fixtures/storage/daemon-era-v2dfc/generation-1-to-13-ddl.json)
-and populated generation-13 fixture are test input, not supported predecessors.
-Explicitly confirmed reset creates a new Store without conversion or backup.
-Historical migrations and their rationale remain in accepted ADRs; this baseline
-does not execute them.
+Generation 16 declares no predecessor. Generations 1 through 15 and their
+supported legacy markers are rejected before SQLite admission, recovery, or
+shared-memory creation. The refusal keeps the original Store intact.
+Explicitly confirmed reset can create a fresh Store. To settle existing v2 work,
+use its original compatible writer before cutover. The frozen daemon-era
+[rejected-input fixture](../../../tests/fixtures/storage/daemon-era-v2dfc/generation-1-to-13-ddl.json)
+remains historical negative evidence.
 
 ## Relational state
 
-The baseline keeps the complete Procedure v2 model:
+The baseline persists these scoped execution records.
 
-- Immutable canonical Procedure snapshots and ordered graph placements.
-- One current prepared/running/completed/cancelled session, with any retained
-  immutable inactive sessions and unique archive slots in `1..=4294967295`.
-- One active attempt and one valid attempt per placement, trace and attempt
-  counters, item slots, blockers and ordered resolved evidence references.
-- Decision and rework records, workflow memory through retained attempt state,
-  goal revisions, criteria, results, citations and immutable assessments.
-- Terminal dispositions tied to an exact terminal session revision, including
-  handed-off, not-required and superseded successor identity.
-- One immutable delegation receipt per attempt, with a 45,000-byte JSON bound
-  and composite session/attempt foreign key.
+- Immutable base and group definitions keyed by canonical digest.
+- One current session and any retained terminal sessions with exact titles,
+  lifecycle revisions, archive metadata and revision-bound dispositions.
+- Ordered immutable activations, design bindings, selection outcomes, closure
+  feedback, prior-work dispositions and scoped node attempts.
+- Item slot revisions and values, blockers, decisions, criterion assessments,
+  goal revisions and the exact historical evidence bindings.
+- One immutable acceptance receipt per delegated attempt. Its scoped package
+  digest and accepted-item digest bind different facts.
 
-A prepared session has revision zero, no trace, active cursor, goal, attempts or
-dependent execution records. Begin creates its first attempt and any goal in
-one transaction. Running sessions have exactly one active attempt. Terminal
-sessions have no active cursor. Inactive sessions are terminal and have archive
-metadata; SQL partial unique indexes enforce the current-session and active
-attempt uniqueness boundaries. Archive allocation and lookup use bounded
-SQL-side selection rather than loading every retained session.
-
-Strict tables, foreign keys, discriminator checks, immutable receipt triggers
-and domain reconstruction retain these invariants. Ordered evidence references
-use `(attempt_id, reference_ordinal)` so separate references may select different
-items from the same source placement. Typed conditions remain immutable snapshot
-declarations; no materialized condition evaluator or mutable default is added.
+The current-slot unique index prevents two current sessions. Strict row
+schemas, foreign keys, canonical record digests and Core reconstruction enforce
+session and attempt scope; an archived execution cannot supply a current
+attempt or current evidence. Prepared sessions have revision zero and no
+attempt or goal. Begin creates the first attempt and optional goal atomically.
+The terminal lifecycle clears the current cursor. A selected group's terminal
+completion persists its final outputs and opens the declared base successor in
+one transaction. Replanning retains the closed execution history.
 
 ## Execution-group candidate Store
 
-[Generation 16](../../../assets/specifications/sqlite-v16.sql) is the canonical
-unreleased execution-group layout. The test-support constructor creates fresh
-fixture files with an exact DDL-bound writer identity. The development manifest
-continues to select generation 15 for the public Procedure v2 runtime. The
-candidate declares no predecessor. Its fixture wrapper records a workspace
-UUID and owning root separately from successor domain state. The workspace
-sequence, operational journal and mutation outcome tables use the Direct
-transaction layout. Command outcomes carry the exact session scope.
+This layout originated as a private fixture and now runs through `DirectStoreV1`.
+The test-support constructor still creates isolated fixtures with their own
+DDL-bound writer identity. Production uses the enrolled generation 16 DDL and
+manifest identity. Both paths keep the workspace sequence, operational journal,
+and mutation outcomes in the Direct transaction layout. Command outcomes carry
+the exact session scope.
 
 An immutable canonical definition is keyed by its digest. Each session retains
 its base, ordered activations, scoped attempt trace, and successive goal
@@ -82,8 +67,8 @@ SQLite enforces composite session and activation relationships. On cold read,
 the Store verifies schema and writer identity, canonical bytes, row checksums,
 scope relationships, and item value digests. The definition-admitter callback
 must fully validate the supplied canonical bytes and return the corresponding
-typed definition. The candidate integration harness supplies Config's successor
-parser and validator. Core reconstructs the cursor and decision counts using
+typed definition. The Direct Engine supplies Config's parser and validator.
+Core reconstructs the cursor and decision counts using
 the original transitions and final item states. The retained trace must match
 the recovered outcomes, closures, guards, and historical references. Blocker
 IDs are unique across the trace and each attempt orders its blockers by
@@ -234,14 +219,11 @@ is empty; the cutover declares no daemon-era predecessor. Only a release or its
 following open-development commit may add a predecessor. Feature work and a
 reduced metadata-only patch gate cannot do so.
 
-The `bug-fix-v2` version `4` reproduction-prompt update changes the manifest even
-though Store generation and layout remain unchanged. The candidate therefore
-refuses Stores carrying the preceding manifest on normal reads, writes and
-original-request replays with `WORKSPACE_CONTRACT_MISMATCH`. This applies to
-sessions using unchanged presets as well. Their snapshots remain immutable;
-that does not promise transparent continuation with a new manifest. Verify the
-candidate in freshly initialized isolated fixtures. No migration, predecessor
-declaration, forced reset or installed-runtime update is part of this change.
+The prior writer's `bug-fix-v2` version `4` reproduction-prompt update changed
+its manifest without changing its Store layout. It refused the preceding
+manifest on ordinary reads, writes and replay, including for sessions with an
+unchanged preset. The same writer binding applies within generation 16. Verify
+development candidates in freshly initialized isolated fixtures.
 
 Integration settings do not participate in writer, Procedure snapshot, session
 or receipt identity. Matching-manifest Direct operations remain HOME-independent

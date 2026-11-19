@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:scoped-item-record-many-input:v1",
+  "title": "Podway Scoped Atomic Item Recording Input v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "context",
+    "operations"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.scoped-item-record-many-input/v1"
+    },
+    "context": {
+      "$ref": "urn:podway:schema:group-activate-input:v1#/$defs/context"
+    },
+    "operations": {
+      "$ref": "urn:podway:schema:item-record-many-input:v1#/properties/operations"
+    }
+  }
+}

@@ -49,7 +49,10 @@ impl Engine {
             temporary,
             selector,
             store,
-            resolver: DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest()),
+            resolver: DirectWorkspaceResolverV1::for_v15_fixture(
+                NativeGitResolverV1::new(),
+                digest(),
+            ),
         };
         engine.success(
             DirectCommandV1::Start(DirectStartCommandV1::Start(SessionStartCommandV1 {
@@ -233,7 +236,8 @@ impl Engine {
             .clone()
     }
     pub(super) fn cold(&mut self) {
-        self.resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+        self.resolver =
+            DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     }
 }
 

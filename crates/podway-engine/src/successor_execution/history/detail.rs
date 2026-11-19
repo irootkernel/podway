@@ -33,14 +33,14 @@ impl SuccessorHistoryDefinition<'_> {
             Self::Base(digest) if digest == state.base_digest() => {
                 Ok((ExecutionScopeV1::Base, state.base_digest()))
             }
-            Self::Base(_) => Err(SuccessorExecutionError::HistoryDefinitionMismatch),
+            Self::Base(_) => Err(SuccessorExecutionError::GroupDefinitionMismatch),
             Self::Group { execution, digest } => {
                 let admitted = retained_group(state, execution)?
                     .1
                     .identity()
                     .definition_digest();
                 if digest != admitted {
-                    return Err(SuccessorExecutionError::HistoryDefinitionMismatch);
+                    return Err(SuccessorExecutionError::GroupDefinitionMismatch);
                 }
                 Ok((
                     ExecutionScopeV1::Group {
@@ -56,7 +56,7 @@ impl SuccessorHistoryDefinition<'_> {
 
 /// List the activation-time applicability judgments of one exact retained group.
 pub fn list_successor_prior_work(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorReadStore,
     target: SuccessorHistorySession<'_>,
     execution: &GroupExecutionIdV1,
     definition_digest: &Sha256Digest,
@@ -68,7 +68,7 @@ pub fn list_successor_prior_work(
     let (index, group) = retained_group(state, execution)?;
     let identity = group.identity();
     if identity.definition_digest() != definition_digest {
-        return Err(SuccessorExecutionError::HistoryDefinitionMismatch);
+        return Err(SuccessorExecutionError::GroupDefinitionMismatch);
     }
     let design = state
         .history_attempt(identity.plan().design_attempt())
@@ -94,7 +94,8 @@ pub fn list_successor_prior_work(
         page,
         PRIOR_WORK_SCHEMA,
         json!([execution, definition_digest]),
-    )?;
+    )?
+    .with_response_headroom(store.response_headroom());
     let prior_work = identity.prior_work();
     bounds.project(
         prior_work.len(),
@@ -144,7 +145,7 @@ fn prior_work_row(state: &ExecutionSessionV3, work: &PriorWorkDispositionV1) -> 
 
 /// Read the canonical graph projection in Unicode-scalar pages.
 pub fn read_successor_history_dag(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorReadStore,
     target: SuccessorHistorySession<'_>,
     definition: SuccessorHistoryDefinition<'_>,
     continuation: Option<&str>,
@@ -154,7 +155,7 @@ pub fn read_successor_history_dag(
     let source = snapshot
         .sources
         .get(digest)
-        .ok_or(SuccessorExecutionError::HistoryDefinitionMismatch)?;
+        .ok_or(SuccessorExecutionError::GroupDefinitionMismatch)?;
     let admitted = admit_canonical_definition(source)?;
     let graph = project_retained_successor_graph(&admitted)?;
     let detail = json!({
@@ -170,13 +171,14 @@ pub fn read_successor_history_dag(
         },
         DAG_SCHEMA,
         json!([scope, digest, graph.digest()]),
-    )?;
+    )?
+    .with_response_headroom(store.response_headroom());
     content_page(bounds, detail, HistoryData::String(graph.projection()))
 }
 
 /// List retained attempts in original trace order in the exact definition scope.
 pub fn list_successor_history_attempts(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorReadStore,
     target: SuccessorHistorySession<'_>,
     definition: SuccessorHistoryDefinition<'_>,
     page: SuccessorHistoryPage<'_>,
@@ -198,32 +200,18 @@ pub fn list_successor_history_attempts(
         page,
         ATTEMPTS_SCHEMA,
         json!([scope, digest]),
-    )?;
+    )?
+    .with_response_headroom(store.response_headroom());
     bounds.project(
         matching().count(),
         None,
-        matching().map(|(index, attempt)| {
-            let mut row = attempt_provenance(attempt);
-            row["trace_sequence"] = json!(index + 1);
-            row["blocker_count"] = json!(attempt.blockers().len());
-            row["items"] = json!(
-                attempt
-                    .slots()
-                    .iter()
-                    .map(|slot| json!({
-                        "item": slot.item_id(), "item_type": slot.item_type().wire_name(),
-                        "revision": slot.revision(), "recorded": slot.value().is_some(),
-                    }))
-                    .collect::<Vec<_>>()
-            );
-            Ok(row)
-        }),
+        matching().map(|(index, attempt)| Ok(attempt_history_row(index, attempt))),
     )
 }
 
 /// Page the retained blockers of the exact attempt in established Store order.
 pub fn list_successor_history_blockers(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorReadStore,
     target: SuccessorHistorySession<'_>,
     source: &ScopedAttemptV1,
     page: SuccessorHistoryPage<'_>,
@@ -232,7 +220,8 @@ pub fn list_successor_history_blockers(
     let snapshot = read_history(store, target)?;
     let blockers = exact_attempt(&snapshot.state, source)?.blockers();
     let mut bounds =
-        HistoryPagination::new(target, &snapshot, page, BLOCKERS_SCHEMA, json!(source))?;
+        HistoryPagination::new(target, &snapshot, page, BLOCKERS_SCHEMA, json!(source))?
+            .with_response_headroom(store.response_headroom());
     bounds.header["attempt"] = json!(source);
     bounds.project(
         blockers.len(),
@@ -254,7 +243,7 @@ pub fn list_successor_history_blockers(
 /// Read a declared item of one exactly scoped attempt. Its stored data never becomes current
 /// evidence. Artifact availability is an observation of metadata at read time.
 pub fn read_successor_history_item(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorReadStore,
     target: SuccessorHistorySession<'_>,
     source: &ScopedAttemptV1,
     item: &ItemId,
@@ -283,7 +272,8 @@ pub fn read_successor_history_item(
         },
         ITEM_SCHEMA,
         json!([source, item, slot.revision(), digest]),
-    )?;
+    )?
+    .with_response_headroom(store.response_headroom());
     let detail = json!({
         "source_attempt": attempt_provenance(attempt),
         "item": item, "item_type": slot.item_type().wire_name(),
@@ -291,23 +281,88 @@ pub fn read_successor_history_item(
         "artifact_availability": value.and_then(RecordedItemValueV2::as_artifact)
             .map(|artifact| artifact_availability(store.workspace_root(), artifact)),
     });
-    let data = match value {
-        None => HistoryData::Absent,
-        Some(value) => {
-            if let Some(text) = value.as_text() {
-                HistoryData::String(text)
-            } else if let Some(entries) = value.as_list() {
-                HistoryData::List(entries)
-            } else {
-                HistoryData::Scalar(item_value_json_v2(value).map_err(|error| {
-                    DomainError::InvalidState {
-                        reason: error.reason(),
-                    }
-                })?)
-            }
-        }
-    };
+    let data = value
+        .map(HistoryData::recorded_value)
+        .transpose()?
+        .unwrap_or(HistoryData::Absent);
     content_page(bounds, detail, data)
+}
+
+// This function lives in successor_execution/history/detail.rs so current and
+// retained values use exactly the same bounded scalar/list paginator.
+pub fn read_successor_current_evidence(
+    store: &mut impl SuccessorReadStore,
+    target: SuccessorHistorySession<'_>,
+    expected_attempt: Option<&AttemptId>,
+    source: &EvidenceSourceV3,
+    item: &ItemId,
+    continuation: Option<&str>,
+) -> Result<CanonicalExecutionJsonV1> {
+    const SCHEMA: &str = "podway.scoped-evidence-read-result/v1";
+    let snapshot = read_history(store, target)?;
+    let state = &snapshot.state;
+    let consumer = state
+        .active_attempt()
+        .ok_or(SuccessorExecutionError::Invalid(
+            "current evidence requires a running attempt",
+        ))?;
+    if let Some(expected) = expected_attempt
+        && expected != consumer.target().attempt()
+    {
+        return Err(DomainError::AttemptNotCurrent {
+            expected: expected.clone(),
+            actual: Some(consumer.target().attempt().clone()),
+        }
+        .into());
+    }
+    let source_selector = match source {
+        EvidenceSourceV3::Local(node) => json!({"scope":"local","node":node}),
+        EvidenceSourceV3::Plan => json!({"scope":"plan"}),
+        EvidenceSourceV3::ExecutionResult => json!({"scope":"execution_result"}),
+    };
+    let (source_attempt, slot) = state.current_evidence(source, item).ok_or_else(|| {
+        SuccessorExecutionError::CurrentEvidenceUnavailable {
+            consumer: Box::new(consumer.target().clone()),
+            selector: source_selector.clone(),
+            item: item.clone(),
+        }
+    })?;
+    let value = slot
+        .value()
+        .expect("Core current evidence returns a recorded slot");
+    let digest = recorded_value_digest_v2(value).map_err(|error| DomainError::InvalidState {
+        reason: error.reason(),
+    })?;
+    let bounds = HistoryPagination::new(
+        target,
+        &snapshot,
+        SuccessorHistoryPage {
+            limit: 1,
+            continuation,
+        },
+        SCHEMA,
+        json!([
+            consumer.target(),
+            source_selector,
+            source_attempt,
+            item,
+            slot.revision(),
+            digest
+        ]),
+    )?
+    .with_response_headroom(store.response_headroom());
+    let detail = json!({
+        "consumer": consumer.target(),
+        "source": source_selector,
+        "source_attempt": source_attempt,
+        "item": item,
+        "item_type": slot.item_type().wire_name(),
+        "item_revision": slot.revision(),
+        "value_digest": digest,
+        "artifact_availability": value.as_artifact()
+            .map(|artifact| artifact_availability(store.workspace_root(), artifact)),
+    });
+    content_page(bounds, detail, HistoryData::recorded_value(value)?)
 }
 
 fn exact_attempt<'a>(
@@ -318,6 +373,23 @@ fn exact_attempt<'a>(
         .history_attempt(source.attempt())
         .filter(|attempt| attempt.target() == source)
         .ok_or(SuccessorExecutionError::HistoryAttemptNotFound)
+}
+
+pub(crate) fn attempt_history_row(index: usize, attempt: &GroupAttemptStateV1) -> Value {
+    let mut row = attempt_provenance(attempt);
+    row["trace_sequence"] = json!(index + 1);
+    row["blocker_count"] = json!(attempt.blockers().len());
+    row["items"] = json!(
+        attempt
+            .slots()
+            .iter()
+            .map(|slot| json!({
+                "item": slot.item_id(), "item_type": slot.item_type().wire_name(),
+                "revision": slot.revision(), "recorded": slot.value().is_some(),
+            }))
+            .collect::<Vec<_>>()
+    );
+    row
 }
 
 fn attempt_provenance(attempt: &GroupAttemptStateV1) -> Value {
@@ -332,6 +404,7 @@ fn attempt_provenance(attempt: &GroupAttemptStateV1) -> Value {
         "validity": if attempt.validity().is_valid() { "valid" } else { "stale" },
         "opened_at": attempt.opened_at(), "closed_at": attempt.closed_at(),
         "reason": attempt.reason().map(|reason| reason.as_str()),
+        "actor": attempt.closed_actor().map(|actor| actor.as_str()),
         "decision_entry": attempt.decision_entry(),
         "selected_group": attempt.selected_decision_entry().map(DecisionEntryV1::selected_group),
         "decision": attempt.decision().map(|decision| json!({
@@ -351,7 +424,7 @@ fn artifact_availability(
     if artifact.location_kind() != ArtifactLocationKindV1::LocalPath {
         return "unverified";
     }
-    match podway_git::test_support::observe_candidate_artifact_presence(
+    match podway_git::observe_local_artifact_presence_v1(
         &root.to_path_buf(),
         Path::new(artifact.location()),
     ) {
@@ -366,6 +439,21 @@ enum HistoryData<'a> {
     String(&'a str),
     List(&'a [String]),
     Scalar(Value),
+}
+
+impl<'a> HistoryData<'a> {
+    fn recorded_value(value: &'a RecordedItemValueV2) -> Result<Self> {
+        if let Some(text) = value.as_text() {
+            return Ok(Self::String(text));
+        }
+        if let Some(entries) = value.as_list() {
+            return Ok(Self::List(entries));
+        }
+        let scalar = item_value_json_v2(value).map_err(|error| DomainError::InvalidState {
+            reason: error.reason(),
+        })?;
+        Ok(Self::Scalar(scalar))
+    }
 }
 
 fn content_page(
@@ -407,7 +495,7 @@ fn content_page(
     result["next_page_token"] =
         json!((next < total).then(|| history_token(&bounds.identity, next)));
     let projected = canonical_response(&result)?;
-    if projected.as_str().len() > MAX_EVIDENCE_RESPONSE_BYTES_V2 {
+    if projected.as_str().len() + bounds.response_headroom > MAX_EVIDENCE_RESPONSE_BYTES_V2 {
         return Err(SuccessorExecutionError::ResponseBudget);
     }
     Ok(projected)

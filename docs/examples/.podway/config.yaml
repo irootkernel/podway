@@ -1,6 +1,6 @@
 schema: podway.workspace/v1
 procedure_paths:
   - .podway/procedures
-default_preset: sw-dev-v2
+default_preset: sw-dev-v3
 ui:
   show_stage_in_prompt: false

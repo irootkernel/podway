@@ -97,7 +97,7 @@ fn direct_start_confirms_source_and_replays_without_source_clock_or_identifiers(
     let (fixture, selector, store, _) = fixture();
     let path = fixture.path().join("start.json");
     std::fs::write(&path, SIMPLE).unwrap();
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let admitted = prepare_workspace_procedure_source_v2("start.json", SIMPLE).unwrap();
     let request = |key: Option<&str>, dry_run, guard| DirectStartRequestV1 {
         selector: selector.clone(),
@@ -232,7 +232,7 @@ fn typed_direct_api_returns_validated_success_and_rejection_without_effects() {
     }
     let (fixture, selector, store, _) = fixture();
     std::fs::write(fixture.path().join("api.json"), ITEMS).unwrap();
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let request = |command, key: Option<&str>| DirectRequestV1 {
         command,
         selector: selector.clone(),
@@ -453,7 +453,8 @@ fn marked_reads_return_the_original_maintenance_key_without_resuming_or_writing(
         (true, "workspace.remove", "removal_marker"),
     ] {
         let (_fixture, selector, store, _) = fixture();
-        let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+        let resolver =
+            DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
         let request = DirectMaintenanceRequestV1 {
             selector: selector.clone(),
             expected_workspace_id: Some(WorkspaceId::new(WORKSPACE).unwrap()),
@@ -572,7 +573,8 @@ fn direct_start_replacement_preserves_terminal_and_superseded_history_atomically
         let source_path = fixture.path().join("start.json");
         std::fs::write(&source_path, SIMPLE).unwrap();
         let source = prepare_workspace_procedure_source_v2("start.json", SIMPLE).unwrap();
-        let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+        let resolver =
+            DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
         let clock = CountClock(AtomicUsize::new(0));
         let ids = NativeDirectIdSourceV1;
         let payload = || SessionStartV1 {
@@ -852,7 +854,7 @@ fn delegated_acceptance_recomputes_package_and_blocks_changed_items_before_clock
     .unwrap()
     .into_state();
     seed_graph(&store, &graph);
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let current = || {
         store
             .read(deadline(), |snapshot| snapshot.current_graph())
@@ -1085,7 +1087,7 @@ fn state001_changed_items_report_items_changed_through_view_with_in_window_recei
     .unwrap()
     .into_state();
     seed_graph(&store, &graph);
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let fences = || {
         let graph = store
             .read(deadline(), |snapshot| snapshot.current_graph())
@@ -1257,7 +1259,7 @@ fn item_commands_replay_success_after_attachment_changes_or_disappears() {
     }
     let (fixture, selector, store, _) = fixture();
     seed_running_items(&store);
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let clock = CountClock(AtomicUsize::new(0));
     let fences = |revision| ItemMutationPreconditionsWireV1 {
         expected_session_id: SessionId::new(LOOKUP_RESPONSE).unwrap(),
@@ -1486,7 +1488,7 @@ fn record_many_commits_ordered_items_atomically_and_replays_after_file_loss() {
         input,
         deadline: deadline(),
     };
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let clock = CountClock(AtomicUsize::new(0));
     let output = record_many_v1(
         &resolver,
@@ -1621,7 +1623,7 @@ fn typed_record_many_rejects_count_and_duplicates_before_write_admission() {
             },
         },
     };
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest())
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest())
         .with_store_boundary_observer_v1(|boundary| {
             if boundary == DirectTransactionBoundaryV1::BeforeBegin {
                 panic!("invalid typed batch entered write admission");
@@ -1736,7 +1738,8 @@ fn record_many_enforces_aggregate_encoded_input_bound_without_effects_and_preser
         .unwrap()
         .into_state();
         seed_graph(&store, &graph);
-        let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+        let resolver =
+            DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
         let clock = CountClock(AtomicUsize::new(0));
         let input = ItemRecordManyV1 {
             operations: (0..16)
@@ -1800,6 +1803,7 @@ fn record_many_enforces_aggregate_encoded_input_bound_without_effects_and_preser
                     idempotency_key: Some(key.clone()),
                     timeout_ms: 5000,
                     generation: podway_protocol::ContractGenerationV1::Generation1,
+                    successor_store: false,
                     maintenance: None,
                 };
                 match record_many_v1(
@@ -1947,7 +1951,7 @@ fn direct_goal_decision_rework_completion_and_disposition_preserve_records_and_r
     .unwrap()
     .into_state();
     seed_graph(&store, &graph);
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let clock = CountClock(AtomicUsize::new(0));
     let ids = NativeDirectIdSourceV1;
     let current = || {
@@ -2357,7 +2361,7 @@ fn direct_reset_preview_and_force_remove_only_session_scoped_outcomes() {
     };
     let (_fixture, selector, store, _) = fixture();
     seed_running_items(&store);
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     execute_item_v1(
         &resolver,
         DirectItemRequestV1 {
@@ -2523,7 +2527,7 @@ pub(super) fn fixture() -> (TempDir, WorktreeSelectorV1, DirectStoreV1, OutputEn
     let root =
         ValidatedWorkspaceRootV1::from_unix_bytes(path.as_os_str().as_bytes().to_vec()).unwrap();
     let store = DirectStoreV1::new(
-        DirectWorkspaceLayoutV1::new(root).unwrap(),
+        DirectWorkspaceLayoutV1::for_v15_fixture(root).unwrap(),
         digest(),
         worktree.identity().common_directory_fingerprint().clone(),
         worktree
@@ -2588,7 +2592,7 @@ fn request(selector: WorktreeSelectorV1, key: &str) -> OutcomeLookupRequestV1 {
 #[test]
 fn outcome_lookup_preserves_the_original_response_and_has_no_write_effect() {
     let (_fixture, selector, store, original) = fixture();
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let before = std::fs::read(store.layout().database()).unwrap();
     let output =
         lookup_outcome_v1(&resolver, request(selector.clone(), "init-key"), &Clock).unwrap();
@@ -2626,7 +2630,7 @@ fn direct_resolution_rejects_a_replaced_workspace_uuid_before_reading_the_clock(
         }
     }
     let (_fixture, selector, _store, _original) = fixture();
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let mut input = request(selector, "init-key");
     input.expected_workspace_id = Some(WorkspaceId::new(LOOKUP_RESPONSE).unwrap());
     assert!(matches!(
@@ -2735,7 +2739,8 @@ fn direct_projection_families_validate_prepared_running_and_terminal_snapshots()
             use podway_engine::direct_execution::{
                 DirectReadCommandV1, DirectReadRequestV1, execute_read_v1,
             };
-            let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+            let resolver =
+                DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
             for command in [
                 DirectReadCommandV1::Status {
                     tier: GraphStatusTierV2::Standard,
@@ -2857,7 +2862,7 @@ fn begin_replays_original_success_before_stale_fences_clock_or_identifiers() {
     )
     .unwrap();
     seed_graph(&store, &graph);
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let clock = CountClock(AtomicUsize::new(0));
     let ids = Ids(AtomicUsize::new(0));
     let input = DirectBeginRequestV1 {
@@ -2997,7 +3002,7 @@ fn cursor_commands_preserve_fences_history_and_exact_replay_across_a_real_store(
     .unwrap()
     .into_state();
     seed_graph(&store, &graph);
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let clock = CountClock(AtomicUsize::new(0));
     let ids = Ids {
         attempts: AtomicUsize::new(0),
@@ -3130,9 +3135,10 @@ fn typed004_lower_read_observer_detects_in_writer_bytes_and_restores_scope() {
     let (fixture, selector, store, _) = fixture();
     let path = fixture.path().join("sensitivity.txt");
     std::fs::write(&path, "Actual native bytes.\n").unwrap();
-    let (resolved, _) = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest())
-        .resolve_existing(selector, None, deadline())
-        .unwrap();
+    let (resolved, _) =
+        DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest())
+            .resolve_existing(selector, None, deadline())
+            .unwrap();
     let native = NativeDirectWorkspaceV1::new(resolved);
     let reads = Rc::new(Cell::new(0));
     let observed = Rc::clone(&reads);
@@ -3190,7 +3196,7 @@ fn direct_artifact_verification_checks_prepared_stamps_without_artifact_byte_rea
     use std::sync::atomic::{AtomicUsize, Ordering};
     let (fixture, selector, store, _original) = fixture();
     std::fs::write(fixture.path().join("report.txt"), "Original report.\n").unwrap();
-    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let resolver = DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest());
     let (resolved, _) = resolver
         .resolve_existing(
             selector,

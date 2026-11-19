@@ -30,7 +30,7 @@ pub struct SuccessorHistoryPage<'a> {
 }
 
 pub fn list_successor_groups(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorReadStore,
     target: SuccessorHistorySession<'_>,
     page: SuccessorHistoryPage<'_>,
 ) -> Result<CanonicalExecutionJsonV1> {
@@ -53,12 +53,13 @@ pub fn list_successor_groups(
             .unwrap_or(0);
         group_summary(index, group, decision_count)
     });
-    let bounds = HistoryPagination::new(target, &snapshot, page, GROUPS_SCHEMA, Value::Null)?;
+    let bounds = HistoryPagination::new(target, &snapshot, page, GROUPS_SCHEMA, Value::Null)?
+        .with_response_headroom(store.response_headroom());
     bounds.project(groups.len(), None, rows.map(Ok))
 }
 
 pub fn show_successor_group(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorReadStore,
     target: SuccessorHistorySession<'_>,
     execution: &GroupExecutionIdV1,
     page: SuccessorHistoryPage<'_>,
@@ -94,7 +95,8 @@ pub fn show_successor_group(
         page,
         GROUP_SCHEMA,
         json!([execution, identity.definition_digest()]),
-    )?;
+    )?
+    .with_response_headroom(store.response_headroom());
     bounds.project(
         total,
         Some(detail),
@@ -118,7 +120,7 @@ fn retained_group<'a>(
 
 /// Read goal-revision and reactivation lineage, including changes made without a selection.
 pub fn list_successor_goal_revisions(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorReadStore,
     target: SuccessorHistorySession<'_>,
     page: SuccessorHistoryPage<'_>,
 ) -> Result<CanonicalExecutionJsonV1> {
@@ -126,13 +128,15 @@ pub fn list_successor_goal_revisions(
     let snapshot = read_history(store, target)?;
     let revisions = snapshot.state.goal_revision_history();
     let bounds =
-        HistoryPagination::new(target, &snapshot, page, GOAL_REVISIONS_SCHEMA, Value::Null)?;
+        HistoryPagination::new(target, &snapshot, page, GOAL_REVISIONS_SCHEMA, Value::Null)?
+            .with_response_headroom(store.response_headroom());
     bounds.project(
         revisions.len(),
         None,
         revisions.iter().map(|revision| {
             Ok(json!({
                 "goal_revision": revision.revision.get(),
+                "actor": revision.actor.as_ref().map(|actor| actor.as_str()),
                 "predecessor": revision.predecessor,
                 "successor": revision.successor,
                 "closure": closure_json(&revision.closure),
@@ -155,7 +159,7 @@ fn closure_json(closure: &GroupSelectionClosureV1) -> Value {
 }
 
 pub(super) fn read_history(
-    store: &mut CandidateExecutionStore,
+    store: &mut impl SuccessorReadStore,
     target: SuccessorHistorySession<'_>,
 ) -> Result<CandidateHistorySnapshot> {
     Ok(store.history_snapshot_with_digest(
@@ -201,6 +205,7 @@ fn decision_row(attempt: &GroupAttemptStateV1, state: &ExecutionSessionV3) -> Re
     Ok(json!({
         "attempt": attempt.target(),
         "entry_ordinal": attempt.decision_entry(),
+        "actor": attempt.closed_actor().map(|actor| actor.as_str()),
         "choice": decision.map(|value| &value.option),
         "reason": decision.map(|value| &value.reason),
         "assessment": assessment,
@@ -300,6 +305,7 @@ struct HistoryPagination {
     offset: usize,
     limit: usize,
     header: Value,
+    response_headroom: usize,
 }
 
 impl HistoryPagination {
@@ -335,7 +341,13 @@ impl HistoryPagination {
             offset,
             limit: page.limit,
             header,
+            response_headroom: 0,
         })
+    }
+
+    fn with_response_headroom(mut self, response_headroom: usize) -> Self {
+        self.response_headroom = response_headroom;
+        self
     }
 
     fn project(
@@ -357,7 +369,10 @@ impl HistoryPagination {
         record["truncated"] = json!(true);
         record["next_page_token"] = json!(history_token(&self.identity, self.offset));
         record["rows"] = json!([]);
-        let mut bytes = canonical_response(&record)?.as_str().len();
+        let mut bytes = self.response_headroom + canonical_response(&record)?.as_str().len();
+        if bytes > MAX_DIRECT_OUTPUT_BYTES_V1 {
+            return Err(SuccessorExecutionError::ResponseBudget);
+        }
         let mut page = Vec::new();
         for row in rows.skip(self.offset).take(self.limit) {
             let row = row?;
@@ -525,6 +540,7 @@ mod tests {
                 offset,
                 limit: 64,
                 header: header.clone(),
+                response_headroom: 0,
             }
             .project(
                 total,

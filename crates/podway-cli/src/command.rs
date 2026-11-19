@@ -1,11 +1,15 @@
 //! Public command-line surface for the Podway command contract.
 
+#[cfg(test)]
 mod authoring;
 mod grammar;
 mod preflight;
 mod procedure_files;
 mod render;
 mod start;
+mod successor_authoring;
+mod successor_cursor;
+mod successor_history;
 
 mod completion;
 mod direct;
@@ -44,22 +48,19 @@ use uuid::Uuid;
 
 #[cfg(test)]
 use authoring::procedure_validate_v2_diagnostics;
-use authoring::{
-    PROCEDURE_FORMAT_COMMAND, execute_preset, execute_procedure,
-    is_worktree_relative_procedure_path,
-};
 use grammar::{
     ArchiveCommand, Cli, Command, DelegationCommand, DispositionCommand, EvidenceCommand,
-    ExistingSessionPolicy, GoalCommand, IntegrationCommand, OutcomeCommand, PresetCommand,
-    ProcedureCommand, ReadArgs, StartArgs, StartTerminalDisposition, WorkspaceCommand, help_text,
-    normalize_top_level_help_alias, parse_failure_command_context, syntax_failure_message,
+    ExistingSessionPolicy, GoalCommand, GroupCommand, HistoryCommand, HistoryDefinitionArgs,
+    IntegrationCommand, OutcomeCommand, PresetCommand, ProcedureCommand, ReadArgs, StartArgs,
+    StartTerminalDisposition, WorkspaceCommand, help_text, normalize_top_level_help_alias,
+    parse_failure_command_context, syntax_failure_message,
 };
 #[cfg(test)]
 use grammar::{ParseFailureCommandContext, parse_timeout_millis};
 use preflight::{StatusPreflight, fill_facts};
 use procedure_files::{
-    OpenedProcedure, open_descriptor_relative_procedure, open_offline_procedure, procedure_format,
-    read_offline_procedure, read_worktree_procedure, replace_procedure_document,
+    is_worktree_relative_procedure_path, open_descriptor_relative_procedure,
+    open_offline_procedure, procedure_format, read_worktree_procedure, replace_procedure_document,
 };
 #[cfg(test)]
 use render::{
@@ -69,10 +70,12 @@ use render::{
 };
 use render::{
     render_authoring_diagnostics, render_local_failure, render_preview_start_command,
-    render_preview_text_value, render_result, render_retirement, write_text_line,
+    render_result, render_retirement, write_text_line,
 };
-use start::{ExistingStartResolution, execute_start_dry_run, resolve_existing_start};
+use start::{ExistingStartResolution, resolve_existing_start};
+use successor_authoring::{execute_preset, execute_procedure};
 
+const PROCEDURE_FORMAT_COMMAND: &str = "procedure.format";
 const MAX_DIRECT_COMMAND_TIMEOUT_MILLIS_V1: u64 = 3_600_000;
 const LOCAL_USAGE_EXIT: i32 = 2;
 const LOCAL_CLIENT_EXIT: i32 = 6;
@@ -602,6 +605,7 @@ fn supplied_workspace_options(cli: &Cli) -> Vec<&'static str> {
         ("--if-attempt", cli.if_attempt.is_some()),
         ("--if-item-revision", cli.if_item_revision.is_some()),
         ("--if-goal-revision", cli.if_goal_revision.is_some()),
+        ("--if-cursor", cli.if_cursor.is_some()),
         ("--yes", cli.yes),
         ("--with-observation", cli.with_observation),
     ]
@@ -1051,7 +1055,7 @@ fn validate_command_shape(command: &Command) -> Result<(), LocalFailure> {
                 ));
             }
             for evidence in &args.evidence {
-                GraphNodeId::new(evidence.clone()).map_err(invalid_v2_value)?;
+                successor_cursor::parse_evidence_selector(evidence)?;
             }
             for item in &args.item {
                 ItemId::new(item.clone()).map_err(invalid_v2_value)?;
@@ -1549,84 +1553,76 @@ fn empty_dynamic_completion() -> RunResult {
     local_result("__complete", json!({ "candidates": [] }), String::new())
 }
 
-fn dynamic_candidates_v2(result: &Map<String, Value>, kind: &str) -> Vec<String> {
+fn dynamic_candidates(result: &Map<String, Value>, kind: &str) -> Vec<String> {
     if !matches!(
         result.get("schema").and_then(Value::as_str),
-        Some("podway.status-result/v5")
+        Some("podway.observation-result/v7" | "podway.observation-result/v8")
     ) {
         return Vec::new();
     }
+    let guidance = result.get("guidance").unwrap_or(&Value::Null);
+    let entries = |key| {
+        result
+            .get(key)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+    };
+    let strings = |value: &Value| {
+        value
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .take(128)
+            .map(str::to_owned)
+            .collect()
+    };
     match kind {
-        "items" => candidate_ids(result, "items", "item_id"),
-        "blockers" => candidate_ids(result, "blocker_window", "blocker_id"),
-        "options" => candidate_strings(result, "allowed_option_ids"),
-        "rework-targets" => candidate_strings(result, "allowed_manual_rework_targets"),
+        "items" | "item-values" => entries("items")
+            .filter(|item| kind == "items" || item["recorded"] == true)
+            .filter_map(|item| item["item"].as_str())
+            .take(128)
+            .map(str::to_owned)
+            .collect(),
+        "blockers" => strings(result.get("open_blockers").unwrap_or(&Value::Null)),
+        "options" => guidance["placement"]["routes"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(_, route)| route["effect"] != "replan")
+            .map(|(option, _)| option.clone())
+            .take(128)
+            .collect(),
+        "rework-targets" => strings(&guidance["manual_rework_targets"]),
         "goal-criteria" => result
             .get("goal")
-            .and_then(Value::as_object)
-            .and_then(|goal| goal.get("criteria"))
-            .and_then(Value::as_array)
+            .and_then(|goal| goal["criteria"].as_array())
             .into_iter()
             .flatten()
-            .filter_map(|criterion| {
-                let criterion = criterion.as_object()?;
-                (criterion.get("status").and_then(Value::as_str) == Some("unassessed"))
-                    .then(|| criterion.get("criterion_id").and_then(Value::as_str))
-                    .flatten()
-                    .map(str::to_owned)
-            })
+            .filter(|criterion| criterion["status"].is_null())
+            .filter_map(|criterion| criterion["id"].as_str())
             .take(128)
+            .map(str::to_owned)
             .collect(),
-        "evidence-sources" => result
-            .get("references")
-            .and_then(Value::as_array)
+        "evidence-sources" => guidance["evidence"]
+            .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|reference| {
-                let reference = reference.as_object()?;
-                (reference.get("state").and_then(Value::as_str) == Some("resolved"))
-                    .then(|| {
-                        reference
-                            .get("source_graph_node_id")
-                            .and_then(Value::as_str)
-                    })
-                    .flatten()
-                    .map(str::to_owned)
-            })
+            .filter(|evidence| !evidence["attempt"].is_null())
+            .filter_map(
+                |evidence| match evidence["declaration"]["scope"].as_str()? {
+                    "local" => evidence["declaration"]["node"].as_str(),
+                    "plan" => Some("@plan"),
+                    "execution_result" => Some("@execution-result"),
+                    _ => None,
+                },
+            )
             .take(128)
+            .map(str::to_owned)
             .collect(),
-        "item-values" => candidate_ids(result, "item_values", "item_id"),
         _ => Vec::new(),
     }
-}
-
-fn candidate_ids(result: &Map<String, Value>, collection: &str, field: &str) -> Vec<String> {
-    result
-        .get(collection)
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|candidate| {
-            candidate
-                .as_object()
-                .and_then(|candidate| candidate.get(field))
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .take(128)
-        .collect()
-}
-
-fn candidate_strings(result: &Map<String, Value>, collection: &str) -> Vec<String> {
-    result
-        .get(collection)
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::to_owned)
-        .take(128)
-        .collect()
 }
 
 #[cfg(test)]
@@ -1642,7 +1638,7 @@ mod tests {
     use super::{
         Cli, Command, CommandNameV1, LocalEnvelopeClock, LocalFailure, ParseFailureCommandContext,
         RequestIdV1, Rfc3339MillisV1, RunResult, StatusPreflight, WorkspaceTarget,
-        contains_check_result_projection_v1, direct_response_result, dynamic_candidates_v2,
+        contains_check_result_projection_v1, direct_response_result, dynamic_candidates,
         local_generated_at, local_result, local_result_v2, parse_failure_command_context,
         parse_timeout_millis, procedure_validate_v2_diagnostics, render_authoring_diagnostics,
         render_local_failure_with_clock_and_writers, render_result_with_clock_and_writers,
@@ -1743,11 +1739,11 @@ mod tests {
             SessionId::new("00000000-0000-4000-8000-000000000001").unwrap()
         );
         let candidates = json!({
-            "schema":"podway.status-result/v5",
-            "items":[{"item_id":"review"}]
+            "schema":"podway.observation-result/v7",
+            "items":[{"item":"review"}]
         });
         assert_eq!(
-            dynamic_candidates_v2(candidates.as_object().unwrap(), "items"),
+            dynamic_candidates(candidates.as_object().unwrap(), "items"),
             ["review"]
         );
     }

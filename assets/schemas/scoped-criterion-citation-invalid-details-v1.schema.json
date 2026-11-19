@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:scoped-criterion-citation-invalid-details:v1",
+  "title": "Podway Scoped Criterion Citation Invalid Details v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "decision",
+    "criterion_id",
+    "citation",
+    "reason"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.scoped-criterion-citation-invalid-details/v1"
+    },
+    "decision": {
+      "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt",
+      "properties": {
+        "scope": {
+          "properties": {
+            "kind": {
+              "const": "base"
+            }
+          }
+        }
+      }
+    },
+    "criterion_id": {
+      "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+    },
+    "citation": {
+      "$ref": "#/$defs/citation"
+    },
+    "reason": {
+      "enum": [
+        "unresolved_evidence",
+        "unrecorded_item",
+        "duplicate",
+        "not_applicable"
+      ]
+    }
+  },
+  "$defs": {
+    "citation": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/evidenceCitation"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "item"
+          ],
+          "properties": {
+            "kind": {
+              "const": "item"
+            },
+            "item": {
+              "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+            }
+          }
+        }
+      ]
+    },
+    "evidenceCitation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "node"
+          ],
+          "properties": {
+            "kind": {
+              "const": "local"
+            },
+            "node": {
+              "$ref": "urn:podway:schema:procedure:v2#/$defs/identifier"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "plan",
+                "execution_result"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

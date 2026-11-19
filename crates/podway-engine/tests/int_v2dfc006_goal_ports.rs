@@ -86,7 +86,7 @@ fn prepared(source: &str) -> (Engine, podway_engine::direct_api::DirectRequestV1
         temporary,
         selector,
         store,
-        resolver: DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest()),
+        resolver: DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest()),
     };
     let request = engine.request(
         DirectCommandV1::Start(DirectStartCommandV1::Start(SessionStartCommandV1 {

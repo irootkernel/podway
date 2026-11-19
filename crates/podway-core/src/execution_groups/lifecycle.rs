@@ -2,15 +2,21 @@
 //! The caller supplies admitted definition identities, fresh IDs, time, and external verification.
 
 use super::*;
+#[path = "attribution.rs"]
+mod attribution;
+#[path = "criteria.rs"]
+mod criteria;
 use crate::{
-    ActionOutcomeV2, AttemptId, AttemptLifecycle, AttemptValidityV2, BlockerState, BlockerStateV2,
-    BoundUnitV2, ConditionStateV2, GoalDefinitionV2, GoalOutcome, GoalRevisionNumberV2,
-    GoalStatementV2, GraphMutationErrorV2, GraphNodeId, ItemId, ItemSlotStateV2,
-    MAX_ACTIVE_ITEM_MUTATIONS_V2, MAX_ATTEMPT_CONTENT_SCALARS_V2, MAX_OPEN_BLOCKERS_V2, OptionId,
-    ReasonV2, RecordedItemSetV2, RecordedItemV2, RecordedItemValueV2, Revision, SessionId,
-    SessionLifecycle, Sha256Digest, UnixMillis, recorded_content_scalars_v2,
-    recorded_items_digest_v2, recorded_value_digest_v2,
+    ActionOutcomeV2, ActorAttributionV2, AttemptId, AttemptLifecycle, AttemptValidityV2,
+    BlockerState, BlockerStateV2, BoundUnitV2, ConditionStateV2, DomainCommandKind,
+    GoalDefinitionV2, GoalOutcome, GoalRevisionNumberV2, GoalStatementV2, GraphMutationErrorV2,
+    GraphNodeId, ItemId, ItemSlotStateV2, MAX_ACTIVE_ITEM_MUTATIONS_V2,
+    MAX_ATTEMPT_CONTENT_SCALARS_V2, MAX_OPEN_BLOCKERS_V2, OptionId, ReasonV2, RecordedItemSetV2,
+    RecordedItemV2, RecordedItemValueV2, Revision, SessionId, SessionLifecycle, Sha256Digest,
+    UnixMillis, recorded_content_scalars_v2, recorded_items_digest_v2, recorded_value_digest_v2,
 };
+pub use attribution::SuccessorAttributionTargetV1;
+pub use criteria::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[path = "retained.rs"]
@@ -69,6 +75,161 @@ pub struct GroupGuardValueV1 {
     pub item: PlanItemBindingV1,
 }
 
+/// The evaluated current source and item for one authored guard predicate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GroupGuardPredicateStatusV1 {
+    pub source: ScopedAttemptV1,
+    pub item: ItemId,
+    pub state: ConditionStateV2,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GroupOptionGuardUnsatisfiedV1 {
+    pub decision: ScopedAttemptV1,
+    pub option: OptionId,
+    pub state: ConditionStateV2,
+    pub predicates: Vec<GroupGuardPredicateStatusV1>,
+}
+
+#[derive(Debug)]
+pub enum GroupReplanErrorV1 {
+    Domain(DomainError),
+    GuardUnsatisfied(Box<GroupOptionGuardUnsatisfiedV1>),
+}
+
+impl From<DomainError> for GroupReplanErrorV1 {
+    fn from(error: DomainError) -> Self {
+        Self::Domain(error)
+    }
+}
+
+impl GroupReplanErrorV1 {
+    fn into_domain(self) -> DomainError {
+        match self {
+            Self::Domain(error) => error,
+            Self::GuardUnsatisfied(_) => {
+                invalid("guard is unmet or unevaluable in current evidence")
+            }
+        }
+    }
+}
+
+/// Activation admission distinguishes invalid requests about earlier work from domain failures.
+#[derive(Debug)]
+pub enum GroupActivationErrorV1 {
+    InvalidPriorWork(DomainError),
+    Domain(DomainError),
+}
+
+impl From<DomainError> for GroupActivationErrorV1 {
+    fn from(error: DomainError) -> Self {
+        Self::Domain(error)
+    }
+}
+
+/// Scope and lifecycle policy refusals retain the original domain reason for concrete-time callers.
+#[derive(Debug)]
+pub enum GroupGoalRevisionErrorV1 {
+    TargetNotAllowed(DomainError),
+    TargetNotOnTrace(DomainError),
+    ReactivationFlagRequired(DomainError),
+    Domain(DomainError),
+}
+
+impl From<DomainError> for GroupGoalRevisionErrorV1 {
+    fn from(error: DomainError) -> Self {
+        Self::Domain(error)
+    }
+}
+
+/// Typed admission of an ordinary successor Decision.
+#[derive(Debug)]
+pub enum GroupDecisionErrorV1 {
+    Graph(GraphMutationErrorV2),
+    GuardUnsatisfied(Box<GroupOptionGuardUnsatisfiedV1>),
+    OptionNotAllowed {
+        decision: Box<ScopedAttemptV1>,
+        option: OptionId,
+        allowed_option_ids: Vec<OptionId>,
+    },
+    ReplanRequired {
+        decision: Box<ScopedAttemptV1>,
+        option: OptionId,
+    },
+}
+
+impl From<DomainError> for GroupDecisionErrorV1 {
+    fn from(error: DomainError) -> Self {
+        Self::Graph(error.into())
+    }
+}
+
+impl From<GraphMutationErrorV2> for GroupDecisionErrorV1 {
+    fn from(error: GraphMutationErrorV2) -> Self {
+        Self::Graph(error)
+    }
+}
+
+impl From<GroupReplanErrorV1> for GroupDecisionErrorV1 {
+    fn from(error: GroupReplanErrorV1) -> Self {
+        match error {
+            GroupReplanErrorV1::Domain(error) => error.into(),
+            GroupReplanErrorV1::GuardUnsatisfied(error) => Self::GuardUnsatisfied(error),
+        }
+    }
+}
+
+impl GroupDecisionErrorV1 {
+    // Keep existing concrete-time Core callers on their original error contract.
+    fn into_legacy_graph(self) -> GraphMutationErrorV2 {
+        match self {
+            Self::OptionNotAllowed { .. } => {
+                invalid("the selected option has no declared route").into()
+            }
+            Self::Graph(error) => error,
+            Self::GuardUnsatisfied(_) => {
+                invalid("guard is unmet or unevaluable in current evidence").into()
+            }
+            Self::ReplanRequired { .. } => {
+                invalid("the selected option requires explicit group replan").into()
+            }
+        }
+    }
+
+    fn into_legacy_domain(self) -> DomainError {
+        match self.into_legacy_graph() {
+            GraphMutationErrorV2::Domain(error) => error,
+            _ => unreachable!("unassessed caller uses only domain-compatible admission"),
+        }
+    }
+}
+
+/// Current guarded choice readback. A missing eligible source has no current scoped attempt.
+pub struct GroupDecisionPredicateReadV1 {
+    pub source: Option<ScopedAttemptV1>,
+    pub item: ItemId,
+    pub state: ConditionStateV2,
+}
+
+pub struct GroupDecisionOptionReadV1 {
+    pub option: OptionId,
+    pub state: ConditionStateV2,
+    pub predicates: Vec<GroupDecisionPredicateReadV1>,
+}
+
+pub struct GroupDecisionGuidanceV1 {
+    pub goal_assessment_available: bool,
+    pub allowed_option_ids: Vec<OptionId>,
+    pub replan_option_ids: Vec<OptionId>,
+    pub guard_statuses: Option<Vec<GroupDecisionOptionReadV1>>,
+}
+
+struct EvaluatedGuardPredicate<'a> {
+    source: Option<&'a GroupAttemptStateV1>,
+    item: &'a ItemId,
+    state: ConditionStateV2,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GroupDecisionRecordV1 {
     pub option: OptionId,
@@ -92,11 +253,13 @@ pub struct GroupAttemptStateV1 {
     validity: AttemptValidityV2,
     opened_at: UnixMillis,
     closed_at: Option<UnixMillis>,
+    closed_actor: Option<ActorAttributionV2>,
     slots: Vec<ItemSlotStateV2>,
     blockers: Vec<BlockerStateV2>,
     delegation: Option<ScopedDelegationBindingV1>,
     decision_entry: Option<DecisionEntry>,
     decision: Option<GroupDecisionRecordV1>,
+    criterion_assessments: Option<SuccessorCriterionSetV1>,
     reason: Option<ReasonV2>,
 }
 
@@ -115,6 +278,9 @@ impl GroupAttemptStateV1 {
     }
     pub const fn closed_at(&self) -> Option<UnixMillis> {
         self.closed_at
+    }
+    pub fn closed_actor(&self) -> Option<&ActorAttributionV2> {
+        self.closed_actor.as_ref()
     }
     pub fn slots(&self) -> &[ItemSlotStateV2] {
         &self.slots
@@ -189,6 +355,7 @@ pub struct ExecutionGoalV3 {
     pub criteria: GoalDefinitionV2,
 }
 
+#[derive(Clone, Debug)]
 pub struct ExecutionGoalChangeV3 {
     pub goal: ExecutionGoalV3,
     pub target: GraphNodeId,
@@ -201,6 +368,7 @@ pub struct ExecutionGoalChangeV3 {
 pub struct GroupGoalRevisionV1 {
     pub revision: GoalRevisionNumberV2,
     pub goal: ExecutionGoalV3,
+    pub actor: Option<ActorAttributionV2>,
     pub source: ScopedAttemptV1,
     pub successor: ScopedAttemptV1,
     pub predecessor: Option<GroupExecutionIdV1>,
@@ -224,26 +392,23 @@ pub struct ExecutionSessionV3 {
     current_group: BTreeMap<GraphNodeId, usize>,
     decision_counts: BTreeMap<(Option<GroupExecutionIdV1>, bool, GraphNodeId), u64>,
     initial_goal: Option<ExecutionGoalV3>,
+    initial_goal_actor: Option<ActorAttributionV2>,
     goal_revisions: Vec<GroupGoalRevisionV1>,
     lifecycle: SessionLifecycle,
     revision: Revision,
+    created_at: UnixMillis,
     updated_at: UnixMillis,
 }
 
 impl ExecutionSessionV3 {
-    pub fn begin(
+    /// Retain the immutable base before there is a current attempt or goal.
+    pub fn prepared(
         session: SessionId,
         base: ProcedureDefinitionV3,
         base_digest: Sha256Digest,
-        initial_goal: Option<ExecutionGoalV3>,
-        entry_attempt: AttemptId,
         now: UnixMillis,
-    ) -> Result<Self, DomainError> {
-        if initial_goal.is_some() && base.goal_tracking().is_none() {
-            return Err(invalid("an untracked base cannot have a goal"));
-        }
-        let entry = base.graph().entry().clone();
-        let mut state = Self {
+    ) -> Self {
+        Self {
             session,
             base_suffix: downstream(base.graph(), base.boundary().success_return()),
             base,
@@ -256,16 +421,69 @@ impl ExecutionSessionV3 {
             current_base: BTreeMap::new(),
             current_group: BTreeMap::new(),
             decision_counts: BTreeMap::new(),
-            initial_goal,
+            initial_goal: None,
+            initial_goal_actor: None,
             goal_revisions: Vec::new(),
-            lifecycle: SessionLifecycle::Running,
+            lifecycle: SessionLifecycle::Prepared,
             revision: Revision::ZERO,
+            created_at: now,
             updated_at: now,
-        };
-        let attempt =
-            state.prepare_attempt(ExecutionScopeV1::Base, &entry, entry_attempt, now, None)?;
-        state.push_attempt(attempt);
+        }
+    }
+
+    pub fn begin(
+        session: SessionId,
+        base: ProcedureDefinitionV3,
+        base_digest: Sha256Digest,
+        initial_goal: Option<ExecutionGoalV3>,
+        entry_attempt: AttemptId,
+        now: UnixMillis,
+    ) -> Result<Self, DomainError> {
+        let mut state = Self::prepared(session, base, base_digest, now);
+        state.begin_prepared(&state.fence(), initial_goal, entry_attempt, now)?;
         Ok(state)
+    }
+
+    /// Atomically begin a prepared session at its exact current revision.
+    pub fn begin_prepared(
+        &mut self,
+        fence: &ExecutionCursorFenceV1,
+        initial_goal: Option<ExecutionGoalV3>,
+        entry_attempt: AttemptId,
+        now: UnixMillis,
+    ) -> Result<(), DomainError> {
+        let revision = self.check_fence(fence, now)?;
+        if self.lifecycle != SessionLifecycle::Prepared {
+            return Err(DomainError::InvalidTransition {
+                command: DomainCommandKind::SessionBegin,
+                state: self.lifecycle,
+            });
+        }
+        self.open_entry(initial_goal, entry_attempt, revision, now)
+    }
+
+    fn open_entry(
+        &mut self,
+        initial_goal: Option<ExecutionGoalV3>,
+        entry_attempt: AttemptId,
+        revision: Revision,
+        now: UnixMillis,
+    ) -> Result<(), DomainError> {
+        if initial_goal.is_some() && self.base.goal_tracking().is_none() {
+            return Err(invalid("an untracked base cannot have a goal"));
+        }
+        let attempt = self.prepare_attempt(
+            ExecutionScopeV1::Base,
+            self.base.graph().entry(),
+            entry_attempt,
+            now,
+            None,
+        )?;
+        self.initial_goal = initial_goal;
+        self.lifecycle = SessionLifecycle::Running;
+        self.push_attempt(attempt);
+        self.update(revision, now);
+        Ok(())
     }
 
     pub fn fence(&self) -> ExecutionCursorFenceV1 {
@@ -285,6 +503,33 @@ impl ExecutionSessionV3 {
 
     pub fn current_placement(&self) -> Option<&PlacementV3> {
         self.current_parts().ok().map(|(_, placement, _)| placement)
+    }
+
+    /// Declarations and slots from the same exact active scope.
+    pub fn current_item_declarations(&self) -> Option<&[ItemSpecV2]> {
+        self.current_parts().ok().map(|(_, _, items)| items)
+    }
+
+    /// Evaluate the same current item, blocker, and evidence requirements as progression.
+    pub fn current_readiness(&self) -> Result<(), DomainError> {
+        let (attempt, placement, items) = self.current_parts()?;
+        self.require_ready(attempt, placement, items)
+    }
+
+    /// Visited manual rework placements still eligible in the current execution scope.
+    pub fn current_manual_rework_targets(&self) -> impl Iterator<Item = &GraphNodeId> {
+        let targets = self.active_attempt().and_then(|attempt| {
+            let scope = attempt.target.scope();
+            self.definition_for(scope, None)
+                .ok()
+                .map(|(graph, _)| (scope, graph))
+        });
+        targets.into_iter().flat_map(move |(scope, graph)| {
+            graph.manual_rework().iter().filter(move |target| {
+                self.check_ordinary_target(scope, target, true).is_ok()
+                    && self.live(scope).contains_key(*target)
+            })
+        })
     }
 
     pub fn attempt_history(&self) -> &[GroupAttemptStateV1] {
@@ -313,6 +558,17 @@ impl ExecutionSessionV3 {
 
     pub fn initial_goal(&self) -> Option<&ExecutionGoalV3> {
         self.initial_goal.as_ref()
+    }
+
+    pub fn initial_goal_actor(&self) -> Option<&ActorAttributionV2> {
+        self.initial_goal_actor.as_ref()
+    }
+
+    pub fn current_goal_actor(&self) -> Option<&ActorAttributionV2> {
+        match self.goal_revisions.last() {
+            Some(latest) => latest.actor.as_ref(),
+            None => self.initial_goal_actor(),
+        }
     }
 
     pub fn current_goal(&self) -> Option<&ExecutionGoalV3> {
@@ -430,6 +686,29 @@ impl ExecutionSessionV3 {
         entry_attempt: AttemptId,
         now: UnixMillis,
     ) -> Result<(), DomainError> {
+        self.activate_with_admission(
+            fence,
+            identity,
+            definition,
+            admitted_digest,
+            entry_attempt,
+            now,
+        )
+        .map_err(|error| match error {
+            GroupActivationErrorV1::InvalidPriorWork(error)
+            | GroupActivationErrorV1::Domain(error) => error,
+        })
+    }
+
+    pub fn activate_with_admission(
+        &mut self,
+        fence: &ExecutionCursorFenceV1,
+        identity: ActivationIdentityV1,
+        definition: ExecutionGroupDefinitionV1,
+        admitted_digest: &Sha256Digest,
+        entry_attempt: AttemptId,
+        now: UnixMillis,
+    ) -> Result<(), GroupActivationErrorV1> {
         let revision = self.check_fence(fence, now)?;
         let (anchor, placement, items) = self.current_parts()?;
         if anchor.target.scope() != &ExecutionScopeV1::Base
@@ -439,7 +718,8 @@ impl ExecutionSessionV3 {
         {
             return Err(invalid(
                 "activation requires an unselected ready anchor with its current goal",
-            ));
+            )
+            .into());
         }
         self.require_ready(anchor, placement, items)?;
         if matches!(
@@ -450,7 +730,7 @@ impl ExecutionSessionV3 {
             }
         ) && anchor.delegation.is_none()
         {
-            return Err(invalid("current delegated anchor acceptance is required"));
+            return Err(invalid("current delegated anchor acceptance is required").into());
         }
         if identity.session() != &self.session
             || identity.base_digest() != &self.base_digest
@@ -464,18 +744,19 @@ impl ExecutionSessionV3 {
                 .iter()
                 .any(|group| group.identity.execution() == identity.execution())
         {
-            return Err(invalid(
-                "activation identity does not bind the exact current design",
-            ));
+            return Err(
+                invalid("activation identity does not bind the exact current design").into(),
+            );
         }
         let plan = selected_items(items, self.base.boundary().plan_inputs())?;
         let terminal = terminal_items(&definition)?;
         if !same_boundary_contract_v1(&plan, definition.plan_inputs())
             || !same_result_contract(self.base.boundary().result_items(), terminal)
         {
-            return Err(invalid("group boundary declarations differ from the base"));
+            return Err(invalid("group boundary declarations differ from the base").into());
         }
-        self.check_prior_work(&identity)?;
+        self.check_prior_work(&identity)
+            .map_err(GroupActivationErrorV1::InvalidPriorWork)?;
         check_bound(
             "group executions",
             self.executions.len() + 1,
@@ -483,9 +764,7 @@ impl ExecutionSessionV3 {
         )?;
         match self.definitions.get(admitted_digest) {
             Some(retained) if retained != &definition => {
-                return Err(invalid(
-                    "a retained group digest names a different definition",
-                ));
+                return Err(invalid("a retained group digest names a different definition").into());
             }
             Some(_) => {}
             None => {
@@ -524,6 +803,28 @@ impl ExecutionSessionV3 {
         self.push_attempt(entry);
         self.update(revision, now);
         Ok(())
+    }
+
+    /// Resolve a typed convenience edit against the exact current declaration and value.
+    pub fn prepare_item_edit(
+        &self,
+        target: &ScopedAttemptV1,
+        item: &ItemId,
+        mutation: crate::ActiveItemMutationV2,
+    ) -> Result<Option<RecordedItemValueV2>, GraphMutationErrorV2> {
+        self.verify_attempt(target)?;
+        let (attempt, _, declarations) = self.current_parts()?;
+        let index = declarations
+            .iter()
+            .position(|declaration| declaration.id() == item)
+            .ok_or_else(|| GraphMutationErrorV2::ItemNotFound {
+                item_id: item.clone(),
+            })?;
+        crate::workflow_v2::mutate_item_value_v2(
+            &declarations[index],
+            attempt.slots[index].value(),
+            mutation,
+        )
     }
 
     /// A current item edit fences the exact scoped attempt and item revision independently.
@@ -855,17 +1156,37 @@ impl ExecutionSessionV3 {
         successor: AttemptId,
         now: UnixMillis,
     ) -> Result<(), DomainError> {
-        let revision = self.check_fence(fence, now)?;
+        self.check_time(now)?;
+        self.decide_with_effects(
+            fence,
+            option,
+            reason,
+            determined_goal_outcome,
+            || now,
+            || successor,
+        )
+        .map(|_| ())
+        .map_err(GroupDecisionErrorV1::into_legacy_domain)
+    }
+
+    fn decide_with_effects(
+        &mut self,
+        fence: &ExecutionCursorFenceV1,
+        option: OptionId,
+        reason: ReasonV2,
+        determined_goal_outcome: Option<GoalOutcome>,
+        clock: impl FnOnce() -> UnixMillis,
+        successor: impl FnOnce() -> AttemptId,
+    ) -> Result<UnixMillis, GroupDecisionErrorV1> {
+        self.verify_cursor(fence)
+            .map_err(ExecutionCursorMismatchV1::into_domain)?;
+        let revision = self.revision.checked_next()?;
         let (attempt, placement, items) = self.current_parts()?;
-        let (definition, route) = self.decision(placement, attempt.target.scope(), &option)?;
+        let (definition, route) = self.ordinary_decision(attempt, placement, &option)?;
         let (node, rework) = match route {
             DecisionRouteV3::Advance(node) => (node, false),
             DecisionRouteV3::Rework(node) => (node, true),
-            DecisionRouteV3::Replan => {
-                return Err(invalid(
-                    "the selected option requires explicit group replan",
-                ));
-            }
+            DecisionRouteV3::Replan => unreachable!("ordinary decision admission excludes replan"),
         };
         let goal_assessment = match (definition.metadata().assessment(), determined_goal_outcome) {
             (None, None) => None,
@@ -883,7 +1204,7 @@ impl ExecutionSessionV3 {
             _ => {
                 return Err(invalid(
                     "goal assessment requires the current goal and an option mapping its determined outcome",
-                ));
+                ).into());
             }
         };
         self.require_ready(attempt, placement, items)?;
@@ -893,8 +1214,10 @@ impl ExecutionSessionV3 {
         let invalidation = rework
             .then(|| self.rework_index(attempt.target.scope(), node))
             .transpose()?;
+        let now = clock();
+        self.check_time(now)?;
         let next =
-            self.prepare_attempt(attempt.target.scope().clone(), node, successor, now, None)?;
+            self.prepare_attempt(attempt.target.scope().clone(), node, successor(), now, None)?;
         self.close_attempt(AttemptLifecycle::Completed, now)
             .decision = Some(GroupDecisionRecordV1 {
             option,
@@ -908,7 +1231,7 @@ impl ExecutionSessionV3 {
         }
         self.push_attempt(next);
         self.update(revision, now);
-        Ok(())
+        Ok(now)
     }
 
     pub fn replan(
@@ -918,24 +1241,33 @@ impl ExecutionSessionV3 {
         fresh_anchor: AttemptId,
         now: UnixMillis,
     ) -> Result<(), DomainError> {
-        let revision = self.check_fence(fence, now)?;
+        self.replan_with_effects(fence, feedback, || now, || fresh_anchor)
+            .map(|_| ())
+            .map_err(GroupReplanErrorV1::into_domain)
+    }
+
+    /// Admit the exact cursor, route and current guards before requesting a fresh ID or time.
+    pub fn replan_with_effects(
+        &mut self,
+        fence: &ExecutionCursorFenceV1,
+        feedback: ReplanFeedbackV1,
+        clock: impl FnOnce() -> UnixMillis,
+        fresh_anchor: impl FnOnce() -> AttemptId,
+    ) -> Result<UnixMillis, GroupReplanErrorV1> {
+        self.verify_cursor(fence)
+            .map_err(ExecutionCursorMismatchV1::into_domain)?;
+        let revision = self.revision.checked_next()?;
         let (attempt, placement, items) = self.current_parts()?;
         let (definition, route) =
             self.decision(placement, attempt.target.scope(), feedback.option())?;
         if feedback.decision() != &attempt.target
             || !matches!(route, DecisionRouteV3::Replan)
-            || definition.metadata().assessment().is_some()
-            || self.selected.is_none()
-            || (attempt.target.scope() == &ExecutionScopeV1::Base
-                && !self
-                    .base
-                    .boundary()
-                    .replan_decisions()
-                    .contains(placement.id()))
+            || !self.can_replan_at(attempt, placement, definition)
         {
             return Err(invalid(
                 "replan requires a declared ordinary Decision at the current selected placement",
-            ));
+            )
+            .into());
         }
         self.require_ready(attempt, placement, items)?;
         let guard_values =
@@ -943,7 +1275,10 @@ impl ExecutionSessionV3 {
         let evidence_sources = self.decision_evidence_sources(attempt, placement);
         let anchor = self.base.boundary().anchor();
         let invalidate_base = self.rework_index(&ExecutionScopeV1::Base, anchor)?;
-        let next = self.prepare_attempt(ExecutionScopeV1::Base, anchor, fresh_anchor, now, None)?;
+        let now = clock();
+        self.check_time(now)?;
+        let next =
+            self.prepare_attempt(ExecutionScopeV1::Base, anchor, fresh_anchor(), now, None)?;
         let source = attempt.target.clone();
         self.close_attempt(AttemptLifecycle::Completed, now)
             .decision = Some(GroupDecisionRecordV1 {
@@ -962,7 +1297,7 @@ impl ExecutionSessionV3 {
         );
         self.push_attempt(next);
         self.update(revision, now);
-        Ok(())
+        Ok(now)
     }
 
     pub fn revise_goal(
@@ -972,6 +1307,22 @@ impl ExecutionSessionV3 {
         successor: AttemptId,
         now: UnixMillis,
     ) -> Result<(), DomainError> {
+        self.revise_goal_with_admission(fence, change, successor, now)
+            .map_err(|error| match error {
+                GroupGoalRevisionErrorV1::TargetNotAllowed(error)
+                | GroupGoalRevisionErrorV1::TargetNotOnTrace(error)
+                | GroupGoalRevisionErrorV1::ReactivationFlagRequired(error)
+                | GroupGoalRevisionErrorV1::Domain(error) => error,
+            })
+    }
+
+    pub fn revise_goal_with_admission(
+        &mut self,
+        fence: &ExecutionCursorFenceV1,
+        change: ExecutionGoalChangeV3,
+        successor: AttemptId,
+        now: UnixMillis,
+    ) -> Result<(), GroupGoalRevisionErrorV1> {
         let revision = self.check_fence(fence, now)?;
         let ExecutionGoalChangeV3 {
             goal,
@@ -986,10 +1337,16 @@ impl ExecutionSessionV3 {
         let cause = match (self.lifecycle, reactivate) {
             (SessionLifecycle::Running, false) => SelectionClosureCauseV1::GoalRevision,
             (SessionLifecycle::Completed, true) => SelectionClosureCauseV1::Reactivation,
-            _ => {
-                return Err(invalid(
+            lifecycle => {
+                let error = invalid(
                     "goal revision requires a running session or explicit completed-session reactivation",
-                ));
+                );
+                return Err(match lifecycle {
+                    (SessionLifecycle::Completed, false) => {
+                        GroupGoalRevisionErrorV1::ReactivationFlagRequired(error)
+                    }
+                    _ => error.into(),
+                });
             }
         };
         let anchor = self.base.boundary().anchor();
@@ -998,16 +1355,18 @@ impl ExecutionSessionV3 {
         });
         if !self.executions.is_empty() || reactivate || active_anchor {
             if target != anchor {
-                return Err(invalid(
+                return Err(GroupGoalRevisionErrorV1::TargetNotAllowed(invalid(
                     "this goal revision must create a fresh design-anchor attempt",
-                ));
+                )));
             }
         } else if !self.base.graph().manual_rework().contains(target) {
-            return Err(invalid(
+            return Err(GroupGoalRevisionErrorV1::TargetNotAllowed(invalid(
                 "goal revision target is not a declared base target",
-            ));
+            )));
         }
-        let index = self.rework_index(&ExecutionScopeV1::Base, target)?;
+        let index = self
+            .rework_index(&ExecutionScopeV1::Base, target)
+            .map_err(GroupGoalRevisionErrorV1::TargetNotOnTrace)?;
         let next = self.prepare_attempt(ExecutionScopeV1::Base, target, successor, now, None)?;
         let source = self
             .attempts
@@ -1024,6 +1383,7 @@ impl ExecutionSessionV3 {
         self.goal_revisions.push(GroupGoalRevisionV1 {
             revision: next_goal_revision,
             goal,
+            actor: None,
             source: source.clone(),
             successor: next.target.clone(),
             predecessor,
@@ -1094,24 +1454,89 @@ impl ExecutionSessionV3 {
         now: UnixMillis,
     ) -> Result<(), DomainError> {
         let revision = self.check_fence(fence, now)?;
-        let active = self
-            .active_attempt()
-            .ok_or_else(|| invalid("rework requires a current attempt"))?;
+        let position = self
+            .manual_rework_position(target)
+            .map_err(ManualReworkAdmissionError::into_domain)?;
+        self.apply_manual_rework(target, reason, successor, now, revision, position)
+    }
+
+    /// Admit a same-scope visited target before requesting transition effects.
+    pub fn rework_with_effects(
+        &mut self,
+        fence: &ExecutionCursorFenceV1,
+        target: &GraphNodeId,
+        reason: ReasonV2,
+        clock: impl FnOnce() -> UnixMillis,
+        successor: impl FnOnce() -> AttemptId,
+    ) -> Result<UnixMillis, GraphMutationErrorV2> {
+        self.verify_cursor(fence)
+            .map_err(ExecutionCursorMismatchV1::into_domain)?;
+        let revision = self.revision.checked_next()?;
+        let position = self
+            .manual_rework_position(target)
+            .map_err(|error| error.into_graph(target))?;
+        let now = clock();
+        self.check_time(now)?;
+        self.apply_manual_rework(target, reason, successor(), now, revision, position)?;
+        Ok(now)
+    }
+
+    fn manual_rework_position(
+        &self,
+        target: &GraphNodeId,
+    ) -> Result<(ExecutionScopeV1, usize), ManualReworkAdmissionError> {
+        let active = self.active_attempt().ok_or_else(|| {
+            ManualReworkAdmissionError::Domain(invalid("rework requires a current attempt"))
+        })?;
         let scope = active.target.scope();
-        let (graph, _) = self.definition_for(scope, None)?;
+        let (graph, _) = self
+            .definition_for(scope, None)
+            .map_err(ManualReworkAdmissionError::Domain)?;
         if !graph.manual_rework().contains(target) {
-            return Err(invalid(
+            return Err(ManualReworkAdmissionError::NotAllowed(invalid(
                 "manual rework target is not declared in the current scope",
-            ));
+            )));
         }
-        self.check_ordinary_target(scope, target, true)?;
-        let index = self.rework_index(scope, target)?;
-        let next = self.prepare_attempt(scope.clone(), target, successor, now, None)?;
+        self.check_ordinary_target(scope, target, true)
+            .map_err(ManualReworkAdmissionError::NotAllowed)?;
+        let index = self
+            .rework_index(scope, target)
+            .map_err(ManualReworkAdmissionError::NotOnTrace)?;
+        Ok((scope.clone(), index))
+    }
+
+    fn apply_manual_rework(
+        &mut self,
+        target: &GraphNodeId,
+        reason: ReasonV2,
+        successor: AttemptId,
+        now: UnixMillis,
+        revision: Revision,
+        (scope, index): (ExecutionScopeV1, usize),
+    ) -> Result<(), DomainError> {
+        let next = self.prepare_attempt(scope, target, successor, now, None)?;
         self.close_attempt(AttemptLifecycle::Abandoned, now).reason = Some(reason);
         self.invalidate_from(next.target.scope(), index);
         self.push_attempt(next);
         self.update(revision, now);
         Ok(())
+    }
+
+    /// The skip policy for the active scoped placement, if skipping is admitted.
+    pub fn current_skip_policy(&self) -> Option<&crate::SkipPolicyV2> {
+        let (attempt, placement, _) = self.current_parts().ok()?;
+        let PlacementKindV3::Action {
+            outcome: ActionOutcomeV2::Next(_),
+            skip: Some(policy),
+            delegation: None,
+        } = placement.kind()
+        else {
+            return None;
+        };
+        (policy.is_allowed()
+            && !(attempt.target.scope() == &ExecutionScopeV1::Base
+                && placement.id() == self.base.boundary().anchor()))
+        .then_some(policy)
     }
 
     pub fn skip(
@@ -1363,6 +1788,145 @@ impl ExecutionSessionV3 {
         Ok((definition, route))
     }
 
+    fn ordinary_decision<'a>(
+        &'a self,
+        attempt: &'a GroupAttemptStateV1,
+        placement: &'a PlacementV3,
+        option: &OptionId,
+    ) -> Result<(&'a DecisionDefinitionV3, &'a DecisionRouteV3), GroupDecisionErrorV1> {
+        let PlacementKindV3::Decision { routes } = placement.kind() else {
+            return Err(invalid("the current placement is not a Decision").into());
+        };
+        match routes
+            .iter()
+            .find(|(id, _)| id == option)
+            .map(|(_, route)| route)
+        {
+            None => {
+                let guidance = self
+                    .current_decision_guidance()?
+                    .expect("current Decision is active");
+                return Err(GroupDecisionErrorV1::OptionNotAllowed {
+                    decision: Box::new(attempt.target.clone()),
+                    option: option.clone(),
+                    allowed_option_ids: guidance.allowed_option_ids,
+                });
+            }
+            Some(DecisionRouteV3::Replan) => {
+                return Err(GroupDecisionErrorV1::ReplanRequired {
+                    decision: Box::new(attempt.target.clone()),
+                    option: option.clone(),
+                });
+            }
+            _ => {}
+        }
+        Ok(self.decision(placement, attempt.target.scope(), option)?)
+    }
+
+    fn can_replan_at(
+        &self,
+        attempt: &GroupAttemptStateV1,
+        placement: &PlacementV3,
+        definition: &DecisionDefinitionV3,
+    ) -> bool {
+        definition.metadata().assessment().is_none()
+            && self.selected.is_some()
+            && (attempt.target.scope() != &ExecutionScopeV1::Base
+                || self
+                    .base
+                    .boundary()
+                    .replan_decisions()
+                    .contains(placement.id()))
+    }
+
+    /// Project the current ordinary and explicit replan choices in declaration order.
+    pub fn current_decision_guidance(
+        &self,
+    ) -> Result<Option<GroupDecisionGuidanceV1>, DomainError> {
+        let Some(placement) = self.current_placement() else {
+            return Ok(None);
+        };
+        let PlacementKindV3::Decision { routes } = placement.kind() else {
+            return Ok(None);
+        };
+        let (attempt, _, items) = self.current_parts()?;
+        let scope = attempt.target.scope();
+        let (_, definitions) = self.definition_for(scope, None)?;
+        let NodeDefinitionV3::Decision(definition) = node_definition(definitions, placement)?
+        else {
+            return Err(invalid("Decision placement has no Decision definition"));
+        };
+        let metadata = definition.metadata();
+        let ready = self.require_ready(attempt, placement, items).is_ok();
+        let outcome = if metadata.assessment().is_some() && self.current_goal().is_some() {
+            // A cleared optional item can leave a retained citation without a current value.
+            // Choice guidance stays unavailable while assessed decision admission remains strict.
+            self.determined_goal_outcome().ok()
+        } else {
+            None
+        };
+        let goal_assessment_available = outcome.is_some();
+        let outcome = outcome.flatten();
+        let mut guidance = GroupDecisionGuidanceV1 {
+            goal_assessment_available,
+            allowed_option_ids: Vec::new(),
+            replan_option_ids: Vec::new(),
+            guard_statuses: metadata
+                .options()
+                .iter()
+                .any(|option| definition.guards(option.id()).is_some())
+                .then(Vec::new),
+        };
+        for option in metadata.options() {
+            let id = option.id();
+            let route = routes
+                .iter()
+                .find(|(candidate, _)| candidate == id)
+                .map(|(_, route)| route)
+                .ok_or_else(|| invalid("the selected option has no declared route"))?;
+            let (state, predicates) =
+                self.evaluate_option_guard(attempt, placement, definition, id)?;
+            if ready && state == ConditionStateV2::Met {
+                match route {
+                    DecisionRouteV3::Replan
+                        if self.can_replan_at(attempt, placement, definition) =>
+                    {
+                        guidance.replan_option_ids.push(id.clone());
+                    }
+                    DecisionRouteV3::Replan => {}
+                    DecisionRouteV3::Advance(node) | DecisionRouteV3::Rework(node) => {
+                        let assessment_matches = metadata.assessment().is_none_or(|assessment| {
+                            assessment.outcomes().iter().any(|entry| {
+                                entry.option_id() == id && Some(entry.outcome()) == outcome
+                            })
+                        });
+                        let rework = matches!(route, DecisionRouteV3::Rework(_));
+                        if assessment_matches
+                            && self.check_ordinary_target(scope, node, rework).is_ok()
+                        {
+                            guidance.allowed_option_ids.push(id.clone());
+                        }
+                    }
+                }
+            }
+            if let Some(statuses) = &mut guidance.guard_statuses {
+                statuses.push(GroupDecisionOptionReadV1 {
+                    option: id.clone(),
+                    state,
+                    predicates: predicates
+                        .into_iter()
+                        .map(|predicate| GroupDecisionPredicateReadV1 {
+                            source: predicate.source.map(|source| source.target.clone()),
+                            item: predicate.item.clone(),
+                            state: predicate.state,
+                        })
+                        .collect(),
+                });
+            }
+        }
+        Ok(Some(guidance))
+    }
+
     fn require_ready(
         &self,
         attempt: &GroupAttemptStateV1,
@@ -1446,6 +2010,57 @@ impl ExecutionSessionV3 {
             .collect()
     }
 
+    fn evaluate_option_guard<'a>(
+        &'a self,
+        attempt: &GroupAttemptStateV1,
+        placement: &PlacementV3,
+        definition: &'a DecisionDefinitionV3,
+        option: &OptionId,
+    ) -> Result<(ConditionStateV2, Vec<EvaluatedGuardPredicate<'a>>), DomainError> {
+        let Some(guard) = definition.guards(option) else {
+            return Ok((ConditionStateV2::Met, Vec::new()));
+        };
+        let mut evaluated = Vec::with_capacity(guard.predicates().len());
+        let mut aggregate = ConditionStateV2::Met;
+        for predicate in guard.predicates() {
+            let item = predicate.predicate().item();
+            if !self.source_exposes_item(predicate.source(), item)
+                || !placement.evidence().iter().any(|reference| {
+                    reference.required()
+                        && reference.source() == predicate.source()
+                        && reference.items().contains(item)
+                })
+            {
+                return Err(invalid(
+                    "guard does not select a required declared source item",
+                ));
+            }
+            let source = self.evidence_source(attempt.target.scope(), predicate.source());
+            let value = source
+                .map(|source| {
+                    source
+                        .slot(item)
+                        .ok_or_else(|| invalid("guard item is undeclared"))
+                })
+                .transpose()?
+                .and_then(ItemSlotStateV2::value);
+            let state = predicate.evaluate(value).state();
+            match state {
+                ConditionStateV2::Unmet => aggregate = ConditionStateV2::Unmet,
+                ConditionStateV2::Unevaluable if aggregate == ConditionStateV2::Met => {
+                    aggregate = ConditionStateV2::Unevaluable;
+                }
+                _ => {}
+            }
+            evaluated.push(EvaluatedGuardPredicate {
+                source,
+                item,
+                state,
+            });
+        }
+        Ok((aggregate, evaluated))
+    }
+
     fn guard_values(
         &self,
         attempt: &GroupAttemptStateV1,
@@ -1453,40 +2068,48 @@ impl ExecutionSessionV3 {
         definition: &DecisionDefinitionV3,
         option: &OptionId,
         required: bool,
-    ) -> Result<Vec<GroupGuardValueV1>, DomainError> {
-        let Some(guard) = definition.guards(option) else {
-            return if required {
-                Err(invalid("replan option lacks eligible guards"))
-            } else {
-                Ok(Vec::new())
-            };
-        };
-        guard
-            .predicates()
-            .iter()
-            .map(|guard| {
-                let item = guard.predicate().item();
-                if !self.source_exposes_item(guard.source(), item)
-                    || !placement.evidence().iter().any(|reference| {
-                        reference.required()
-                            && reference.source() == guard.source()
-                            && reference.items().contains(item)
+    ) -> Result<Vec<GroupGuardValueV1>, GroupReplanErrorV1> {
+        let (state, predicates) =
+            self.evaluate_option_guard(attempt, placement, definition, option)?;
+        if required && predicates.is_empty() {
+            return Err(invalid("replan option lacks eligible guards").into());
+        }
+        // Progression has already verified that every required source resolves in this scope.
+        if state != ConditionStateV2::Met {
+            let predicates = predicates
+                .into_iter()
+                .map(|predicate| {
+                    let source = predicate
+                        .source
+                        .ok_or_else(|| invalid("guard source is unavailable"))?;
+                    Ok(GroupGuardPredicateStatusV1 {
+                        source: source.target.clone(),
+                        item: predicate.item.clone(),
+                        state: predicate.state,
                     })
-                {
-                    return Err(invalid(
-                        "guard does not select a required declared source item",
-                    ));
-                }
-                let source = self
-                    .evidence_source(attempt.target.scope(), guard.source())
+                })
+                .collect::<Result<_, DomainError>>()?;
+            return Err(GroupReplanErrorV1::GuardUnsatisfied(Box::new(
+                GroupOptionGuardUnsatisfiedV1 {
+                    decision: attempt.target.clone(),
+                    option: option.clone(),
+                    state,
+                    predicates,
+                },
+            )));
+        }
+        predicates
+            .into_iter()
+            .map(|predicate| {
+                let source = predicate
+                    .source
                     .ok_or_else(|| invalid("guard source is unavailable"))?;
                 let slot = source
-                    .slot(item)
+                    .slot(predicate.item)
                     .ok_or_else(|| invalid("guard item is undeclared"))?;
                 let value = slot
                     .value()
-                    .filter(|value| guard.evaluate(Some(value)).state() == ConditionStateV2::Met)
-                    .ok_or_else(|| invalid("guard is unmet or unevaluable in current evidence"))?;
+                    .ok_or_else(|| invalid("met predicate lacks a recorded item"))?;
                 Ok(GroupGuardValueV1 {
                     source: source.target.clone(),
                     item: item_binding(slot, value)?,
@@ -1558,11 +2181,13 @@ impl ExecutionSessionV3 {
             validity: AttemptValidityV2::Valid,
             opened_at: now,
             closed_at: None,
+            closed_actor: None,
             slots,
             blockers: Vec::new(),
             delegation: None,
             decision_entry,
             decision: None,
+            criterion_assessments: None,
             reason: None,
         })
     }
@@ -1771,6 +2396,32 @@ impl ExecutionSessionV3 {
     fn update(&mut self, revision: Revision, now: UnixMillis) {
         self.revision = revision;
         self.updated_at = now;
+    }
+}
+
+enum ManualReworkAdmissionError {
+    Domain(DomainError),
+    NotAllowed(DomainError),
+    NotOnTrace(DomainError),
+}
+
+impl ManualReworkAdmissionError {
+    fn into_domain(self) -> DomainError {
+        match self {
+            Self::Domain(error) | Self::NotAllowed(error) | Self::NotOnTrace(error) => error,
+        }
+    }
+
+    fn into_graph(self, target: &GraphNodeId) -> GraphMutationErrorV2 {
+        match self {
+            Self::Domain(error) => error.into(),
+            Self::NotAllowed(_) => GraphMutationErrorV2::ManualReworkTargetNotAllowed {
+                target_graph_node_id: target.clone(),
+            },
+            Self::NotOnTrace(_) => GraphMutationErrorV2::ManualReworkTargetNotOnTrace {
+                target_graph_node_id: target.clone(),
+            },
+        }
     }
 }
 

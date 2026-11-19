@@ -9,7 +9,7 @@ pub fn observe_candidate_artifact_presence(
     root: &Path,
     relative: &Path,
 ) -> Result<crate::LocalPathPresenceV1, crate::GitResolverErrorV1> {
-    crate::native::observe_candidate_artifact_presence(root, relative)
+    crate::observe_local_artifact_presence_v1(root, relative)
 }
 
 type ArtifactReadObserver = Rc<dyn Fn(&Path, usize)>;

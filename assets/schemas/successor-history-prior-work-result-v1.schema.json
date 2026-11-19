@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:successor-history-prior-work-result:v1",
+  "title": "Podway Retained Prior Work Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "workspace",
+    "session",
+    "session_location",
+    "session_revision",
+    "truncated",
+    "next_page_token",
+    "group",
+    "total",
+    "rows"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.successor-history-prior-work-result/v1"
+    },
+    "workspace": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "session": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "session_location": {
+      "enum": [
+        "current",
+        "archived"
+      ]
+    },
+    "session_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "next_page_token": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}:[0-9a-f]{16}$"
+        }
+      ]
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "activation_sequence",
+        "execution",
+        "definition_digest",
+        "goal_revision",
+        "design_attempt",
+        "plan",
+        "working_copy_basis",
+        "predecessor"
+      ],
+      "properties": {
+        "activation_sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "execution": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "definition_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "goal_revision": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 18446744073709551615
+            }
+          ]
+        },
+        "design_attempt": {
+          "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+        },
+        "plan": {
+          "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/plan"
+        },
+        "working_copy_basis": {
+          "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/working_copy_basis"
+        },
+        "predecessor": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "urn:podway:schema:successor-history-records:v1#/$defs/group_ref"
+            }
+          ]
+        }
+      }
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65536
+    },
+    "rows": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "choice",
+          "rationale",
+          "source"
+        ],
+        "properties": {
+          "choice": {
+            "enum": [
+              "retain",
+              "revalidate",
+              "modify",
+              "revert"
+            ]
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "source": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "group",
+              "attempt",
+              "item"
+            ],
+            "properties": {
+              "group": {
+                "$ref": "urn:podway:schema:successor-history-records:v1#/$defs/group_ref"
+              },
+              "attempt": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/scoped_attempt"
+                  }
+                ]
+              },
+              "item": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "urn:podway:schema:execution-group-records:v1#/$defs/plan_item"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

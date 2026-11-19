@@ -4,17 +4,17 @@ Podway prevents omitted steps in one current task without becoming a project
 manager. It makes the active graph node, missing recorded items, blockers, goal
 state, legal actions, and next commands explicit for humans and automation.
 
-Podway must support finite declarative Procedure v2 graphs with action, decision,
-and goal-assessment placements; one authoritative cursor; exactly one active
-attempt; bounded typed items; declared evidence references; deterministic retry and
-rework; durable idempotent mutations; crash recovery; and worktree-local state.
+Podway supports finite declarative Procedure v3 and Execution Group v1 graphs
+with action, decision and goal-assessment placements. A running session has one
+cursor and active attempt. It uses bounded typed items, declared evidence,
+deterministic retry and rework, and durable idempotent worktree-local mutations.
 
 It must fail closed on stale identities, revisions, attempts, item versions, goal
 versions, unsupported procedure schemas, inconsistent persistence, and unknown
 mutation outcomes. It must expose stable machine contracts and useful text without
 making automation parse prose.
 
-Procedure v2 may derive conditional required items and decision-option
+Procedures and groups may derive conditional required items and decision-option
 availability from a closed bounded typed predicate vocabulary over current
 attempt state and selected fresh evidence. These predicates are deterministic
 progression guards, not a general expression or policy engine.

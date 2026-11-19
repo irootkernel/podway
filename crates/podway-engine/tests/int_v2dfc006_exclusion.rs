@@ -73,7 +73,7 @@ const REMOVE_STEPS: [&str; 8] = [
 ];
 
 fn resolver() -> DirectWorkspaceResolverV1<NativeGitResolverV1> {
-    DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest())
+    DirectWorkspaceResolverV1::for_v15_fixture(NativeGitResolverV1::new(), digest())
 }
 fn selector(root: &Path) -> WorktreeSelectorV1 {
     WorktreeSelectorV1::new(
@@ -149,7 +149,7 @@ fn quiesce_writers(directory: &Path, value: &str, token: &str) {
     }
 }
 fn marker(root: &Path) -> Value {
-    let layout = DirectWorkspaceLayoutV1::new(
+    let layout = DirectWorkspaceLayoutV1::for_v15_fixture(
         ValidatedWorkspaceRootV1::from_unix_bytes(root.as_os_str().as_bytes().to_vec()).unwrap(),
     )
     .unwrap();

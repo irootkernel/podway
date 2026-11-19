@@ -6,13 +6,15 @@ use super::int_group002_transactions::{
 use super::int_group003_replan::{assessment, complete, feedback, local_decision_group};
 use super::int_group004_fences::tracked_base;
 use podway_core::execution_groups::{
-    ExecutionGoalChangeV3, ExecutionGoalV3, GroupClosureFeedbackV1, GroupExecutionIdV1,
-    GroupItemWriteV1, PriorWorkChoiceV1, PriorWorkDispositionV1, ScopedAttemptV1,
+    EvidenceSourceV3, ExecutionGoalChangeV3, ExecutionGoalV3, GroupClosureFeedbackV1,
+    GroupExecutionIdV1, GroupItemWriteV1, PriorWorkChoiceV1, PriorWorkDispositionV1,
+    RetainedCriterionCitationV1, ScopedAttemptV1, SuccessorCriterionCitationV1,
+    SuccessorCriterionInputV1,
 };
 use podway_core::{
-    CheckResultInputBasisV2, CriterionId, DomainError, GoalCriterionV2, GoalDefinitionV2,
-    GoalOutcome, GoalStatementV2, GraphNodeId, ItemId, OptionId, ReasonV2, RecordedItemValueV2,
-    Revision, canonicalize_json_v1, recorded_value_digest_v2,
+    CheckResultInputBasisV2, CriterionAssessmentReasonV2, CriterionId, CriterionStatusV2,
+    DomainError, GoalCriterionV2, GoalDefinitionV2, GoalStatementV2, GraphNodeId, ItemId, OptionId,
+    ReasonV2, RecordedItemValueV2, Revision, canonicalize_json_v1, recorded_value_digest_v2,
 };
 use podway_engine::direct_execution::NativeDirectIdSourceV1;
 use podway_engine::successor_execution::*;
@@ -346,14 +348,49 @@ fn goal_lineage_keeps_closures_and_boundary_decisions_across_reactivation() {
         &NativeDirectIdSourceV1,
     )
     .unwrap();
-    let review = fixture.state().0.active_attempt().unwrap().target().clone();
+    let state = fixture.state().0;
+    let review = state.active_attempt().unwrap().target().clone();
+    let criterion = state.current_goal().unwrap().criteria.criteria()[0]
+        .id()
+        .clone();
+    issue(
+        &mut fixture,
+        "assess-goal",
+        SuccessorCursorMutation::AssessCriteria {
+            entries: vec![SuccessorCriterionInputV1 {
+                criterion,
+                status: CriterionStatusV2::Satisfied,
+                reason: CriterionAssessmentReasonV2::new(
+                    "The retained group report satisfies the goal.",
+                )
+                .unwrap(),
+                citations: vec![SuccessorCriterionCitationV1::Evidence(
+                    EvidenceSourceV3::ExecutionResult,
+                )],
+            }],
+            actor: None,
+        },
+    );
+    let readback = fixture.state().0;
+    assert_eq!(
+        readback
+            .active_attempt()
+            .unwrap()
+            .criterion_assessments()
+            .unwrap()
+            .results[0]
+            .citations,
+        [RetainedCriterionCitationV1::Evidence {
+            source: EvidenceSourceV3::ExecutionResult,
+            target: terminal_attempt.clone()
+        }],
+    );
     issue(
         &mut fixture,
         "accept-goal",
-        SuccessorCursorMutation::Decide {
+        SuccessorCursorMutation::DecideAssessed {
             option: OptionId::new("accept").unwrap(),
             reason: ReasonV2::new("Accept the recorded result.").unwrap(),
-            goal_outcome: Some(GoalOutcome::Achieved),
         },
     );
     let close = fixture.state().0.active_attempt().unwrap().target().clone();
@@ -496,6 +533,7 @@ fn item_request(
 ) -> SuccessorItemRequest {
     let request = mutation(&fixture.workspace, state, key);
     SuccessorItemRequest {
+        response: podway_engine::successor_execution::SuccessorMutationResponseV1::Fixture,
         workspace: request.workspace,
         key: request.key,
         request_id: request.request_id,
@@ -521,9 +559,9 @@ fn exact_group_history_survives_replacement_cancellation_and_archive() {
     }
     assert!(matches!(
         list(&mut fixture, Archived, page(1, None)),
-        Err(SuccessorExecutionError::Store(CandidateStoreError::Domain(
+        Err(SuccessorExecutionError::Domain(
             DomainError::SessionIdentityMismatch { actual: None, .. }
-        )))
+        ))
     ));
     assert!(matches!(
         list(&mut fixture, Current, page(1, Some("not-a-token"))),
@@ -1016,10 +1054,8 @@ fn unguarded_choice_retains_its_exact_assessment_across_rework_and_archive() {
     fixture.reopen();
     assert!(matches!(
         show(&mut fixture, Archived, &execution, page(64, None)),
-        Err(SuccessorExecutionError::Store(CandidateStoreError::Domain(
-            DomainError::InvalidState {
-                reason: "retained trace differs from replayed execution"
-            }
-        )))
+        Err(SuccessorExecutionError::Domain(DomainError::InvalidState {
+            reason: "retained trace differs from replayed execution"
+        }))
     ));
 }
