@@ -1663,6 +1663,62 @@ and `int_v2dfc006_runtime_ports::v2run004_production_retry_is_clean_durable_repl
 Public successor admission, paged history, and released binary qualification
 have their own later gates.
 
+## Execution-group writer cutover qualification
+
+ADOPT-004 exercised the Store 15 to 16 boundary on native Apple Silicon macOS
+with separate preserved and recovery Git fixtures. The original writer was extracted from the
+[published v0.2.17 release](https://github.com/irootkernel/podway/releases/tag/v0.2.17)
+after comparing the fixed archive checksum, provenance and packaged binary
+digest to the published metadata. The release tag resolves to
+`31cbd110573271ea3376cb07eb961f3dc257a05d`. The archive SHA-256 is
+`4ca62ec943aa21e59c3173201c1f2e80cf274bb459dbb2ff3af0f01e34926546`.
+
+The development (debug) CLI reports source commit
+`3e739950d6a7b6a0d90d00b45a14b72d41032c02`. Read-only inspection of owned
+SQLite copies verified the persisted writer rows after native execution:
+
+| Executable | Store | Contract manifest digest |
+| --- | --- | --- |
+| Published `v0.2.17` arm64 binary | 15 | `sha256:f5e56e344a79022766fb69af7991c60d57e7793495b2599c1c3d3ef296309100` |
+| Development successor arm64 binary | 16 | `sha256:a20cbfa86383a523eb6105ee6747a4fa2294e191b5b576ecf7a8e205a2f352ba` |
+
+- The previous writer created the old Stores using the actual packaged
+  Procedure v2 source and positively retrieved a recorded outcome key. The
+  successor rejected observation, detailed original-key lookup, and ordinary
+  completion in both old fixtures with `LEGACY_RUNTIME_STATE_UNSUPPORTED`,
+  exit 5. Each request's before and after comparison matched file names, modes,
+  identities and bytes, including the existing WAL and SHM. The preserved
+  fixture retained its original runtime through the refusal checks.
+- The successor refused an unconfirmed reset in the recovery fixture. The
+  separately confirmed `reset --all --yes` allocated a fresh workspace UUID
+  and wrote Store 16. Exact replay returned the original reset response bytes.
+  The old active and archived sessions and recorded key were absent afterward.
+  Git metadata, tracked and untracked sentinels, configuration, `.gitignore`
+  and the original Procedure v2 bytes were preserved.
+- On the admitted successor Store, starting the retained v2 source returned
+  `PROCEDURE_SCHEMA_UNSUPPORTED`, exit 1. The source, SQLite main and WAL,
+  path names, modes and identities matched, and the rejected key had no
+  outcome. In a newly reset fixture, the existing SHM file changed bytes in
+  place. An earlier supplementary comparison stopped on an unclassified
+  mismatch before retaining its baseline or looking up that request key.
+  A later probe after archive used a fresh key and kept the full snapshot
+  unchanged. The successor admitted and activated the default
+  `small-change-v3` group, returned its declared outputs, completed and
+  archived the base, and read the retained archive.
+- The authentic previous binary refused observation, known-key lookup and an
+  ordinary mutation on the fresh Store 16 while the successor group was active.
+  All three returned `WORKSPACE_SCHEMA_UNSUPPORTED`, exit 5, with
+  `store_schema_version: 16` and `supported_store_schema_version: 15`. The
+  runtime snapshot was unchanged around each request. The successor resumed
+  its normal lifecycle from that state.
+
+The refusal envelopes were checked against each executing version's schemas.
+All fixture processes returned, the owned Git worktrees were removed, and the
+source repository's worktree registry was unchanged. The
+[upgrade QA scenarios](release-upgrade-qa.md#direct-to-direct-boundary-for-store-16)
+define how to repeat the comparison with an exact candidate. Release
+qualification has its own selected candidate and evidence requirements.
+
 ## Candidate group-lineage qualification
 
 Run the registered history cases against the isolated successor Engine and

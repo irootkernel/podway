@@ -1,172 +1,217 @@
 # Release Upgrade Hands-on QA
 
-Run this repository-specific cluster during every full Aquarium release-QA pass.
-For the `v0.2.12` to `v0.2.13` cutover, upgrade means unchanged legacy refusal,
-then an explicitly confirmed destructive reset and a working fresh direct
-workspace. There is no daemon handoff, transparent migration, or named runtime
-mode. This independent QA is not a `make dist` stage or release-provenance receipt.
+Run this independent repository cluster during every full Aquarium release-QA
+pass. Select the branch by the exact writer generations and manifests. The
+`v0.2.12` to `v0.2.13` cutover established the daemon-era refusal boundary.
+The Procedure v3 and Execution Group v1 cutover has a separate direct-to-direct
+boundary from the `v0.2.17` Procedure v2 writer (Store 15) to Store 16.
+Retain the frozen daemon-era coverage and verify the applicable exact
+previous-release boundary. This hands-on QA is separate from `make dist` and
+its package provenance.
 
-## Inputs and result
+## Inputs and evidence boundary
 
-Require the exact clean candidate and intended stable version, the selected
-previous stable release, its verified Apple Silicon archive/checksum/provenance,
-native Apple Silicon macOS, and verified frozen historical Store fixtures.
-Select the latest non-draft, non-prerelease release reachable from the candidate
-or an exact baseline explicitly confirmed by Master. Compare its declared SQLite
-generation and writer contract with the candidate authority before execution.
-A confirmed first release has no upgrade baseline and is not applicable.
+Require the exact clean candidate and intended stable version, native Apple
+Silicon macOS, and the selected previous stable release's authenticated Apple
+Silicon archive, checksum and provenance. Select the latest non-draft,
+non-prerelease stable release reachable from the candidate or an exact baseline
+explicitly confirmed by Master. A confirmed initial release has no previous
+release. Record that boundary before execution.
 
-Generations 1–13 are legacy regardless of their old runtime mode. `v0.2.13`
-declares no writer predecessor. A later direct-to-direct upgrade may migrate only
-a digest explicitly declared by the release or following open-development
-commit; a version difference alone does not authorize conversion. Follow
-[Upgrade](../specs/operations/release-and-packaging.md#upgrade) for that contract.
+Pin the previous release tag and peeled source commit, archive name and
+SHA-256, provenance, and extracted binary SHA-256. Check the release, target,
+source, build and manifest identities against the selected published assets.
+Use the previous release's verified provenance and packaged manifest for its
+identity. Check the candidate's identity through `version --json --identity`.
+Record actual signing and notarization facts as published. A matching checksum and provenance do not
+establish a signature. Compare both binaries' SQLite generations and writer
+manifest identities with their owning source. The version string and shared
+Output v4 and Error v2 envelopes alone cannot distinguish writers or dictate
+which error detail family applies.
 
-Missing or ambiguous assets, unsupported hosts, absent authentic historical
-fixtures, or an inability to run the isolated exact candidate makes the pass
-`INCOMPLETE`. A reproducible expected-behavior mismatch is a finding.
+Require verified frozen historical fixtures for the daemon-era branch and
+real previous-writer Stores for the direct branch. Missing or ambiguous inputs,
+unsupported execution hosts, missing authentic fixture provenance or failure to
+isolate the exact candidate makes the applicable pass `INCOMPLETE`. A
+reproducible mismatch against the owning contract is a finding.
 
 ## Safety boundary
 
-Use only the caller-assigned private fixture below the physical release-QA
-evidence root, resolved with `pwd -P`. Keep extraction, builds, standalone Git
-repositories, frozen-input staging, commands and results there. Never use
-`git worktree add` against the source repository. Record source HEAD, porcelain
-status, and common-Git worktree entries and prove they are unchanged afterward.
+Use only the assigned private evidence root, physically resolved with `pwd -P`,
+with standalone Git repositories, explicit absolute worktree paths and
+bounded child cleanup. Keep source HEAD, porcelain status and the common Git
+worktree registry for integrity comparisons. Do not use `git worktree add`
+against the source repository or run a candidate against an installed/managed
+workspace. Keep installation and account/tool/service state outside the pass.
 
-Before dispatch, the coordinator may download only the selected previous
-release's archive, checksum and provenance into this fixture, without new
-authentication. Verify regular non-symlink files, archive name/digest, selected
-version/target, and the previous generation's own binary identities. Extract
-without absolute paths, traversal, links, devices or unexpected members. Inspect
-these previous assets; do not launch an old installed or extracted daemon, invoke
-old service commands, or create an old account runtime.
+Before dispatch, the Coordinator may download only the selected previous
+release's archive, checksum and provenance into the assigned fixture without
+new authentication. Verify regular non-symlink files and the exact package.
+Reject extraction paths with links, traversal, absolute names, devices or
+unexpected members. Inspect daemon-era inputs without launching the old daemon,
+invoking its service commands or creating account runtime. In a direct-to-direct
+pass, the provenance- and checksum-verified previous CLI may run in owned
+fixtures to create authentic previous-release Stores and to verify its
+refusal of the successor Store. Establish its identity from the package before
+running either fixture. The previous CLI remains outside all other workspace,
+maintenance and adoption work in this pass.
 
-Use a candidate archive only if its provenance binds the exact candidate commit.
-Otherwise build only the current `podway` with the pinned toolchain, `--locked`,
-release profile, offline Cargo networking and a private `CARGO_TARGET_DIR`.
-Validate its full Output v4/version-result v2 identity and manifest v2 against
-that candidate. Invoke this exact CLI directly with explicit `--worktree` paths;
-no `--mode`, `--dev`, socket, `PODWAY_DEV_HOME`, LaunchAgent or `launchctl` is used.
-The worker retains the no-network/no-credential boundary after dispatch.
+Use a candidate archive only when its provenance binds the exact clean
+candidate. Otherwise build the exact candidate `podway` using the pinned
+toolchain, `--locked`, release profile, offline Cargo networking and a private
+`CARGO_TARGET_DIR`. Verify the candidate's binary SHA-256, full Output v4 and
+version-result v2 identity and manifest v2. Invoke the exact executable with
+an explicit `--worktree` and use its applicable presentation schema. Worker
+execution stays offline after dispatch. Mode switches, global runtime roots,
+sockets and installed service controls have no role in these fixtures.
 
-## Historical input preparation
+For each fixture prepare configuration, local source, `.gitignore`, Git
+metadata and unrelated tracked and untracked sentinels. Before a refusal,
+snapshot the full relevant trees: names, file types, modes, identities and
+content digests, including SQLite main/WAL and the presence or absence of
+SHM and maintenance markers. Compare before and after each invocation without
+opening the rejected database through an inspection tool. For a no-SHM
+case, establish the absence at snapshot time and verify it again afterward.
+Preserve an existing SHM file when testing an input that already has one.
 
-Use the reviewed frozen recipes and producer provenance in
-[`tests/fixtures/storage/daemon-era-v2dfc`](../../tests/fixtures/storage/daemon-era-v2dfc/README.md).
-They are rejected historical evidence, not current canonical DDL or a migration
-source. The existing `podway-store` test-support fixture writer materializes each
-generation's actual main file plus committed WAL without SHM from the frozen
-ordered SQL. Its checkpointed and WAL-only header cases cover generations 1–13.
-The separately frozen `generation-13-populated.sql` preserves a genuine legacy
-current session, completed job and delegation receipt from the original producer.
-Do not claim populated semantic coverage for the other generations.
+## Historical daemon-era inputs
 
-Have the coordinator supply verified private fixture copies from those reviewed
-recipes, including checkpointed and WAL-only layouts, the populated generation-13
-case, and the frozen old marker cases. Record original producer commits and recipe
-hashes. Fixture materialization is an explicitly bounded historical test-input
-step before candidate execution; it is not a production conversion route or
-permission to edit the candidate's Store. Do not invent old state by patching a
-live database or run an old daemon to fill a missing prerequisite.
+For the `v0.2.12` to `v0.2.13` boundary, the original contract treats Store
+generations 1–13 and old maintenance markers as unsupported. Use the reviewed
+[frozen inputs and producer recipes](../../tests/fixtures/storage/daemon-era-v2dfc/README.md).
+They are historical rejection witnesses. The existing `podway-store` test
+fixture writer materializes checkpointed and committed WAL-only header cases
+from the ordered recipes. The populated generation-13 case retains a genuine
+legacy current session, completed job and delegation receipt. Qualify that
+populated meaning only for the populated case. Pin producer commits and
+recipe hashes, and supply verified fixture copies in the owned area. Fixture
+materialization grants no permission to edit a live Store or generate a
+surrogate for an authentic previous direct writer.
 
-Place copies only in disposable standalone Git worktrees. Include configuration,
-a supported local Procedure, `.gitignore`, tracked files and unrelated untracked
-sentinels. Before invoking the candidate, record the full `.podway` tree's names,
-bytes, modes and file identities, plus main/WAL hashes and absence of SHM.
+Exercise candidate observation, outcome lookup and a normal Store-backed
+mutation against each applicable frozen legacy input. Require the executing
+writer's own Error v2 `LEGACY_RUNTIME_STATE_UNSUPPORTED` details and explicit
+reset-required recipe. Check unchanged file bytes, modes, identities and names,
+with no SHM/marker creation, state effect or successful outcome. A refusal must
+preserve the populated generation-13 evidence unchanged. Retain the historical
+regression even when a later direct writer is the selected preceding stable
+release. Use the independent [explicit reset](#explicit-reset-and-exact-replay)
+and [fresh lifecycle](#fresh-lifecycle-and-deletion-boundaries) scenarios for
+applicable recovery, using the actual candidate's supported Procedure model.
 
-## Scenario 1: legacy refusal leaves old state unchanged
+## Direct-to-direct boundary for Store 16
 
-Against each legacy worktree, run actual read and mutation commands with explicit
-keys/fences as applicable. Include observation, outcome lookup and a normal
-session mutation. Require validated Error v2
-`LEGACY_RUNTIME_STATE_UNSUPPORTED`, its explicit reset-required recovery recipe,
-and no outcome or state effect. Candidate classification must not initialize,
-migrate, checkpoint, open a legacy Store for writes, or create SHM.
+For the `v0.2.17` to Store 16 case, build the authentic old Store with the
+verified previous-release CLI in an owned Git fixture. Retain its initialized
+writer/workspace identity, admitted Procedure v2, actual active attempt, recorded
+work and known successful key to exercise lookup against real history. Retain
+its closed native envelopes as source provenance. Keep any original installed
+or managed workspace outside both fixture operation and reset.
 
-Compare every original file and marker with the pre-invocation snapshot; require
-identical bytes, names, modes and identities and no new files. Preserve the genuine
-populated generation-13 state and evidence unchanged during refusal. A successful
-open, silent replacement, changed old data, or new SQLite sidecar is a finding.
+| Executing writer and input | Expected refusal |
+| --- | --- |
+| Store 16 candidate opening an authentic `v0.2.17` Store 15 | Error v2, exit `5`, `LEGACY_RUNTIME_STATE_UNSUPPORTED`, `podway.legacy-runtime-state-unsupported-details/v2`, `store_schema_version: 15`. The explicit reset recipe requires separate authorization. |
+| Verified `v0.2.17` writer opening a successor Store 16 | Error v2, exit `5`, `WORKSPACE_SCHEMA_UNSUPPORTED`, `podway.workspace-schema-unsupported-details/v1`, actual generation `16`, supported generation `15`. Use a compatible writer. |
+| Store 16 `start` with a well-formed Procedure v2 source on an admitted successor workspace | Error v2, exit `1`, `PROCEDURE_SCHEMA_UNSUPPORTED`, `podway.procedure-source-error-details/v1`, `expected_schema: podway.procedure/v3`, `reason: unsupported_schema`, `known_source_schema: podway.procedure/v2`. |
 
-## Scenario 2: explicit reset establishes fresh current state
+Both Store refusal cases classify by generation before opening SQLite for
+recovery, writes or SHM creation. `WORKSPACE_CONTRACT_MISMATCH` describes a
+separate writer-digest mismatch in an admitted generation. Store 16 declares
+no predecessor. Neither presentation selector restores Procedure v2 grammar or
+permits conversion of its state. Source support must be checked separately
+from the Store gate on a compatible successor workspace.
+See the [upgrade contract](../specs/operations/release-and-packaging.md#upgrade).
 
-After retaining the refusal proof, authorize destructive reset only for the exact
-assigned fixture. Run the current CLI with an explicit stable key:
+For the forward Store case, run actual successor `observe`, `outcome lookup`
+and a Store-backed session mutation. Preserve the original writer's old key
+for the lookup and use an explicit key for the declined new request. A lookup
+on the refused Store itself returns the admission error. The unchanged owned
+snapshot establishes absence of a new success outcome. For the v2 source
+case, use an admitted fixture and check the Procedure bytes, SQLite main and
+WAL, path identities and known rejected-key miss. A start request in an
+admitted Store may refresh existing transient SHM bytes even when source
+validation rejects it. Record any observed SHM change separately. Verify the
+successor source through a fresh lifecycle.
+
+For the reverse Store case, invoke the previous CLI only through the scoped
+ordinary read and session-mutation refusal commands on the owned successor
+Store. Select actual Store-backed calls rather than a local authoring route or
+an unfenced source preview. Require unchanged files, no new sidecars/markers
+and no successful outcome. The prior release's own error contract supplies the
+expected result. Use no previous-writer reset, removal or migration to obtain a
+refusal. In future direct passes, select the expected transition from both
+exact authorities. An unchanged writer identity needs continuity evidence. A
+declared predecessor needs the release's specified forward-admission evidence.
+An unsupported generation or undeclared digest needs unchanged refusal evidence.
+This cutover supplies no future migration or downgrade promise.
+
+## Explicit reset and exact replay
+
+After retaining the refusal comparison, obtain distinct destructive authority
+covering only the exact disposable fixture and all of its runtime history.
+Confirm no process or other writer still uses it. With an unsupported Store
+there is no supported UUID-fenced continuation with the candidate. Use a new
+explicit unfenced discard request with the candidate CLI:
 
 ```bash
-podway --worktree <owned-legacy-worktree> --json reset --all --yes --idempotency-key <new-key>
+podway --worktree <owned-disposable-worktree> --json reset --all --yes --idempotency-key <new-key>
 ```
 
-Require a validated success with a fresh workspace UUID, current schema generation
-and writer manifest digest, and no legacy current or archived session, job or
-receipt. Old runtime history is deliberately discarded; report that loss rather
-than claiming migration or archive preservation. Configuration, local Procedure
-files, `.gitignore`, Git metadata and unrelated tracked/untracked files survive.
-Replay the same reset key and original preconditions; require its original full
-response and no second identity change. Reconcile through current read APIs.
+Require an Output v4 success for `workspace.reset_all`, a fresh workspace UUID
+and the candidate Store generation and writer digest. Verify through current
+workspace and session reads that no old current or archived session or outcomes
+became current. Record deliberate loss of the selected fixture's runtime
+history. Verify preserved configuration, user Procedure source, `.gitignore`,
+Git and the unrelated tracked/untracked sentinels. Legacy mode configuration is
+retired only where the maintenance contract already says so. The reset does
+not rewrite old Procedure documents or v2 preset pins to v3. Select compatible
+successor sources explicitly.
 
-## Scenario 3: the fresh candidate lifecycle and deletion boundaries work
+Replay the exact original unfenced request and key against that fixture.
+Require the complete original success response and no second UUID or other
+state effect. Inspect current state separately. Lost output or an interruption
+retains the same request and marker-backed recovery boundary. See the
+[maintenance contract](../specs/storage/recovery-retention-and-maintenance.md).
 
-In the reset worktree, start and begin canonical `small-change-v2`, record its
-required evidence with nonempty English text, and traverse its declared successful
-path and Goal closeout using current JSON-derived revision/attempt/item fences.
-Validate every Output v4/Error v2 response. Require the expected current identity,
-normal progress, durable evidence and exact replay across separate CLI processes.
-Archive a terminal session with a current disposition and verify bounded immutable
-archive list/show evidence. Confirm purge removes only the selected inactive
-session without altering Git or another current session.
+## Fresh lifecycle and deletion boundaries
 
-Then run confirmed reset-all with a new key, verify preserved user/config files
-and a fresh UUID, and use that exact UUID and canonical-root confirmation for
-`workspace remove`. The whole `.podway` tree must disappear while the Git worktree,
-HEAD and unrelated files survive. Reinitialize through the supported CLI and
-require a new working current workspace. Do not manually delete runtime files to
-stand in for these public operations.
+For Store 16, start and begin with a supported base such as `small-change-v3`.
+Record the current anchor's plan items and activate the exact expected default
+or custom group using its current cursor, plan binding, working-copy basis,
+digest and caller key. Use an empty `prior_work` for first activation. Follow
+the actual group's declared actions/decisions, record current evidence, then
+return from its terminal to the declared base successor. Complete the base
+session and record its real terminal disposition. The untracked
+`small-change-v3` needs no goal assertion. For a tracked base, supply a current
+goal and follow its declared final assessment. Use separate CLI processes,
+scoped fences and exact replay/lookup where applicable. Check every envelope
+against the executing CLI's contract. [Procedure v3 walkthrough](../examples/continuation-v3.md)
 
-## Direct-to-direct upgrades
+For a full release-QA pass, retain and inspect the terminal session through
+archive list/show and verify that confirmed purge deletes only the selected
+inactive history. Run separately authorized reset-all with a new key to prove
+preserved user/configuration files and fresh UUID. Use the applicable workspace
+UUID and confirmation rules for approved `workspace remove`. Verify the chosen
+`.podway` tree is removed and the Git worktree, HEAD and unrelated files survive.
+Reinitialize through the supported CLI and verify fresh current operation. The
+historical daemon cutover uses the exact candidate's own known-good Procedure
+and lifecycle rules. No case substitutes manual runtime-file edits for the
+public operations. A work-unit cutover check can establish only the branches it
+actually executed and does not waive these full-release obligations.
 
-When the selected previous release and the candidate are both direct
-generations (SQLite generation 15, `v0.2.13` or later), upgrade QA additionally
-covers the writer-refusal boundary in both directions. The candidate declares
-no writer predecessor, so each release's manifest digest differs and each
-binary refuses the other's Store. The coordinator's verified previous-release
-CLI (see Safety boundary) may run against owned fixtures only, for exactly two
-purposes: creating authentic previous-release Stores, and confirming that it
-refuses the new Store. It runs without daemons, installation or account state;
-extracted previous assets stay inspect-only otherwise.
+## Cleanup and scope of the result
 
-1. **Refusal leaves the Store unchanged.** Start from a Store written by the
-   previous CLI in an owned fixture. Record the full `.podway` tree's names,
-   bytes, modes and file identities, then run candidate read and mutation
-   commands. Require validated Error v2 `WORKSPACE_CONTRACT_MISMATCH` with no
-   outcome, no state effect, no new files and no SQLite sidecars.
-2. **Confirmed unfenced reset, with exact replay.** After read-only diagnosis
-   and explicit discard authorization, run the candidate's
-   `reset --all --yes --idempotency-key <new-key>` and require a fresh UUID and
-   current writer digest with user files preserved; replay the same key and
-   request and require the original full response with no second identity
-   change (as in Scenario 2).
-3. **A fresh lifecycle.** In the reset worktree, run one complete current
-   lifecycle — start, begin, record, advance, disposition and archive — with
-   exact replay across processes (as in Scenario 3).
-4. **The previous CLI refuses the new Store.** Point the verified
-   previous-release CLI at a worktree whose Store the candidate wrote. Require
-   its fail-closed writer refusal with no destructive reset, no marker and no
-   byte change. Invoke only ordinary read and session-mutation commands for
-   this refusal check; never invoke the previous CLI's reset, removal or
-   migration routes.
+Bound and reap every owned child and verify no owned process or lock remains.
+Remove the exact owned extraction, build, staging and fixture paths after saving
+bounded evidence, and compare source repository and worktree-registry state.
+Installed/managed writer retirement is separate real-upgrade work through the
+original owners, outside this QA pass.
 
-## Cleanup and evidence
-
-Bound and reap every candidate/fixture child and prove no owned process or lock
-remains. Remove exact extracted/build/staging/worktree paths, retain only bounded
-text/JSON evidence, and verify the source repository and worktree registry stayed
-unchanged. Never control installed or Aquarium legacy services as cleanup.
-
-Report selected previous release, candidate/manifest identities, fixture producer
-and recipe hashes, controlled commands, complete envelopes, immutable refusal
-comparisons, destructive-reset result, fresh lifecycle and deletion observations,
-cleanup, findings and gaps through Aquarium's normal result. This cluster passes
-only when all applicable scenarios and cleanup pass. A confirmation rerun is
-allowed only when this cluster belongs to the frozen full-pass matrix.
+Report the two writer identities, selected release/provenance, actual fixture
+producers, controlled commands and exit/envelope pairs, original and final
+snapshots, exact scope of reset and its replay, preserved files, fresh lifecycle,
+reverse refusals and cleanup. Report explicit coverage limits and findings.
+Pass only when all applicable cases and cleanup pass. A confirmation rerun uses
+the authorized frozen full-pass matrix. Settling real v2 sessions with their
+original writer, approving a discard, installing a release or activating an
+external consumer each needs the applicable separate authority.

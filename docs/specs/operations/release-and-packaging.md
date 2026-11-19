@@ -288,53 +288,75 @@ qualification requires qualification of the final changed bytes.
 
 ## Upgrade
 
-Before installing the current CLI or resetting legacy worktrees, finish or
-abandon active sessions and retire every legacy writer. Under separate explicit
-authorization, uninstall the old daemon with the old generation's
-`podway daemon uninstall` and retire any Aquarium managed development service
-through its original controller. Confirm that those writers have stopped; a
-running old daemon can write to unlinked files during reset. If retirement is
-unresolved, stop the real upgrade at read-only inspection. Installing the new
-CLI or receiving a reset recipe never grants service-control authority.
+Select the exact original writer and current candidate from their Store
+generations and writer manifest identities. Before installing the successor
+or resetting a worktree, settle existing work with its original compatible
+writer or preserve the worktree, its history and the verified original writer.
+Installing a new writer or receiving an error recovery recipe gives no authority
+to retire a service, discard runtime or rewrite sources.
 
-After retirement, install the current single CLI, retire the legacy `~/.podway`
-account state under the original owner's authorization, and inspect worktrees
-explicitly. The `v0.2.13` cutover treats SQLite generations 1–13 and old
-maintenance markers as unsupported legacy input. Classification refuses without
-opening for writes, migration,
-checkpointing or SHM creation and reports `LEGACY_RUNTIME_STATE_UNSUPPORTED` with
-an explicit reset recipe. There is no daemon-era state conversion.
-The generation 16 writer also refuses prior Direct generations 14 and 15
-unchanged with the older-state error and reset recipe. Settle their work with an
-original compatible writer before discarding the old state.
+### Historical daemon retirement
 
-After backing up any desired historical evidence and confirming the exact target,
-run `podway --worktree <root> --json reset --all --yes --idempotency-key <new-key>`.
-This deliberately discards legacy runtime history and initializes a fresh direct
-workspace while preserving configuration unrelated to retired runtime modes,
-Procedure files, `.gitignore` and Git/unrelated files. A normal start and begin
-then establishes a new session.
-[Upgrade QA](../../implementation-tips/release-upgrade-qa.md) proves unchanged
-refusal, explicit reset and the working fresh lifecycle independently on private
-frozen fixtures. It does not retire installed writers or establish the real
-upgrade's retirement prerequisite.
+For a daemon-era worktree, retire every affected legacy writer through its
+original supported owner under separate explicit authority. Use the old
+binary's `podway daemon uninstall` where applicable and the original controller
+for any Aquarium managed development service. Confirm the writers have stopped
+before installing the successor or performing an approved reset. Resolve
+`~/.podway` account cleanup under its own authority. Leave unresolved installed
+service state at read-only inspection.
+The `v0.2.13` cutover classifies generations 1–13 and old maintenance markers as
+unsupported legacy state. Its independent upgrade QA uses frozen inputs and
+does not start or retire an installed daemon.
 
-A direct Store records its writer contract-manifest digest. A different digest
-fails with `WORKSPACE_CONTRACT_MISMATCH` unless the build explicitly declares that
-forward-migratable predecessor. Predecessors are added only in a release commit or
-the following open-development commit. `v0.2.13` declares none; direct predecessor
-migration begins with a later release. Development builds with changed assets use
-scratch worktrees rather than runtime modes.
+### Procedure v3 direct cutover
+
+The `v0.2.17` release wrote Procedure v2 Stores at generation 15. The Procedure
+v3 and Execution Group v1 writer uses generation 16 and declares no predecessor.
+It refuses generations 1–15 before SQLite recovery, mutation or SHM creation.
+On an authentic Store 15, the successor emits `LEGACY_RUNTIME_STATE_UNSUPPORTED`
+with `podway.legacy-runtime-state-unsupported-details/v2`, generation 15 and
+an explicit-authorization reset recipe. Preserve the Store to continue v2 work
+with the original writer. Neither presentation selector changes the model or
+converts source, sessions, retained values or outcomes. Procedure v2 source
+selected for `start` on a readable successor workspace is refused separately.
+
+After preserving any desired evidence and confirming no other writer still uses
+the exact discard target, an explicitly authorized reset may discard unsupported
+older runtime. Use the identified executable and owning worktree:
+
+```bash
+podway --worktree <root> --json reset --all --yes --idempotency-key <new-key>
+```
+
+This unfenced discard request deletes current and inactive runtime history and
+establishes a fresh UUID and current writer. It preserves configuration unrelated
+to retired runtime modes, Procedure files, `.gitignore`, Git and unrelated files.
+It does not adopt an old default preset or edit any custom Procedure. Start an
+explicitly supported base, then begin and use its design anchor to activate a
+compatible group. Preserve exact request and key if reset response is lost.
+
+An admitted schema generation with a different writer digest reports
+`WORKSPACE_CONTRACT_MISMATCH` unless an exact predecessor is explicitly supported.
+Predecessors belong to the applicable release or following open-development
+commit and require their own verified forward contract. Use owned isolated
+worktrees for development with changed contract assets.
+
+[Upgrade QA](../../implementation-tips/release-upgrade-qa.md) defines isolated
+refusal, reset/replay, fresh lifecycle and reverse-refusal cases with exact
+input and cleanup requirements. Qualification of those fixtures establishes no
+installed-writer retirement, release, or consumer activation.
 
 ## Downgrade
 
-Database downgrade is unsupported. A newer schema or undeclared writer digest
-fails closed without changing the Store. Use a compatible writer for newer
-generations; an older binary refuses even destructive reset and removal. A
-compatible generation that fails writer, schema or binding qualification,
-including unreadable rows or pages, can instead be discarded by a confirmed
-unfenced reset or interactive removal. A version string
-alone never permits reopening incompatible state.
+An older writer refuses a known newer Store before mutation, including attempted
+reset or removal. The `v0.2.17` binary reports `WORKSPACE_SCHEMA_UNSUPPORTED`
+with `podway.workspace-schema-unsupported-details/v1`, actual generation 16 and
+supported generation 15, on a Store 16 input. An unsupported downgrade supplies
+no conversion or reset authority. Use a compatible writer for the newer Store.
+For the distinct case of permitted discard of a corrupt or foreign-bound
+current or older runtime, follow the
+[storage recovery policy](../storage/recovery-retention-and-maintenance.md) and
+obtain explicit authority covering the exact destructive operation.
 
 ## Uninstall
 
