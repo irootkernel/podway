@@ -24,6 +24,9 @@ its in-process Direct Engine as one product and are grouped by concern:
 - [Execution groups](domain/execution-groups.md): Procedure v3 and Execution Group v1 source and
   graph admission, canonical identities and projections, exact item interfaces,
   immutable identity, bounded caller records and pure session lifecycle transitions.
+- [Execution group consumer contract](interfaces/execution-group-consumers.md):
+  versioned external assignment, assessment, settlement, replacement authority
+  and late-result handling for consumers of the scoped Direct interface.
 
 ## Supervised delegation
 

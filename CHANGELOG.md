@@ -9,6 +9,7 @@ This file records concise shipped outcomes and the planned next stable release.
 - Adopt Procedure v3 and explicit execution-group activation, guarded replanning, scoped history and delegation on Store generation 16 with `sw-dev-v3` as the default, retiring the four `*-v2` preset IDs and digests and refusing custom Procedure v2 sources
   while requiring the original writer for older sessions and a consumer re-pin to the successor manifest, `observe` v7/v8 and the commit-bound observation wrapper v2.
 - Update both source-distributed Podway skills for Procedure v3 and add worked examples of activation, staged failure assessment, and group replacement.
+- Specify the version 1 execution-group consumer contract, with examples for scoped assignments, settlement, replacement authority, and late-result refusal.
 
 ### Fixed
 

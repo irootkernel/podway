@@ -42,6 +42,11 @@ the original package binding and accepted item digest. The
 reports its applicability. Only an applicable accepted receipt can satisfy
 the active attempt's delegation gate.
 
+The [version 1 execution group consumer contract](execution-group-consumers.md)
+adds shared external assignment, single-Writer custody, settlement and authority
+requirements for both ordinary contributions and opt-in delegation. Use it before
+closing or replacing a selection with affected external work.
+
 The following host-neutral requirements remain applicable. Descriptions of
 unscoped v1 inputs and results apply to the original Procedure v2 writer.
 
