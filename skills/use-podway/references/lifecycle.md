@@ -28,7 +28,7 @@ command forms below; fenced templates do not supply semantic decisions.
 ## Prepare and start
 
 Inspect `podway preset list` and `podway preset explain <name>`. Supported built-ins
-are `analysis-v2`, `bug-fix-v2`, `small-change-v2` and `sw-dev-v2`; select from the
+are `analysis-v3`, `bug-fix-v3`, `small-change-v3` and `sw-dev-v3`; select from the
 actual task. For custom source, use `$create-podway-procedure`, then copy preview's
 exact start suggestion and `--expect-procedure-digest`. That suggestion is a bare
 handoff: retain its source and digest, fill the task, add caller options and a
@@ -40,8 +40,9 @@ fenced templates: a prepared session offers `session.begin`, `session.reset`
 and two replacement starts; an undisposed terminal session offers the two
 `session.terminal_disposition` variants; a disposed terminal session offers
 `session.archive`, `session.reset` and two fenced plain `session.start`
-variants. Execute them under the shared caller-option rule above. The deprecated
-generation 1 keeps the bare v5 lifecycle templates.
+variants. Preserve the fences and explicit-authority conditions of the offered
+recipe. Generation 1 serves the same lifecycle guidance in v7 without executable
+templates.
 
 An unfenced plain `start --dry-run` previews only the Procedure. With paired
 `--if-session-id` and `--if-session-revision`, it also verifies the current
@@ -66,20 +67,84 @@ JSON, quiet and non-TTY starts never prompt:
   when its disposition matches the current revision. The next-session request
   permits this retention transition; it never permits evicting inactive history.
 
-Require `podway.session-start-result/v4` (or `result.mutation_result` of that
-schema under `podway.mutation-observation-result/v1` when `--with-observation`
-is passed on a plain non-dry-run `start`, including plain start on a disposed
-terminal session): the new session is prepared at revision 0, with no attempt or
-goal. When plain `start --with-observation` succeeds on a known first submission,
-the caller may use `result.observation`'s fenced `session.begin` template
-directly (without an intermediate `observe`) and pass `--with-observation` on
-`begin` to receive `podway.session-begin-result/v2` plus the initial active
-node's `result.observation`. `start --dry-run`, replacement starts (`--on-existing
-preserve|delete`), `disposition`, `archive`, `archive purge`, `cancel`, `reset`,
-`doctor` and `workspace remove` do not accept `--with-observation`
-(`REQUEST_INVALID`, exit `2`); re-observe after those commands. Provide an
-initial goal only with explicit intent; a goal-tracking Procedure permits
-`goal define` once later when begin omitted it.
+Require `podway.successor-session-start-result/v1`. The new session is prepared
+at revision 0 with no active attempt or goal. A known first submission of plain
+`start --with-observation` may supply the next fenced `session.begin` template
+in the embedded v8 observation. `begin` opens the first base attempt. Provide
+an initial goal only with explicit intent. A goal-tracking Procedure permits
+one later `goal define` if begin omitted it. Replacement starts, previews and
+terminal disposition do not support `--with-observation`. Use the shared
+[rules for refreshing state](../SKILL.md#command-execution).
+
+## Activate, return and replan
+
+1. At the base anchor, record the required plan items and resolve blockers. In
+   generation-2 `observe`, copy the `group.activate` stdin template and exact
+   `result.plan`. Use `source: {"kind":"default"}` with the catalog's exact
+   `result.group_digest` from `preset show` as `expected_definition`. For custom
+   source, use `kind: "document"`, `format: "yaml"` or `"json"`, and the exact
+   group document text in `source.source`. Use the group preview's canonical
+   `result.digest` as `expected_definition`. Supply the actual working-copy basis descriptor
+   and digest and a new key. First-ever activation uses no predecessor and
+   `prior_work: []`. The input is `podway.group-activate-input/v1`; the
+   successful transaction opens one fresh scoped group entry attempt.
+2. Work through the selected group's declared actions and decisions. Once its
+   terminal action is ready, use the fenced `group return` template. The atomic
+   return closes the group's terminal attempt and opens the base's declared
+   successor. It does not finish the session. Follow base guidance through any
+   goal assessment and the base terminal. A successful group can remain selected
+   while the base evaluates its returned outputs.
+3. For a real failure, use the actual per-decision, per-execution `decision_entry`
+   (or `next_decision_entry` when projected for a preceding assessment Action).
+   The shipped policy uses first-entry ordinary rework only with a viable
+   correction, second-entry lightweight screening, and third-entry or later
+   scored assessment and a current Coordinator choice. A declared serious
+   structural defect can justify scoring earlier. Default assessment items
+   preserve actual verdict and stage and use zero as the unscored placeholder.
+   For default scores, evaluate structural need (50), lack of viable local
+   repair (30) and demonstrated lack of progress (20) from current evidence.
+   Below 80, keep the plan and apply a justified local correction or remain
+   blocked. At 80 or higher, continue with a viable local correction, make an
+   explicit replan choice, or retain a blocker with the missing facts. Record
+   the reason for the choice. Advance immediately on success. Never manufacture
+   a failure, inflate a score, repeat a decision to raise its entry ordinal, or
+   run an empty correction loop. When a real dependency prevents an admissible
+   next step, record a blocker and resume only when the facts change.
+4. From a current eligible replan decision use `group replan --stdin` with
+   `podway.group-replan-input/v1`. Include the observed option, reason, current
+   working-copy basis and bounded feedback. Current declared guard evidence
+   decides eligibility; the request has no score override. Settle affected
+   descendants and reconcile uncertain external effects before closing the
+   selection. When a new topology stays in scope, review the current plan under
+   the original authority. Expanded scope or newly uncovered effects require
+   their own approval. A base review must be explicitly declared for replan.
+   Successful replan commits the decision, closes the selection and opens a
+   new anchor. It retains previous attempts and never rewrites the working copy.
+5. For later activation, use the fresh plan and basis. Link the latest prior
+   execution as predecessor and include 1..128 justified prior-work dispositions
+   against retained work of this session. A disposition can cite the group or
+   the exact retained attempt or item allowed by the schema. State whether to
+   `retain`, `revalidate`, `modify` or `revert` it and why. Those facts may come
+   from an older same-session group even when a newer predecessor exists.
+   Revalidate work under current inputs and records before using it at a gate.
+
+The [worked continuation walkthrough](../../../docs/examples/continuation-v3.md)
+is distributed with the paired source. Select it from the exact validated source
+commit or matching published tag when running it. If only the skill is
+installed, find `docs/examples/continuation-v3.md` in that source revision.
+
+## Read retained history
+
+Use `group list --session <id>` to discover retained execution identities and
+`group show --session <id> --execution <id>` for one retained record. Read its
+dispositions with `group prior-work --session <id> --execution <id>
+--definition-digest <sha256>`.
+Use `history dag` and `history attempts` with the retained session and definition
+identity and the `--group-execution` when querying a group. Use `history item` and
+`history blockers` with the exact retained `--attempt` JSON object. Add
+`--archived` for these group/history queries on archived sessions. Keep the query
+identity fixed when following an opaque `next_page_token`. These reads are
+write-free and grant no eligibility to cite retained evidence as current work.
 
 ## Choose the lifecycle boundary
 
@@ -87,8 +152,8 @@ initial goal only with explicit intent; a goal-tracking Procedure permits
 | --- | --- |
 | `cancel` | Terminally abandons running work; retains session/history; it is not a pause |
 | `archive` | Frees the current slot while retaining an eligible terminal session |
-| `reset` | Deletes the current session and its session-scoped history |
-| `archive purge` | Permanently deletes one selected inactive session |
+| `reset` | Deletes the current session and its group and attempt history |
+| `archive purge` | Permanently deletes one selected inactive session and its retained group history |
 | `reset --all` | Replaces all workspace runtime state; keeps configuration and Procedures |
 | `workspace remove` | Deletes the entire `.podway` tree; keeps the Git worktree and outside paths |
 
@@ -105,7 +170,7 @@ can reactivate only under authorized rework or goal revision.
 ### Archive and purge
 
 Re-read terminal identity/revision before `session.archive`, preserve every fence,
-and require `podway.session-archive-result/v2` with `activity: inactive`.
+and confirm the exact session is now inactive.
 Use `archive list` or `archive show --session-id <uuid>` for retained state.
 Show includes disposition and successor identity for superseded work; request
 bounded verbose history only when needed.

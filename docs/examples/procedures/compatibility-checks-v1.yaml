@@ -1,0 +1,238 @@
+schema: podway.execution-group/v1
+id: compatibility-checks-v1
+version: "1"
+name: Compatibility checks
+purpose: Verify a small change against two independently established compatibility cases.
+node_definitions:
+  prepare-cases:
+    type: action
+    title: Prepare the compatibility cases
+    intent: Establish the actual implementation and expected behavior of both cases.
+    instructions:
+      - "Accountable role: Task Operator. Inspect the current scope and retained working copy."
+      - Record the implementation and identify both cases and their expected results.
+      - If the required cases cannot be established, record a blocker with the missing facts.
+    items:
+      - id: implementation-summary
+        type: text
+        prompt: Summarize the implementation and the two expected outcomes in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+  supported-case:
+    type: action
+    title: Verify the supported case
+    intent: Give the supported case its own recorded outcome.
+    instructions:
+      - "Accountable role: Verifier. Run the supported case outside Podway using the prepared expectations."
+      - Record the actual command and result, including any failure.
+      - Block with the missing evidence if the check cannot run.
+    items:
+      - id: supported-case-result
+        type: text
+        prompt: Record the command, exit status, and observed supported-case behavior.
+        required: true
+        min_length: 1
+        max_length: 2000
+        multiline: true
+  boundary-case:
+    type: action
+    title: Verify the boundary case
+    intent: Record a second result independently of the supported-case assertion.
+    instructions:
+      - "Accountable role: Verifier. Run the boundary case outside Podway using its own expected result."
+      - Record the actual command and result, including any failure.
+      - Block with the missing evidence if the check cannot run.
+    items:
+      - id: boundary-case-result
+        type: text
+        prompt: Record the command, exit status, and observed boundary-case behavior.
+        required: true
+        min_length: 1
+        max_length: 2000
+        multiline: true
+  assess-cases:
+    type: action
+    title: Assess both current cases
+    intent: Record the affected Evaluator's conclusion about the prepared change and both results.
+    instructions:
+      - "Accountable role: affected Evaluator. Read the current scope, implementation and separate case results."
+      - Record pass only when both checks meet their expected outcomes.
+      - On failure, identify the concrete defect and the local case or implementation that needs correction. Block if the evidence is missing or there is no viable correction.
+    items:
+      - id: verification-verdict
+        type: choice
+        prompt: Did both separately observed cases meet their expected behavior?
+        required: true
+        choices:
+          - pass
+          - fail
+      - id: verification-basis
+        type: text
+        prompt: Explain the current basis, including any defect and viable correction.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+  route-cases:
+    type: decision
+    title: Decide from the separate results
+    objective: Return successful assessed results or direct a concrete correction.
+    prompt: Do the current case results support returning the change?
+    evidence_guidance:
+      - "Accountable role: Coordinator. Read the current verdict and basis recorded by the affected Evaluator."
+      - Advance when both cases pass. Rework only for an observed failure with a viable correction.
+      - Keep a blocker with the missing facts when the assessment cannot support either route.
+    options:
+      - id: ready
+        label: Both cases pass
+        criteria: Current evidence independently establishes both expected outcomes.
+        guards:
+          - evidence:
+              scope: local
+              node: assess-cases
+              item: verification-verdict
+            equals: pass
+      - id: correction
+        label: Correct the observed defect
+        criteria: Current evidence identifies a failure and a viable in-scope correction.
+        guards:
+          - evidence:
+              scope: local
+              node: assess-cases
+              item: verification-verdict
+            equals: fail
+    reason:
+      required: true
+      prompt: Explain the advance or correction using the affected Evaluator's current evidence.
+  return-results:
+    type: action
+    title: Return the assessed compatibility results
+    intent: Supply the base Procedure's three result declarations.
+    instructions:
+      - "Accountable role: Task Operator. Read the current implementation and separately assessed checks."
+      - Record the actual verification command and aggregate exit status, identifying the two case results in the implementation summary.
+      - If a required output cannot be supplied from the current evidence, record a blocker with the missing facts.
+    items:
+      - id: implementation-summary
+        type: text
+        prompt: Summarize the implementation and separately assessed case results.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: verification-command
+        type: text
+        prompt: Record the actual command used to verify both cases.
+        help: Podway records this assertion and does not execute or attest the command. Use a check_result item when structural operation binding is required.
+        required: true
+        min_length: 1
+        max_length: 2000
+        multiline: true
+      - id: verification-exit-status
+        type: integer
+        prompt: Record the actual exit status of the combined verification.
+        help: Podway records this assertion and does not determine whether the command ran or the status is semantically acceptable.
+        required: true
+graph:
+  entry: prepare-cases
+  nodes:
+    - id: prepare-cases
+      use: prepare-cases
+      evidence_from:
+        - scope: plan
+          required: true
+          items:
+            - scope-summary
+      next: supported-case
+    - id: supported-case
+      use: supported-case
+      evidence_from:
+        - scope: local
+          node: prepare-cases
+          required: true
+          items:
+            - implementation-summary
+      next: boundary-case
+    - id: boundary-case
+      use: boundary-case
+      evidence_from:
+        - scope: local
+          node: prepare-cases
+          required: true
+          items:
+            - implementation-summary
+      next: assess-cases
+    - id: assess-cases
+      use: assess-cases
+      evidence_from:
+        - scope: plan
+          required: true
+          items:
+            - scope-summary
+        - scope: local
+          node: prepare-cases
+          required: true
+          items:
+            - implementation-summary
+        - scope: local
+          node: supported-case
+          required: true
+          items:
+            - supported-case-result
+        - scope: local
+          node: boundary-case
+          required: true
+          items:
+            - boundary-case-result
+      next: route-cases
+    - id: route-cases
+      use: route-cases
+      evidence_from:
+        - scope: local
+          node: assess-cases
+          required: true
+          items:
+            - verification-verdict
+            - verification-basis
+      routes:
+        ready:
+          to: return-results
+          effect: advance
+        correction:
+          to: prepare-cases
+          effect: rework
+    - id: return-results
+      use: return-results
+      evidence_from:
+        - scope: local
+          node: prepare-cases
+          required: true
+          items:
+            - implementation-summary
+        - scope: local
+          node: supported-case
+          required: true
+          items:
+            - supported-case-result
+        - scope: local
+          node: boundary-case
+          required: true
+          items:
+            - boundary-case-result
+        - scope: local
+          node: assess-cases
+          required: true
+          items:
+            - verification-verdict
+            - verification-basis
+      terminal: true
+plan_inputs:
+  - id: scope-summary
+    type: text
+    prompt: Summarize the bounded compatibility scope.
+    required: true
+    min_length: 1
+    max_length: 4000
+    multiline: true

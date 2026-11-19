@@ -15,7 +15,9 @@ and makes its default group available. After recording the design inputs, use
 the generation-2 observation template to activate an exact group explicitly.
 A successful group returns its declared results to the base. A guarded replan
 retains the closed group's work and starts a fresh design attempt. A running
-session continues from its admitted definition snapshots.
+session continues from its admitted definition snapshots. The
+[continuation walkthrough](../../examples/continuation-v3.md) covers both normal
+completion and separate scoped failure and replacement scenarios.
 
 During a task, read `podway observe` (or the commit-bound `result.observation`
 returned by `--with-observation` on a known first submission of a supported

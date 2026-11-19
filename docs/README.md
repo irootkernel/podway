@@ -22,6 +22,11 @@ write-free snapshot reads are the current product boundaries.
 7. [Roadmap](roadmap/) owns adopted work, ordering, and status.
 
 [Examples](examples/) provide walkthroughs and versioned known-answer payloads.
+Use the [Procedure v3 continuation walkthrough](examples/continuation-v3.md)
+with the checked-in [runtime skill](../skills/use-podway/SKILL.md) and
+[authoring skill](../skills/create-podway-procedure/SKILL.md) for the matching
+successor CLI. The walkthrough covers first activation, current evidence,
+correction, justified replanning and base closeout.
 
 Current adopted work is tracked by the [active roadmap](roadmap/).
 The [execution-group continuation program](roadmap/README.md#execution-group-continuation-program)

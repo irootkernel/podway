@@ -1,104 +1,75 @@
 # Operate a Delegated Action
 
-Read only for an authorized Procedure declaring `delegation`. Require the exact
-compatible CLI/manifest and a qualified integration for its binding. Source
-support, a Role label or valid YAML is not a working executor. Do not fabricate
-provenance, use a fixture receipt for real work or bypass required delegation.
-
-Podway guards structural progression. The Primary judges results; the integration
-owns dispatch, feedback, durable task identities and worker recovery. External and
-managed Primaries use their respective authorized integration paths;
-`primary_host` is attribution, not authority to switch them.
+Read for an authorized v3 base or v1 group action that declares `delegation`.
+Use the exact compatible CLI and a qualified integration for its binding. The
+Primary judges and accepts results. The integration owns dispatch, feedback,
+settlement, durable task identity and worker recovery. Podway fences the exact
+scoped attempt and persists the caller's reported acceptance. Source support
+alone supplies no executor or semantic proof.
 
 ## Package, supervise, record, accept, complete
 
-1. Observe (`podway.observation-result/v6` under `--contract-generation 2`; the
-   deprecated default serves v5) and confirm the active action/attempt,
-   declaration and `status.delegation.state`. Ordinary Direct placements still use
-   the normal item/progression rules.
-2. Read `podway delegation package --json`; require
-   `podway.delegation-package-result/v1`, retaining the complete package/digest.
-   Read selected evidence fully with `evidence read`, continuing until not truncated.
-3. The integration resolves the exact Role/configuration and dispatches the actual
-   task. The Primary supervises feedback and explicitly accepts the final result.
-   Delivery or an empty findings list is not acceptance.
-4. Finish required items and any optional values used by the result, then resolve
-   blockers. Verify that `after_accept: retain` settled the worker to `idle`, or
-   `after_accept: release` completed release and settled to `released`.
-5. Re-observe after the last mutation. Assemble the closed acceptance document from
-   the sources below, retain its exact bytes/key and submit:
-
-   ```bash
-   podway --contract-generation 2 --worktree <absolute-root> --json delegation accept --stdin < acceptance.json
-   ```
-
-   Input supplies all mutation identities; do not also pass identity, revision or
-   key flags (`REQUEST_INVALID`, exit `2`), and stdin-fenced mutations never run
-   implicit status preflight. Keep it within 32 KiB and use unsigned integer JSON
-   literals for revisions and round counts.
-6. Require `podway.delegation-accept-result/v2`, then re-observe (`delegation
-   accept --stdin` and `delegation block`/`unblock` do not accept
-   `--with-observation`, whereas `record --stdin` before acceptance and `complete`
-   after acceptance do accept `--with-observation`). Acceptance creates one
-   immutable receipt per attempt but does not move the cursor. Complete only when
-   current acceptance and ordinary readiness permit it, with fresh completion
-   fences and a new key.
-
-Keep the established owning worktree on every workspace command.
+1. Observe v8 and check the active placement, `result.cursor.attempt`, selected
+   execution and delegation declaration/state. Use ordinary Direct commands
+   for a placement with no delegation. Read `delegation package --json` on the
+   current delegated attempt and retain `podway.delegation-package-result/v2`,
+   its complete `package` and `package_digest`. Resolve selected evidence with
+   `evidence read` and page each needed value to completion.
+2. The authorized integration resolves the exact Role and configuration,
+   dispatches the work and supervises feedback. The Primary explicitly evaluates
+   and accepts the external result. Finish all required and used optional items
+   before acceptance. Confirm that `after_accept: retain` settled the worker
+   to `idle`, or `after_accept: release` settled it to `released`.
+3. Re-observe after item writes. Match the current active scoped attempt and
+   package digest, then prepare `podway.delegation-accept-input/v2`. Use the
+   [stdin context](../SKILL.md#command-execution) with the newest session revision
+   and keep the exact original key/body. Submit the closed document (at most
+   32 KiB) via `podway --contract-generation 2 --worktree <absolute-root> --json
+   delegation accept --stdin < acceptance.json`. Use unsigned integer JSON
+   literals for revisions and rounds. Do not supply argv preconditions or a key.
+4. Require `podway.delegation-accept-result/v3`. Acceptance creates an immutable
+   receipt and leaves the cursor in place. Re-observe, then `complete` when the
+   current receipt and ordinary readiness permit it. `delegation accept --stdin`
+   has no `--with-observation`. Keep receipt settlement and completion distinct.
 
 ## Acceptance field sources
 
 | Fields | Authority |
 | --- | --- |
-| `schema` | `podway.delegation-accept-input/v1` |
-| `workspace_uuid` | Outer `podway.output/v4` envelope `workspace.uuid` (or concrete template `preconditions.workspace_uuid`) |
-| `session_id`, `session_revision` | `result.status.session.id`, `.revision` |
-| `attempt_id` | `result.status.current.attempt.attempt_id` |
-| `idempotency_key` | Caller-generated unique key retained with this request |
-| `package_digest` | Current complete package for this attempt |
-| `execution.binding_ref`, `execution.role_ref`, `execution.role_snapshot_digest` | Integration-verified identities matching the declaration |
-| Remaining `execution` fields | Reviewed integration mapping and durable acknowledgement |
-| `rounds_used`, `worker_disposition` | Durable round accounting and settled worker state |
-| `result_digest` | Immutable complete external result under that mapping |
-| `summary`, `accepted` | Primary explanation and explicit decision; `accepted: true` |
+| `context` | Workspace UUID, active scoped stdin cursor from current observation and caller-owned idempotency key |
+| `package_digest` | Complete current package for that exact scoped attempt |
+| `execution.binding_ref`, `execution.role_ref`, `execution.role_snapshot_digest` | Integration facts matching the declaration |
+| Other `execution` fields | Reviewed integration identity and durable acknowledgement |
+| `rounds_used`, `worker_disposition` | Accounted feedback rounds and settled worker |
+| `result_digest` | Immutable complete external result under that identity |
+| `summary`, `accepted` | Primary explanation and explicit acceptance (`accepted: true`) |
 
-The remaining execution fields are `adapter_id`, `adapter_version`, `primary_host`,
+The other execution fields are `adapter_id`, `adapter_version`, `primary_host`,
 `scope_kind`, `scope_ref`, `supervisor_ref`, `worker_ref`, `task_ref`,
-`agent_configuration_digest` and `accepted_task_digest`. Do not derive missing
-identities from labels, task prose, summaries or private executor databases.
-Exclude credentials, transcripts and host paths. Podway computes
-`accepted_items_digest`; the caller does not supply it.
+`agent_configuration_digest` and `accepted_task_digest`. Do not invent them from
+local labels or private databases. The integration's `scope_kind` and `scope_ref`
+do not replace Podway's scoped attempt. Exclude credentials, transcripts and host
+paths. Podway computes the accepted item identity from the recorded item state.
 
 ## Inspect and recover
 
-Read `podway --contract-generation 2 --worktree <absolute-root> --json delegation
-receipt --session <session-id> --attempt <attempt-id>`;
-require `podway.delegation-receipt-result/v1`. Compare its applicability with fresh
-observation; a historical receipt does not satisfy another attempt.
+`delegation receipt --session <session-id> --attempt <attempt-id>` is read-only.
+`podway.delegation-receipt-result/v2` reports the full scoped `target`,
+`acceptance_state` (`missing`, `stale` or `accepted`), `receipt` and `applicability`
+(`current` or `historical`). Compare them with the current attempt and selection.
+A historical receipt is evidence of its original acceptance only.
 
-| State/error | Action |
+| Result or error | Action |
 | --- | --- |
-| `awaiting_acceptance` / `DELEGATION_RECEIPT_REQUIRED` | Finish supervision and recording before acceptance |
-| `DELEGATION_BINDING_MISMATCH` | Compare actual execution against binding, Role, rounds and disposition; do not relabel old work |
-| `accepted` | Complete only with ordinary readiness and fresh fences |
-| `stale_acceptance` / `DELEGATION_RECEIPT_STALE` | Retry or declared rework, then revalidate work for the new attempt |
-| `DELEGATION_ALREADY_ACCEPTED` | Inspect the receipt; another key cannot replace it |
-| Response loss | Follow [recovery](recovery.md) with original request/key and outcome lookup |
+| `missing` or `DELEGATION_RECEIPT_REQUIRED` | Finish current recording and verified worker settlement before acceptance |
+| `DELEGATION_BINDING_MISMATCH` | Reconcile actual Role, binding, round and worker disposition against the current declaration |
+| `accepted` with `current` applicability | Complete only with ordinary readiness and fresh fences |
+| `stale` or `DELEGATION_RECEIPT_STALE` | Use retry or declared rework, then revalidate work for the new attempt |
+| `DELEGATION_ALREADY_ACCEPTED` | Inspect the original immutable receipt |
+| Lost response | Use original-key recovery in [recovery](recovery.md) |
 
-Any committed item-state change after acceptance, even cosmetic/optional, makes the receipt
-stale. Reverting content does not restore revision. Reads, true no-ops and rolled
-back edits preserve applicability. Exact replay can return historical success
-while current readiness remains stale.
-
-Retry/rework does not redispatch external tasks. Reconcile uncertain external
-results through their integration owner before reassigning. Reused artifacts need
-revalidation against current inputs and acknowledged task identity, not a copied
-receipt.
-
-After `v0.2.15` is published, its [supervised review example](https://github.com/irootkernel/podway/blob/v0.2.15/docs/examples/supervised-delegation.md)
-uses a synthetic executor and proves only isolated protocol behavior. Until then,
-use the source and instructions at the exact reviewed candidate commit. Keep
-the CLI, example and instructions at that same release or candidate identity;
-the `v0.2.14` walkthrough uses generation 1 and is not this edition's example.
-It supplies neither a
-live adapter nor permission to create a session.
+Any committed item-state edit after acceptance makes the receipt stale,
+including a cosmetic, optional or reversing edit. Reads and true no-ops preserve
+it. Retry or rework does not launch another external task. Before replan or goal
+revision, settle affected descendants and reconcile uncertain effects with the
+integration. A prior scoped receipt cannot be moved to a new activation.

@@ -1,80 +1,81 @@
 ---
 name: create-podway-procedure
-description: Author, review, revise and validate custom Podway Procedure v2 source from repository-owned workflow requirements. This skill hands off declarative source without operating sessions or changing workspace runtime state.
+description: Author, review, revise and validate repository-owned Podway Procedure v3 and Execution Group v1 source. Hand off declarative source and exact identities for separately authorized runtime use.
 ---
 
 # Create a Podway Procedure
 
 ## Establish ownership and readiness
 
-The requesting repository owns workflow meaning, canonical paths, compatibility,
-tests and distribution. Podway owns the Procedure v2 grammar and runtime semantics.
-Prefer an existing built-in or repository Procedure when its gates already fit.
-Do not add execution hooks, Git mutation, expressions, plugins or parallel cursors.
+The repository owns workflow meaning, canonical source paths, compatibility,
+tests and distribution. Podway owns admitted grammar and transition semantics.
+Prefer an existing base and group when their gates already fit.
 
-1. Resolve one Git worktree. Run `podway version --json` for its compact version and
-   `podway version --json --identity` for Output v4, version-result v2 and
-   contract-manifest v2. Record exact build/source/manifest identity, not semver
-   alone. Missing Podway is a prerequisite, not installation authority.
-2. Read repository guidance and `.podway/config.yaml`. Resolve the canonical target
-   through policy and `procedure_paths`; otherwise use
-   `.podway/procedures/<procedure-id>.yaml`.
-3. On absent configuration, `WORKSPACE_CONFIG_INVALID` or an excluded target, stop
-   before editing and hand off initialization/diagnosis to `$use-podway` under
-   separate intent. Authoring does not authorize workspace or session mutation.
-4. Establish task purpose, action/decision owners, evidence producers, accepted
-   outcomes, correction routes and goal need. Resolve ambiguity that would change
-   the graph, trust claim or supported contract before writing it.
+1. Resolve the owning Git worktree. Run `podway version --json` and `podway
+   version --json --identity`. Require Output v4, version-result v2 and
+   contract-manifest v2, then confirm that the exact binary and manifest admit
+   Procedure v3 and Execution Group v1. A missing binary is a prerequisite.
+   Match the original writer and its guidance for any older Procedure v2 work.
+   Compatibility of a new base and group gives no basis to rewrite an existing
+   v2 pin in workspace configuration.
+2. Read repository guidance and `.podway/config.yaml`. Find the canonical base
+   path through project policy and configured `procedure_paths`. The default is
+   `.podway/procedures/<procedure-id>.yaml`. Keep reusable groups in the
+   repository-owned source locations and supply their exact documents at
+   activation. A group cannot be passed directly to `start`.
+3. On absent configuration, `WORKSPACE_CONFIG_INVALID` or an excluded base
+   target, hand the runtime prerequisite to `$use-podway` under separate intent.
+   Offline reading and validation can proceed on an authorized source file.
+   Authoring grants no workspace initialization, repair or session effects.
+4. Establish the base's starting work, design anchor, returned outputs, goal
+   policy and closeout. For the group, identify owned actions, evidence sources,
+   decision predicates, viable corrections and the single success terminal.
+   Define any guarded replan and the circumstances that justify it.
 
-Read [authoring](references/authoring.md) and the complete
-[capability inventory](references/capabilities.md) before changing source.
-For a managed/distributed bundle, also read [distribution](references/distribution.md)
-and identify the minimum immutable released manifest supporting every feature
-and those current identity families. Validate with that exact release binary.
-A local Procedure needs exact validation-binary provenance, not a new release pin.
-Authoring commands are local: they open no workspace and reject `--worktree`,
-`--timeout`, `--idempotency-key`, `--if-*` fences and `--yes`. Use the exact validating binary's
-grammar. Its local results are unchanged by the generation selector when
-supported; do not require `--contract-generation` on older release validators.
-
-Delegation requires explicit intent, an exact admitting schema and a reviewed
-integration mapping for all identities. It applies only to non-skippable action
-placements; omission remains Direct. Read [delegation](references/delegation.md)
-before declaring it. Source support does not supply a live executor or permit
-invented binding refs or Role digests.
+Read [authoring](references/authoring.md) and the
+[capability inventory](references/capabilities.md) before choosing features.
+For managed or shipped source read [distribution](references/distribution.md).
+For explicitly delegated base or group actions read
+[delegation](references/delegation.md). Delegation needs an admitting schema,
+reviewed binding and exact Role identity before it can be used.
 
 ## Author and verify
 
-Inspect exact-binary sources with `podway preset list`, then
-`podway preset show analysis-v2` for analysis or `podway preset show sw-dev-v2`
-for broad development.
-Use only returned presets. Consult `podway help procedure.<operation>` and the
-manifest-bound schema; neither a preset nor minimal scaffold defines the grammar.
-`podway procedure scaffold --template minimal` writes stdout, not a canonical file.
+Inspect `podway preset list`, then use `podway preset show sw-dev-v3` for broad
+work or `podway preset show small-change-v3` for assertion-only bounded work.
+Consult the exact CLI help and manifest-bound schemas. `podway procedure
+scaffold --template minimal` writes an editable base to stdout. A scaffold and
+any single preset are partial examples of the grammar.
 
-Write the smallest graph with one cursor/attempt, owned actions and decisions,
-bounded evidence, explicit advance/rework routes and terminal outcomes. Keep
-narrative guidance in English. Review the complete canonical source diff.
+Keep one cursor and attempt. Give every node an accountable external role,
+actual inputs, expected records, failure-report obligations and owned next
+steps. Author evidence ports, conditional items, guards, and terminal routes
+against the complete base and group together. Reserve replan for a declared
+Decision with current failure evidence and a justified structural change. Do
+not add execution hooks, Git effects, expressions, plugins or nested groups.
 
-Run repository-required checks plus the following from the owning worktree root:
+From the owning worktree, validate both source documents and review the graph:
 
 ```bash
-podway procedure check <file> --warnings-as-errors
-podway --json procedure preview <worktree-relative-file>
+podway procedure check <base-file> --warnings-as-errors
+podway procedure check <group-file> --warnings-as-errors
+podway procedure graph <base-file> --format mermaid
+podway procedure graph <group-file> --format mermaid
+podway --json procedure preview <worktree-relative-base-file>
+podway --json procedure preview <worktree-relative-group-file>
 ```
 
-`check` already combines formatting, validation, graph vetting and lint. Use the
-individual commands only to diagnose a finding; retain repository-required checks.
-`podway procedure graph <file> --format mermaid` is a review projection; source and digest
-remain authoritative. For local source, these checks/preview suffice unless the
-repository requires more. Distributed accepted-path evidence needs separate runtime
-authorization under [distribution](references/distribution.md).
+`check` combines formatting, validation, graph vetting and lint. Preview
+shows the admitted digest, graph and separate diagnostics. Only a ready base
+preview supplies `result.start_argv`. A group preview supplies its definition
+identity for activation. Compare the result and plan item declarations across
+the pair. Individual source checks cannot establish pair admission or runtime
+execution. Use the [distribution checks](references/distribution.md) for any
+separately authorized accepted-path execution.
 
-Report path, ID/version/digest, selection boundary, exact validation identity,
-checks/outcomes, evidence and correction decisions, compatibility and remaining
-uncertainty. Copy preview's exact start suggestion, including
-`--expect-procedure-digest`, without executing it. The runtime caller completes
-this bare template with the task, applicable
-caller options, key and current start preconditions under `$use-podway`.
-Keep structural validation, runtime qualification, released support and real
-integration proof distinct.
+Report both paths, IDs, versions and canonical digests, pair-interface review,
+validation-binary identity, checks and remaining limits. Hand off the base's
+exact preview start suggestion with `--expect-procedure-digest`, plus the group
+source and digest. The runtime caller adds the current start fences, task and
+caller-owned key, then uses the current group activation envelope at the anchor.
+Keep preview, runtime qualification, release status and installed adoption distinct.

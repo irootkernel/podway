@@ -27,14 +27,14 @@ do not expand its deletion boundary or switch targets.
 ## Stale request
 
 Preserve the rejected request/key, re-observe and compare workspace, session,
-attempt, goal and item identities/revisions. If current state already achieved
-the intended effect, do not repeat it. Otherwise derive a new request from current
+scoped attempt, selected group, goal and item identities/revisions. If current
+state already achieved the intended effect, do not repeat it. Otherwise derive a new request from current
 state with all applicable fences. A changed canonical request needs a new key;
 an identical recovery replay keeps its original key and fences.
 
 `EVIDENCE_REFERENCE_STALE`, `GOAL_REVISION_STALE`, `SESSION_REVISION_CONFLICT`,
-`ITEM_REVISION_CONFLICT` and `ATTEMPT_NOT_CURRENT` are retryable exit-4
-conflicts. `DIGEST_CONFIRMATION_REQUIRED` is a non-retryable exit-2 error. Do
+`ITEM_REVISION_CONFLICT`, `GROUP_SELECTION_STALE` and `ATTEMPT_NOT_CURRENT`
+are retryable exit-4 conflicts. `DIGEST_CONFIRMATION_REQUIRED` is a non-retryable exit-2 error. Do
 not remove a precondition to bypass any conflict. After any conflict or
 contention (`WORKSPACE_BUSY`), reconcile the original request/writer as
 applicable and obtain a **fresh `observe`** before deriving any new mutation;
@@ -66,15 +66,16 @@ not establish continued execution.
    A miss outside retention does not disprove an earlier effect.
 5. Replay only the identical reconstructible request/key within existing authority.
    If that cannot be established, report the recovery gap before another mutation.
-   Re-observe before deriving any new request; never replace fences on an exact replay.
+   Re-observe before deriving any new request. Preserve the original attempt,
+   selection, revisions and group document/basis bytes on exact replay.
    When a command does not support `--with-observation`, returns a compatible
    unwrapped result, or leaves observation facts incomplete, fall back to a fresh
    `observe`.
 
 Only validated successful effects retain outcomes atomically. Rejections retain
 none. `IDEMPOTENCY_KEY_REUSED` (exit `2`) means another canonical request—including
-a different `--with-observation` mode or reordered stdin entries—owns the key;
-inspect that outcome rather than overwriting its identity.
+a different `--with-observation` mode—owns the key. Inspect the stored outcome
+and retain the original stdin order for recovery.
 
 ## Workspace and maintenance
 
@@ -97,21 +98,10 @@ inspect that outcome rather than overwriting its identity.
   use the original worktree or its original location instead of discarding. I/O,
   permission and contention failures are not discard authority. A newer unsupported
   Store remains refused. Never edit databases, markers or filesystem identity.
-- On `WORKSPACE_CONTRACT_MISMATCH`, compare writer/current manifest identities.
-  Semver alone is insufficient. Only a declared release-owned predecessor permits
-  migration; do not invent one. For non-destructive continuation, use the original
-  writer matching `actual_contract_manifest_digest`, not an arbitrary binary with
-  the same semver. Its `version --json --identity` `contract_manifest_digest` must equal
-  that recorded digest; the released-writer table below maps it to a release.
-  Follow that writer's exact release-tagged skill and help for continuation:
-  `v0.2.13` and `v0.2.14` do not accept `--contract-generation` and serve observation
-  v5, so do not apply this edition's generation-2 commands to them. A handoff to
-  that writer does not authorize downloading, installing or switching binaries.
-  For discard, use the separately authorized reset-all path above. Use disposable
-  worktrees for development with changed contract bytes. Under
-  `--contract-generation 2`, the error's details carry `actual_product_version`
-  naming the stored writer's release (null when unknown) and the recovery
-  reason names the original writer.
+- On a writer or schema mismatch, follow [Older writers](#older-writers).
+  Use the separately authorized reset-all path only for an explicit discard of
+  the identified older runtime. Use isolated worktrees for development with
+  changed contract bytes.
 - Initialization resumes keep the original key and `--repair` policy. Foreign
   writer/root markers and predecessor intents require supported read-only writer
   diagnosis. Resume only with the original writer and owning worktree.
@@ -125,7 +115,26 @@ inspect that outcome rather than overwriting its identity.
   deletion of `maintenance-intent.json`, `reset-all.marker` or `removal.marker`
   bypasses supported recovery.
 
-## Released writer manifests
+## Older writers
+
+The v16 writer has no declared predecessor. It refuses legacy v1–v15 Stores
+before SQLite recovery or SHM creation. Preserve them byte-for-byte. Continue
+Procedure v2 work with the original writer and its exact release-tagged skill
+and contract. Match `actual_contract_manifest_digest` when that mismatch detail
+is available, and require the original binary's `version --json --identity`
+manifest digest to agree. Inspect writer and schema diagnostics through their
+closed detail schemas. On legacy refusal the candidate may have a generation
+classification without the original manifest. Identify the writer from retained
+provenance without opening the Store through a speculative binary.
+
+Current selectors 1 and 2 both use the successor model. They cannot enable
+v2 authoring, old routes, old-Store migration or downgrade. Releases `v0.2.13`
+and `v0.2.14` have no `--contract-generation` flag and use observation v5.
+`v0.2.15`–`v0.2.17` can serve observation v6 with generation 2. These are
+historical writer contracts. Matching source support does not authorize swapping
+an installed CLI, updating installed skills or replacing managed Procedures.
+
+### Released writer manifests
 
 The table below maps a `WORKSPACE_CONTRACT_MISMATCH` error's
 `actual_contract_manifest_digest` (the stored writer digest) to its release:

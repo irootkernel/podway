@@ -78,10 +78,9 @@ System Settings before its first run.
 
 ## Install a release
 
-This checkout prepares `v0.2.17`; source implementation
-is not evidence that a matching stable release has been published. Select an
-archive whose identity matches this direct generation, or use an explicitly
-chosen source build without claiming stable-release qualification.
+The Procedure v3 and Execution Group v1 cutover targets `v0.2.18`. These
+source instructions apply to a matching development build until a compatible
+release is published. Select a released archive by its exact contract identity.
 
 If an older daemon-based generation is installed, complete the separately
 authorized [legacy cutover](#legacy-state-and-cutover) before installing this CLI
@@ -173,7 +172,20 @@ For a small project-wide policy, add this template to the project's `AGENTS.md`:
 - Podway records assertions; it does not run the work or prove semantic truth.
 ```
 
-After `v0.2.17` is published, install the complete [`use-podway` skill](https://github.com/irootkernel/podway/tree/v0.2.17/skills/use-podway) directory under `~/.agents/skills/`:
+The checked-in [runtime skill](skills/use-podway/) and
+[authoring skill](skills/create-podway-procedure/) cover the successor source.
+Use both complete directories from the same reviewed commit or published release
+as the matching CLI. See the
+[Procedure v3 continuation walkthrough](docs/examples/continuation-v3.md) for
+scoped activation, ordinary correction, guarded replanning and session finish.
+Installing the CLI alone does not change any installed skill, workspace or
+managed Procedure.
+
+For an existing Procedure v2 workspace whose original writer is `v0.2.17`, the
+following commands install that release's complete
+[`use-podway` skill](https://github.com/irootkernel/podway/tree/v0.2.17/skills/use-podway)
+under `~/.agents/skills/`. Use them only when that original-writer guidance is
+needed and updating the installed skill is authorized:
 
 ```bash
 podway_skill_dir="$HOME/.agents/skills/use-podway"
@@ -190,7 +202,7 @@ done
 
 The runtime skill covers the active-session loop and loads separate references only for lifecycle, session-goal, recovery, or explicitly delegated work.
 
-Install [`create-podway-procedure`](https://github.com/irootkernel/podway/tree/v0.2.17/skills/create-podway-procedure) separately only when the agent needs to create, revise, review, or harden custom Procedure source:
+For `v0.2.17` source work, install that release's [`create-podway-procedure`](https://github.com/irootkernel/podway/tree/v0.2.17/skills/create-podway-procedure) separately:
 
 ```bash
 procedure_skill_dir="$HOME/.agents/skills/create-podway-procedure"
@@ -222,10 +234,13 @@ Before replacing an existing CLI or resetting workspace state, read
 [Upgrade and uninstall](#upgrade-and-uninstall). Skill installation does not grant
 runtime-deletion authority.
 
-For supervised delegation, follow the [worked review example](docs/examples/supervised-delegation.md)
-and its canonical YAML. The example is exercised by the real direct CLI in
-an isolated worktree test with a synthetic executor. It is not a built-in preset or a live
-Dolgorae adapter; source validation does not establish installed-release support.
+For successor delegation, use the
+[scoped runtime reference](skills/use-podway/references/delegation.md) and the
+matching [supervised review walkthrough](docs/examples/supervised-delegation.md).
+The native qualifier exercises its Procedure v3 example in an isolated
+worktree with a synthetic executor. The retained
+[Procedure v2 source](docs/examples/procedures/supervised-review-v2.yaml)
+requires its original writer. Live adapters need their own qualification.
 
 ## Build from source
 
@@ -272,7 +287,10 @@ podway --json observe
 
 Record the design items at the base anchor. When the plan is ready, generation-2
 observation supplies the `group.activate` template for the default proposal.
-Use the selected group's current guidance to progress. See the [scoped Direct contract](docs/specs/interfaces/json-contract.md#scoped-direct-execution).
+Use the selected group's current guidance to progress. Follow the
+[continuation walkthrough](docs/examples/continuation-v3.md) for the complete
+path and the [scoped Direct contract](docs/specs/interfaces/json-contract.md#scoped-direct-execution)
+for machine fields.
 
 Inspect the current session at any time:
 
@@ -300,7 +318,7 @@ podway start --preset small-change-v3 --task "update one validation rule"
 podway begin
 ```
 
-You can also use a worktree-local YAML procedure:
+You can also use a worktree-local YAML base Procedure:
 
 ```bash
 podway procedure scaffold --template minimal > .podway/procedures/custom.yaml
@@ -314,6 +332,12 @@ podway start \
   --task "review queue behavior"
 podway begin
 ```
+
+Author and validate a compatible Execution Group v1 definition before activating
+a custom base. `procedure check` and `procedure preview` accept both document
+types. Only a base preview supplies `result.start_argv`. At the anchor,
+use the exact group digest and current plan in `group activate --stdin`.
+Group terminal return opens the base successor, where session finish belongs.
 
 Read declared current evidence with
 `podway evidence read --source <source> --item <item-id> --json`. If the result

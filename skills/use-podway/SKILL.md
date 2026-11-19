@@ -1,247 +1,157 @@
 ---
 name: use-podway
-description: Operate an explicitly authorized Podway Procedure v2 session or workspace lifecycle, including state inspection, progression, goals and recovery. Use create-podway-procedure for Procedure authoring.
+description: Operate an explicitly authorized Podway Procedure v3 and Execution Group v1 session in one Git worktree. Covers scoped progression, history, goals, delegation and recovery. Use create-podway-procedure for source authoring.
 ---
 
 # Use Podway
 
 ## Scope and entry
 
-This runtime skill requires an explicit request to use or manage Podway, or an
-approved workflow that names its operations. Availability, repository files and
-existing sessions do not activate it. Carry authorization forward within the
-same workflow; unrelated work needs no Podway inspection.
-A request limited to inspection, diagnosis or one lifecycle operation authorizes
-only that operation, not item recording or progression.
+Use this runtime skill when the user explicitly requests a Podway operation or
+an approved workflow names it. This runtime skill applies the grant to that
+operation and worktree.
+Inspection alone gives no authority to record items, advance or delete state.
+Podway records caller assertions and formal progression. It cannot perform work
+or establish the truth of a result. Route source changes to `$create-podway-procedure`.
 
-Podway guards one task in one Git worktree. It records caller results and formal
-progression, not external execution or semantic truth. Use JSON fields and stable
-error codes for decisions, and `podway help <route or command words>` for exact
-command grammar.
-Do not install it, change project guidance or author a Procedure through this
-skill. Route Procedure source work to `$create-podway-procedure`.
-
-This edition requires the generation-2 support introduced for `v0.2.15`, or a
-verified matching development build. If the CLI rejects `--contract-generation`,
-report the compatibility gap; do not silently fall back to generation 1. Recovery
-with an older original writer uses that release's own guidance and grammar.
-
-1. Resolve the owning worktree, available CLI and `.podway/config.yaml`. Report
-   missing prerequisites without initializing or installing anything. Reviewable
-   `.podway` content is `.podway/config.yaml`, Procedure files under
-   `.podway/procedures/` and `.podway/.gitignore`, which ignores `runtime/`;
-   authoritative task state and maintenance locks live under `.podway/runtime/`
-   and are never tracked.
+1. Resolve the owning Git worktree and `.podway/config.yaml`. Read `podway
+   version --json --identity` and match the exact build and contract manifest to
+   the applicable source or release. This edition requires Procedure v3,
+   Execution Group v1 and Store generation 16. To continue older work use its
+   original writer and guidance. See [recovery](references/recovery.md#older-writers).
 2. Run `podway --contract-generation 2 --worktree <absolute-root> --json observe`.
-   Require `podway.output/v4` (exit code `0`; `podway.output/v4` has no `ok` field)
-   and `podway.observation-result/v6`; the deprecated generation-1 default still
-   serves `podway.observation-result/v5` to consumers that have not adopted
-   generation 2. Error output uses `podway.error/v2`; `SESSION_NOT_FOUND` means
-   no current session; `WORKSPACE_NOT_INITIALIZED` means this worktree has no
-   workspace, so report it and initialize only with explicit intent.
-3. Read identities and lifecycle from `status`, current work from `guidance`
-   (including `guidance.goal` when goal tracking is enabled), declarations from
-   `active_items`, and fenced requests from `mutation_templates`. Note that
-   `podway.observation-result/v6` has no `workspace.uuid` field; read
-   `workspace_uuid` from the outer `podway.output/v4` envelope (`workspace.uuid`)
-   or from concrete `mutation_templates[].preconditions.workspace_uuid`.
-   Apply [command execution](#command-execution) when using a template.
-   Prepared state has no active attempt; null guidance denotes terminal state.
-   An undisposed terminal revision needs disposition before archive or replacement.
-   Use `status --verbose` for history and `next` for narrower guidance.
-4. Once per workflow entry, run `podway archive list --json` and require
-   `podway.session-archive-list-result/v2`. Above 10 inactive sessions, report the
-   count and offer exactly two boundaries: reset all workspace runtime state, or
-   purge only the oldest inactive session. Follow [lifecycle](references/lifecycle.md)
-   for the exact requests. This is a nonblocking advisory, never deletion authority;
-   if the count read fails, report it and continue the requested work.
-5. Without a current session, continue external work. Create a session only when
-   the workflow explicitly authorizes it.
+   Require `podway.output/v4` with `result.schema` equal to
+   `podway.observation-result/v8`. Generation 1 is the deprecated default and
+   serves v7 with no executable templates. Both selectors use the same writer,
+   routes and runtime model. Failures use `podway.error/v2`. Read
+   `SESSION_NOT_FOUND` as no current session and `WORKSPACE_NOT_INITIALIZED` as
+   no initialized workspace. Start or initialize only under explicit intent.
+3. Read `result.lifecycle`, `result.cursor`, `result.selection`,
+   `result.guidance`, `result.items` and `result.goal`. Use `guidance.ready`,
+   `guidance.available_operations` and `result.open_blockers` to plan the current
+   work. `result.workspace` is the UUID. Use `result.workspace_sequence` to
+   identify the observed workspace snapshot and `cursor.session_revision` as
+   the session revision. Each scoped attempt binds the session, base digest,
+   local node and unique attempt, plus `group_execution_id` and
+   `definition_digest` for group scope. A prepared session has no active attempt. For terminal state,
+   read `lifecycle_guidance` and establish disposition before archive or replacement.
+4. Once per workflow entry, read `archive list`. If the inactive count exceeds
+   ten, report it and offer the two exact deletion boundaries in
+   [lifecycle](references/lifecycle.md#archive-and-purge). This advisory grants
+   no deletion authority. Report a failed count read and continue authorized work.
 
 ## Command execution
 
-Pass `--contract-generation 2` on every command with this compatible CLI. Use
-`--json` for machine output and `--worktree <absolute-root>` on every workspace
-command. Local commands (`help`, `version`, `completions`, `preset`, `procedure`)
-accept the generation selector but reject worktree request options: `--worktree`,
-`--timeout`, `--idempotency-key`, all `--if-*` fences, `--with-observation` and
-`--yes`.
+Use JSON and an explicit `--worktree <absolute-root>` for workspace operations.
+For executable recipes use `--contract-generation 2`. Local `help`, `version`,
+`completions`, `preset` and `procedure` need no workspace flags or mutation fences.
+Consult `podway help <route>` for route grammar and use the closed schema tied to
+that binary. Machine callers branch on stable fields and error codes.
 
-Six direct mutations (plain `start` without `--dry-run` or `--on-existing`,
-`begin`, `record --stdin`, `complete`, `decide` and
-`goal assess-criteria --stdin`) accept `--with-observation`. When passed, the
-response result schema is `podway.mutation-observation-result/v1` (with
-`result.mutation_result` holding the command's normal result,
-`result.observation` holding an as-of-commit successor
-`podway.observation-result/v6` computed in the same transaction without a second
-database read, and `result.workspace_sequence`; both generation 1 and generation
-2 embed `podway.observation-result/v6`, while omitting `--with-observation`
-preserves the default unwrapped result schemas and request identities).
-`--with-observation` is a boolean flag and takes no `=true` or `=false` value;
-all other commands reject `--with-observation` with `REQUEST_INVALID` (exit `2`).
+- For argv mutations preserve concrete template fences. For an active attempt,
+  use the complete observed `result.cursor` as one JSON argument to
+  `--if-cursor`, together with `--if-workspace-uuid`. Supply the observed item
+  revision as `--if-item-revision` on single-item writes. Two writers can record
+  different items across session revisions when both item revisions, attempt and
+  selection still match. Cursor-changing and batch mutations also require the
+  exact session revision. For prepared or terminal lifecycle routes, follow
+  their identity/revision templates. Fill only declared placeholders with real
+  facts and a caller-owned unique stable idempotency key. Several CLI routes
+  can fill omitted fences from fresh state. Automation should always target the
+  state it inspected.
+- `record --stdin`, `goal assess-criteria --stdin`, `group activate --stdin`,
+  `group replan --stdin` and `delegation accept --stdin` own the request identity
+  in their closed JSON input. Start with generation-2 `stdin_template` when
+  supplied. Their `context` contains `workspace_uuid`, `idempotency_key` and
+  `cursor` with `attempt`, `session_revision`, `goal_revision` and `selected_group`.
+  The attempt already contains `session`. Omit the observation cursor's extra
+  top-level `session` when constructing a stdin cursor. Preserve null goal
+  or selection values. These routes have no automatic fence preflight and reject
+  argv `--if-*` or `--idempotency-key`. `set <item> --stdin` reads text only and
+  retains ordinary argv fences.
+- `--with-observation` is a boolean flag available on plain non-preview `start`,
+  `begin`, `record --stdin`, `complete`, `decide` and `goal assess-criteria
+  --stdin`. Both selectors return `podway.mutation-observation-result/v2` with
+  the normal `result.mutation_result` and a commit-bound v8 `result.observation`.
+  Use it to derive the next mutation only when submission history is known,
+  the request was sent once, it exited 0 and the observation is complete. After
+  replay, outcome lookup, lost stdout, retry, conflict, unknown submission history
+  or an unsupported/unwrapped response, obtain a fresh `observe` before deriving
+  any new mutation. Keep the original wrapper preference when reconstructing a
+  request. A new key alone cannot prove a first submission.
 
-Templates and recovery recipes never embed `--contract-generation` or
-`--with-observation`. Add the caller options above only where absent. Replace
-declared placeholders with supported facts; preserve supplied options, fences and
-concrete idempotency keys. Observation mutation templates and preview start
-suggestions may append optional or repeatable semantic arguments admitted by
-command help, including additional `--criterion`, citations (`--evidence` /
-`--item`), `--with-observation` on the six supported mutations, and applicable
-`--actor`, within the authorized work. Recovery recipes keep their semantic argv
-unchanged: add only caller options and fill declared placeholders. A bare preview
-start suggestion also needs a caller-owned key and current start preconditions
-when applicable. Stdin-fenced mutations (`record --stdin`,
-`goal assess-criteria --stdin`, `delegation accept --stdin`) own their workspace,
-session, attempt, item or goal fences and `idempotency_key` inside the JSON stdin
-body, never run implicit status preflight, and reject CLI `--if-*` and
-`--idempotency-key` flags (`REQUEST_INVALID`, exit `2`).
-
-`--timeout <duration>` defaults to `5s`; unsigned `ms`, `s` or `m` values
-may be at most `60m`. It supplies one admission-wait budget across maintenance
-leases, the connection gate and SQLite locks. Input, preparation and confirmation
-consume that budget without renewing it; each boundary tries once even at `0ms`,
-and admitted work may finish later. It is not an execution timer.
+`--timeout` defaults to `5s`. Unsigned `ms`, `s` or `m` values are bounded by
+`60m`. It supplies one admission-wait budget across maintenance and SQLite
+boundaries, not an execution timer.
 
 ## Record and advance
 
-1. Perform the work owned by the active node. Inspect `missing_required_items`,
-   readiness and the observed suggestions; fill values only from actual results.
-2. For each mutation, use the latest workspace, session, attempt, goal and item
-   identities/revisions required by its template. Supply one unique stable
-   idempotency key, retain the canonical request, and add semantic arguments from
-   command help. Some CLI commands can fill omitted fences from an internal
-   preflight, but automation must preserve the observed template fences so it
-   acts on the state it inspected. Never drop a fence to make a request succeed;
-   separately authorized unfenced maintenance is described in
-   [lifecycle](references/lifecycle.md).
-3. Record items with their typed command:
+Perform the active node's work before recording its actual results. Read
+`result.items` for record revisions and `guidance.items` for effective
+requirements. Read the current guidance again when a mutation can change its
+readiness, guards or evidence. Keep actor attribution when the route supports it.
 
-   | Type | Operation |
-   | --- | --- |
-   | `confirm` | `check` / `uncheck` |
-   | `text`, `choice`, `integer` | `set`; text accepts `--stdin` |
-   | `list` | `add` / `remove` |
-   | `artifact` | `attach` |
-   | `check_result` | `record --stdin` with the declared operation identity |
-   | Any recorded value | `clear` |
+| Type | Operation |
+| --- | --- |
+| `confirm` | `check` / `uncheck` |
+| `text`, `choice`, `integer` | `set` (text accepts `--stdin`) |
+| `list` | `add` / `remove` |
+| `artifact` | `attach` |
+| `check_result` | `record --stdin` with the authored operation identity |
+| Any recorded value | `clear` |
 
-   For `check_result`, start from the observed `item.record_many` template's
-   `stdin_template` when present. Its `record` requires `type: "check_result"`,
-   `operation_id`, `operation_digest`, `input_basis` with both `descriptor` and
-   `digest`, `executor` with both `name` and `version`, `outcome`, `summary` and
-   `output_digest`. Keep the declared operation identity; fill result fields from
-   the actual check. Hash retained check-output bytes reproducibly and identify
-   the checked inputs; never invent digests. Podway validates structure, not truth.
+For `record --stdin`, use `podway.scoped-item-record-many-input/v1`. Each of
+1..128 unique operations supplies `item_id`, `expected_item_revision` and either
+a typed `record` or `clear: true`. Validation and commit cover the entire batch.
+For `check_result`, fill the declared `operation_id` and `operation_digest`,
+`input_basis` (`descriptor`, `digest`), `executor` (`name`, `version`),
+`outcome`, `summary` and `output_digest` from the actual check. Hash retained
+bytes with a reproducible method. Artifact attachment records metadata and
+rechecks required local files at completion. `ARTIFACT_CHANGED` requires fresh
+attachment of the identified, verified file.
 
-   Use `--actor` only on commands that admit it, such as goal-bearing `begin`,
-   disposition, `decide`, `rework` and goal operations. Keep distinct actors distinct.
-   Required local artifacts are checked again at completion; `ARTIFACT_CHANGED`
-   requires fresh attachment of the verified file.
-4. When one observation supports several item updates, or when reducing a
-   satisfied action node's normal progression from four CLI calls (`observe`,
-   `record`, `observe`, `complete`) to two (`record --stdin --with-observation`
-   followed by `complete --with-observation`), prefer atomic `podway record
-   --stdin`. Observation `mutation_templates` emits `item.record_many`
-   (`stdin_template`) only when the active node has a `check_result` target item.
-   On action nodes without a `check_result` target, construct the closed
-   `podway.item-record-many-input/v1` document directly from the same
-   observation: `workspace_uuid` from the outer `podway.output/v4` envelope's
-   `workspace.uuid` (or a concrete template's `preconditions.workspace_uuid`),
-   `session_id` and `session_revision` from `status.session.id` and `.revision`,
-   `attempt_id` from `status.current.attempt.attempt_id`, and a new caller-owned
-   `idempotency_key`. Its 1..128 unique operations each carry `item_id`, an
-   `expected_item_revision` taken from that item's `active_items[].revision`
-   (record templates show it as `preconditions.item_revision`), and exactly one
-   typed `record` or `clear: true`. Do not also pass identity, revision or key
-   flags on argv. Require `podway.item-record-many-result/v2` (or
-   `result.mutation_result` of that schema when `--with-observation` is used);
-   any rejected operation changes none of them. The mutation result's `revision`
-   is the session revision, not an item revision; read current
-   `active_items[].revision` from the returned `result.observation` (under the
-   first-submission rule below) or from a fresh `observe` before another write.
-5. Advance using either a fresh `observe` or a verified first-submission
-   `result.observation`:
-   - **Conditional first-submission rule**: When one of the six supported
-     mutations is submitted with `--with-observation`, consume its embedded
-     `result.observation` directly to derive the next mutation **only** when the
-     caller knows the request was its first submission (no hidden retries), the
-     command exited `0`, and `result.observation` is present and complete.
-     Generating a new idempotency key alone does not prove submission history.
-   - **Mandatory `observe` fallback**: After any idempotent replay,
-     `outcome lookup`, lost stdout, retry, unresolved submission history, or
-     contention/conflict requiring refresh (`WORKSPACE_BUSY`,
-     `SESSION_REVISION_CONFLICT`, `ITEM_REVISION_CONFLICT`,
-     `GOAL_REVISION_STALE`, `ATTEMPT_NOT_CURRENT`), or when running an
-     unsupported command, receiving a compatible unwrapped response, or lacking
-     complete observation facts, obtain a fresh `podway --contract-generation 2
-     --worktree <absolute-root> --json observe` before deriving any new mutation.
-     Never derive multiple mutations from a single unrefreshed observation, and
-     never treat historical success as current readiness.
-6. Use `complete`, `skip`, `retry`, `decide`, `rework`, `block` or `unblock` only
-   when current evidence and `allowed_actions` permit it. Block only for a real
-   external dependency that prevents progress.
+Use an allowed ordinary decision option and a nonblank evidence-based reason.
+Read `guidance.allowed_option_ids`, `guidance.replan_option_ids` and guarded
+`guidance.option_guard_statuses`. Use `group replan` for an eligible replan. Use `retry`
+or declared `rework` only when the current work supports a fresh attempt. Use
+`skip` only on an eligible nonterminal placement and supply a reason when its
+policy requires one. Block for a real dependency and unblock when it is resolved. Advance promptly when
+ready. For tracked sessions, read [goal assessment](references/goal.md).
 
-An authorized active workflow permits supported item updates and progression.
-Initialization, session creation/replacement, archive/purge, cancel/reset/removal,
-repair, and completed-session reactivation require explicit user intent for their
-exact effects. Starting the next session permits automatic archival of a disposed
-terminal session, not deletion of current work or inactive history.
+## Move through the group boundary
 
-## Graph, goals and evidence
+- `start` pins the base. `begin` opens its first attempt. The base design anchor
+  records the current plan inputs. When `group.activate` is available, use its
+  closed stdin template with the exact plan, expected group digest and actual
+  working-copy basis. A catalog proposal stays inactive until explicit activation.
+- One group execution is selected at a time. The same definition digest can
+  produce different execution IDs and fresh attempts. Complete ready group
+  actions. Use `group return` at the selected group's terminal to close it and
+  open the base return placement atomically. The base uses that group's declared
+  outputs and owns final goal assessment and session completion.
+- Replan from a declared, currently eligible decision only, using `group replan
+  --stdin` with option, reason, working-copy basis and feedback. Settle affected
+  workers and uncertain external effects first. This closes the selection and
+  opens a new anchor attempt, preserving prior work. A replacement activation
+  links the predecessor, records scoped prior-work dispositions and uses the
+  new plan and basis. For details and the staged failure policy, read
+  [group lifecycle](references/lifecycle.md#activate-return-and-replan).
 
-- `decide` needs a nonblank reason and a currently allowed option. `rework` follows
-  a declared target. Retry/rework creates fresh attempts; history does not satisfy
-  them. Completed sessions can reactivate through rework or
-  `goal revise --reactivate` under explicit intent;
-  cancelled sessions cannot.
-- Skip is a separate disposition allowed only by placement policy. It clears the
-  attempt's item values; required items and open blockers do not gate it. Terminal
-  skip still requires the applicable goal and fresh-assessment readiness.
-- Define or revise a goal only with explicit intent in a goal-tracking Procedure.
-  Assess its criteria only at the active goal-assessment decision after the work,
-  using `goal assess-criteria --stdin` (optionally with `--with-observation` so
-  three prepared/ready criterion assessments plus `decide` take two normal CLI
-  calls instead of eight `observe`+mutation calls) or single-criterion
-  `goal assess-criterion`. These `4 -> 2` action and `8 -> 2` goal-checkpoint
-  counts are structural normal-path CLI invocation counts excluding setup,
-  external work, contention, recovery and independent verifier observations; they
-  claim no measured speedup or LLM-turn reduction, introduce no fused one-call
-  `record-and-complete` or `assess-and-decide` operation, and imply no
-  user-global installation. No batch `goal.assess_criteria` template is emitted
-  in `mutation_templates`; construct the batch stdin document from the observed
-  `goal.assess_criterion` template's `preconditions` and `guidance.goal`, then
-  choose the `decide` option via the Procedure's declared outcome mapping
-  (`not_achieved` maps to `--option not-achieved` in `bug-fix-v2`). Read
-  [goals](references/goal.md) before choosing, defining, assessing or revising a
-  goal, including cooperation with a Codex goal.
-- Check reference/readback states together with `items_satisfied`, `unblocked`,
-  `goal_ready` and `can_advance`. Required evidence must resolve and be fresh;
-  an unresolved optional reference does not block progression.
-- Previews are excerpts. Read a complete selected value with `podway
-  --contract-generation 2 --worktree <absolute-root> --json evidence read
-  --source <node> --item <item>`. Pass `next_page_token` back as `--page-token` until
-  `truncated: false`. On `EVIDENCE_PAGE_TOKEN_STALE`, re-observe and restart at page
-  one. On stale required evidence, rework its owner only when the graph requires it.
-- Before an explicitly delegated action, read [delegation](references/delegation.md).
-  Require a qualified integration, final item recording, settled worker state and
-  current acceptance before completion. Neither receipts nor retry/rework launch
-  external work.
+## Evidence and recovery
 
-## Resume and recover
+Use `evidence read --source <selector> --item <item-id>` for a selected value
+available to the current attempt. Select a declared local node, `@plan` or
+`@execution-result` as allowed by current evidence. Use the consumer attempt
+fence and follow `next_page_token` until `truncated: false`. After a stale token,
+re-observe and restart paging. For earlier group/design/attempt records use
+`group list`, `group show`, `group prior-work` and `history` queries. Retained
+values help explain or revalidate work. Only current declared sources satisfy
+a gate. Consult [lifecycle](references/lifecycle.md#read-retained-history).
 
-After context loss, re-observe and match the recorded workspace UUID/session ID.
-An identity change needs authorization covering that new target; revisions within
-the same authorized session do not. Derive new work from the current attempt,
-not notes. Reuse external checks when their actual inputs still match and the
-Procedure permits it; resuming does not repeat the archive advisory.
-
-Retain an unresolved mutation's original request, key and recovery location.
-Read [recovery](references/recovery.md) for stale state, unknown outcomes or Store
-failures. Only successful mutations retain outcomes; exact replay returns the
-entire original envelope and request ID. Do not blindly retry or change a key.
-Structured recovery guidance never grants authorization or weakens fences.
-
-Read [lifecycle](references/lifecycle.md) before authorized initialization, start,
-replacement, archive, purge, cancellation, reset, removal or repair. For bounded
-work without a goal, prefer `small-change-v2`; for source-backed analysis, prefer
-`analysis-v2`. Select a fuller or custom Procedure only when its gates fit the work.
+On resume, re-observe and compare workspace/session identity before recording.
+For an uncertain result retain the exact request and use original-key lookup
+before any exact replay. See [recovery](references/recovery.md). Read
+[delegation](references/delegation.md) before any explicitly delegated action.
+Initialization, start/replacement, cancellation, archive/purge, reset/removal,
+repair and completed-session reactivation need explicit authority for the exact
+effect. See [lifecycle](references/lifecycle.md) before acting.

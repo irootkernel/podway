@@ -5,7 +5,7 @@ exact validating binary and local/distributed support.
 
 The Primary owns decisions and semantic acceptance. The integration supplies
 execution identities and settled workers; Podway does not discover providers,
-execute tasks or establish receipt truth. Put `delegation` on an action placement
+execute tasks or establish receipt truth. Put `delegation` on an action placement in a v3 base or v1 group
 under `graph.nodes`, beside `use` and `next`/`terminal`, not in `node_definitions`.
 Decisions and skip-enabled actions cannot delegate. Omission remains Direct;
 there is no execution-mode switch or fallback after failure.
@@ -40,17 +40,21 @@ fresh attempt without dispatching an executor. Integration owns reassignment,
 result revalidation and recovery of uncertain external effects. Acceptance and
 completion are distinct; delivery/submission never advances the cursor alone.
 
-## Example and handoff
+## Scoped handoff
 
-Use the [review YAML](https://github.com/irootkernel/podway/blob/v0.2.15/docs/examples/procedures/supervised-review-v2.yaml)
-and [walkthrough](https://github.com/irootkernel/podway/blob/v0.2.15/docs/examples/supervised-delegation.md)
-after `v0.2.15` is published; before publication, use both from the exact reviewed
-candidate commit with its matching CLI. When validating another release, select both from
-its exact tag; keep example bytes and instructions at one pinned revision.
-This is custom source, not a preset. Its binding and
-synthetic Role digest apply only to the isolated fixture. Real use needs the
-reviewed binding/Role mapping, chosen rounds/disposition and full authoring checks.
+An admitted declaration is instantiated per attempt. Package and receipt use
+successor scope and exact execution identity, including activation and group
+digest for group attempts. `delegation accept --stdin` uses the current closed
+`podway.delegation-accept-input/v2` context. A package or receipt from a previous
+execution never qualifies a new, same-definition activation. Settle affected
+workers and reconcile uncertain integration effects before a boundary change.
 
-Hand off preview's exact digest/start suggestion without executing it. Grammar
-validation, isolated runtime paths, released support and a live adapter are separate
-claims; source tests do not qualify real execution.
+Hand off the validated source pair, canonical digests, exact base start suggestion,
+and current binding and Role ownership. Qualify representative delegated paths
+only with separate runtime authority and exact source/CLI pairing. Follow the
+[supervised review walkthrough](../../../docs/examples/supervised-delegation.md)
+from the exact compatible source commit or release tag. With an installed
+skill, open `docs/examples/supervised-delegation.md` in that source revision.
+The walkthrough uses the v3 example with a synthetic executor. The retained
+`supervised-review-v2.yaml` requires its original writer. Live adapters need
+their own qualification.

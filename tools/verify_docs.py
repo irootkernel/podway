@@ -111,30 +111,33 @@ def validate_skill_frontmatter(name: str, entrypoint: str) -> None:
 
 
 def canonical_capability_inventory(
-    schema_path: Path = ROOT / "assets/schemas/procedure-v2.schema.json",
+    schema_path: Path = ROOT / "assets/schemas/procedure-v3.schema.json",
 ) -> dict[str, list[str]]:
     schema = json.loads(
         schema_path.read_text(encoding="utf-8")
     )
-    definitions = schema["$defs"]
+    # Procedure v3 and Execution Group v1 reuse the canonical typed item definitions.
+    shared = json.loads(
+        (ROOT / "assets/schemas/procedure-v2.schema.json").read_text(encoding="utf-8")
+    )["$defs"]
     item_types = []
-    for variant in definitions["item"]["oneOf"]:
+    for variant in shared["item"]["oneOf"]:
         definition = variant["$ref"].rsplit("/", 1)[-1]
-        item_schema = definitions[definition]
+        item_schema = shared[definition]
         if "$ref" in item_schema:
-            item_schema = definitions[item_schema["$ref"].rsplit("/", 1)[-1]]
+            item_schema = shared[item_schema["$ref"].rsplit("/", 1)[-1]]
         item_types.append(item_schema["properties"]["type"]["const"])
     predicate_sets = []
-    for definition in ("item_predicate", "evidence_predicate"):
+    for predicate in (shared["item_predicate"], schema["$defs"]["evidence_predicate"]):
         predicate_sets.append(
             {
                 required
-                for variant in definitions[definition]["oneOf"]
+                for variant in predicate["oneOf"]
                 for required in variant["required"]
             }
         )
     if predicate_sets[0] != predicate_sets[1]:
-        fail("Procedure v2 item and evidence predicate operators differ")
+        fail("Procedure v3 item and evidence predicate operators differ")
     return {
         "item_types": sorted(item_types),
         "predicate_operators": sorted(predicate_sets[0]),
@@ -213,10 +216,10 @@ def validate_skills(skills_root: Path = SKILLS) -> int:
         "authoring entrypoint": (
             ("podway version --json", ".podway/procedures/<procedure-id>.yaml"),
             ("WORKSPACE_CONFIG_INVALID", "$use-podway"),
-            ("podway preset show sw-dev-v2", "--expect-procedure-digest"),
+            ("podway preset show sw-dev-v3", "--expect-procedure-digest"),
         ),
         "authoring reference": (
-            ("podway help procedure.<operation>", "podway preset show sw-dev-v2"),
+            ("podway help procedure.<operation>", "podway preset show sw-dev-v3"),
             ("WORKSPACE_CONFIG_INVALID", "configured `procedure_paths`"),
         ),
         "distribution reference": (
@@ -230,7 +233,10 @@ def validate_skills(skills_root: Path = SKILLS) -> int:
             ("paged read-back", "stale-token rejection"),
             ("podway version --json --identity", "published release"),
         ),
-        "runtime entrypoint": (("$create-podway-procedure", "runtime skill"),),
+        "runtime entrypoint": (
+            ("$create-podway-procedure", "runtime skill"),
+            ("podway.observation-result/v8", "group.activate", "--if-cursor"),
+        ),
     }
     contents = {
         "authoring entrypoint": authoring_entrypoint,
@@ -470,7 +476,7 @@ def validate_skills_self_test() -> None:
 
         predicate_mismatch = temporary_root / "predicate-mismatch.json"
         schema = json.loads(
-            (ROOT / "assets/schemas/procedure-v2.schema.json").read_text(
+            (ROOT / "assets/schemas/procedure-v3.schema.json").read_text(
                 encoding="utf-8"
             )
         )

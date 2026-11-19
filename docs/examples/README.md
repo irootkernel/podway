@@ -1,6 +1,9 @@
 # Examples
 
 - [`.podway/config.yaml`](.podway/config.yaml): reference tracked workspace configuration.
+- [Procedure v3 continuation walkthrough](continuation-v3.md): author a
+  compatible group, activate the default, assess failures, and finish through
+  a justified replacement.
 - [Procedure v2 workflow](v2-workflow.md): historical walkthrough for the
   previous writer's preset admission, decision, rework and goal flow.
 - [Supervised delegation](supervised-delegation.md): a custom review Procedure,
