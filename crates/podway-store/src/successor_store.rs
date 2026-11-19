@@ -1,4 +1,4 @@
-//! Candidate Store persistence for isolated execution-group integration fixtures.
+//! Native execution-group Store persistence and isolated integration fixtures.
 //! Transaction callers own commit and success-only outcome publication.
 
 mod delegation;

@@ -9,7 +9,8 @@ use podway_protocol::{
     released_writer_release_v1,
 };
 use podway_store::{
-    GraphMutationErrorV2, IdempotencyKeyV1, StoreErrorV1, direct_store::DirectStoreErrorV1,
+    GraphMutationErrorV2, IdempotencyKeyV1, StoreErrorV1,
+    direct_store::{DIRECT_SCHEMA_GENERATION_V1, DirectStoreErrorV1},
 };
 use serde_json::{Value, json};
 
@@ -653,7 +654,11 @@ fn store(error: &DirectStoreErrorV1, context: &DirectErrorContextV1) -> Presenta
                 "argv":["podway","--json","reset","--all","--yes","--idempotency-key","<new-idempotency-key>"], "reason":"Replace <new-idempotency-key> with a fresh caller-owned key, then explicitly reset unsupported older runtime state.","requires_explicit_authorization":true}}),
         },
         E::UnsupportedGeneration { generation } => {
-            let supported = if context.successor_store { 16 } else { 15 };
+            let supported = if context.successor_store {
+                DIRECT_SCHEMA_GENERATION_V1
+            } else {
+                15
+            };
             Presentation {
                 code: "WORKSPACE_SCHEMA_UNSUPPORTED",
                 details: json!({

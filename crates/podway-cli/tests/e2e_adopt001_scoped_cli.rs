@@ -596,6 +596,36 @@ fn successor_cli_dry_run_and_fenced_default_activation() {
     assert!(preview.get("session").is_none());
     assert!(!fixture.0.join(".podway").exists());
 
+    let custom = podway_presets::lookup_v3("small-change-v3").unwrap();
+    std::fs::write(fixture.0.join("procedure.yaml"), custom.base_yaml).unwrap();
+    let missing_digest = fixture.output(&[
+        "start",
+        "--procedure",
+        "procedure.yaml",
+        "--task",
+        "Preview custom source",
+        "--dry-run",
+    ]);
+    assert_eq!(missing_digest.status.code(), Some(2));
+    assert!(missing_digest.stderr.is_empty());
+    let error: ErrorEnvelopeV2 = serde_json::from_slice(&missing_digest.stdout).unwrap();
+    let error = error.as_value();
+    assert_eq!(error["code"], "DIGEST_CONFIRMATION_REQUIRED");
+    assert_eq!(
+        error["message"],
+        "A custom Procedure start requires explicit digest confirmation."
+    );
+    assert_eq!(error["command"], "session.start");
+    assert_eq!(
+        error["details"],
+        json!({
+            "schema": "podway.v2-runtime-error-details/v2",
+            "kind": "DIGEST_CONFIRMATION_REQUIRED",
+            "procedure_digest": preview["result"]["procedure_digest"],
+        })
+    );
+    assert!(!fixture.0.join(".podway").exists());
+
     fixture.run(&["init", "--idempotency-key", "init"]);
     fixture.run(&[
         "start",

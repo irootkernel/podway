@@ -356,8 +356,7 @@ impl CandidateExecutionStore {
         Ok(transaction)
     }
 
-    /// Outcome readback is a verification handle for this fixture; the public CLI route
-    /// continues to use its existing v15 Store.
+    /// Read back the original successful outcome retained by this isolated fixture.
     pub fn outcome(&self, key: &IdempotencyKeyV1) -> Result<Option<DirectRecordedOutcomeV1>> {
         self.lookup_outcome(&self.workspace, key)
     }

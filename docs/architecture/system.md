@@ -613,6 +613,10 @@ detection, including accidental out-of-protocol modification.
 
 ### Request-scoped read composition
 
+This section describes the predecessor projection. The [automation client
+contract](../specs/interfaces/automation-client-contract.md) owns the current
+Procedure v3 observation families v7 and v8.
+
 `ReadScope` borrows the coherent view the caller already owns, either
 `DirectWorkspaceViewV1` or an existing `GraphWorkspaceViewV2`. It does not clone
 `GraphSessionStateV2`. Public wrappers remain. Nested consumers of the same

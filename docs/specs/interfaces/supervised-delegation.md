@@ -534,10 +534,10 @@ confirmed cascade and marker recovery; no orphan receipt survives deletion.
 Session success outcomes have their separate retained lookup lifetime, including
 after archive purge, as defined by the automation contract.
 
-Daemon-era generations 1–13 and markers are refused without conversion or deletion.
-Confirmed reset-all is explicit destructive recovery, not a forward migration of
-old work. Only declared direct writer predecessors may migrate under exclusive
-maintenance; the initial cutover declares none. Qualify strict writer refusal,
+Store 16 refuses daemon-era generations 1–13, prior direct generations 14–15,
+and daemon-era markers without conversion or deletion. Confirmed reset-all
+is explicit destructive recovery. Only declared direct writer predecessors may
+migrate under exclusive maintenance. Store 16 declares no predecessor. Qualify strict writer refusal,
 read-only non-mutation, direct transaction/reconstruction, interruption and exact
 marker retry on isolated fixtures. Never weaken manifest or integrity checks to
 keep a partial implementation running.

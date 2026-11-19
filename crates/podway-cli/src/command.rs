@@ -319,7 +319,7 @@ impl LocalFailure {
     fn digest_confirmation_required(actual: &Sha256Digest, command: &str) -> Self {
         let mut failure = Self::catalog(
             "DIGEST_CONFIRMATION_REQUIRED",
-            "A custom Procedure v2 start requires explicit digest confirmation.",
+            "A custom Procedure start requires explicit digest confirmation.",
             command,
         );
         failure.details = Map::from_iter([

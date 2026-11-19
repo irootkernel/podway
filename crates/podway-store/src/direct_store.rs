@@ -1,4 +1,4 @@
-//! Generation-15 direct persistence.
+//! Native direct persistence for the current Store.
 //!
 //! This boundary owns native maintenance leases and private SQLite transactions. The
 //! engine supplies pure domain transitions and validates the complete public success.
