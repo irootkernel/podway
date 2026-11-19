@@ -2,7 +2,7 @@
 
 use super::{
     CandidateDefinition, CandidateSources, CandidateStoreError, Result, admit_writer, bounded_text,
-    corrupt, create_candidate_fixture, load_candidate_execution, open_candidate,
+    corrupt, create_candidate_fixture, load_candidate_content, open_candidate,
     persist_candidate_execution, reopen_candidate_fixture,
 };
 use crate::direct_store::{
@@ -12,8 +12,11 @@ use crate::direct_store::{
 };
 use crate::{CanonicalExecutionJsonV1, IdempotencyKeyV1, ValidatedWorkspaceRootV1};
 use podway_core::execution_groups::ExecutionSessionV3;
-use podway_core::{DomainError, Revision, SessionId, SessionLifecycle, UnixMillis, WorkspaceId};
+use podway_core::{
+    DomainError, Revision, SessionId, SessionLifecycle, Sha256Digest, UnixMillis, WorkspaceId,
+};
 use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior, params};
+use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::sync::{
     Arc,
@@ -40,6 +43,13 @@ pub struct CandidateFixtureSession<'a> {
     pub session: &'a SessionId,
     pub location: CandidateSessionLocation,
     pub revision: Revision,
+}
+
+/// Admitted state and its continuation binding, gathered in one read transaction.
+pub struct CandidateHistorySnapshot {
+    pub state: ExecutionSessionV3,
+    pub sources: CandidateSources,
+    pub content_digest: Sha256Digest,
 }
 
 impl CandidateSessionLocation {
@@ -161,14 +171,9 @@ impl CandidateExecutionStore {
         location: CandidateSessionLocation,
         admit: impl Fn(&str) -> Result<CandidateDefinition>,
     ) -> Result<(ExecutionSessionV3, CandidateSources, u64)> {
-        self.require_workspace(workspace)?;
-        let transaction = self.connection.transaction()?;
-        admit_writer(&transaction)?;
-        verify_binding(&transaction, &self.root, workspace)?;
+        let transaction = self.fixture_read(workspace)?;
         let (state, sources) = load_requested_session(&transaction, session, location, admit)?;
-        if location == CandidateSessionLocation::Archived && !terminal_session(&state) {
-            return Err(corrupt("archived candidate session is not terminal"));
-        }
+        require_terminal_archive(location, &state)?;
         let sequence: i64 = transaction.query_row(
             "SELECT next_workspace_sequence FROM workspace_state WHERE singleton=1",
             [],
@@ -177,6 +182,37 @@ impl CandidateExecutionStore {
         let sequence = u64::try_from(sequence)
             .map_err(|_| corrupt("candidate workspace sequence is negative"))?;
         Ok((state, sources, sequence))
+    }
+
+    /// Load history and its session-local content identity without consulting the ledger.
+    pub fn history_snapshot_with_digest(
+        &mut self,
+        workspace: &WorkspaceId,
+        session: &SessionId,
+        location: CandidateSessionLocation,
+        admit: impl Fn(&str) -> Result<CandidateDefinition>,
+    ) -> Result<CandidateHistorySnapshot> {
+        let transaction = self.fixture_read(workspace)?;
+        let mut checksums = Sha256::new();
+        checksums.update(b"podway.candidate-history-snapshot/v1");
+        let (state, sources) =
+            load_requested_content(&transaction, session, location, admit, Some(&mut checksums))?;
+        require_terminal_archive(location, &state)?;
+        let content_digest = Sha256Digest::new(format!("sha256:{:x}", checksums.finalize()))
+            .expect("hex encoded SHA-256 is a valid digest");
+        Ok(CandidateHistorySnapshot {
+            state,
+            sources,
+            content_digest,
+        })
+    }
+
+    fn fixture_read(&mut self, workspace: &WorkspaceId) -> Result<Transaction<'_>> {
+        self.require_workspace(workspace)?;
+        let transaction = self.connection.transaction()?;
+        admit_writer(&transaction)?;
+        verify_binding(&transaction, &self.root, workspace)?;
+        Ok(transaction)
     }
 
     /// Archive an admitted terminal session in an isolated fixture. This fixture operation
@@ -542,8 +578,28 @@ fn load_requested_session(
     location: CandidateSessionLocation,
     admit: impl Fn(&str) -> Result<CandidateDefinition>,
 ) -> Result<(ExecutionSessionV3, CandidateSources)> {
+    load_requested_content(transaction, session, location, admit, None)
+}
+
+fn load_requested_content(
+    transaction: &Transaction<'_>,
+    session: &SessionId,
+    location: CandidateSessionLocation,
+    admit: impl Fn(&str) -> Result<CandidateDefinition>,
+    checksums: Option<&mut Sha256>,
+) -> Result<(ExecutionSessionV3, CandidateSources)> {
     require_session_location(transaction, session, location)?;
-    load_candidate_execution(transaction, session, admit)
+    load_candidate_content(transaction, session, admit, checksums)
+}
+
+fn require_terminal_archive(
+    location: CandidateSessionLocation,
+    state: &ExecutionSessionV3,
+) -> Result<()> {
+    if location == CandidateSessionLocation::Archived && !terminal_session(state) {
+        return Err(corrupt("archived candidate session is not terminal"));
+    }
+    Ok(())
 }
 
 fn require_session_location(

@@ -284,6 +284,7 @@ pub(super) enum Lifecycle {
     Archive(Target),
     Remove(Target),
     Install(Value, Option<SessionId>),
+    InstallWithEntry(Value, SessionId, AttemptId),
     Reset(Target, Value),
 }
 
@@ -688,25 +689,12 @@ fn lifecycle(
         Lifecycle::Archive(_) => return Reply::Rejected(Refusal::ArchivePhase),
         Lifecycle::Remove(target) => store.remove_fixture_session(target.scope(), definition),
         Lifecycle::Install(base, session) => {
-            let (mut initial, sources) = initial_state(&base, true);
-            if let Some(session) = session {
-                initial = ExecutionSessionV3::begin(
-                    session,
-                    initial.base_definition().clone(),
-                    initial.base_digest().clone(),
-                    None,
-                    NativeDirectIdSourceV1.next_attempt_id(),
-                    TIME,
-                )
-                .unwrap();
-            }
-            return match store.install_fixture_session(workspace, &initial, &sources) {
-                Ok(()) => Reply::Installed {
-                    workspace: workspace.clone(),
-                    session: initial.fence().session,
-                },
-                Err(error) => Reply::Rejected(SuccessorExecutionError::from(error).into()),
-            };
+            let requested =
+                session.map(|session| (session, NativeDirectIdSourceV1.next_attempt_id()));
+            return install(store, workspace, &base, requested);
+        }
+        Lifecycle::InstallWithEntry(base, session, entry) => {
+            return install(store, workspace, &base, Some((session, entry)));
         }
         Lifecycle::Reset(target, base) => {
             let (initial, sources) = initial_state(&base, true);
@@ -728,6 +716,33 @@ fn lifecycle(
     };
     match result {
         Ok(()) => Reply::Lifecycle,
+        Err(error) => Reply::Rejected(SuccessorExecutionError::from(error).into()),
+    }
+}
+
+fn install(
+    store: &mut CandidateExecutionStore,
+    workspace: &WorkspaceId,
+    base: &Value,
+    requested: Option<(SessionId, AttemptId)>,
+) -> Reply {
+    let (mut initial, sources) = initial_state(base, true);
+    if let Some((session, entry)) = requested {
+        initial = ExecutionSessionV3::begin(
+            session,
+            initial.base_definition().clone(),
+            initial.base_digest().clone(),
+            None,
+            entry,
+            TIME,
+        )
+        .unwrap();
+    }
+    match store.install_fixture_session(workspace, &initial, &sources) {
+        Ok(()) => Reply::Installed {
+            workspace: workspace.clone(),
+            session: initial.fence().session,
+        },
         Err(error) => Reply::Rejected(SuccessorExecutionError::from(error).into()),
     }
 }

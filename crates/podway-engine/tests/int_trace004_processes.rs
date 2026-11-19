@@ -118,6 +118,150 @@ fn launch_group(
 }
 
 #[test]
+fn continuation_rejects_a_reset_and_reinstalled_session_at_the_same_revision() {
+    assert_reset_continuation(false);
+}
+
+#[test]
+fn continuation_rejects_a_reset_with_the_same_session_and_entry_attempt() {
+    assert_reset_continuation(true);
+}
+
+fn assert_reset_continuation(reuse_entry: bool) {
+    use Location::{Archived, Current};
+
+    let base = base_document();
+    let original_group = local_decision_group(true);
+    let mut replacement_group = original_group.clone();
+    replacement_group["id"] = json!("replacement-session-group");
+    let mut fixture = Fixture::create(&base, false);
+    let finish_two_groups = |fixture: &mut Fixture, prefix: &str, group: &Value| {
+        write(
+            fixture,
+            &format!("{prefix}-plan"),
+            Action::Record(text("plan", 0, "Plan the first group")),
+        );
+        launch_group(fixture, &format!("{prefix}-first"), group, vec![]);
+        let first = fixture.read(&[]);
+        assess(fixture, &format!("{prefix}-first"), None);
+        launch_group(
+            fixture,
+            &format!("{prefix}-second"),
+            group,
+            vec![retain(&first.groups[0], None)],
+        );
+        write(fixture, &format!("{prefix}-cancel"), Action::Cancel);
+        fixture.read(&[])
+    };
+
+    let old = finish_two_groups(&mut fixture, "old", &original_group);
+    let old_target = fixture.target(Current, old.cursor.revision);
+    let old_first = page(history(&mut fixture, &old_target, Query::Groups, 1, None));
+    let old_token = old_first["next_page_token"].as_str().unwrap();
+    let old_last = page(history(
+        &mut fixture,
+        &old_target,
+        Query::Groups,
+        1,
+        Some(old_token),
+    ));
+    assert_eq!(old_first["total"], 2);
+    assert_eq!(old_last["rows"][0]["execution"], old.groups[1]["id"]);
+    assert!(matches!(
+        fixture.lifecycle(Lifecycle::Remove(old_target.clone())),
+        Reply::Lifecycle
+    ));
+    let old_entry: ScopedAttemptV1 =
+        serde_json::from_value(old.attempts[0]["target"].clone()).unwrap();
+    let reinstall = if reuse_entry {
+        Lifecycle::InstallWithEntry(
+            base.clone(),
+            old_target.session.clone(),
+            old_entry.attempt().clone(),
+        )
+    } else {
+        Lifecycle::Install(base.clone(), Some(old_target.session.clone()))
+    };
+    let Reply::Installed { workspace, session } = fixture.lifecycle(reinstall) else {
+        panic!("expected reinstallation with the removed session UUID");
+    };
+    assert_eq!(workspace, old_target.workspace);
+    assert_eq!(session, old_target.session);
+
+    let new = finish_two_groups(&mut fixture, "new", &replacement_group);
+    let new_target = fixture.target(Current, new.cursor.revision);
+    assert_eq!(new_target.workspace, old_target.workspace);
+    assert_eq!(new_target.session, old_target.session);
+    assert_eq!(new_target.revision, old_target.revision);
+    assert_eq!(
+        new.attempts[0]["target"]["attempt"] == old.attempts[0]["target"]["attempt"],
+        reuse_entry
+    );
+    let new_first = page(history(&mut fixture, &new_target, Query::Groups, 1, None));
+    assert_eq!(new_first["total"], old_first["total"]);
+    assert_eq!(new_first["session_location"], old_first["session_location"]);
+    assert_ne!(
+        new_first["rows"][0]["definition_digest"],
+        old_first["rows"][0]["definition_digest"]
+    );
+    let before = fixture.inspect(&["old-first", "new-first"]);
+    assert!(before.outcomes["old-first"].is_none());
+    assert!(before.outcomes["new-first"].is_some());
+    let bytes = fixture.persistent_bytes();
+    rejection(
+        history(&mut fixture, &new_target, Query::Groups, 1, Some(old_token)),
+        Refusal::StaleHistoryToken,
+    );
+    let new_last = page(history(
+        &mut fixture,
+        &new_target,
+        Query::Groups,
+        1,
+        new_first["next_page_token"].as_str(),
+    ));
+    assert_eq!(new_last["rows"][0]["execution"], new.groups[1]["id"]);
+    assert_ne!(new_last["rows"], old_last["rows"]);
+    assert_eq!(new_last["next_page_token"], Value::Null);
+    assert_eq!(fixture.inspect(&["old-first", "new-first"]), before);
+    assert!(
+        fixture.persistent_bytes() == bytes,
+        "history changed quiescent DB/WAL"
+    );
+
+    assert!(matches!(
+        fixture.lifecycle(Lifecycle::Archive(new_target.clone())),
+        Reply::Lifecycle
+    ));
+    let archived = Target {
+        location: Archived,
+        ..new_target
+    };
+    let archived_first = page(history(&mut fixture, &archived, Query::Groups, 1, None));
+    let archived_last = |fixture: &mut Fixture| {
+        page(history(
+            fixture,
+            &archived,
+            Query::Groups,
+            1,
+            archived_first["next_page_token"].as_str(),
+        ))
+    };
+    let archived_before = archived_last(&mut fixture);
+    assert_eq!(archived_before["rows"], new_last["rows"]);
+    assert!(matches!(
+        fixture.lifecycle(Lifecycle::Install(base, None)),
+        Reply::Installed { .. }
+    ));
+    write(
+        &mut fixture,
+        "unrelated-current-write",
+        Action::Record(text("plan", 1, "Recorded after archival")),
+    );
+    assert_eq!(archived_last(&mut fixture), archived_before);
+    fixture.finish();
+}
+
+#[test]
 fn cold_history_survives_ordinary_pruning_exhaustion_and_archive() {
     use Location::{Archived, Current};
 

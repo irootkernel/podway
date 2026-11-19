@@ -429,6 +429,16 @@ pub fn load_candidate_execution(
     session_id: &SessionId,
     admit_definition: impl Fn(&str) -> Result<CandidateDefinition>,
 ) -> Result<(ExecutionSessionV3, CandidateSources)> {
+    load_candidate_content(transaction, session_id, admit_definition, None)
+}
+
+fn load_candidate_content(
+    transaction: &Transaction<'_>,
+    session_id: &SessionId,
+    admit_definition: impl Fn(&str) -> Result<CandidateDefinition>,
+    checksums: Option<&mut Sha256>,
+) -> Result<(ExecutionSessionV3, CandidateSources)> {
+    let mut history = HistoryChecksums(checksums);
     admit_writer(transaction)?;
     let mut header_query = transaction.prepare(
         "SELECT base_digest, record_json, record_digest FROM successor_sessions WHERE session_id = ?1",
@@ -437,7 +447,7 @@ pub fn load_candidate_execution(
     let header_row = header_rows
         .next()?
         .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
-    let header: Session = decode_row(header_row, 1, MAX_SESSION_JSON_BYTES)?;
+    let header: Session = history.decode(header_row, 1, MAX_SESSION_JSON_BYTES, b's')?;
     if &header.id != session_id
         || header.base_digest.as_str() != bounded_text(header_row, 0, DIGEST_BYTES)?
     {
@@ -466,8 +476,9 @@ pub fn load_candidate_execution(
         if ordinal > MAX_GROUP_EXECUTIONS_V1 || ordinal != executions.len() + 1 {
             return Err(corrupt("retained activation ordinal differs"));
         }
-        let value =
-            decode_row::<records::Activation>(row, 5, MAX_ACTIVATION_JSON_BYTES)?.admit()?;
+        let value = history
+            .decode::<records::Activation>(row, 5, MAX_ACTIVATION_JSON_BYTES, b'g')?
+            .admit()?;
         let identity = &value.identity;
         if bounded_text(row, 1, UUID_BYTES)? != identity.execution().as_str()
             || bounded_text(row, 2, DIGEST_BYTES)? != identity.definition_digest().as_str()
@@ -495,8 +506,8 @@ pub fn load_candidate_execution(
         }
         executions.push(value);
     }
-    let attempts = load_attempts(transaction, session_id)?;
-    let goal_revisions = load_goals(transaction, session_id)?;
+    let attempts = load_attempts(transaction, session_id, &mut history)?;
+    let goal_revisions = load_goals(transaction, session_id, &mut history)?;
     let state = ExecutionSessionV3::from_retained(RetainedExecutionV3 {
         session: header.id,
         base,
@@ -543,6 +554,7 @@ fn load_definition(
 fn load_attempts(
     transaction: &Transaction<'_>,
     session_id: &SessionId,
+    history: &mut HistoryChecksums<'_>,
 ) -> Result<Vec<RetainedAttemptV3>> {
     let mut values = Vec::new();
     let mut statement = transaction.prepare(
@@ -554,7 +566,9 @@ fn load_attempts(
         if values.len() >= MAX_SESSION_ATTEMPTS_V1 || row.get::<_, usize>(0)? != values.len() + 1 {
             return Err(corrupt("retained attempt trace ordinal differs"));
         }
-        let value = decode_row::<records::Attempt>(row, 4, MAX_ATTEMPT_JSON_BYTES)?.admit()?;
+        let value = history
+            .decode::<records::Attempt>(row, 4, MAX_ATTEMPT_JSON_BYTES, b'a')?
+            .admit()?;
         let (group, definition) = scope_columns(&value.target);
         if bounded_text(row, 1, UUID_BYTES)? != value.target.attempt().as_str()
             || optional_bounded_text(row, 2, UUID_BYTES)? != group
@@ -570,6 +584,7 @@ fn load_attempts(
 fn load_goals(
     transaction: &Transaction<'_>,
     session_id: &SessionId,
+    history: &mut HistoryChecksums<'_>,
 ) -> Result<Vec<GroupGoalRevisionV1>> {
     let mut values = Vec::new();
     let mut statement = transaction.prepare(
@@ -582,7 +597,9 @@ fn load_goals(
         if ordinal > MAX_SESSION_ATTEMPTS_V1 || ordinal != values.len() + 2 {
             return Err(corrupt("retained goal revision ordinal differs"));
         }
-        let value = decode_row::<records::GoalChange>(row, 3, MAX_GOAL_JSON_BYTES)?.admit()?;
+        let value = history
+            .decode::<records::GoalChange>(row, 3, MAX_GOAL_JSON_BYTES, b'r')?
+            .admit()?;
         if ordinal as u64 != value.revision.get()
             || bounded_text(row, 1, UUID_BYTES)? != value.source.attempt().as_str()
             || bounded_text(row, 2, UUID_BYTES)? != value.successor.attempt().as_str()
@@ -624,6 +641,26 @@ fn decode_row<T: DeserializeOwned + Serialize>(
         bounded_text(row, record_column, maximum)?,
         bounded_text(row, record_column + 1, DIGEST_BYTES)?,
     )
+}
+
+struct HistoryChecksums<'a>(Option<&'a mut Sha256>);
+
+impl HistoryChecksums<'_> {
+    fn decode<T: DeserializeOwned + Serialize>(
+        &mut self,
+        row: &Row<'_>,
+        column: usize,
+        maximum: usize,
+        kind: u8,
+    ) -> Result<T> {
+        let record = decode_row(row, column, maximum)?;
+        if let Some(checksums) = self.0.as_deref_mut() {
+            // The verified checksums are fixed-width; the kind separates ordered row runs.
+            checksums.update([kind]);
+            checksums.update(bounded_text(row, column + 1, DIGEST_BYTES)?.as_bytes());
+        }
+        Ok(record)
+    }
 }
 
 fn prior_record<T: DeserializeOwned + Serialize>(

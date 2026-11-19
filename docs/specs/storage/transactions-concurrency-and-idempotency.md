@@ -157,9 +157,11 @@ its own binding. A new request for an already accepted current action is
 rejected. Exact replay returns the original acceptance success.
 
 Candidate history queries select one exact current or archived session in a
-read transaction. Group, Decision and goal-revision lineage use that admitted
-snapshot and revision-bound continuations. They leave current evidence and
-mutation state unchanged.
+read transaction. History continuations bind the session revision and a
+session-local digest computed from the checksums verified during that same
+admission. Reinstallation with different retained content makes old
+continuations stale even when the session UUID, first attempt ID and revision
+are reused. History reads leave current evidence and mutation state unchanged.
 Historical graphs, trace attempts, scoped blockers and item reads use the same
 admission and bind their narrower definition, attempt or value identity.
 Prior-work history uses that snapshot to project the admitted activation

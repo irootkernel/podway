@@ -121,10 +121,14 @@ completion. The original group's closure remains visible in group detail.
 
 Pages return exact totals, truncation and a continuation when rows remain. A
 page holds up to 64 rows within the direct response byte and depth limits.
-Continuations bind the query kind, workspace, exact session and location,
-session revision, group execution and definition when selected, and offset.
-A different binding returns a stale-token error. Read admission and paging
-use the stored definition and trace, independent of outcome and journal rows.
+Continuations bind the query kind, workspace, exact session ID, location,
+revision, admitted content digest, query-specific selectors and offset.
+The digest combines the verified checksums of the session record and the
+ordered activation, attempt and goal-revision rows. Session and activation
+records identify their independently verified definitions by digest. A
+different binding returns a stale-token error. Read admission and paging
+use the retained rows and definitions, independently of the workspace
+sequence, outcome and journal rows.
 
 The isolated fixture may archive a terminal session at its expected revision.
 Archival marks the stored session without rewriting its retained execution data.
@@ -135,9 +139,12 @@ Explicit fixture purge deletes the exact archived session and cascades to its
 activation, attempt and goal-revision rows. The original session outcomes remain
 available by key. Explicit fixture reset of the terminal current session also
 deletes that session's outcomes. The session deletion paths remove only
-definitions that have no remaining references. A fresh fixture session can
-fill a vacant current slot and must have a new identity, including relative to
-session outcomes retained after archive purge.
+definitions that have no remaining references. Installation requires a vacant
+current slot and a session UUID absent from both session rows and retained
+session outcomes. The private fixture can reinstall a reset session using the
+same UUID and first base attempt ID. Changed retained content makes its prior
+continuations stale even at the same revision. An archived session keeps its
+admitted digest and continuations across unrelated current-session writes.
 
 An explicit whole-worktree fixture reset replaces the candidate's logical
 runtime with a fresh workspace and initial session. Prior session records,
@@ -169,8 +176,8 @@ Text and canonical DAG pages advance by Unicode scalars; list pages advance
 by whole entries. Other typed values return as one complete record. Each
 page reports its logical offset, size, exact total and continuation. Encoded
 data fits within 256 KiB and the complete candidate response within 320 KiB.
-Continuation identity includes the query, owning session and revision, and
-the selected scope and exact definition, projection or value identifiers.
+Continuations use the shared admitted snapshot binding, selected scope and
+exact definition, projection or value identifiers.
 
 An artifact page returns its original location, digest, byte length and
 media type. Local availability uses a no-follow metadata observation beneath
@@ -193,8 +200,9 @@ disposition order, choice and rationale. Each row identifies its earlier group
 execution and definition, and adds a scoped attempt or exact item revision and
 value digest when cited. Existing decision, attempt and item queries resolve
 those links. Pages use the shared history row and response bounds.
-Continuations bind the query kind, workspace, exact session ID, session
-location and revision, target group execution, definition digest and offset.
+Continuations bind the query kind, workspace, exact session ID, location,
+revision, admitted content digest, target group execution, definition digest
+and offset.
 
 The generation-16 record encodings are private Store codecs. The successor
 component schemas describe the separately owned wire contracts. The candidate

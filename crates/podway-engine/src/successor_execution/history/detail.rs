@@ -63,8 +63,9 @@ pub fn list_successor_prior_work(
     page: SuccessorHistoryPage<'_>,
 ) -> Result<CanonicalExecutionJsonV1> {
     page.check_limit()?;
-    let state = read_state(store, target)?;
-    let (index, group) = retained_group(&state, execution)?;
+    let snapshot = read_history(store, target)?;
+    let state = &snapshot.state;
+    let (index, group) = retained_group(state, execution)?;
     let identity = group.identity();
     if identity.definition_digest() != definition_digest {
         return Err(SuccessorExecutionError::HistoryDefinitionMismatch);
@@ -74,7 +75,7 @@ pub fn list_successor_prior_work(
         .ok_or(SuccessorExecutionError::HistoryAttemptNotFound)?;
     let predecessor = identity
         .predecessor()
-        .map(|execution| retained_group(&state, execution))
+        .map(|execution| retained_group(state, execution))
         .transpose()?
         .map(|(_, group)| group_reference(group.identity()));
     let detail = json!({
@@ -89,7 +90,7 @@ pub fn list_successor_prior_work(
     });
     let bounds = HistoryPagination::new(
         target,
-        &state,
+        &snapshot,
         page,
         PRIOR_WORK_SCHEMA,
         json!([execution, definition_digest]),
@@ -98,7 +99,7 @@ pub fn list_successor_prior_work(
     bounds.project(
         prior_work.len(),
         Some(detail),
-        prior_work.iter().map(|work| prior_work_row(&state, work)),
+        prior_work.iter().map(|work| prior_work_row(state, work)),
     )
 }
 
@@ -148,14 +149,10 @@ pub fn read_successor_history_dag(
     definition: SuccessorHistoryDefinition<'_>,
     continuation: Option<&str>,
 ) -> Result<CanonicalExecutionJsonV1> {
-    let (state, sources, _) = store.history_snapshot(
-        target.workspace,
-        target.session,
-        target.location,
-        admit_candidate_definition,
-    )?;
-    let (scope, digest) = definition.resolve(&state)?;
-    let source = sources
+    let snapshot = read_history(store, target)?;
+    let (scope, digest) = definition.resolve(&snapshot.state)?;
+    let source = snapshot
+        .sources
         .get(digest)
         .ok_or(SuccessorExecutionError::HistoryDefinitionMismatch)?;
     let admitted = admit_canonical_definition(source)?;
@@ -166,7 +163,7 @@ pub fn read_successor_history_dag(
     });
     let bounds = HistoryPagination::new(
         target,
-        &state,
+        &snapshot,
         SuccessorHistoryPage {
             limit: 1,
             continuation,
@@ -185,10 +182,11 @@ pub fn list_successor_history_attempts(
     page: SuccessorHistoryPage<'_>,
 ) -> Result<CanonicalExecutionJsonV1> {
     page.check_limit()?;
-    let state = read_state(store, target)?;
-    let (scope, digest) = definition.resolve(&state)?;
+    let snapshot = read_history(store, target)?;
+    let (scope, digest) = definition.resolve(&snapshot.state)?;
     let matching = || {
-        state
+        snapshot
+            .state
             .attempt_history()
             .iter()
             .enumerate()
@@ -196,7 +194,7 @@ pub fn list_successor_history_attempts(
     };
     let bounds = HistoryPagination::new(
         target,
-        &state,
+        &snapshot,
         page,
         ATTEMPTS_SCHEMA,
         json!([scope, digest]),
@@ -231,9 +229,10 @@ pub fn list_successor_history_blockers(
     page: SuccessorHistoryPage<'_>,
 ) -> Result<CanonicalExecutionJsonV1> {
     page.check_limit()?;
-    let state = read_state(store, target)?;
-    let blockers = exact_attempt(&state, source)?.blockers();
-    let mut bounds = HistoryPagination::new(target, &state, page, BLOCKERS_SCHEMA, json!(source))?;
+    let snapshot = read_history(store, target)?;
+    let blockers = exact_attempt(&snapshot.state, source)?.blockers();
+    let mut bounds =
+        HistoryPagination::new(target, &snapshot, page, BLOCKERS_SCHEMA, json!(source))?;
     bounds.header["attempt"] = json!(source);
     bounds.project(
         blockers.len(),
@@ -261,8 +260,8 @@ pub fn read_successor_history_item(
     item: &ItemId,
     continuation: Option<&str>,
 ) -> Result<CanonicalExecutionJsonV1> {
-    let state = read_state(store, target)?;
-    let attempt = exact_attempt(&state, source)?;
+    let snapshot = read_history(store, target)?;
+    let attempt = exact_attempt(&snapshot.state, source)?;
     let slot = attempt
         .slots()
         .iter()
@@ -277,7 +276,7 @@ pub fn read_successor_history_item(
         })?;
     let bounds = HistoryPagination::new(
         target,
-        &state,
+        &snapshot,
         SuccessorHistoryPage {
             limit: 1,
             continuation,

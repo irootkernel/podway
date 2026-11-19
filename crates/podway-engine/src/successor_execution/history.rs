@@ -3,6 +3,7 @@
 use super::*;
 use podway_core::{ItemTypeV1, recorded_value_digest_v2};
 use podway_protocol::MAX_DIRECT_OUTPUT_BYTES_V1;
+use podway_store::successor_store::CandidateHistorySnapshot;
 pub use podway_store::successor_store::CandidateSessionLocation;
 
 mod detail;
@@ -34,7 +35,8 @@ pub fn list_successor_groups(
     page: SuccessorHistoryPage<'_>,
 ) -> Result<CanonicalExecutionJsonV1> {
     page.check_limit()?;
-    let state = read_state(store, target)?;
+    let snapshot = read_history(store, target)?;
+    let state = &snapshot.state;
     let groups = state.group_history();
     let mut counts = BTreeMap::new();
     for entry in state
@@ -51,7 +53,7 @@ pub fn list_successor_groups(
             .unwrap_or(0);
         group_summary(index, group, decision_count)
     });
-    let bounds = HistoryPagination::new(target, &state, page, GROUPS_SCHEMA, Value::Null)?;
+    let bounds = HistoryPagination::new(target, &snapshot, page, GROUPS_SCHEMA, Value::Null)?;
     bounds.project(groups.len(), None, rows.map(Ok))
 }
 
@@ -62,8 +64,9 @@ pub fn show_successor_group(
     page: SuccessorHistoryPage<'_>,
 ) -> Result<CanonicalExecutionJsonV1> {
     page.check_limit()?;
-    let state = read_state(store, target)?;
-    let (index, group) = retained_group(&state, execution)?;
+    let snapshot = read_history(store, target)?;
+    let state = &snapshot.state;
+    let (index, group) = retained_group(state, execution)?;
     let decisions: Vec<_> = state
         .attempt_history()
         .iter()
@@ -87,7 +90,7 @@ pub fn show_successor_group(
     });
     let bounds = HistoryPagination::new(
         target,
-        &state,
+        &snapshot,
         page,
         GROUP_SCHEMA,
         json!([execution, identity.definition_digest()]),
@@ -97,7 +100,7 @@ pub fn show_successor_group(
         Some(detail),
         decisions
             .into_iter()
-            .map(|attempt| decision_row(attempt, &state)),
+            .map(|attempt| decision_row(attempt, state)),
     )
 }
 
@@ -120,9 +123,10 @@ pub fn list_successor_goal_revisions(
     page: SuccessorHistoryPage<'_>,
 ) -> Result<CanonicalExecutionJsonV1> {
     page.check_limit()?;
-    let state = read_state(store, target)?;
-    let revisions = state.goal_revision_history();
-    let bounds = HistoryPagination::new(target, &state, page, GOAL_REVISIONS_SCHEMA, Value::Null)?;
+    let snapshot = read_history(store, target)?;
+    let revisions = snapshot.state.goal_revision_history();
+    let bounds =
+        HistoryPagination::new(target, &snapshot, page, GOAL_REVISIONS_SCHEMA, Value::Null)?;
     bounds.project(
         revisions.len(),
         None,
@@ -150,17 +154,16 @@ fn closure_json(closure: &GroupSelectionClosureV1) -> Value {
     })
 }
 
-pub(super) fn read_state(
+pub(super) fn read_history(
     store: &mut CandidateExecutionStore,
     target: SuccessorHistorySession<'_>,
-) -> Result<ExecutionSessionV3> {
-    let (state, _, _) = store.history_snapshot(
+) -> Result<CandidateHistorySnapshot> {
+    Ok(store.history_snapshot_with_digest(
         target.workspace,
         target.session,
         target.location,
         admit_candidate_definition,
-    )?;
-    Ok(state)
+    )?)
 }
 
 fn group_summary(index: usize, group: &GroupExecutionStateV1, decision_count: usize) -> Value {
@@ -302,18 +305,19 @@ struct HistoryPagination {
 impl HistoryPagination {
     fn new(
         target: SuccessorHistorySession<'_>,
-        state: &ExecutionSessionV3,
+        snapshot: &CandidateHistorySnapshot,
         page: SuccessorHistoryPage<'_>,
         schema: &str,
         selector: Value,
     ) -> Result<Self> {
-        let revision = state.fence().revision;
+        let revision = snapshot.state.fence().revision;
         let location = target.location.as_str();
         let identity = canonical_digest(
             &canonicalize_json_v1(&json!([
                 schema,
                 target.workspace,
                 target.session,
+                snapshot.content_digest,
                 location,
                 revision,
                 selector,
@@ -451,9 +455,14 @@ mod tests {
             session: &session,
             location: CandidateSessionLocation::Current,
         };
+        let snapshot = CandidateHistorySnapshot {
+            state,
+            sources: CandidateSources::new(),
+            content_digest: admitted.digest().clone(),
+        };
         let first = HistoryPagination::new(
             target,
-            &state,
+            &snapshot,
             SuccessorHistoryPage {
                 limit: 1,
                 continuation: None,
@@ -474,7 +483,7 @@ mod tests {
             continuation: Some(first["next_page_token"].as_str().unwrap()),
         };
         assert_eq!(
-            HistoryPagination::new(target, &state, page, GROUPS_SCHEMA, Value::Null)
+            HistoryPagination::new(target, &snapshot, page, GROUPS_SCHEMA, Value::Null)
                 .unwrap()
                 .offset,
             1
@@ -490,7 +499,7 @@ mod tests {
             },
         ] {
             assert!(matches!(
-                HistoryPagination::new(changed, &state, page, GROUPS_SCHEMA, Value::Null),
+                HistoryPagination::new(changed, &snapshot, page, GROUPS_SCHEMA, Value::Null),
                 Err(SuccessorExecutionError::StaleHistoryPageToken),
             ));
         }

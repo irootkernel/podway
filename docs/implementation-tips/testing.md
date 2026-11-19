@@ -1749,9 +1749,16 @@ Run the registered private Engine child fixtures:
 gaori --json run --tag rust --tag unit -- cargo test --locked -p podway-engine --features test-support --test int_suite int_group005_processes::trace004:: -- --nocapture
 ```
 
-The nested `int_group005_processes::trace004::` filter selects both
+The nested `int_group005_processes::trace004::` filter selects all four
 TRACE-004 cases. The broader `int_group005_processes::` filter includes them
 with the GROUP-005 process cases in the same registered `int_suite` target.
+
+The session-reinstallation cases use an explicit terminal current reset and
+replacement history at the same session UUID and revision. They cover both
+fresh and reused first attempt IDs through the private driver. The prior
+continuation returns a stale-token error and the new token reads the next
+group. Logical rows and durable SQLite bytes compare unchanged. An archived
+continuation remains usable after a success in a separate current session.
 
 The retention case commits real Engine activations and replans through the
 64-group cap. Ordinary later success invokes journal pruning, and original
