@@ -328,6 +328,17 @@ plus `goal assess-criteria --stdin` caller journeys and recovery
 (`e2e_guide009_generation2_lifecycle::agent005_with_observation_lifecycle_replay_lookup_and_conflicts`
 and `agent006_*`).
 
+The [successor CLI integration qualification](../../implementation-tips/testing.md#successor-cli-integration-qualification)
+exercises real activation and report contention, pre-commit interruption,
+post-commit response loss, exact replay, and retained work across replacements.
+It also verifies bounded read-only pages in current and archived sessions and
+the archive purge boundary.
+
+The separate [writer cutover qualification](../../implementation-tips/testing.md#execution-group-writer-cutover-qualification)
+records ADOPT-004 measurements of the released original Store and both directions
+of incompatible-writer refusal. Run the applicable [release upgrade QA scenario](../../implementation-tips/release-upgrade-qa.md#direct-to-direct-boundary-for-store-16)
+for an intended stable release.
+
 The release-hook case
 `e2e_v2_native_qualification::release_binary_ignores_every_debug_maintenance_hook`
 requires an actual release-profile binary supplied through

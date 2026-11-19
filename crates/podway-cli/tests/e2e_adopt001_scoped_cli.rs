@@ -1,6 +1,15 @@
 //! Exercise successor authoring and scoped mutations through the production CLI.
 
-use super::cli_fixture::Fixture;
+use std::{
+    fs::{self, File, TryLockError},
+    io::Read,
+    os::unix::process::ExitStatusExt,
+    process::{Command, Output, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
+use super::cli_fixture::{Fixture, GuardedChild, bounded_output, podway_binary};
 use podway_protocol::{ErrorEnvelopeV2, OutputEnvelopeV4};
 use serde_json::{Value, json};
 
@@ -65,10 +74,506 @@ fn fixture_activation(state: &Value, definition: &Value, plan: &Value, key: &str
 }
 
 fn run_activation(fixture: &Fixture, input: &Value) -> std::process::Output {
-    fixture.output_with_stdin(
-        &["group", "activate", "--stdin"],
-        input.to_string().as_bytes(),
-    )
+    fixture.output_with_stdin(ACTIVATE_ARGS, input.to_string().as_bytes())
+}
+
+const ACTIVATE_ARGS: &[&str] = &["group", "activate", "--stdin", "--timeout", "10s"];
+const REPLAN_ARGS: &[&str] = &["group", "replan", "--stdin", "--timeout", "10s"];
+const REPORT_ARGS: &[&str] = &["record", "--stdin", "--timeout", "10s"];
+
+fn activation_ready_fixture() -> (Fixture, Value, Value) {
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    fixture.run(&[
+        "start",
+        "--preset",
+        "small-change-v3",
+        "--task",
+        "Native process contention and recovery",
+        "--idempotency-key",
+        "start",
+    ]);
+    scoped(&fixture, &observe(&fixture), &["begin"], "begin");
+    scoped(
+        &fixture,
+        &observe(&fixture),
+        &[
+            "set",
+            "scope-summary",
+            "Record qualifying evidence in the owned fixture.",
+            "--if-item-revision",
+            "0",
+        ],
+        "scope",
+    );
+    let before = observe(&fixture);
+    let mut request = stdin_template(&before, "group.activate");
+    request["context"]["idempotency_key"] = json!("activate-first");
+    request["working_copy_basis"] =
+        json!({"descriptor":"Owned fixture basis","digest":FIXTURE_BASIS});
+    (fixture, before, request)
+}
+
+fn successful_process(output: &Output) -> Value {
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    serde_json::from_slice::<OutputEnvelopeV4>(&output.stdout)
+        .unwrap()
+        .into_value()
+}
+
+fn lookup_process_outcome(fixture: &Fixture, key: &str) -> Value {
+    fixture.run(&["outcome", "lookup", "--idempotency-key", key])["result"].clone()
+}
+
+fn workspace_sequence(output: &Value) -> u64 {
+    output["workspace"]["latest_workspace_sequence"]
+        .as_u64()
+        .unwrap()
+}
+
+fn launch_scoped_process(
+    fixture: &Fixture,
+    argv: &[&str],
+    input: Option<&Value>,
+    stdout: Stdio,
+) -> GuardedChild {
+    let stdin = input.map_or_else(Stdio::null, |input| {
+        // A preloaded, unlinked fixture file avoids blocking the supervisor
+        // while feeding stdin to a child about to contend or be killed.
+        let path = fixture
+            .0
+            .join(format!("process-input-{}", uuid::Uuid::new_v4()));
+        fs::write(&path, input.to_string()).unwrap();
+        let file = File::open(&path).unwrap();
+        fs::remove_file(path).unwrap();
+        Stdio::from(file)
+    });
+    let child = Command::new(podway_binary())
+        .arg("--worktree")
+        .arg(&fixture.0)
+        .arg("--json")
+        .args(argv)
+        .current_dir(&fixture.0)
+        .env_remove("HOME")
+        .env_remove("XDG_CONFIG_HOME")
+        .stdin(stdin)
+        .stdout(stdout)
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    GuardedChild::new(child)
+}
+
+fn hold_fixture_sqlite_writer(fixture: &Fixture) -> rusqlite::Connection {
+    let writer =
+        rusqlite::Connection::open(fixture.0.join(".podway/runtime/state.sqlite3")).unwrap();
+    // Match the CLI's no-checkpoint-on-close policy. This connection exists
+    // only to hold SQLite's write lock and must not retire the WAL or SHM.
+    // While BEGIN is active, opening and closing Store files in this process
+    // can release SQLite's process-owned POSIX locks, even on read-only opens.
+    writer
+        .set_db_config(
+            rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+            true,
+        )
+        .unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+    writer
+}
+
+fn assert_live(child: &mut GuardedChild) {
+    assert!(
+        child.0.as_mut().unwrap().try_wait().unwrap().is_none(),
+        "the real CLI child exited before its boundary was observed"
+    );
+}
+
+fn wait_for_scoped_store_lease(fixture: &Fixture, children: &mut [&mut GuardedChild]) {
+    // The raw SQLite writer holds no native maintenance lease. An exclusive
+    // probe blocked by a child witnesses real Store admission while SQLite
+    // still prevents every contender from beginning its writer transaction.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let lease = File::open(fixture.0.join(".podway/runtime/maintenance.lock")).unwrap();
+    loop {
+        for child in children.iter_mut() {
+            assert_live(child);
+        }
+        match lease.try_lock() {
+            Ok(()) => lease.unlock().unwrap(),
+            Err(TryLockError::WouldBlock) => return,
+            Err(error) => panic!("unable to inspect the owned Store lease: {error}"),
+        }
+        assert!(Instant::now() < deadline, "no contender reached the Store");
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn scoped_item_args<'a>(
+    workspace: &'a str,
+    cursor: &'a str,
+    item: &'a str,
+    value: &'a str,
+    key: &'a str,
+) -> [&'a str; 13] {
+    [
+        "set",
+        item,
+        value,
+        "--if-workspace-uuid",
+        workspace,
+        "--if-cursor",
+        cursor,
+        "--if-item-revision",
+        "0",
+        "--idempotency-key",
+        key,
+        "--timeout",
+        "10s",
+    ]
+}
+
+fn assert_one_activation(fixture: &Fixture, before: &Value, committed: &Value) -> Value {
+    let after = observe(fixture);
+    let session = before["result"]["cursor"]["session"].as_str().unwrap();
+    let list = fixture.run(&["group", "list", "--session", session]);
+    assert_eq!(after["result"]["retained_group_count"], 1);
+    assert_eq!(list["result"]["total"], 1);
+    assert_eq!(
+        after["result"]["cursor"]["selected_group"],
+        committed["result"]["execution_id"]
+    );
+    assert_eq!(
+        after["result"]["cursor"]["attempt"]["scope"]["group_execution_id"],
+        committed["result"]["execution_id"]
+    );
+    assert_eq!(after["result"]["cursor"]["attempt"]["node"], "implement");
+    assert_eq!(workspace_sequence(&after), workspace_sequence(before) + 1);
+    after
+}
+
+#[test]
+fn native_process_activation_contenders_converge_on_one_execution() {
+    for same_key in [true, false] {
+        let (fixture, before, request) = activation_ready_fixture();
+        let mut second = request.clone();
+        if !same_key {
+            second["context"]["idempotency_key"] = json!("activate-second");
+        }
+        let writer = hold_fixture_sqlite_writer(&fixture);
+        let mut first =
+            launch_scoped_process(&fixture, ACTIVATE_ARGS, Some(&request), Stdio::piped());
+        let mut other =
+            launch_scoped_process(&fixture, ACTIVATE_ARGS, Some(&second), Stdio::piped());
+        wait_for_scoped_store_lease(&fixture, &mut [&mut first, &mut other]);
+        writer.execute_batch("ROLLBACK").unwrap();
+        let first = bounded_output(first, ACTIVATE_ARGS);
+        let other = bounded_output(other, ACTIVATE_ARGS);
+        drop(writer);
+        let (committed, successful_key) = if same_key {
+            let original = successful_process(&first);
+            assert_eq!(successful_process(&other), original);
+            assert_eq!(first.stdout, other.stdout);
+            (original, "activate-first")
+        } else {
+            assert_ne!(first.status.success(), other.status.success());
+            let (accepted, refused, accepted_key, rejected_key) = if first.status.success() {
+                (first, other, "activate-first", "activate-second")
+            } else {
+                (other, first, "activate-second", "activate-first")
+            };
+            let after = observe(&fixture);
+            let detail = serde_json::from_slice::<ErrorEnvelopeV2>(&refused.stdout).unwrap();
+            assert_eq!(
+                detail.as_value()["details"]["expected_attempt_id"],
+                before["result"]["cursor"]["attempt"]["attempt"]
+            );
+            assert_eq!(
+                detail.as_value()["details"]["actual_attempt_id"],
+                after["result"]["cursor"]["attempt"]["attempt"]
+            );
+            let before_rejection_replay = durable_snapshot(&fixture);
+            assert_refusal(&fixture, refused, "ATTEMPT_NOT_CURRENT", Some(rejected_key));
+            let rejected = if rejected_key == "activate-first" {
+                &request
+            } else {
+                &second
+            };
+            assert_refusal(
+                &fixture,
+                run_activation(&fixture, rejected),
+                "ATTEMPT_NOT_CURRENT",
+                Some(rejected_key),
+            );
+            assert_eq!(durable_snapshot(&fixture), before_rejection_replay);
+            (successful_process(&accepted), accepted_key)
+        };
+        assert_one_activation(&fixture, &before, &committed);
+        assert_eq!(
+            lookup_process_outcome(&fixture, successful_key)["outcome"]["response"],
+            committed
+        );
+    }
+}
+
+#[test]
+fn native_process_scoped_item_contenders_preserve_slot_fences() {
+    let (fixture, _, request) = activation_ready_fixture();
+    successful_process(&run_activation(&fixture, &request));
+    scoped(
+        &fixture,
+        &observe(&fixture),
+        &[
+            "set",
+            "implementation-summary",
+            "Prepared the owned concurrency fixture.",
+            "--if-item-revision",
+            "0",
+        ],
+        "implement",
+    );
+    scoped(
+        &fixture,
+        &observe(&fixture),
+        &["complete"],
+        "complete-implementation",
+    );
+    let before = observe(&fixture);
+    assert_eq!(before["result"]["cursor"]["attempt"]["node"], "verify");
+    assert_eq!(
+        before["result"]["cursor"]["attempt"]["scope"]["kind"],
+        "group"
+    );
+    let workspace = before["workspace"]["uuid"].as_str().unwrap();
+    let cursor = before["result"]["cursor"].to_string();
+    let commands = [
+        scoped_item_args(
+            workspace,
+            &cursor,
+            "verification-command",
+            "fixture command A",
+            "command-a",
+        ),
+        scoped_item_args(
+            workspace,
+            &cursor,
+            "verification-command",
+            "fixture command B",
+            "command-b",
+        ),
+        scoped_item_args(
+            workspace,
+            &cursor,
+            "verification-exit-status",
+            "0",
+            "exit-status",
+        ),
+    ];
+    let writer = hold_fixture_sqlite_writer(&fixture);
+    let mut contenders =
+        commands.map(|argv| launch_scoped_process(&fixture, &argv, None, Stdio::piped()));
+    wait_for_scoped_store_lease(&fixture, &mut contenders.iter_mut().collect::<Vec<_>>());
+    writer.execute_batch("ROLLBACK").unwrap();
+    let [first, second, exit_status] = contenders;
+    let first = bounded_output(first, &commands[0]);
+    let second = bounded_output(second, &commands[1]);
+    let exit_status = bounded_output(exit_status, &commands[2]);
+    drop(writer);
+    assert_ne!(
+        first.status.success(),
+        second.status.success(),
+        "same-slot contender A ({}): {} / {}; contender B ({}): {} / {}; different slot ({}): {} / {}",
+        first.status,
+        String::from_utf8_lossy(&first.stdout),
+        String::from_utf8_lossy(&first.stderr),
+        second.status,
+        String::from_utf8_lossy(&second.stdout),
+        String::from_utf8_lossy(&second.stderr),
+        exit_status.status,
+        String::from_utf8_lossy(&exit_status.stdout),
+        String::from_utf8_lossy(&exit_status.stderr),
+    );
+    let (accepted, refused, accepted_key, rejected_key, reject_argv) = if first.status.success() {
+        (first, second, "command-a", "command-b", commands[1])
+    } else {
+        (second, first, "command-b", "command-a", commands[0])
+    };
+    let accepted = successful_process(&accepted);
+    let exit_status = successful_process(&exit_status);
+    let after = observe(&fixture);
+    let durable_after = durable_snapshot(&fixture);
+    assert_refusal(
+        &fixture,
+        refused,
+        "ITEM_REVISION_CONFLICT",
+        Some(rejected_key),
+    );
+    assert_refusal(
+        &fixture,
+        fixture.output(&reject_argv),
+        "ITEM_REVISION_CONFLICT",
+        Some(rejected_key),
+    );
+    assert_eq!(
+        lookup_process_outcome(&fixture, accepted_key)["outcome"]["response"],
+        accepted
+    );
+    assert_eq!(
+        lookup_process_outcome(&fixture, "exit-status")["outcome"]["response"],
+        exit_status
+    );
+    assert_eq!(workspace_sequence(&after), workspace_sequence(&before) + 2);
+    assert_eq!(
+        after["result"]["cursor"]["attempt"],
+        before["result"]["cursor"]["attempt"]
+    );
+    assert_eq!(
+        after["result"]["cursor"]["selected_group"],
+        before["result"]["cursor"]["selected_group"]
+    );
+    assert_eq!(
+        after["result"]["items"],
+        json!([
+            {"item":"verification-command","recorded":true,"revision":1},
+            {"item":"verification-exit-status","recorded":true,"revision":1},
+        ])
+    );
+    assert_eq!(observe(&fixture)["result"], after["result"]);
+    assert_eq!(durable_snapshot(&fixture), durable_after);
+}
+
+#[test]
+fn native_process_activation_sigkill_before_commit_leaves_the_key_retryable() {
+    let (fixture, before, request) = activation_ready_fixture();
+    let durable = durable_snapshot(&fixture);
+    let writer = hold_fixture_sqlite_writer(&fixture);
+    let mut child = launch_scoped_process(&fixture, ACTIVATE_ARGS, Some(&request), Stdio::piped());
+    wait_for_scoped_store_lease(&fixture, &mut [&mut child]);
+
+    // A separate CLI process must see the actual SQLite writer lock. The
+    // maintenance lease alone only witnesses that the victim reached Store admission.
+    let mut probe = request.clone();
+    probe["context"]["idempotency_key"] = json!("held-writer-probe");
+    let blocked = fixture.output_with_stdin(
+        &["group", "activate", "--stdin", "--timeout", "0ms"],
+        probe.to_string().as_bytes(),
+    );
+    assert_eq!(blocked.status.code(), Some(4), "{blocked:?}");
+    assert!(blocked.stderr.is_empty(), "{blocked:?}");
+    let error = serde_json::from_slice::<ErrorEnvelopeV2>(&blocked.stdout).unwrap();
+    let error = error.as_value();
+    assert_eq!(error["code"], "WORKSPACE_BUSY", "{error}");
+    assert_eq!(error["command"], "group.activate");
+    assert_eq!(error["details"]["boundary"], "sqlite_write_lock");
+    assert_eq!(error["details"]["timeout_ms"], 0);
+    assert_live(&mut child);
+    child.0.as_mut().unwrap().kill().unwrap();
+    let killed = bounded_output(child, ACTIVATE_ARGS);
+    assert_eq!(killed.status.signal(), Some(9));
+    assert!(killed.stdout.is_empty() && killed.stderr.is_empty());
+    writer.execute_batch("ROLLBACK").unwrap();
+    drop(writer);
+    assert_eq!(durable_snapshot(&fixture), durable);
+    assert_eq!(observe(&fixture)["result"], before["result"]);
+    for key in ["activate-first", "held-writer-probe"] {
+        assert_eq!(lookup_process_outcome(&fixture, key)["found"], false);
+    }
+    let committed = successful_process(&run_activation(&fixture, &request));
+    assert_one_activation(&fixture, &before, &committed);
+    assert_eq!(
+        lookup_process_outcome(&fixture, "activate-first")["outcome"]["response"],
+        committed
+    );
+}
+
+#[test]
+fn native_process_activation_sigkill_after_commit_recovers_without_stdout() {
+    use nix::{
+        errno::Errno,
+        fcntl::{FcntlArg, OFlag, fcntl},
+        unistd::{pipe, write},
+    };
+
+    let (fixture, before, request) = activation_ready_fixture();
+    let (read_end, write_end) = pipe().unwrap();
+    let flags = OFlag::from_bits_truncate(fcntl(&write_end, FcntlArg::F_GETFL).unwrap());
+    fcntl(&write_end, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK)).unwrap();
+    let mut prefilled = 0;
+    loop {
+        match write(&write_end, b"x") {
+            Ok(1) => prefilled += 1,
+            Err(Errno::EAGAIN) => break,
+            other => panic!("unexpected pipe prefill result: {other:?}"),
+        }
+        assert!(
+            prefilled < 1_048_576,
+            "the pipe capacity must remain bounded"
+        );
+    }
+    assert!(prefilled > 0);
+    fcntl(&write_end, FcntlArg::F_SETFL(flags)).unwrap();
+    let mut child = launch_scoped_process(
+        &fixture,
+        ACTIVATE_ARGS,
+        Some(&request),
+        Stdio::from(write_end),
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let original = loop {
+        assert_live(&mut child);
+        let result = lookup_process_outcome(&fixture, "activate-first");
+        if result["found"] == true {
+            break result["outcome"]["response"].clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no commit before stdout delivery"
+        );
+        thread::sleep(Duration::from_millis(5));
+    };
+    assert_live(&mut child);
+    child.0.as_mut().unwrap().kill().unwrap();
+    let killed = child.0.take().unwrap().wait_with_output().unwrap();
+    assert_eq!(killed.status.signal(), Some(9));
+    assert!(killed.stderr.is_empty());
+    let mut bytes = Vec::new();
+    File::from(read_end)
+        .take(1_048_577)
+        .read_to_end(&mut bytes)
+        .unwrap();
+    assert_eq!(
+        bytes,
+        vec![b'x'; prefilled],
+        "no activation output byte was delivered"
+    );
+    let activated = assert_one_activation(&fixture, &before, &original);
+    scoped(
+        &fixture,
+        &activated,
+        &[
+            "set",
+            "implementation-summary",
+            "A subsequent scoped mutation.",
+            "--if-item-revision",
+            "0",
+        ],
+        "subsequent-report",
+    );
+    let current = observe(&fixture);
+    assert_eq!(
+        workspace_sequence(&current),
+        workspace_sequence(&before) + 2
+    );
+    let durable = durable_snapshot(&fixture);
+    let replay = run_activation(&fixture, &request);
+    assert_eq!(successful_process(&replay), original);
+    assert_eq!(run_activation(&fixture, &request).stdout, replay.stdout);
+    assert_eq!(
+        lookup_process_outcome(&fixture, "activate-first")["outcome"]["response"],
+        original
+    );
+    assert_eq!(observe(&fixture)["result"], current["result"]);
+    assert_eq!(durable_snapshot(&fixture), durable);
 }
 
 #[test]
@@ -666,37 +1171,16 @@ fn successor_goal_actor_and_unblock_all_round_trip_through_cli() {
     );
     fixture.assert_podway_snapshot(&before);
 }
-#[test]
-fn shipped_small_change_replan_requires_the_current_guarded_score() {
-    const BASIS: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000001";
-    for (score, verdict) in [(79, Some("failure")), (80, Some("failure")), (80, None)] {
-        let fixture = Fixture::new();
-        fixture.run(&["init", "--idempotency-key", "init"]);
-        fixture.run(&[
-            "start",
-            "--preset",
-            "small-change-v3",
-            "--task",
-            "Verify default replan guards",
-            "--idempotency-key",
-            "start",
-        ]);
-        scoped(&fixture, &observe(&fixture), &["begin"], "begin");
-        fixture.run(&[
-            "set",
-            "scope-summary",
-            "Test the shipped guard on the owned fixture.",
-            "--idempotency-key",
-            "scope",
-        ]);
-        let anchor = observe(&fixture);
-        let mut activate = stdin_template(&anchor, "group.activate");
-        activate["context"]["idempotency_key"] = json!("activate");
-        activate["working_copy_basis"] =
-            json!({"descriptor": "Owned test fixture", "digest": BASIS});
+fn prepare_small_change_review(
+    score: i64,
+    verdict: Option<&str>,
+    with_report: bool,
+) -> (Fixture, Value) {
+    let (fixture, _, mut activate) = activation_ready_fixture();
+    if verdict.is_none() || with_report {
+        let preset = fixture.run(&["preset", "show", "small-change-v3"]);
+        let mut document = preset["result"]["default_group"].clone();
         if verdict.is_none() {
-            let preset = fixture.run(&["preset", "show", "small-change-v3"]);
-            let mut document = preset["result"]["default_group"].clone();
             let assessor = &mut document["node_definitions"]["assess-review"]["items"];
             let verdict_item = assessor
                 .as_array_mut()
@@ -705,75 +1189,84 @@ fn shipped_small_change_replan_requires_the_current_guarded_score() {
                 .find(|item| item["id"] == "assessment-verdict")
                 .unwrap();
             verdict_item["required"] = json!(false);
-            let source = document.to_string();
-            std::fs::write(fixture.0.join("guard-fixture.json"), &source).unwrap();
-            let validated = fixture.run(&["procedure", "validate", "guard-fixture.json"]);
-            activate["source"] = json!({"kind": "document", "format": "json", "source": source});
-            activate["expected_definition"] = validated["result"]["digest"].clone();
         }
-        let activated = fixture.output_with_stdin(
-            &["group", "activate", "--stdin"],
-            activate.to_string().as_bytes(),
-        );
-        assert!(activated.status.success(), "{activated:?}");
-
-        fixture.run(&[
-            "set",
-            "implementation-summary",
-            "A deterministic test input.",
-            "--idempotency-key",
-            "implementation",
-        ]);
-        fixture.run(&["complete", "--idempotency-key", "complete-implementation"]);
-        fixture.run(&[
-            "set",
-            "verification-command",
-            "fixture assertion",
-            "--idempotency-key",
-            "command",
-        ]);
-        fixture.run(&[
-            "set",
-            "verification-exit-status",
-            "1",
-            "--idempotency-key",
-            "status",
-        ]);
-        fixture.run(&["complete", "--idempotency-key", "complete-verification"]);
-        assert_eq!(observe(&fixture)["result"]["next_decision_entry"], 1);
-        if let Some(verdict) = verdict {
-            fixture.run(&[
-                "set",
-                "assessment-verdict",
-                verdict,
-                "--idempotency-key",
-                "verdict",
+        if with_report {
+            document["node_definitions"]["review-change"]["items"] = json!([
+                {"id":"review-note","type":"text","prompt":"Retain the optional current report.","required":false}
             ]);
         }
+        let source = document.to_string();
+        std::fs::write(fixture.0.join("guard-fixture.json"), &source).unwrap();
+        let validated = fixture.run(&["procedure", "validate", "guard-fixture.json"]);
+        activate["source"] = json!({"kind": "document", "format": "json", "source": source});
+        activate["expected_definition"] = validated["result"]["digest"].clone();
+    }
+    successful_process(&run_activation(&fixture, &activate));
+    fixture.run(&[
+        "set",
+        "implementation-summary",
+        "A deterministic test input.",
+        "--idempotency-key",
+        "implementation",
+    ]);
+    fixture.run(&["complete", "--idempotency-key", "complete-implementation"]);
+    fixture.run(&[
+        "set",
+        "verification-command",
+        "fixture assertion",
+        "--idempotency-key",
+        "command",
+    ]);
+    fixture.run(&[
+        "set",
+        "verification-exit-status",
+        "1",
+        "--idempotency-key",
+        "status",
+    ]);
+    fixture.run(&["complete", "--idempotency-key", "complete-verification"]);
+    assert_eq!(observe(&fixture)["result"]["next_decision_entry"], 1);
+    if let Some(verdict) = verdict {
         fixture.run(&[
             "set",
-            "assessment-stage",
-            "scored",
+            "assessment-verdict",
+            verdict,
             "--idempotency-key",
-            "stage",
+            "verdict",
         ]);
-        fixture.run(&[
-            "set",
-            "assessment-score",
-            &score.to_string(),
-            "--idempotency-key",
-            "score",
-        ]);
-        fixture.run(&[
-            "set",
-            "scored-basis",
-            "Deterministic rejection-control basis.",
-            "--idempotency-key",
-            "basis",
-        ]);
-        fixture.run(&["complete", "--idempotency-key", "settle-assessment"]);
-        let decision = observe(&fixture);
-        assert_eq!(decision["result"]["decision_entry"], 1);
+    }
+    fixture.run(&[
+        "set",
+        "assessment-stage",
+        "scored",
+        "--idempotency-key",
+        "stage",
+    ]);
+    fixture.run(&[
+        "set",
+        "assessment-score",
+        &score.to_string(),
+        "--idempotency-key",
+        "score",
+    ]);
+    fixture.run(&[
+        "set",
+        "scored-basis",
+        "Deterministic rejection-control basis.",
+        "--idempotency-key",
+        "basis",
+    ]);
+    fixture.run(&["complete", "--idempotency-key", "settle-assessment"]);
+    let decision = observe(&fixture);
+    assert_eq!(decision["result"]["decision_entry"], 1);
+    (fixture, decision)
+}
+
+#[test]
+fn shipped_small_change_replan_requires_the_current_guarded_score() {
+    const BASIS: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000001";
+    for (score, verdict) in [(79, Some("failure")), (80, Some("failure")), (80, None)] {
+        let (fixture, decision) = prepare_small_change_review(score, verdict, false);
 
         let eligible = verdict.is_some() && score == 80;
         let before = durable_snapshot(&fixture);
@@ -875,6 +1368,104 @@ fn shipped_small_change_replan_requires_the_current_guarded_score() {
             );
         }
     }
+}
+
+fn process_replan_request(decision: &Value, key: &str) -> Value {
+    let mut request = stdin_template(decision, "group.replan");
+    request["context"]["idempotency_key"] = json!(key);
+    request["working_copy_basis"] =
+        json!({"descriptor":"Owned fixture basis","digest":FIXTURE_BASIS});
+    request["reason"] = json!("The current admitted failed assessment supports replacement.");
+    request["feedback"] = json!("Retain the original scoped work and assessment.");
+    request
+}
+
+#[test]
+fn native_process_replan_and_atomic_report_contend_on_the_same_cursor() {
+    let (fixture, decision) = prepare_small_change_review(80, Some("failure"), true);
+    let replan = process_replan_request(&decision, "contending-replan");
+    let mut report = stdin_template(&decision, "item.record_many");
+    report["context"]["idempotency_key"] = json!("contending-report");
+    report["operations"] = json!([{
+        "item_id":"review-note", "expected_item_revision":0,
+        "record":{"type":"text","value":"The current note was recorded."}
+    }]);
+    let writer = hold_fixture_sqlite_writer(&fixture);
+    let mut change = launch_scoped_process(&fixture, REPLAN_ARGS, Some(&replan), Stdio::piped());
+    let mut record = launch_scoped_process(&fixture, REPORT_ARGS, Some(&report), Stdio::piped());
+    wait_for_scoped_store_lease(&fixture, &mut [&mut change, &mut record]);
+    writer.execute_batch("ROLLBACK").unwrap();
+    let change = bounded_output(change, REPLAN_ARGS);
+    let record = bounded_output(record, REPORT_ARGS);
+    drop(writer);
+    assert_ne!(change.status.success(), record.status.success());
+    let landed = observe(&fixture);
+    assert_eq!(
+        workspace_sequence(&landed),
+        workspace_sequence(&decision) + 1
+    );
+    let new_anchor = if change.status.success() {
+        let result = successful_process(&change);
+        assert_eq!(
+            result["result"]["closed_attempt"],
+            decision["result"]["cursor"]["attempt"]
+        );
+        assert_refusal(
+            &fixture,
+            record,
+            "ATTEMPT_NOT_CURRENT",
+            Some("contending-report"),
+        );
+        assert_eq!(
+            lookup_process_outcome(&fixture, "contending-replan")["outcome"]["response"],
+            result
+        );
+        landed
+    } else {
+        let result = successful_process(&record);
+        assert_refusal(
+            &fixture,
+            change,
+            "SESSION_REVISION_CONFLICT",
+            Some("contending-replan"),
+        );
+        assert_eq!(
+            lookup_process_outcome(&fixture, "contending-report")["outcome"]["response"],
+            result
+        );
+        assert_eq!(
+            landed["result"]["cursor"]["attempt"],
+            decision["result"]["cursor"]["attempt"]
+        );
+        assert_eq!(
+            landed["result"]["items"],
+            json!([{"item":"review-note","recorded":true,"revision":1}])
+        );
+        let fresh_replan = process_replan_request(&landed, "fresh-replan");
+        let accepted = fixture.output_with_stdin(REPLAN_ARGS, fresh_replan.to_string().as_bytes());
+        let accepted = successful_process(&accepted);
+        assert_eq!(
+            accepted["result"]["closed_attempt"],
+            decision["result"]["cursor"]["attempt"]
+        );
+        observe(&fixture)
+    };
+    assert_eq!(new_anchor["result"]["cursor"]["attempt"]["node"], "inspect");
+    assert_eq!(
+        new_anchor["result"]["cursor"]["attempt"]["scope"]["kind"],
+        "base"
+    );
+    assert_eq!(new_anchor["result"]["retained_group_count"], 1);
+    let stable = durable_snapshot(&fixture);
+    report["context"]["idempotency_key"] = json!("late-report");
+    assert_refusal(
+        &fixture,
+        fixture.output_with_stdin(REPORT_ARGS, report.to_string().as_bytes()),
+        "ATTEMPT_NOT_CURRENT",
+        Some("late-report"),
+    );
+    assert_eq!(observe(&fixture)["result"], new_anchor["result"]);
+    assert_eq!(durable_snapshot(&fixture), stable);
 }
 
 #[test]

@@ -2,8 +2,10 @@
 
 use std::{collections::BTreeSet, fs, process::Command};
 
-use podway_protocol::ErrorEnvelopeV2;
+use podway_core::{MAX_EVIDENCE_PAGE_BYTES_V2, MAX_TEXT_SCALARS_V2};
+use podway_protocol::{ErrorEnvelopeV2, OutputEnvelopeV4};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use super::cli_fixture::Fixture;
 
@@ -101,7 +103,21 @@ fn begin(fixture: &Fixture, goal: &str, criterion: &str) {
 }
 
 fn activate(fixture: &Fixture) -> Value {
-    let source = group().to_string();
+    activate_document(fixture, group())
+}
+
+fn activate_document(fixture: &Fixture, document: Value) -> Value {
+    let mut input = activation_input(fixture, document);
+    input["context"]["idempotency_key"] = json!("activate");
+    input["working_copy_basis"] = json!({
+        "descriptor":"Owned native conformance fixture",
+        "digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    });
+    submit_activation(fixture, &input)
+}
+
+fn activation_input(fixture: &Fixture, document: Value) -> Value {
+    let source = document.to_string();
     fs::write(fixture.0.join(GROUP_FILE), &source).unwrap();
     let digest = fixture.run(&["procedure", "preview", GROUP_FILE])["result"]["digest"].clone();
     let ready = observe(fixture);
@@ -113,21 +129,179 @@ fn activate(fixture: &Fixture) -> Value {
         .unwrap();
     let mut input: Value =
         serde_json::from_str(template["stdin_template"].as_str().unwrap()).unwrap();
-    input["context"]["idempotency_key"] = json!("activate");
     input["source"] = json!({"kind":"document","format":"json","source":source});
     input["expected_definition"] = digest;
-    input["working_copy_basis"] = json!({
-        "descriptor":"Owned native conformance fixture",
-        "digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111"
-    });
+    input
+}
+
+fn submit_activation(fixture: &Fixture, input: &Value) -> Value {
     let output = fixture.output_with_stdin(
         &["group", "activate", "--stdin"],
         input.to_string().as_bytes(),
     );
     assert!(output.status.success(), "{output:?}");
-    serde_json::from_slice::<podway_protocol::OutputEnvelopeV4>(&output.stdout)
+    serde_json::from_slice::<OutputEnvelopeV4>(&output.stdout)
         .unwrap()
         .into_value()
+}
+
+#[test]
+fn successor_cli_retains_first_group_work_across_an_empty_replacement() {
+    let fixture = Fixture::new();
+    let started = prepared(&fixture);
+    let session = started["session"]["id"].as_str().unwrap();
+    let source = fixture.0.join("work.txt");
+    fs::write(&source, b"Original worktree contents.\n").unwrap();
+    let basis = || format!("sha256:{:x}", Sha256::digest(fs::read(&source).unwrap()));
+    let criterion = "fresh=Current evidence must be recorded again.";
+    begin(&fixture, "Retain fixture work.", criterion);
+
+    let activate = |key: &str, document: Value, predecessor: &Value, prior: &Value| {
+        let mut input = activation_input(&fixture, document);
+        input["context"]["idempotency_key"] = json!(key);
+        input["predecessor"] = predecessor.clone();
+        input["prior_work"] = prior.clone();
+        input["working_copy_basis"] =
+            json!({"descriptor":"Exact fixture work.txt bytes","digest":basis()});
+        submit_activation(&fixture, &input)["result"]["execution_id"].clone()
+    };
+    let plan = |key: &str, note: &str| {
+        fixture.run(&["set", "plan-note", note, "--idempotency-key", key]);
+    };
+    let revise = |key: &str, title: &str| {
+        fixture.run(&[
+            "goal",
+            "revise",
+            "--goal",
+            title,
+            "--criterion",
+            criterion,
+            "--rework-to",
+            "plan",
+            "--reason",
+            "The remaining work changed.",
+            "--basis-description",
+            "Exact fixture work.txt bytes",
+            "--basis-digest",
+            &basis(),
+            "--feedback",
+            "Review the retained work under the new goal.",
+            "--idempotency-key",
+            key,
+        ])
+    };
+    plan("plan-one", "First plan");
+    let first_basis = basis();
+    let first = activate("first", group(), &Value::Null, &json!([]));
+    let first_state = observe(&fixture);
+    let attempt = &first_state["result"]["cursor"]["attempt"];
+    fixture.run(&[
+        "set",
+        "result",
+        "Completed work from the first group.",
+        "--idempotency-key",
+        "first-result",
+    ]);
+    fixture.run(&["complete", "--idempotency-key", "first-work-complete"]);
+    let history = [
+        "history",
+        "item",
+        "--session",
+        session,
+        "--attempt",
+        &attempt.to_string(),
+        "--item",
+        "result",
+    ];
+    let original = fixture.run(&history);
+    let original = &original["result"];
+    let retained = json!([{"group_execution_id":first,"choice":"revalidate","rationale":"Confirm the existing result under the revised plan.",
+                           "item":{"attempt":attempt["attempt"],"item":"result","value_digest":original["detail"]["value_digest"]}}]);
+
+    fs::write(&source, b"Keep completed work and update its boundary.\n").unwrap();
+    let revised_basis = basis();
+    assert_ne!(first_basis, revised_basis);
+    revise("revision-two", "Reconcile the existing result.");
+    plan("plan-two", "Second plan");
+    let second = activate("second", group(), &first, &retained);
+    let empty = observe(&fixture);
+    assert_ne!(second, first);
+    assert_eq!(
+        empty["result"]["selection"]["definition_digest"],
+        first_state["result"]["selection"]["definition_digest"]
+    );
+    assert_eq!(empty["result"]["items"][0]["revision"], 0);
+    assert_eq!(empty["result"]["items"][0]["item"], "result");
+    assert_eq!(empty["result"]["items"][0]["recorded"], false);
+
+    revise("revision-three", "Qualify the new execution definition.");
+    plan("plan-three", "Third plan");
+    let mut replacement = group();
+    replacement["name"] = json!("Revised execution definition");
+    let third = activate("third", replacement, &second, &retained);
+    let selected = observe(&fixture);
+    assert_ne!(third, second);
+    assert_eq!(selected["result"]["cursor"]["goal_revision"], 3);
+    assert_ne!(
+        selected["result"]["selection"]["definition_digest"],
+        empty["result"]["selection"]["definition_digest"]
+    );
+    assert_eq!(selected["result"]["items"][0]["recorded"], false);
+    assert_eq!(
+        fs::read(&source).unwrap(),
+        b"Keep completed work and update its boundary.\n"
+    );
+
+    let before = fixture.podway_snapshot();
+    let list = fixture.run(&["group", "list", "--session", session]);
+    let rows = list["result"]["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    for (row, execution) in rows.iter().zip([&first, &second, &third]) {
+        assert_eq!(&row["execution"], execution);
+    }
+    assert_eq!(rows[0]["outcome"], "abandoned");
+    assert_eq!(rows[1]["outcome"], "abandoned");
+    assert_eq!(rows[2]["predecessor"], second);
+    for (execution, expected) in [(&first, first_basis), (&third, revised_basis)] {
+        let shown = fixture.run(&[
+            "group",
+            "show",
+            "--session",
+            session,
+            "--execution",
+            execution.as_str().unwrap(),
+        ]);
+        assert_eq!(
+            shown["result"]["group"]["working_copy_basis"]["digest"],
+            expected
+        );
+    }
+    let prior = fixture.run(&[
+        "group",
+        "prior-work",
+        "--session",
+        session,
+        "--execution",
+        third.as_str().unwrap(),
+        "--definition-digest",
+        selected["result"]["selection"]["definition_digest"]
+            .as_str()
+            .unwrap(),
+    ]);
+    assert_eq!(prior["result"]["total"], 1);
+    let reference = &prior["result"]["rows"][0]["source"];
+    assert_eq!(reference["group"]["execution"], first);
+    assert_eq!(
+        reference["item"]["value_digest"],
+        original["detail"]["value_digest"]
+    );
+    let current = fixture.run(&history);
+    assert_eq!(current["result"]["data"], original["data"]);
+    assert_eq!(
+        current["result"]["detail"]["value_digest"],
+        original["detail"]["value_digest"]
+    );
+    fixture.assert_podway_snapshot(&before);
 }
 
 fn failure(fixture: &Fixture, argv: &[&str], code: &str, exit: i32) -> Value {
@@ -653,6 +827,197 @@ fn public_goal_flow_preserves_rework_and_stale_attempt_history_across_processes(
     assert_eq!(reset["result"]["mode"], "eligible");
     assert_eq!(reset["result"]["reset"], true);
     failure(&fixture, &["status"], "SESSION_NOT_FOUND", 1);
+}
+
+#[test]
+fn retained_item_pages_are_bounded_and_read_only_through_archive_and_purge() {
+    let fixture = Fixture::new();
+    let started = prepared(&fixture);
+    let session = started["session"]["id"].as_str().unwrap();
+    begin(
+        &fixture,
+        "Exercise history bounds.",
+        "retained=Paged work survives archiving.",
+    );
+    fixture.run(&[
+        "set",
+        "plan-note",
+        "Keep earlier evidence.",
+        "--idempotency-key",
+        "plan",
+    ]);
+
+    let mut document = group();
+    document["node_definitions"]["work"]["items"]
+        .as_array_mut()
+        .unwrap()
+        .push(
+            json!({"id":"memo","type":"text","prompt":"Record a memo.","required":false,
+                     "min_length":0,"max_length":MAX_TEXT_SCALARS_V2}),
+        );
+    let activated = activate_document(&fixture, document);
+    let execution = activated["result"]["execution_id"].as_str().unwrap();
+    let state = observe(&fixture);
+    let attempt = state["result"]["cursor"]["attempt"].to_string();
+    let text: String = "\u{0001}\u{0002}\u{0003}\u{0004}\u{0005}\u{0006}\u{0007}🧭éa"
+        .chars()
+        .cycle()
+        .take(MAX_TEXT_SCALARS_V2 as usize)
+        .collect();
+    assert!(serde_json::to_vec(&text).unwrap().len() > MAX_EVIDENCE_PAGE_BYTES_V2);
+    let record = |key: &str, value: &str, observation: &Value, revision| {
+        let mut cursor = observation["result"]["cursor"].as_object().unwrap().clone();
+        cursor.remove("session");
+        let request = json!({
+            "schema":"podway.scoped-item-record-many-input/v1",
+            "context":{"workspace_uuid":observation["workspace"]["uuid"],"idempotency_key":key,"cursor":cursor},
+            "operations":[{"item_id":"memo","expected_item_revision":revision,"record":{"type":"text","value":value}}]
+        });
+        fixture.output_with_stdin(
+            &["record", "--stdin"],
+            &serde_json::to_vec(&request).unwrap(),
+        )
+    };
+    let recorded = record("max-memo", &text, &state, 0);
+    assert!(
+        recorded.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recorded.stdout)
+    );
+    let recorded = serde_json::from_slice::<OutputEnvelopeV4>(&recorded.stdout)
+        .unwrap()
+        .into_value();
+    let after = observe(&fixture);
+    let excessive = record("one-over", &format!("{text}x"), &after, 1);
+    assert!(!excessive.status.success());
+    let error = serde_json::from_slice::<ErrorEnvelopeV2>(&excessive.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(error["code"], "REQUEST_INVALID");
+    assert_eq!(observe(&fixture)["result"], after["result"]);
+    assert_eq!(
+        fixture.run(&["outcome", "lookup", "--idempotency-key", "one-over"])["result"]["found"],
+        false
+    );
+
+    fixture.run(&[
+        "cancel",
+        "--reason",
+        "Retain the interrupted group.",
+        "--idempotency-key",
+        "cancel",
+    ]);
+    let item = [
+        "history",
+        "item",
+        "--session",
+        session,
+        "--attempt",
+        &attempt,
+        "--item",
+        "memo",
+    ];
+    let pages = |query: &[&str]| {
+        let before = fixture.podway_snapshot();
+        let first = fixture.run(query);
+        let first = &first["result"];
+        assert_eq!(first["schema"], "podway.successor-history-item-result/v1");
+        assert_eq!(
+            first["detail"]["source_attempt"]["attempt"],
+            serde_json::from_str::<Value>(&attempt).unwrap()
+        );
+        assert_eq!(first["detail"]["item_revision"], 1);
+        assert_eq!(first["total"], MAX_TEXT_SCALARS_V2);
+        assert_eq!(first["offset"], 0);
+        assert_eq!(first["unit"], "unicode_scalar");
+        let token = first["next_page_token"].as_str().unwrap();
+        let second = fixture.run(&[query, &["--page-token", token]].concat());
+        let second = &second["result"];
+        assert_eq!(second["detail"], first["detail"]);
+        assert_eq!(second["offset"], first["size"]);
+        assert_eq!(second["total"], first["total"]);
+        assert!(second["next_page_token"].is_null());
+        for page in [first, second] {
+            let data = page["data"].as_str().unwrap();
+            assert_eq!(data.chars().count() as u64, page["size"].as_u64().unwrap());
+            assert!(serde_json::to_vec(data).unwrap().len() <= MAX_EVIDENCE_PAGE_BYTES_V2);
+        }
+        let rejoined = [
+            first["data"].as_str().unwrap(),
+            second["data"].as_str().unwrap(),
+        ]
+        .concat();
+        assert!(
+            rejoined == text,
+            "the exact value must survive page reassembly"
+        );
+        fixture.assert_podway_snapshot(&before);
+        (token.to_owned(), first["detail"].clone())
+    };
+    let (current_token, detail) = pages(&item);
+    fixture.run(&[
+        "disposition",
+        "not-required",
+        "--reason",
+        "Owned test fixture.",
+        "--idempotency-key",
+        "disposition",
+    ]);
+    fixture.run(&["archive", "--idempotency-key", "archive"]);
+    let archived_item = [&item[..], &["--archived"]].concat();
+    let (_, archived_detail) = pages(&archived_item);
+    assert_eq!(archived_detail, detail);
+    let before = fixture.podway_snapshot();
+    failure(
+        &fixture,
+        &[&archived_item[..], &["--page-token", &current_token]].concat(),
+        "HISTORY_PAGE_TOKEN_STALE",
+        4,
+    );
+    let group = fixture.run(&[
+        "group",
+        "show",
+        "--session",
+        session,
+        "--archived",
+        "--execution",
+        execution,
+    ]);
+    assert_eq!(group["result"]["total"], 0);
+    assert_eq!(group["result"]["group"]["summary"]["execution"], execution);
+    assert_eq!(
+        group["result"]["group"]["summary"]["outcome"],
+        "terminated_by_cancel"
+    );
+    assert_eq!(group["result"]["group"]["closure"]["cause"], "cancel");
+    fixture.assert_podway_snapshot(&before);
+
+    let archive = fixture.run(&["archive", "list"]);
+    let revision = archive["result"]["sessions"][0]["session_revision"]
+        .as_u64()
+        .unwrap()
+        .to_string();
+    let purge = fixture.run(&[
+        "archive",
+        "purge",
+        "--session-id",
+        session,
+        "--if-session-revision",
+        &revision,
+        "--yes",
+        "--idempotency-key",
+        "purge",
+    ]);
+    assert_eq!(purge["result"]["purged"], true);
+    let before_missing = fixture.podway_snapshot();
+    let missing = failure(&fixture, &archived_item, "SESSION_ID_MISMATCH", 4);
+    assert_eq!(missing["details"]["expected_session_id"], session);
+    assert!(missing["details"]["actual_session_id"].is_null());
+    assert_eq!(
+        fixture.run(&["outcome", "lookup", "--idempotency-key", "max-memo"])["result"]["outcome"]["response"],
+        recorded
+    );
+    fixture.assert_podway_snapshot(&before_missing);
 }
 
 #[test]

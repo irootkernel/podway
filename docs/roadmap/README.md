@@ -104,7 +104,7 @@ Target release: `v0.2.18` (planning only).
 | `ADOPT-002` | Align successor guidance and additional examples | Completed | Provide normal, staged-failure and justified-replan authoring examples without artificial loops; align paired source skills; preserve installed copies and managed Procedures. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
 | `ADOPT-003` | Specify external role and assignment consumption | Completed | Provide executor-neutral assignment, affected Evaluator/CO decisions, assessment reuse, settlement and late-result examples. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
 | `ADOPT-004` | Qualify the single-model cutover | Completed | Verify unchanged refusal of authentic v2/previous-writer fixtures and explicit safe recovery. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
-| `ADOPT-005` | Qualify the product and finish adoption | Planned | Exercise actual CLI normal/fault flows, make test and whole-program verification; promote durable outcomes. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `ADOPT-005` | Qualify the product and finish adoption | Completed | Exercise actual CLI normal/fault flows, make test and whole-program verification; promote durable outcomes. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
 
 ## TYPED — Typed Boundary Ownership
 

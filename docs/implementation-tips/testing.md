@@ -1719,6 +1719,31 @@ source repository's worktree registry was unchanged. The
 define how to repeat the comparison with an exact candidate. Release
 qualification has its own selected candidate and evidence requirements.
 
+## Successor CLI integration qualification
+
+Run the `native_process_` cases in the registered `e2e_adopt001_scoped_cli`
+module and the retained-work and bounded-history cases in
+`e2e_v2dfc007_native_conformance`. The suite starts the product binary in owned
+Git fixtures. Run the complete development gate with the configured Gaori
+`full` command, which runs `make test`, on the same source candidate.
+
+| Case | Public result measured |
+| --- | --- |
+| Activation and scoped write contenders | Two original activation keys compete for one execution. A duplicate request replays its original success. Separate item slots remain writable at the same scoped attempt, and the stale same-slot loser retains no outcome. |
+| Guarded replan and atomic report | Both requests use the same exact cursor. The winner determines the current scope, and the rejected request leaves no retained success. |
+| Interrupted activation before commit | A separate CLI activation observes the held SQLite write lock while the interrupted CLI is alive. Kill and reap the child before releasing the lock. A fresh process reads unchanged durable state and misses both original keys. The interrupted request can then commit on exact retry. |
+| Lost activation output after commit | A saturated stdout pipe blocks delivery. Another CLI process retrieves the committed outcome while the writer is alive. The killed writer delivered no response bytes. Advancing the session preserves the original lookup and exact replay. |
+| Replacement provenance | Two goal revisions close the selected groups. The third activation uses a different definition and cites the first group's exact retained item through an empty second group. The fixture file keeps its revised contents, and prior work leaves the current slot unrecorded. |
+| Current, archived and purged history | Record 65,536 mixed escaped and Unicode scalars and refuse one more. Reassemble both bounded pages in current and archived history. Reject a current token in archived history. Purging removes the archived value while lookup can still recover the original mutation response. |
+
+Use these checks with the registered [guarded replan and Engine process
+qualification](#execution-group-process-qualification), the [writer
+cutover qualification](#execution-group-writer-cutover-qualification) and the
+[consumer contract](../specs/interfaces/execution-group-consumers.md). The
+Engine cases exercise internal transaction boundaries. The CLI cases exercise
+public invocation, durable outcomes, response delivery and the selected wire
+contracts. Stable release qualification uses its own selected release gate.
+
 ## Candidate group-lineage qualification
 
 Run the registered history cases against the isolated successor Engine and

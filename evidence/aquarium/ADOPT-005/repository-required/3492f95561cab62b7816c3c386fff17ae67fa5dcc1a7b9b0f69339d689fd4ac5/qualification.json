@@ -1,0 +1,49 @@
+{
+  "schema": "podway.successor-cli-qualification-evidence/v1",
+  "qualification": "successor-cli-integration",
+  "scope": "development-candidate",
+  "target": {
+    "tree": "e2d7baf215cba7b3556c127913b621f197247dd4",
+    "source_snapshot_sha256": "sha256:3492f95561cab62b7816c3c386fff17ae67fa5dcc1a7b9b0f69339d689fd4ac5",
+    "capture": [
+      "tools/python",
+      "tools/release_archive.py",
+      "source-snapshot"
+    ]
+  },
+  "checks": [
+    {
+      "argv": [
+        "make",
+        "test"
+      ],
+      "exit_code": 0,
+      "status": "passed",
+      "extractor_status": "no_match"
+    },
+    {
+      "argv": [
+        "tools/python",
+        "tools/verify_docs.py"
+      ],
+      "exit_code": 0,
+      "status": "passed"
+    }
+  ],
+  "native_process_cases": [
+    "activation-same-and-distinct-keys",
+    "disjoint-and-same-slot-writes",
+    "guarded-replan-and-report-contention",
+    "activation-before-commit-sigkill",
+    "distinct-cli-workspace-busy-at-sqlite-write-lock",
+    "activation-after-commit-output-loss"
+  ],
+  "native_lifecycle_cases": [
+    "guarded-base-review-replan",
+    "forged-request-score-refusal",
+    "atomic-decision-closure-and-feedback",
+    "archived-groups-preserve-cancellation-after-return",
+    "third-group-reads-first-work-through-empty-replacement",
+    "bounded-history-archive-and-purge"
+  ]
+}

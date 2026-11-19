@@ -42,8 +42,8 @@ Native Git resolution distinguishes main and linked worktrees, validates canonic
 identity and component containment and rejects symlink escapes. Podway never
 mutates Git. Repair accepts a supported moved-worktree identity; a copied or
 incompatible UUID fails closed. There is no global task copy or workspace registry.
-Legacy generations 1–13 are classified without mutation; only an explicitly
-confirmed reset discards their history and creates fresh direct state.
+The writer classifies legacy generations 1–15 without mutation. Discarding their
+history and creating fresh direct state requires an explicitly confirmed reset.
 
 The explicit integration-settings query uses native Git/configuration access
 without Store/maintenance admission or workspace/session identity. Its bounded

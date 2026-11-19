@@ -282,16 +282,17 @@ and its original recovery authority are unchanged.
 
 ## Legacy state and installed writers
 
-Classification detects Store generations 1–13 and retired `reset.marker`,
+Classification detects Store generations 1–15 and retired `reset.marker`,
 `workspace-removal.marker`, `development-v2.marker` and `.podway/mode-switch.json`
 without writes, migration or SHM creation. It returns
 `LEGACY_RUNTIME_STATE_UNSUPPORTED` and an explicitly authorized reset recipe with
-a fresh caller-owned key. Before an actual upgrade/reset, retire the installed
-old daemon and Aquarium writer under their original controllers and separate
-authority: an old open handle can keep writing unlinked files after deletion.
+a fresh caller-owned key. Settle work with its compatible writer before an
+upgrade or reset. Where a legacy daemon or Aquarium writer is installed, retire
+it under its original controller and separate authority before installation or
+reset. An old open handle can keep writing unlinked files after deletion.
 Follow the complete [upgrade prerequisite](../operations/release-and-packaging.md#upgrade).
-A disposable frozen legacy fixture proves byte-identical refusal and explicit
-reset, not retirement of an installed writer.
+The upgrade QA uses frozen daemon-era fixtures and released direct-writer
+fixtures to measure refusal and reset in isolated worktrees.
 
 ## Moved worktrees
 

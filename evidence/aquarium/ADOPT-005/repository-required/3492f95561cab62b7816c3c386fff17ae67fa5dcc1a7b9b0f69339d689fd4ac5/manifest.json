@@ -1,0 +1,23 @@
+{
+  "schema": "aquarium.promoted-evidence/v1",
+  "work_unit": {
+    "kind": "task",
+    "id": "ADOPT-005"
+  },
+  "purpose": "repository-required",
+  "target": {
+    "git_head": "27f88030eea691d01873bf456a215f2a61a67723",
+    "capture_kind": "stage",
+    "content_sha256": "sha256:3492f95561cab62b7816c3c386fff17ae67fa5dcc1a7b9b0f69339d689fd4ac5"
+  },
+  "source": {
+    "tool": "podway"
+  },
+  "payloads": [
+    {
+      "path": "evidence/aquarium/ADOPT-005/repository-required/3492f95561cab62b7816c3c386fff17ae67fa5dcc1a7b9b0f69339d689fd4ac5/qualification.json",
+      "media_type": "application/json",
+      "sha256": "sha256:dcc524fc2fd6f00f2ef20e91e0f27f89ceacfbff2889b6a78a8c44a40f6031aa"
+    }
+  ]
+}

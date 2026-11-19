@@ -274,10 +274,9 @@ later downgrade does not grant an older writer destructive authority. The bounde
 scan refuses an unresolved valid stream rather than falling back to an older
 main generation. Marker diagnosis never substitutes for destructive generation
 admission, which independently revalidates the main/WAL file identities.
-Legacy markers, generations
-1–13, unsupported newer state, unknown writer, schema drift and foreign Git
-identity refuse ordinary reads and writes without modifying legacy bytes or
-creating SHM.
+Legacy markers, generations 1–15, unsupported newer state, unknown writer,
+schema drift and foreign Git identity refuse ordinary reads and writes without
+modifying legacy bytes or creating SHM.
 Newer committed generations take precedence over legacy/maintenance markers and
 invalid configuration, including for reset and removal. They refuse before any
 lock creation, with actual/supported generation and compatible-Podway guidance.

@@ -1862,7 +1862,7 @@ fn route_topic(topic: &str) -> Option<&'static str> {
             "Usage:\n  podway procedure format <file> [--check] [--write]\n\nRenders a Procedure v3 document in canonical authoring form on stdout. --check\nreports drift and writes nothing; --write replaces the named file atomically.\n\nExample:\n  podway procedure format .podway/procedures/custom.yaml"
         }
         "procedure.vet" => {
-            "Usage:\n  podway procedure vet <file>\n\nRuns mandatory graph-wide semantic and resource-budget checks over a Procedure\nv2 document without writing anything.\n\nExample:\n  podway procedure vet .podway/procedures/custom.yaml"
+            "Usage:\n  podway procedure vet <file>\n\nRuns mandatory graph-wide semantic and resource-budget checks on Procedure v3\nand Execution Group v1 documents without writing anything.\n\nExample:\n  podway procedure vet .podway/procedures/custom.yaml"
         }
         "procedure.graph" => {
             "Usage:\n  podway procedure graph <file> --format <json|mermaid|puml|dot>\n\nEmits a deterministic JSON, Mermaid, PlantUML, or DOT projection of a validated\nand vetted Procedure v3 graph without writing anything.\n\nExample:\n  podway procedure graph .podway/procedures/custom.yaml --format dot"

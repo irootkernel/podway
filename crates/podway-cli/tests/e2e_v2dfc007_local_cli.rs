@@ -1175,13 +1175,12 @@ fn guide003_help_topics_resolve_command_words_and_groups() {
         let envelope = one_json(&output);
         assert_eq!(envelope["command"], "help", "{words:?}");
         assert_eq!(envelope["result"]["topic"], words.join(" "), "{words:?}");
-        assert!(
-            envelope["result"]["text"]
-                .as_str()
-                .unwrap()
-                .contains("Usage:"),
-            "{words:?}"
-        );
+        let help = envelope["result"]["text"].as_str().unwrap();
+        assert!(help.contains("Usage:"), "{words:?}");
+        if *words == ["procedure", "vet"] {
+            assert!(help.contains("Procedure v3"));
+            assert!(help.contains("Execution Group v1"));
+        }
     }
 
     let group_children: &[(&str, &[(&str, &str)])] = &[

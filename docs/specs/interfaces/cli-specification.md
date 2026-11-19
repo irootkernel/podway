@@ -262,9 +262,9 @@ retry, edit a published request or change machine error fields, codes or exits.
 `reset --all --yes --idempotency-key <key>` replaces runtime state with a fresh
 Store while preserving Procedure sources and configuration unrelated to retired
 legacy mode; legacy-mode configuration/markers are intentionally retired.
-`--force` is not required for reset-all. Store generations 1–13 and daemon-era
-markers are refused without conversion or deletion; explicit reset-all is the
-supported destructive recovery. A Store newer than this binary supports is
+`--force` is optional for reset-all. The writer refuses Store generations 1–15
+and daemon-era markers without conversion or deletion. Explicit reset-all is
+the supported destructive recovery. A Store newer than this binary supports is
 refused even for reset and removal; use a Podway that supports it. A recipe alone
 grants no reset authority.
 
