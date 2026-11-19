@@ -723,6 +723,28 @@ For TRACE and ADOPT, also plan these review and closeout practices:
   verification and review path. Keep final owner acceptance and the exact
   closeout commit as separate steps.
 
+Include these additional practices in the ADOPT execution plan.
+
+- **Prepare the Validation-to-closeout handoff.** Retain the approved technical
+  review selection and use `validated-closeout` for the documentation-only
+  Goal after internal Validation has successfully completed. Bind the archived
+  Validation result and its exact validated commit to the focused checks on the
+  closeout patch. Before applying the patch, pin the original roadmap and shared
+  dossier to immutable Git content so evaluators can still read those
+  requirements if the patch changes or retires either source. Record the
+  exact file postimages and any authorized deletions. Check the last-consumer
+  condition and canonical references under Section 7, and leave final owner
+  acceptance pending for the exact patch.
+- **Reuse the candidate evidence index across review and assessment.** Record
+  the exact commit range or staged tree, review report references and digests,
+  assessment ordinal, prior operation state, and applicable check receipts in
+  the existing index. Populate factual fields from verified records when the
+  installed tooling supports it. The Coordinator retains the decisions on
+  finding validity, effective severity, ownership, and disposition. Later
+  assessments can cite the same verified evidence when it still applies and
+  record each checkpoint's own judgment and any gaps. Use the supported
+  closeout assessment path selected at plan time.
+
 | Epic | Evidence to bind to the exact candidate |
 | --- | --- |
 | GROUP | Bind Store and Engine lifecycle evidence to the source and fixtures used. Retain real-process contention, interruption and cold-reopen receipts for GROUP-005, including exact scope of the full development gate. |

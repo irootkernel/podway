@@ -79,17 +79,17 @@ Target release: `v0.2.18` (planning only).
 
 ## TRACE — Retained Execution History
 
-Dependencies: Completed GROUP. Status: In Progress.
+Dependencies: Completed GROUP. Status: Completed.
 Execution owner: `aquarium:epic-handler` when explicitly invoked.
-Detailed SOT: [Execution-group continuation](../todo/TODO-podway-continuation-groups.md).
+Canonical Outcomes: [group lineage](../specs/storage/sqlite-model.md#candidate-group-lineage-reads), [candidate transactions and replay](../specs/storage/transactions-concurrency-and-idempotency.md#execution-group-candidate-persistence) and [history retention qualification](../implementation-tips/testing.md#candidate-history-retention-qualification).
 Target release: `v0.2.18` (planning only).
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `TRACE-001` | Query planning and activation lineage | Completed | Expose bounded paging of groups, decision entry counts, assessment/CO choices and replacement causes. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
-| `TRACE-002` | Inspect historical DAGs and node execution | Completed | Render past graphs and read retained attempt values, results and provenance without making them current. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
-| `TRACE-003` | Link prior work to the new planning basis | Completed | Query and project admitted prior-work judgments and exact historical execution references without inheriting gates. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
-| `TRACE-004` | Qualify history retention and lifecycle | Completed | Verify archive, limits, explicit deletion boundaries and cold reopen; finish the development gate. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `TRACE-001` | Query planning and activation lineage | Completed | Expose bounded paging of groups, decision entry counts, assessment/CO choices and replacement causes. | [Candidate group lineage reads](../specs/storage/sqlite-model.md#candidate-group-lineage-reads) |
+| `TRACE-002` | Inspect historical DAGs and node execution | Completed | Render past graphs and read retained attempt values, results and provenance without making them current. | [Candidate DAG, attempt and item history](../specs/storage/sqlite-model.md#candidate-dag-attempt-and-item-history) |
+| `TRACE-003` | Link prior work to the new planning basis | Completed | Query and project admitted prior-work judgments and exact historical execution references without inheriting gates. | [Candidate prior-work history](../specs/storage/sqlite-model.md#candidate-prior-work-history) |
+| `TRACE-004` | Qualify history retention and lifecycle | Completed | Verify archive, limits, explicit deletion boundaries and cold reopen; finish the development gate. | [Candidate history retention qualification](../implementation-tips/testing.md#candidate-history-retention-qualification) |
 
 ## ADOPT — Product Adoption and Qualification
 
