@@ -93,18 +93,18 @@ Target release: `v0.2.18` (planning only).
 
 ## ADOPT — Product Adoption and Qualification
 
-Dependencies: Completed TRACE. Status: In Progress.
+Dependencies: Completed TRACE. Status: Completed.
 Execution owner: `aquarium:epic-handler` when explicitly invoked.
-Detailed SOT: [Execution-group continuation](../todo/TODO-podway-continuation-groups.md).
+Canonical Outcomes: [public CLI contract](../specs/interfaces/cli-specification.md), [execution-group consumer contract](../specs/interfaces/execution-group-consumers.md), [writer cutover qualification](../implementation-tips/testing.md#execution-group-writer-cutover-qualification), and [successor CLI integration qualification](../implementation-tips/testing.md#successor-cli-integration-qualification).
 Target release: `v0.2.18` (planning only).
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `ADOPT-001` | Expose the atomic successor product cutover | Completed | Switch CLI/parser/runtime, Store/writer/manifests, successor presets with complete node/failure guidance and scoped delegation contracts together. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
-| `ADOPT-002` | Align successor guidance and additional examples | Completed | Provide normal, staged-failure and justified-replan authoring examples without artificial loops; align paired source skills; preserve installed copies and managed Procedures. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
-| `ADOPT-003` | Specify external role and assignment consumption | Completed | Provide executor-neutral assignment, affected Evaluator/CO decisions, assessment reuse, settlement and late-result examples. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
-| `ADOPT-004` | Qualify the single-model cutover | Completed | Verify unchanged refusal of authentic v2/previous-writer fixtures and explicit safe recovery. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
-| `ADOPT-005` | Qualify the product and finish adoption | Completed | Exercise actual CLI normal/fault flows, make test and whole-program verification; promote durable outcomes. | [Task contract](../todo/TODO-podway-continuation-groups.md#6-roadmap-ownership-dependencies-and-task-contracts) |
+| `ADOPT-001` | Expose the atomic successor product cutover | Completed | Switch CLI/parser/runtime, Store/writer/manifests, successor presets with complete node/failure guidance and scoped delegation contracts together. | [Procedure v3, group and Store contract](../specs/interfaces/json-contract.md) |
+| `ADOPT-002` | Align successor guidance and additional examples | Completed | Provide normal, staged-failure and justified-replan authoring examples without artificial loops; align paired source skills; preserve installed copies and managed Procedures. | [Procedure v3 continuation walkthrough](../examples/continuation-v3.md) |
+| `ADOPT-003` | Specify external role and assignment consumption | Completed | Provide executor-neutral assignment, affected Evaluator/CO decisions, assessment reuse, settlement and late-result examples. | [Consumer assignments and settlement](../specs/interfaces/execution-group-consumers.md) |
+| `ADOPT-004` | Qualify the single-model cutover | Completed | Verify unchanged refusal of authentic v2/previous-writer fixtures and explicit safe recovery. | [Writer cutover](../implementation-tips/testing.md#execution-group-writer-cutover-qualification) |
+| `ADOPT-005` | Qualify the product and finish adoption | Completed | Exercise actual CLI normal/fault flows, make test and whole-program verification; promote durable outcomes. | [Successor CLI integration qualification](../implementation-tips/testing.md#successor-cli-integration-qualification) |
 
 ## TYPED — Typed Boundary Ownership
 
