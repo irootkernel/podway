@@ -48,7 +48,7 @@ fn input(
 fn boundary_equality_ignores_only_prompts() {
     let a = ItemSpecV2::integer(common("A"), Some(0), Some(100)).unwrap();
     let b = ItemSpecV2::integer(common("B"), Some(0), Some(100)).unwrap();
-    assert!(same_boundary_contract_v1(&[a.clone()], &[b]));
+    assert!(same_boundary_contract_v1(std::slice::from_ref(&a), &[b]));
     assert!(
         !a.same_boundary_contract(&ItemSpecV2::integer(common("A"), Some(0), Some(99)).unwrap())
     );
@@ -903,7 +903,7 @@ fn exact_boundary_contract_and_scoped_guard_metadata_reject_substitutions() {
     };
     let original = item("result");
     let other = item("other");
-    assert!(!same_boundary_contract_v1(&[original.clone()], &[]));
+    assert!(!same_boundary_contract_v1(std::slice::from_ref(&original), &[]));
     assert!(!same_boundary_contract_v1(
         &[original.clone(), other.clone()],
         &[other, original.clone()]

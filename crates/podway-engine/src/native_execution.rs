@@ -689,10 +689,10 @@ mod tests {
                 DirectOutcomeScopeV1::Workspace,
             )
             .unwrap();
-            let result = podway_git::test_support::with_artifact_read_observer_v1(
+            let rejected = podway_git::test_support::with_artifact_read_observer_v1(
                 |_, _| panic!("native verification read bytes under writer"),
                 || {
-                    store.mutate_typed(
+                    let result = store.mutate_typed(
                         &request,
                         deadline(),
                         || UnixMillis::new(1_700_000_000_000),
@@ -725,10 +725,11 @@ mod tests {
                                 ExecutionBoundaryErrorV1::domain(DomainError::ArtifactChanged),
                             ))
                         },
-                    )
+                    );
+                    result.is_err()
                 },
             );
-            assert!(result.is_err());
+            assert!(rejected);
             store
                 .read(deadline(), |snapshot| {
                     assert!(snapshot.current_graph()?.is_none());
