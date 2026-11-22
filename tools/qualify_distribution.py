@@ -219,6 +219,7 @@ def run_packaged_suite(root: Path, harness: Path, cli: Path) -> None:
     expected_digest = release_archive.sha256_file(cli)
     environment = {
         "PATH": "/usr/bin:/bin",
+        "PODWAY_PACKAGED_TEST_PYTHON": str(Path(sys.executable).resolve(strict=True)),
         "GIT_CONFIG_GLOBAL": "/dev/null",
         "GIT_CONFIG_NOSYSTEM": "1",
         "TMPDIR": str(fixtures),

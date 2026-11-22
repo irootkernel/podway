@@ -8,7 +8,17 @@ use serde_json::Value;
 fn supervised_delegation_preserves_documented_example_hosts_and_recovery() {
     let qualifier = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tools/qualify_supervised_delegation.py");
-    let python = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tools/python");
+    let python = match std::env::var_os("PODWAY_PACKAGED_TEST_PYTHON") {
+        Some(executable) => {
+            let executable = PathBuf::from(executable);
+            assert!(
+                executable.is_absolute(),
+                "packaged test Python must be absolute"
+            );
+            executable
+        }
+        None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tools/python"),
+    };
     let output = Command::new(python)
         .arg(qualifier)
         .arg("--podway")
