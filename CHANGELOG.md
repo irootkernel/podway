@@ -4,20 +4,31 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.2.18 - Unreleased
 
+### Added
+
+- Activate an execution group at a Procedure v3 design anchor, return to the base on success,
+  and replace a group through a declared, guarded failure decision.
+- Read scoped attempts, decisions, blockers, goal revisions and linked prior work across replacements and archived sessions.
+
 ### Changed
 
-- Adopt Procedure v3 and explicit execution-group activation, guarded replanning, scoped history and delegation on Store generation 16 with `sw-dev-v3` as the default, retiring the four `*-v2` preset IDs and digests and refusing custom Procedure v2 sources
-  while requiring the original writer for older sessions and a consumer re-pin to the successor manifest, `observe` v7/v8 and the commit-bound observation wrapper v2.
-- Update both source-distributed Podway skills for Procedure v3 and add worked examples of activation, staged failure assessment, and group replacement.
-- Specify the version 1 execution-group consumer contract, with examples for scoped assignments, settlement, replacement authority, and late-result refusal.
+- Use Procedure v3 and Execution Group v1, with `sw-dev-v3` as the default preset.
+- Finish or abandon older sessions with their original writer, or keep the original writer and worktree to retain their history,
+  because Store 16 refuses generations 1–15 and declares no migration.
+- Preserve desired history before explicitly authorizing `reset --all`, which discards current and retained runtime history
+  and creates fresh Store 16 state.
+- Re-pin automation to the successor manifest, `observe` v7/v8, the commit-bound observation wrapper v2,
+  and the scoped criteria, evidence, retained-read and delegation contracts.
+- Use matching runtime and authoring skills with the Procedure v3 walkthrough and execution-group consumer examples.
+
+### Removed
+
+- Replace the retired `*-v2` preset IDs and digests with their v3 equivalents, and port custom Procedure v2 sources before starting a new session.
 
 ### Fixed
 
-- Pin contributor Python through `.python-version` and use versioned validation environments.
-
+- Use the pinned Python version, a versioned validation environment and the pinned Rust toolchain for contributor builds and qualification.
 - Update rustix to fix zero-length extended-attribute buffer handling (RUSTSEC-2026-0486).
-- Select the pinned Rust build toolchain consistently across contributor and qualification tools.
-
 - Update bundled SQLite to prevent memory disclosure from database/WAL pairs with mismatched page sizes (RUSTSEC-2026-0459).
 
 ## v0.2.17 - 2026-11-08
