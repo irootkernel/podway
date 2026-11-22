@@ -29,7 +29,7 @@ responses must pass the current full `output/v4` or `error/v2` validation.
 
 ## Independent process cases
 
-1. Initialize a fresh worktree and start the canonical `small-change-v2` preset.
+1. Initialize a fresh worktree and start the canonical `small-change-v3` preset.
    Validate the complete returned success envelope. Through a new Engine/read
    transaction, look up its idempotency key and require the original committed
    success, including command, request identity, timestamps, result, and warnings.
