@@ -903,7 +903,10 @@ fn exact_boundary_contract_and_scoped_guard_metadata_reject_substitutions() {
     };
     let original = item("result");
     let other = item("other");
-    assert!(!same_boundary_contract_v1(std::slice::from_ref(&original), &[]));
+    assert!(!same_boundary_contract_v1(
+        std::slice::from_ref(&original),
+        &[]
+    ));
     assert!(!same_boundary_contract_v1(
         &[original.clone(), other.clone()],
         &[other, original.clone()]
