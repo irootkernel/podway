@@ -28,6 +28,14 @@ Candidate. The original research text below retains its dated provenance;
 selected execution decisions belong to the new dossier and Accepted ADR-0044.
 No product implementation or accepted-ADR change is established by this amendment.
 
+## Delivery of the adopted continuation scope
+
+The roadmap records the selected same-session execution-group replacement and
+retained history scope as complete through
+[FRAME, GROUP, TRACE and ADOPT](../roadmap/README.md#execution-group-continuation-program).
+Each Epic links to its delivered contracts and verification in the roadmap.
+S1-S6 remain candidate research, and S7 remains an unperformed comparison.
+
 ## 1. Context
 
 Procedure v2 already permits external parallel work whose results are

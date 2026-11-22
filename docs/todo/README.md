@@ -102,11 +102,12 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-- [Execution-group continuation](TODO-podway-continuation-groups.md): shared
-  execution dossier for FRAME, GROUP, TRACE and ADOPT. The roadmap owns their
-  order, dependencies and status. Retain this dossier while any consumer remains
-  unfinished or still references it; promote each Epic's durable outcomes before
-  its closeout. Target product release: `v0.2.18` (planning only).
+- The [execution-group continuation dossier](TODO-podway-continuation-groups.md)
+  records the shared design for
+  [FRAME, GROUP, TRACE and ADOPT](../roadmap/README.md#execution-group-continuation-program).
+  The roadmap records all four Epics as complete and links to their delivered
+  outcomes. [ADR-0044](../architecture-decision-records/0044-versioned-execution-groups.md)
+  and [PROOF](TODO-podway-graph-evolution-feasibility.md) still reference the dossier.
 
 ## Related candidates
 
@@ -125,7 +126,7 @@ does not waive them.
 | Working label | Candidate | Proposed outcome | Source feedback |
 |---|---|---|---|
 | Future executor qualification | [Executor integration](TODO-podway-executor-integration.md) | Real adapter and selected-build qualification beyond the bounded INTEG readiness work | Existing real executor candidate |
-| PROOF | [Graph evolution feasibility](TODO-podway-graph-evolution-feasibility.md) | Unadopted coordination research and retained, unperformed S7 comparisons; selected continuation design is owned by the adopted dossier | Existing graph and continuation research |
+| PROOF | [Graph evolution feasibility](TODO-podway-graph-evolution-feasibility.md) | S1-S6 coordination research and the unperformed S7 comparison. The [adopted continuation scope](../roadmap/README.md#execution-group-continuation-program) is complete through FRAME, GROUP, TRACE and ADOPT. | Existing graph and continuation research |
 | WEBUI | [Operations console](TODO-podway-operations-console.md) | Foreground human operations after the graph direction is settled | Existing Web console candidate |
 
 The [deferred-feedback register](../deferred-feedback/README.md) retains each
