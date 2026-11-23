@@ -53,6 +53,11 @@ performs no daemon-era migration or automatic backup.
 Runtime and local source access must remain contained in the owning worktree.
 `.podway` and `runtime` are validated real directories. Local Procedure sources
 reject symlink traversal, including links whose targets remain in the worktree.
+An absolute Procedure source for `start --procedure` is accepted only under the
+selected worktree spelling or its resolved Git root. `procedure preview` uses
+the process working directory and its canonical form. Both strip the selected
+prefix lexically and apply the same relative-path checks and descriptor walk.
+Parent traversal is refused before the prefix is removed.
 Bounded source reads detect native root/source replacement. Runtime files and
 lock files use nofollow inspection/opening, regular-file checks and descriptor
 revalidation so renamed ancestors or swapped files cannot grant stale authority.
@@ -159,13 +164,14 @@ SQLite/domain checks must not be described as a Git-index audit it does not perf
 schema: podway.workspace/v1
 procedure_paths:
   - .podway/procedures
-default_preset: sw-dev-v3
 ui:
   show_stage_in_prompt: false
 ```
 
 Procedure paths are local and relative; configuration contains no remote includes,
-plugins, executable commands or credential feature. The legacy v1 `job_queue`
+plugins, executable commands or credential feature. The `default_preset` field
+is accepted, ignored and reserved. New configuration omits it.
+The legacy v1 `job_queue`
 member is accepted and ignored, and new configuration omits it. Config v2 accepts
 only absent or `prod` mode; named modes fail with guidance to remove mode and reset.
 These formats do not select an account namespace.

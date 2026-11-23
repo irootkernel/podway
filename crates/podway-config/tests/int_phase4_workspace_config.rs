@@ -17,7 +17,7 @@ fn limits(max_bytes: usize, max_depth: usize, max_nodes: usize) -> WorkspaceConf
 fn default_workspace_config_bytes_are_explicit_canonical_and_replayable() {
     assert_eq!(
         DEFAULT_WORKSPACE_CONFIG_YAML_V1,
-        b"schema: podway.workspace/v1\nprocedure_paths:\n  - .podway/procedures\ndefault_preset: sw-dev-v3\nui:\n  show_stage_in_prompt: false\n",
+        b"schema: podway.workspace/v1\nprocedure_paths:\n  - .podway/procedures\nui:\n  show_stage_in_prompt: false\n",
     );
     let first = parse_workspace_config_v1(DEFAULT_WORKSPACE_CONFIG_YAML_V1).unwrap();
     let second = parse_workspace_config_v1(DEFAULT_WORKSPACE_CONFIG_YAML_V1).unwrap();
@@ -57,9 +57,9 @@ fn workspace_config_limits_admit_equality_and_reject_first_overflow() {
     let first_overflow = format!("{at_limit} ");
     let byte_limit = at_limit.len();
 
-    parse_workspace_config_v1_with_limits(&at_limit, limits(byte_limit, 3, 7)).unwrap();
+    parse_workspace_config_v1_with_limits(&at_limit, limits(byte_limit, 3, 6)).unwrap();
     assert_eq!(
-        parse_workspace_config_v1_with_limits(&first_overflow, limits(byte_limit, 3, 7)),
+        parse_workspace_config_v1_with_limits(&first_overflow, limits(byte_limit, 3, 6)),
         Err(ConfigError::InputTooLarge {
             maximum: byte_limit,
             actual: byte_limit + 1,
@@ -82,10 +82,10 @@ fn workspace_config_limits_admit_equality_and_reject_first_overflow() {
 
     let node_overflow = format!("{input}unknown: true\n");
     assert_eq!(
-        parse_workspace_config_v1_with_limits(&node_overflow, limits(1_024, 3, 7)),
+        parse_workspace_config_v1_with_limits(&node_overflow, limits(1_024, 3, 6)),
         Err(ConfigError::InputTooComplex {
-            maximum: 7,
-            actual: 8,
+            maximum: 6,
+            actual: 7,
         })
     );
 
@@ -220,6 +220,14 @@ fn ignored_queue_and_mode_are_never_written() {
         serde_json::from_str(input.canonical_json_v1().unwrap().as_str()).unwrap();
     assert!(document.get("mode").is_none());
     assert!(document.get("job_queue").is_none());
+}
+
+#[test]
+fn workspace_config_still_accepts_a_reserved_default_preset() {
+    let config =
+        parse_workspace_config_v1("schema: podway.workspace/v1\ndefault_preset: sw-dev-v2\n")
+            .unwrap();
+    assert_eq!(config.default_preset, "sw-dev-v2");
 }
 
 #[test]

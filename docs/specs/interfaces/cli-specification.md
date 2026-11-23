@@ -123,12 +123,12 @@ route while retired syntax keeps `COMMAND_RETIRED` precedence.
 | `procedure validate\|lint\|check <FILE> [--warnings-as-errors]` | Authoring diagnostics and warning policy |
 | `procedure show <FILE> [--canonical]` | Source or canonical data |
 | `procedure format <FILE> [--check\|--write]` | Check and write conflict; omission renders only |
-| `procedure vet\|preview <FILE>` | Read-only semantic budget checks or preview; preview uses start-safe worktree-relative spelling |
+| `procedure vet\|preview <FILE>` | Read-only semantic budget checks or preview. Preview accepts files under the current directory and reports the path relative to that directory. |
 | `procedure graph <FILE> --format <json\|mermaid\|puml\|dot>` | Required projection format |
-| `procedure scaffold [--template minimal]` | `minimal` is the only accepted template |
-| `init [--repair]`, `doctor [--deep]`, `workspace show\|repair` | Local initialization, diagnosis, or explicit repair; Doctor uses the retained generic result object |
+| `procedure scaffold [--template minimal]` | `minimal` emits the canonical Procedure v3 base `custom-procedure-v3` with its own admitted digest. |
+| `init [--repair]`, `doctor [--deep]`, `workspace show\|repair` | Local initialization, diagnosis, or explicit repair. New configuration omits `default_preset`, which remains accepted, ignored and reserved in existing files. Doctor uses the retained generic result object. |
 | `workspace remove [--force] [--yes]` | Confirmed complete `.podway` removal and workspace fencing below |
-| `start (--preset <NAME>\|--procedure <FILE>) --task <TITLE>` | Optional file-only digest, policy, reason/actor/summary, paired session fences, and dry-run controls below |
+| `start (--preset <NAME>\|--procedure <FILE>) --task <TITLE>` | A contained absolute Procedure path is normalized to a worktree-relative path before request identity is computed. Optional file-only digest, policy, reason/actor/summary, paired session fences, and dry-run controls below. |
 | `begin [--goal <TEXT> --criterion <ID=STATEMENT>...] [--actor <TEXT>]` | Goal and criteria require each other; actor requires goal |
 | `status [--compact\|--verbose [--history-before <N>]]` | Compact conflicts with verbose/history; history requires verbose and a positive trace sequence |
 | `next`, `observe` | `--verbose` is rejected; no read barrier or job wait |

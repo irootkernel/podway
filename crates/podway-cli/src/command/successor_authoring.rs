@@ -1,6 +1,6 @@
 //! Offline authoring of the successor Procedure model and its preset pairs.
 
-use std::path::Path;
+use std::{env, fs, path::Path};
 
 use podway_config::execution_groups::{
     SuccessorDefinition, SuccessorGraphFormat, ValidatedSuccessorDefinition,
@@ -8,8 +8,8 @@ use podway_config::execution_groups::{
     project_successor_graph, render_successor_graph, validate_successor_definition,
 };
 use podway_config::{
-    AuthoringContext, AuthoringStage, FinalizedDiagnostics, FormatRequest, config_error_diagnostic,
-    finalize_diagnostics,
+    AuthoringContext, AuthoringStage, FinalizedDiagnostics, FormatRequest, ProcedureDocumentFormat,
+    SCAFFOLD_TEMPLATE_MINIMAL_V3, config_error_diagnostic, finalize_diagnostics,
 };
 use podway_core::AuthoringDiagnostic;
 use podway_presets::{PresetMetadata, list_v3, lookup_v3};
@@ -18,8 +18,8 @@ use serde_json::{Value, json};
 use super::{
     LocalFailure, PresetCommand, ProcedureCommand, RunResult, is_worktree_relative_procedure_path,
     local_result_v2, open_descriptor_relative_procedure, open_offline_procedure, preset_failure,
-    procedure_config_failure, procedure_format, render_authoring_diagnostics,
-    render_preview_start_command, replace_procedure_document,
+    procedure_config_failure, procedure_format, relativize_procedure_path,
+    render_authoring_diagnostics, render_preview_start_command, replace_procedure_document,
 };
 
 const AUTHORING_SCHEMA: &str = "podway.successor-authoring-result/v1";
@@ -37,12 +37,26 @@ pub(super) fn execute_procedure(command: &ProcedureCommand) -> Result<RunResult,
         ProcedureCommand::Check { file, .. } => (file, "procedure.check"),
         ProcedureCommand::Scaffold { template } => return scaffold(template),
     };
-    let opened = if matches!(command, ProcedureCommand::Preview { .. }) {
+    let is_preview = matches!(command, ProcedureCommand::Preview { .. });
+    let invalid_preview_path = || {
+        LocalFailure::request_invalid("preview requires a safe UTF-8 worktree-relative path")
+            .with_command(name)
+    };
+    let relative;
+    let path = if is_preview && path.is_absolute() {
+        let cwd = env::current_dir().map_err(|_| invalid_preview_path())?;
+        let canonical = fs::canonicalize(&cwd).ok();
+        let roots = [cwd.as_path(), canonical.as_deref().unwrap_or(&cwd)];
+        relative = relativize_procedure_path(path, &roots)
+            .filter(|path| !path.as_os_str().is_empty())
+            .ok_or_else(invalid_preview_path)?;
+        relative.as_path()
+    } else {
+        path
+    };
+    let opened = if is_preview {
         if !is_worktree_relative_procedure_path(path) || path.to_str().is_none() {
-            return Err(LocalFailure::request_invalid(
-                "preview requires a safe UTF-8 worktree-relative path",
-            )
-            .with_command(name));
+            return Err(invalid_preview_path());
         }
         open_descriptor_relative_procedure(
             Path::new("."),
@@ -295,23 +309,17 @@ fn preview(
 
 fn scaffold(template: &str) -> Result<RunResult, LocalFailure> {
     let name = "procedure.scaffold";
-    let preset = lookup_v3("small-change-v3").expect("built-in minimal base");
-    let definition = preset
-        .validate()
-        .map_err(|error| preset_failure(error).with_command(name))?;
+    let source = SCAFFOLD_TEMPLATE_MINIMAL_V3;
+    let definition = parse_successor_document(source.as_bytes(), ProcedureDocumentFormat::Yaml)
+        .and_then(validate_successor_definition)
+        .map_err(|error| procedure_config_failure(error).with_command(name))?;
     let result = json!({
         "template": template,
-        "document_schema": definition.base.definition().schema(),
-        "digest": definition.base.digest().as_str(),
-        "document": preset.base_yaml,
+        "document_schema": definition.definition().schema(),
+        "digest": definition.digest().as_str(),
+        "document": source,
     });
-    Ok(output(
-        AUTHORING_SCHEMA,
-        name,
-        result,
-        preset.base_yaml.to_owned(),
-        0,
-    ))
+    Ok(output(AUTHORING_SCHEMA, name, result, source.to_owned(), 0))
 }
 
 pub(super) fn execute_preset(command: &PresetCommand) -> Result<RunResult, LocalFailure> {

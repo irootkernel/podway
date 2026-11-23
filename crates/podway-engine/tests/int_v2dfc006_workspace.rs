@@ -557,11 +557,9 @@ fn successor_start_keeps_original_outcome_after_source_disappears() {
     let path = root.path().join("successor.yaml");
     let preset = podway_presets::lookup_v3("small-change-v3").unwrap();
     std::fs::write(&path, preset.base_yaml).unwrap();
-    let config = std::fs::read_to_string(root.path().join(".podway/config.yaml")).unwrap();
-    assert!(
-        config
-            .lines()
-            .any(|line| line == "default_preset: sw-dev-v3")
+    assert_eq!(
+        std::fs::read(root.path().join(".podway/config.yaml")).unwrap(),
+        b"schema: podway.workspace/v1\nprocedure_paths:\n  - .podway/procedures\nui:\n  show_stage_in_prompt: false\n",
     );
 
     let request = |key: &str, dry_run: bool, digest: Option<Sha256Digest>| DirectStartRequestV1 {

@@ -2,7 +2,8 @@
 
 use std::{
     fs,
-    path::PathBuf,
+    os::unix::fs::symlink,
+    path::{Path, PathBuf},
     process::{Command, Output, Stdio},
 };
 
@@ -10,7 +11,7 @@ use podway_protocol::ErrorEnvelopeV2;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::cli_fixture::{Fixture, GuardedChild, bounded_output};
+use super::cli_fixture::{Fixture, GuardedChild, bounded_output, podway_binary};
 
 const BASIS_DIGEST: &str =
     "sha256:1111111111111111111111111111111111111111111111111111111111111111";
@@ -22,6 +23,529 @@ const GROUP_ACTIVATION: &str =
     "Group activation requires the current unselected base anchor and valid prior work.";
 const REQUEST_INVALID: &str = "Request is malformed or violates schema.";
 const ACTIVATE: &[&str] = &["group", "activate", "--stdin"];
+
+#[test]
+fn existing_default_preset_is_accepted_without_rewriting_config() {
+    let fixture = Fixture::new();
+    let config = fixture.0.join(".podway/config.yaml");
+    let bytes = b"schema: podway.workspace/v1\ndefault_preset: sw-dev-v2\n";
+    fs::create_dir(config.parent().unwrap()).unwrap();
+    fs::write(&config, bytes).unwrap();
+    let initialized = fixture.run(&["init", "--idempotency-key", "init"]);
+    assert_eq!(
+        fixture.run(&["doctor", "--deep"])["result"]["healthy"],
+        true
+    );
+    assert_eq!(fs::read(&config).unwrap(), bytes);
+    for repair in [
+        ["init", "--repair", "--idempotency-key", "init-repair"],
+        [
+            "workspace",
+            "repair",
+            "--idempotency-key",
+            "workspace-repair",
+        ],
+    ] {
+        fixture.run(&repair);
+        assert_eq!(fs::read(&config).unwrap(), bytes);
+    }
+    fixture.run(&[
+        "reset",
+        "--all",
+        "--yes",
+        "--if-workspace-uuid",
+        initialized["workspace"]["uuid"].as_str().unwrap(),
+        "--idempotency-key",
+        "reset-all",
+    ]);
+    assert_eq!(fs::read(config).unwrap(), bytes);
+    assert_eq!(
+        fixture.run(&["doctor", "--deep"])["result"]["healthy"],
+        true
+    );
+}
+
+const HANDS003_PROCEDURE_FILE: &str = ".podway/procedures/hands003.yaml";
+const HANDS003_START_TASK: &str = "Verify in-worktree absolute Procedure paths";
+
+fn write_hands003_procedure(fixture: &Fixture) -> PathBuf {
+    let source = fixture.0.join(HANDS003_PROCEDURE_FILE);
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    let preset = podway_presets::lookup_v3("small-change-v3").unwrap();
+    fs::write(&source, preset.base_yaml).unwrap();
+    source
+}
+
+fn hands003_start_args<'a>(path: &'a str, digest: &'a str, key: &'a str) -> [&'a str; 9] {
+    [
+        "start",
+        "--procedure",
+        path,
+        "--expect-procedure-digest",
+        digest,
+        "--task",
+        HANDS003_START_TASK,
+        "--idempotency-key",
+        key,
+    ]
+}
+
+fn hands003_output_at(directory: &Path, args: &[&str]) -> Output {
+    let child = Command::new(podway_binary())
+        .arg("--json")
+        .args(args)
+        .current_dir(directory)
+        .env_remove("HOME")
+        .env_remove("XDG_CONFIG_HOME")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    bounded_output(GuardedChild::new(child), args)
+}
+
+#[test]
+fn absolute_procedure_preview_uses_the_relative_path_in_output() {
+    let fixture = Fixture::new();
+    let source = write_hands003_procedure(&fixture);
+    let relative = fixture.run(&["procedure", "preview", HANDS003_PROCEDURE_FILE]);
+    let absolute = fixture.run(&["procedure", "preview", source.to_str().unwrap()]);
+    assert_eq!(absolute["result"], relative["result"]);
+    assert_eq!(absolute["result"]["file"], HANDS003_PROCEDURE_FILE);
+    assert_eq!(absolute["result"]["start_argv"][3], HANDS003_PROCEDURE_FILE);
+    assert!(!fixture.0.join(".podway/runtime").exists());
+}
+
+#[test]
+fn absolute_procedure_preview_normalizes_lexical_components_only() {
+    let fixture = Fixture::new();
+    write_hands003_procedure(&fixture);
+    let noisy_relative = ".podway/./procedures//hands003.yaml";
+    let noisy_absolute = format!("{}/{noisy_relative}", fixture.0.display());
+    let clean = fixture.run(&["procedure", "preview", HANDS003_PROCEDURE_FILE]);
+    let relative = fixture.run(&["procedure", "preview", noisy_relative]);
+    assert_eq!(relative["result"]["file"], noisy_relative);
+    assert_eq!(relative["result"]["start_argv"][3], noisy_relative);
+    let absolute = fixture.run(&["procedure", "preview", &noisy_absolute]);
+    assert_eq!(absolute["result"], clean["result"]);
+}
+
+#[test]
+fn absolute_procedure_roots_are_refused_before_start_dispatch() {
+    let fixture = Fixture::new();
+    let nested = fixture.0.join("nested");
+    fs::create_dir(&nested).unwrap();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    let before = fixture.podway_snapshot();
+    let digest = podway_presets::lookup_v3("small-change-v3")
+        .unwrap()
+        .base_digest;
+    let root = fixture.0.to_str().unwrap();
+    let nested = nested.to_str().unwrap();
+    let mut nested_start = vec!["--worktree", nested];
+    nested_start.extend(hands003_start_args(nested, digest, "root-source"));
+
+    for (output, message) in [
+        (
+            fixture.output(&["procedure", "preview", root]),
+            "preview requires a safe UTF-8 worktree-relative path",
+        ),
+        (
+            fixture.output(&[
+                "start",
+                "--procedure",
+                root,
+                "--task",
+                HANDS003_START_TASK,
+                "--dry-run",
+            ]),
+            "procedure must be worktree-relative",
+        ),
+        (
+            fixture.output(&hands003_start_args(root, digest, "root-source")),
+            "procedure must be worktree-relative",
+        ),
+        (
+            hands003_output_at(&fixture.0, &nested_start),
+            "procedure must be worktree-relative",
+        ),
+    ] {
+        refuse(output, "REQUEST_INVALID", 2, message);
+    }
+    fixture.assert_podway_snapshot(&before);
+    let lookup = fixture.run(&["outcome", "lookup", "--idempotency-key", "root-source"]);
+    assert_eq!(lookup["result"]["found"], false);
+    refuse(
+        fixture.output(&["status"]),
+        "SESSION_NOT_FOUND",
+        1,
+        "No current task session exists.",
+    );
+}
+
+#[test]
+fn procedure_preview_help_distinguishes_preview_and_start_roots() {
+    let fixture = Fixture::new();
+    let help = fixture.run(&["help", "procedure", "preview"]);
+    let help = help["result"]["text"].as_str().unwrap();
+    assert!(help.contains("podway procedure preview <file>"), "{help}");
+    assert!(help.contains("current directory"), "{help}");
+    assert!(help.contains("Git worktree root"), "{help}");
+}
+
+#[test]
+fn absolute_procedure_start_uses_the_relative_request_identity() {
+    use podway_core::{Sha256Digest, WorkspaceId};
+    use podway_protocol::{
+        SessionStartCommandV1, SessionStartSourceV1, SessionStartV1, SliceCommandV1,
+        canonical_direct_start_digest_with_observation_v1,
+    };
+
+    let fixture = Fixture::new();
+    let source = write_hands003_procedure(&fixture);
+    let noisy_relative = ".podway/./procedures//hands003.yaml";
+    let noisy_absolute = format!("{}/{noisy_relative}", fixture.0.display());
+    let digest = podway_presets::lookup_v3("small-change-v3")
+        .unwrap()
+        .base_digest;
+    for path in [noisy_relative, noisy_absolute.as_str()] {
+        let dry_run = fixture.run(&[
+            "start",
+            "--procedure",
+            path,
+            "--expect-procedure-digest",
+            digest,
+            "--task",
+            HANDS003_START_TASK,
+            "--dry-run",
+        ]);
+        assert_eq!(dry_run["result"]["procedure_digest"], digest);
+        assert!(!fixture.0.join(".podway/runtime").exists());
+    }
+    let initialized = fixture.run(&["init", "--idempotency-key", "init"]);
+    let relative = fixture.output(&hands003_start_args(
+        noisy_relative,
+        digest,
+        "noisy-relative",
+    ));
+    let relative_error = serde_json::from_slice::<ErrorEnvelopeV2>(&relative.stdout).unwrap();
+    assert_eq!(relative_error.as_value()["code"], "PROCEDURE_INVALID");
+    let absolute = fixture.run(&hands003_start_args(&noisy_absolute, digest, "absolute"));
+    assert_eq!(absolute["result"]["procedure_digest"], digest);
+    let lookup = fixture.run(&["outcome", "lookup", "--idempotency-key", "absolute"]);
+    let expected_digest = canonical_direct_start_digest_with_observation_v1(
+        &SliceCommandV1::SessionStart(SessionStartCommandV1 {
+            start: SessionStartV1 {
+                source: SessionStartSourceV1::Procedure {
+                    procedure: HANDS003_PROCEDURE_FILE.to_owned(),
+                },
+                expected_procedure_digest: Some(Sha256Digest::new(digest.to_owned()).unwrap()),
+                task_title: HANDS003_START_TASK.to_owned(),
+                dry_run: false,
+            },
+            preconditions: None,
+        }),
+        &WorkspaceId::new(initialized["workspace"]["uuid"].as_str().unwrap()).unwrap(),
+        &Sha256Digest::new(digest.to_owned()).unwrap(),
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        lookup["result"]["outcome"]["request_digest"],
+        expected_digest.as_str()
+    );
+    assert_eq!(lookup["result"]["outcome"]["response"], absolute);
+    fs::remove_file(source).unwrap();
+    assert_eq!(
+        fixture.run(&hands003_start_args(
+            HANDS003_PROCEDURE_FILE,
+            digest,
+            "absolute"
+        )),
+        absolute
+    );
+}
+
+#[test]
+fn absolute_procedure_start_from_a_subdirectory_selects_the_named_source() {
+    let fixture = Fixture::new();
+    let local = fixture.0.join("nested/inner");
+    fs::create_dir_all(&local).unwrap();
+    let wanted = podway_presets::lookup_v3("small-change-v3").unwrap();
+    let decoy = podway_presets::lookup_v3("sw-dev-v3").unwrap();
+    fs::write(fixture.0.join("same.yaml"), decoy.base_yaml).unwrap();
+    let selected = local.join("same.yaml");
+    fs::write(&selected, wanted.base_yaml).unwrap();
+
+    let nested_preview =
+        |path: &Path| hands003_output_at(&local, &["procedure", "preview", path.to_str().unwrap()]);
+    let relative = nested_preview(Path::new("same.yaml"));
+    let absolute = nested_preview(&selected);
+    assert!(relative.status.success(), "{relative:?}");
+    assert!(absolute.status.success(), "{absolute:?}");
+    let relative: Value = serde_json::from_slice(&relative.stdout).unwrap();
+    let absolute: Value = serde_json::from_slice(&absolute.stdout).unwrap();
+    assert_eq!(absolute["result"], relative["result"]);
+    assert_eq!(absolute["result"]["file"], "same.yaml");
+    assert_eq!(absolute["result"]["start_argv"][3], "same.yaml");
+    assert_eq!(absolute["result"]["digest"], wanted.base_digest);
+    for path in [
+        fixture.0.join("same.yaml"),
+        local.join("../inner/same.yaml"),
+    ] {
+        refuse(
+            nested_preview(&path),
+            "REQUEST_INVALID",
+            2,
+            "preview requires a safe UTF-8 worktree-relative path",
+        );
+    }
+
+    // The relative dry-run remains cwd-based and store-independent.
+    for path in ["same.yaml", selected.to_str().unwrap()] {
+        let dry_run = hands003_output_at(
+            &local,
+            &[
+                "start",
+                "--procedure",
+                path,
+                "--expect-procedure-digest",
+                wanted.base_digest,
+                "--task",
+                HANDS003_START_TASK,
+                "--dry-run",
+            ],
+        );
+        assert_eq!(dry_run.status.code(), Some(0), "{dry_run:?}");
+        assert!(dry_run.stderr.is_empty(), "{dry_run:?}");
+        let dry_run: Value = serde_json::from_slice(&dry_run.stdout).unwrap();
+        assert_eq!(dry_run["result"]["procedure_digest"], wanted.base_digest);
+        assert_eq!(dry_run["result"]["dry_run"], true);
+        assert!(!fixture.0.join(".podway").exists());
+    }
+
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    let args = hands003_start_args(selected.to_str().unwrap(), wanted.base_digest, "nested");
+    let absolute = hands003_output_at(&local, &args);
+    assert_eq!(absolute.status.code(), Some(0), "{absolute:?}");
+    assert!(absolute.stderr.is_empty());
+    let absolute: Value = serde_json::from_slice(&absolute.stdout).unwrap();
+    assert_eq!(absolute["result"]["procedure_digest"], wanted.base_digest);
+    assert_eq!(
+        fixture.run(&hands003_start_args(
+            "nested/inner/same.yaml",
+            wanted.base_digest,
+            "nested"
+        )),
+        absolute
+    );
+
+    for worktree in [
+        "nested/inner",
+        "nested//inner",
+        "nested/./inner",
+        "nested/..",
+    ] {
+        let mut explicit = vec!["--worktree", worktree];
+        explicit.extend(args);
+        let replay = hands003_output_at(&fixture.0, &explicit);
+        assert_eq!(replay.status.code(), Some(0), "{replay:?}");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&replay.stdout).unwrap(),
+            absolute
+        );
+    }
+
+    let outside = Fixture::new();
+    let alias = outside.0.join("worktree-alias");
+    symlink(&fixture.0, &alias).unwrap();
+    let aliased = alias.join("nested/inner/same.yaml");
+    let aliased_subdirectory = format!("{}/nested/./inner", alias.display());
+    for (worktree, source) in [
+        (alias.to_str().unwrap(), &aliased),
+        (alias.to_str().unwrap(), &selected),
+        (aliased_subdirectory.as_str(), &aliased),
+    ] {
+        let mut explicit = vec!["--worktree", worktree];
+        explicit.extend(hands003_start_args(
+            source.to_str().unwrap(),
+            wanted.base_digest,
+            "nested",
+        ));
+        let replay = hands003_output_at(&outside.0, &explicit);
+        assert_eq!(replay.status.code(), Some(0), "{replay:?}");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&replay.stdout).unwrap(),
+            absolute
+        );
+    }
+}
+
+#[test]
+fn absolute_procedure_refusals_preserve_path_admission_and_state() {
+    let fixture = Fixture::new();
+    let outside = Fixture::new();
+    let original = write_hands003_procedure(&fixture);
+    let other = write_hands003_procedure(&outside);
+    let digest = podway_presets::lookup_v3("small-change-v3")
+        .unwrap()
+        .base_digest;
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    let subdirectory = fixture.0.join("nested");
+    fs::create_dir(&subdirectory).unwrap();
+    for directory in [&fixture.0, &subdirectory] {
+        symlink(original.parent().unwrap(), directory.join("linked")).unwrap();
+    }
+    let snapshot = || {
+        let mut snapshot = fixture.podway_snapshot();
+        // SQLite read admission can update volatile reader locks in SHM.
+        for (path, bytes, _, _) in &mut snapshot {
+            if path.ends_with("state.sqlite3-shm")
+                && let Some(bytes) = bytes
+            {
+                bytes.clear();
+            }
+        }
+        snapshot
+    };
+    let before = snapshot();
+    let procedure_name = original.file_name().unwrap();
+    let linked = Path::new("linked").join(procedure_name);
+    let parent = original
+        .parent()
+        .unwrap()
+        .join("../procedures")
+        .join(procedure_name);
+    for path in [&other, &parent] {
+        let path = path.to_str().unwrap();
+        for output in [
+            fixture.output(&["procedure", "preview", path]),
+            fixture.output(&hands003_start_args(path, digest, "rejected-path")),
+        ] {
+            assert_eq!(output.status.code(), Some(2), "{output:?}");
+            let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout).unwrap();
+            assert_eq!(error.as_value()["code"], "REQUEST_INVALID");
+        }
+    }
+    let absolute_link = fixture.0.join(&linked);
+    let with_parent_root = original.parent().unwrap().join("../..");
+    let path_with_parent_root = with_parent_root.join(HANDS003_PROCEDURE_FILE);
+    let mut matching_parent_args = vec!["--worktree", with_parent_root.to_str().unwrap()];
+    matching_parent_args.extend(hands003_start_args(
+        path_with_parent_root.to_str().unwrap(),
+        digest,
+        "rejected-path",
+    ));
+    let output = hands003_output_at(&fixture.0, &matching_parent_args);
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout).unwrap();
+    assert_eq!(error.as_value()["code"], "REQUEST_INVALID");
+    for (relative, absolute) in [
+        (
+            fixture.output(&["procedure", "preview", linked.to_str().unwrap()]),
+            fixture.output(&["procedure", "preview", absolute_link.to_str().unwrap()]),
+        ),
+        (
+            fixture.output(&hands003_start_args(
+                linked.to_str().unwrap(),
+                digest,
+                "rejected-link",
+            )),
+            fixture.output(&hands003_start_args(
+                absolute_link.to_str().unwrap(),
+                digest,
+                "rejected-link",
+            )),
+        ),
+    ] {
+        assert!(!relative.status.success());
+        assert_eq!(absolute.status, relative.status, "{absolute:?}");
+        let relative = serde_json::from_slice::<ErrorEnvelopeV2>(&relative.stdout).unwrap();
+        let absolute = serde_json::from_slice::<ErrorEnvelopeV2>(&absolute.stdout).unwrap();
+        for field in ["code", "message", "retryable", "details"] {
+            assert_eq!(absolute.as_value()[field], relative.as_value()[field]);
+        }
+    }
+    for (alias_name, target) in [
+        ("worktree-alias", &fixture.0),
+        ("subdirectory-alias", &subdirectory),
+    ] {
+        let alias = outside.0.join(alias_name);
+        symlink(target, &alias).unwrap();
+        let aliased_selection = alias.join("linked");
+        let aliased_source = aliased_selection.join(procedure_name);
+        let mut explicit = vec!["--worktree", aliased_selection.to_str().unwrap()];
+        explicit.extend(hands003_start_args(
+            aliased_source.to_str().unwrap(),
+            digest,
+            "rejected-link",
+        ));
+        let output = hands003_output_at(&outside.0, &explicit);
+        let target_source = target.join(&linked);
+        let relative = target_source.strip_prefix(&fixture.0).unwrap();
+        let relative = fixture.output(&hands003_start_args(
+            relative.to_str().unwrap(),
+            digest,
+            "rejected-link",
+        ));
+        assert!(!relative.status.success(), "{relative:?}");
+        assert_eq!(output.status, relative.status, "{alias_name}: {output:?}");
+        let relative = serde_json::from_slice::<ErrorEnvelopeV2>(&relative.stdout).unwrap();
+        let absolute = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout).unwrap();
+        for field in ["code", "message", "retryable", "details"] {
+            assert_eq!(absolute.as_value()[field], relative.as_value()[field]);
+        }
+    }
+    for key in ["rejected-path", "rejected-link"] {
+        let lookup = fixture.run(&["outcome", "lookup", "--idempotency-key", key]);
+        assert_eq!(lookup["result"]["found"], false);
+    }
+    assert_eq!(snapshot(), before);
+}
+
+#[test]
+fn scaffold_v3_admits_a_distinct_custom_procedure() {
+    let fixture = Fixture::new();
+    let scaffold = fixture.run(&["procedure", "scaffold"]);
+    let document = scaffold["result"]["document"].as_str().unwrap();
+    assert!(
+        document
+            .lines()
+            .any(|line| line == "id: custom-procedure-v3")
+    );
+    fs::write(fixture.0.join("scaffold.yaml"), document).unwrap();
+    let check = fixture.run(&[
+        "procedure",
+        "check",
+        "scaffold.yaml",
+        "--warnings-as-errors",
+    ]);
+    assert_eq!(check["result"]["digest"], scaffold["result"]["digest"]);
+    let preview = fixture.run(&["procedure", "preview", "scaffold.yaml"]);
+    let graph = fixture.run(&["procedure", "graph", "scaffold.yaml", "--format", "mermaid"]);
+    assert_eq!(preview["result"]["digest"], scaffold["result"]["digest"]);
+    assert_eq!(preview["result"]["document_id"], "custom-procedure-v3");
+    assert_eq!(preview["result"]["admissible"], true);
+    assert_eq!(graph["result"]["digest"], scaffold["result"]["digest"]);
+    assert_eq!(graph["result"]["format"], "mermaid");
+    assert_eq!(graph["result"]["projection"], preview["result"]["mermaid"]);
+    assert!(
+        graph["result"]["projection"]
+            .as_str()
+            .unwrap()
+            .starts_with("flowchart"),
+        "{graph:?}"
+    );
+    for preset in podway_presets::list_v3() {
+        assert_ne!(scaffold["result"]["digest"], preset.base_digest);
+        assert_ne!(scaffold["result"]["digest"], preset.group_digest);
+    }
+    for preset in podway_presets::list() {
+        assert_ne!(scaffold["result"]["digest"], preset.shipped_digest);
+    }
+}
+
 const LEGACY_STORE_15_WRITER_SHA256: &str =
     "c9923c6c1fee8c31e595c8163863051ebc5d62ae651c3a947b8662cd3aa927a7";
 const LEGACY_STATUS_15_JSON: &str = concat!(

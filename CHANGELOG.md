@@ -11,6 +11,9 @@ This file records concise shipped outcomes and the planned next stable release.
   history DAG or attempts receives a retained group digest without its execution.
 - Show how to keep legacy Store history with its original Podway writer and
   warn that `reset --all` destroys current and retained history.
+- Omit the reserved default preset from new workspace configuration, accept
+  absolute Procedure paths within the selected worktree, and give the minimal
+  Procedure scaffold its own identity and digest.
 
 ## v0.2.18 - 2026-11-23
 

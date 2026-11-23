@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 
 use super::{
     Cli, Command, ExistingSessionPolicy, LocalFailure, RunResult, StartTerminalDisposition,
-    StatusPreflight, invalid_v2_value, local_result_v2, procedure_config_failure, procedure_format,
-    read_worktree_procedure, workspace_target,
+    StatusPreflight, WorkspaceTarget, invalid_v2_value, local_result_v2, procedure_config_failure,
+    procedure_format, read_worktree_procedure, workspace_target,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -261,7 +261,10 @@ fn prompt_start_text(label: &str) -> Result<Option<String>, LocalFailure> {
 
 /// Preview the same v3 base and default group used by native start. The
 /// unfenced preview neither initializes nor opens a Store.
-pub(super) fn preview(cli: &Cli) -> Result<RunResult, LocalFailure> {
+pub(super) fn preview(
+    cli: &Cli,
+    procedure_worktree: Option<WorkspaceTarget>,
+) -> Result<RunResult, LocalFailure> {
     use podway_config::execution_groups::{
         SuccessorDefinition, parse_successor_document, validate_successor_definition,
     };
@@ -289,7 +292,10 @@ pub(super) fn preview(cli: &Cli) -> Result<RunResult, LocalFailure> {
             .procedure
             .as_deref()
             .ok_or_else(|| LocalFailure::request_invalid("start requires a preset or procedure"))?;
-        let worktree = workspace_target(cli.worktree.clone())?;
+        let worktree = match procedure_worktree {
+            Some(target) => target,
+            None => workspace_target(cli.worktree.clone())?,
+        };
         let procedure = Path::new(path);
         let source = read_worktree_procedure(&worktree, procedure)?;
         let admitted = validate_successor_definition(

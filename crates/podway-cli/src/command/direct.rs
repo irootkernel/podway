@@ -32,6 +32,22 @@ pub(super) struct Invocation {
 
 use podway_engine::direct_api as protocol_boundary;
 
+pub(super) fn worktree_selector(
+    target: &WorkspaceTarget,
+) -> Result<protocol_boundary::WorktreeSelectorV1, LocalFailure> {
+    protocol_boundary::WorktreeSelectorV1::new(
+        protocol_boundary::WORKTREE_SELECTOR_VERSION_V1,
+        None,
+        protocol_boundary::LosslessPathV1::from_raw_bytes(
+            &target.path_bytes,
+            protocol_boundary::DiagnosticPathDisplayV1::new(target.display.clone())
+                .map_err(|_| LocalFailure::request_invalid("worktree display is invalid"))?,
+        )
+        .map_err(|_| LocalFailure::request_invalid("worktree path bytes are invalid"))?,
+    )
+    .map_err(|_| LocalFailure::request_invalid("workspace selector is invalid"))
+}
+
 impl Invocation {
     fn new(
         target: &WorkspaceTarget,
@@ -39,17 +55,7 @@ impl Invocation {
         started: Instant,
         generation: protocol::ContractGenerationV1,
     ) -> Result<Self, LocalFailure> {
-        let selector = protocol_boundary::WorktreeSelectorV1::new(
-            protocol_boundary::WORKTREE_SELECTOR_VERSION_V1,
-            None,
-            protocol_boundary::LosslessPathV1::from_raw_bytes(
-                &target.path_bytes,
-                protocol_boundary::DiagnosticPathDisplayV1::new(target.display.clone())
-                    .map_err(|_| LocalFailure::request_invalid("worktree display is invalid"))?,
-            )
-            .map_err(|_| LocalFailure::request_invalid("worktree path bytes are invalid"))?,
-        )
-        .map_err(|_| LocalFailure::request_invalid("workspace selector is invalid"))?;
+        let selector = worktree_selector(target)?;
         let manifest = Sha256Digest::new(build_identity_v1().contract_manifest_digest().to_owned())
             .map_err(invalid_v2_value)?;
         Ok(Self {
@@ -266,7 +272,14 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     }
     prepare_stdin_payload(&mut cli.command)?;
     apply_record_input(&mut cli)?;
-    validate_direct_flags(&cli)?;
+    let normalized_start = validate_direct_flags(&cli)?;
+    let procedure_worktree = normalized_start.map(|(procedure, target)| {
+        let Command::Start(args) = &mut cli.command else {
+            unreachable!("only start accepts a Procedure source path");
+        };
+        args.procedure = Some(procedure);
+        target
+    });
     validate_command_shape(&cli.command)?;
     // The offline preview applies only to unfenced plain dry runs; a fenced
     // dry run verifies the fences and the lifecycle read-only through the
@@ -281,9 +294,12 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     ) && cli.if_workspace_uuid.is_none()
         && cli.if_session_id.is_none()
     {
-        return start::preview(&cli);
+        return start::preview(&cli, procedure_worktree);
     }
-    let mut target = workspace_target(cli.worktree.clone())?;
+    let mut target = match procedure_worktree {
+        Some(target) => target,
+        None => workspace_target(cli.worktree.clone())?,
+    };
     if matches!(
         &cli.command,
         Command::Workspace {

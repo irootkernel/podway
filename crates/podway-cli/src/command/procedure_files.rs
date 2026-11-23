@@ -5,7 +5,7 @@ use std::{
     fs::{self},
     io::{Read, Write},
     os::{fd::OwnedFd, unix::fs::MetadataExt},
-    path::{Component, Path},
+    path::{Component, Path, PathBuf},
 };
 
 use nix::{
@@ -42,6 +42,34 @@ pub(super) fn is_worktree_relative_procedure_path(path: &Path) -> bool {
         && !path
             .components()
             .any(|component| matches!(component, std::path::Component::ParentDir))
+}
+
+/// Match the caller's root spelling without resolving the Procedure path.
+/// An empty suffix still identifies the first matched root.
+pub(super) fn relativize_procedure_path(path: &Path, roots: &[&Path]) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return Some(path.to_path_buf());
+    }
+    // Check the whole spelling before a root prefix can hide a parent step.
+    if path.components().any(|part| part == Component::ParentDir) {
+        return None;
+    }
+    roots
+        .iter()
+        .find_map(|root| path.strip_prefix(root).ok())
+        .and_then(normalize_relative_procedure_components)
+}
+
+pub(super) fn normalize_relative_procedure_components(path: &Path) -> Option<PathBuf> {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(name) => normalized.push(name),
+            Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    Some(normalized)
 }
 
 /// Opens a procedure named by an ordinary filesystem path, keeping everything a rewrite needs.
@@ -314,13 +342,47 @@ fn procedure_write_failure() -> LocalFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     struct OwnedDirectory(PathBuf);
     impl Drop for OwnedDirectory {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn relative_procedure_path_matches_roots_in_order_and_normalizes_only_absolute_input() {
+        let logical = Path::new("/logical");
+        let physical = Path::new("/physical");
+        let nested = Path::new("/physical/nested");
+        let roots = [logical, physical];
+        let relative = Path::new("nested/./inner//source.yaml");
+        let absolute = physical.join(relative);
+        assert_eq!(
+            relativize_procedure_path(relative, &roots)
+                .unwrap()
+                .as_os_str(),
+            relative.as_os_str()
+        );
+        assert_eq!(
+            relativize_procedure_path(&absolute, &roots)
+                .unwrap()
+                .as_os_str(),
+            OsStr::new("nested/inner/source.yaml")
+        );
+        assert_eq!(
+            relativize_procedure_path(nested, &[nested, physical])
+                .unwrap()
+                .as_os_str(),
+            OsStr::new("")
+        );
+        assert!(
+            relativize_procedure_path(
+                Path::new("/physical/other/../nested/source.yaml"),
+                &[Path::new("/physical/other/../nested"), physical]
+            )
+            .is_none()
+        );
     }
 
     #[test]

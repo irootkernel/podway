@@ -147,5 +147,7 @@ the established built-in preset digests do not rotate. Conditions are part of th
 immutable canonical snapshot and require no runtime-row migration.
 
 Current authoring commands accept Procedure v3 bases and Execution Group v1
-definitions. `scaffold` emits a Procedure v3 base. `start` admits only a base.
+definitions. `scaffold` emits the canonical Procedure v3 base
+`custom-procedure-v3` with an admitted digest distinct from the built-in presets.
+`start` admits only a base.
 An older Procedure v2 document requires its original authoring tool and writer.

@@ -22,7 +22,7 @@ use std::{
     ffi::OsString,
     fs::{self},
     io::{self, IsTerminal, Read, Write},
-    os::unix::ffi::OsStrExt,
+    os::unix::ffi::{OsStrExt, OsStringExt},
     path::{Path, PathBuf},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -59,8 +59,9 @@ use grammar::{
 use grammar::{ParseFailureCommandContext, parse_timeout_millis};
 use preflight::{StatusPreflight, fill_facts};
 use procedure_files::{
-    is_worktree_relative_procedure_path, open_descriptor_relative_procedure,
-    open_offline_procedure, procedure_format, read_worktree_procedure, replace_procedure_document,
+    is_worktree_relative_procedure_path, normalize_relative_procedure_components,
+    open_descriptor_relative_procedure, open_offline_procedure, procedure_format,
+    read_worktree_procedure, relativize_procedure_path, replace_procedure_document,
 };
 #[cfg(test)]
 use render::{
@@ -686,7 +687,7 @@ fn local_result_v2(
     }
 }
 
-fn validate_direct_flags(cli: &Cli) -> Result<(), LocalFailure> {
+fn validate_direct_flags(cli: &Cli) -> Result<Option<(String, WorkspaceTarget)>, LocalFailure> {
     let command = &cli.command;
     let wire = command
         .direct_route()
@@ -866,17 +867,25 @@ fn validate_direct_flags(cli: &Cli) -> Result<(), LocalFailure> {
             ));
         }
     }
-    match command {
+    let normalized_procedure = match command {
         Command::Start(StartArgs {
             procedure: Some(procedure),
             ..
-        }) if !is_worktree_relative_procedure_path(Path::new(procedure)) => {
-            return Err(LocalFailure::request_invalid(
-                "procedure must be worktree-relative",
-            ));
+        }) => {
+            let path = Path::new(procedure);
+            let normalized = normalize_absolute_start_procedure(path, cli.worktree.as_deref())?;
+            let relative = normalized
+                .as_ref()
+                .map_or(path, |(relative, _)| Path::new(relative));
+            if !is_worktree_relative_procedure_path(relative) {
+                return Err(LocalFailure::request_invalid(
+                    "procedure must be worktree-relative",
+                ));
+            }
+            normalized
         }
-        _ => {}
-    }
+        _ => None,
+    };
     match command {
         Command::Start(args)
             if args.supersede_reason.is_some()
@@ -929,7 +938,7 @@ fn validate_direct_flags(cli: &Cli) -> Result<(), LocalFailure> {
         }
         _ => {}
     }
-    Ok(())
+    Ok(normalized_procedure)
 }
 
 fn validate_command_shape(command: &Command) -> Result<(), LocalFailure> {
@@ -1446,14 +1455,7 @@ fn item_id(command: &Command) -> Option<&str> {
 }
 
 fn workspace_target(worktree: Option<PathBuf>) -> Result<WorkspaceTarget, LocalFailure> {
-    let path = worktree.unwrap_or_else(|| PathBuf::from("."));
-    let absolute = if path.is_absolute() {
-        path
-    } else {
-        env::current_dir()
-            .map_err(|_| LocalFailure::internal("current directory cannot be resolved"))?
-            .join(path)
-    };
+    let absolute = absolute_workspace_path(worktree.as_deref())?;
     let canonical = match fs::canonicalize(&absolute) {
         Ok(canonical) => canonical,
         Err(error) if error.kind() == io::ErrorKind::NotFound => absolute,
@@ -1463,16 +1465,90 @@ fn workspace_target(worktree: Option<PathBuf>) -> Result<WorkspaceTarget, LocalF
             ));
         }
     };
-    let path_bytes = canonical.as_os_str().as_bytes().to_vec();
+    workspace_target_for_path(canonical)
+}
+
+fn absolute_workspace_path(worktree: Option<&Path>) -> Result<PathBuf, LocalFailure> {
+    let path = worktree.unwrap_or_else(|| Path::new("."));
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    env::current_dir()
+        .map(|current| current.join(path))
+        .map_err(|_| LocalFailure::internal("current directory cannot be resolved"))
+}
+
+fn workspace_target_for_path(path: PathBuf) -> Result<WorkspaceTarget, LocalFailure> {
+    let path_bytes = path.as_os_str().as_bytes().to_vec();
     if path_bytes.is_empty() {
         return Err(LocalFailure::request_invalid("worktree path is empty"));
     }
-    let display = canonical.display().to_string();
+    let display = path.display().to_string();
     Ok(WorkspaceTarget {
-        path: canonical,
+        path,
         path_bytes,
         display,
     })
+}
+
+fn normalize_absolute_start_procedure(
+    procedure: &Path,
+    worktree: Option<&Path>,
+) -> Result<Option<(String, WorkspaceTarget)>, LocalFailure> {
+    if !procedure.is_absolute() {
+        return Ok(None);
+    }
+    let spelling = absolute_workspace_path(worktree)?;
+    let selected = workspace_target(Some(spelling.clone()))?;
+    let selector = direct::worktree_selector(&selected)?;
+    let root = match podway_engine::direct_api::NativeGitResolverV1::new()
+        .resolve_git_only(selector)
+    {
+        Ok(worktree) => PathBuf::from(OsString::from_vec(
+            worktree
+                .roots()
+                .worktree_root()
+                .decode_path_bytes()
+                .map_err(|_| LocalFailure::internal("resolved worktree path bytes are invalid"))?,
+        )),
+        // The unfenced dry-run may work in a standalone directory. Normal
+        // start still requires the Engine's full worktree admission.
+        Err(_) => selected.path.clone(),
+    };
+    let invalid = || LocalFailure::request_invalid("procedure must be worktree-relative");
+    let relative = if let Some(suffix) = relativize_procedure_path(procedure, &[&spelling]) {
+        if suffix.as_os_str().is_empty() {
+            return Err(invalid());
+        }
+        // Preserve any prefix spelled below the Git root for the nofollow
+        // walk, including when an ancestor spells the root through an alias.
+        let prefix = spelling
+            .strip_prefix(&root)
+            .ok()
+            .map(Path::to_path_buf)
+            .or_else(|| {
+                spelling
+                    .ancestors()
+                    .filter_map(|ancestor| {
+                        let canonical = fs::canonicalize(ancestor).ok()?;
+                        let prefix = canonical.strip_prefix(&root).ok()?;
+                        let remainder = spelling.strip_prefix(ancestor).ok()?;
+                        Some(prefix.join(remainder))
+                    })
+                    .last()
+            })
+            .ok_or_else(invalid)?;
+        normalize_relative_procedure_components(&prefix.join(suffix)).ok_or_else(invalid)?
+    } else {
+        relativize_procedure_path(procedure, &[&root]).ok_or_else(invalid)?
+    };
+    let relative = relative
+        .as_os_str()
+        .to_str()
+        .filter(|path| !path.is_empty())
+        .ok_or_else(invalid)?
+        .to_owned();
+    Ok(Some((relative, workspace_target_for_path(root)?)))
 }
 
 fn workspace_removal_target(target: WorkspaceTarget) -> Result<WorkspaceTarget, LocalFailure> {

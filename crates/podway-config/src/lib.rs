@@ -79,7 +79,8 @@ pub use procedure_v2_preview::{
     ProcedurePreviewStartSuggestionV2, ProcedurePreviewSummaryV2, preview_procedure_v2,
 };
 pub use procedure_v2_scaffold::{
-    SCAFFOLD_TEMPLATE_MINIMAL, ScaffoldTemplate, scaffold_procedure_v2,
+    SCAFFOLD_TEMPLATE_MINIMAL, SCAFFOLD_TEMPLATE_MINIMAL_V3, ScaffoldTemplate,
+    scaffold_procedure_v2,
 };
 pub use procedure_v2_validate::{ValidatedProcedureV2, validate_procedure_v2};
 pub use procedure_v2_vet::vet_procedure_v2;
@@ -93,7 +94,7 @@ pub use integration_settings::{
     parse_user_config_v1_with_limits, resolve_integration_settings_v1,
 };
 /// The complete, explicit v1 workspace configuration written for a new workspace.
-pub const DEFAULT_WORKSPACE_CONFIG_YAML_V1: &[u8] = b"schema: podway.workspace/v1\nprocedure_paths:\n  - .podway/procedures\ndefault_preset: sw-dev-v3\nui:\n  show_stage_in_prompt: false\n";
+pub const DEFAULT_WORKSPACE_CONFIG_YAML_V1: &[u8] = b"schema: podway.workspace/v1\nprocedure_paths:\n  - .podway/procedures\nui:\n  show_stage_in_prompt: false\n";
 
 #[doc(hidden)]
 pub const V15_FIXTURE_WORKSPACE_CONFIG_YAML_V1: &[u8] = b"schema: podway.workspace/v1\nprocedure_paths:\n  - .podway/procedures\ndefault_preset: sw-dev-v2\nui:\n  show_stage_in_prompt: false\n";
