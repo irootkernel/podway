@@ -20,6 +20,37 @@ sequence, for example `OPTIM-001`. Existing alphanumeric epic IDs, including
 `V2CTR` and `REL12`, and the compact `REL12` task IDs remain unchanged historical
 identifiers. Do not rename completed work to apply the new convention.
 
+## HANDS — Hands-on Usability Corrections
+
+Dependencies: completed [ADOPT](#adopt-product-adoption-and-qualification). Status: Planned.
+Detailed SOT: [hands-on usability dossier](../todo/TODO-podway-hands-on-usability.md).
+Execution owner: `aquarium:epic-handler` when explicitly invoked.
+
+HANDS corrects the ten usability findings from the owner-requested hands-on
+evaluation of the published `v0.2.18`. Refusals will name their correctable
+cause, human legacy-Store refusals will show the original-writer path, inert or
+surprising authoring and configuration behavior will be removed, human status
+will be readable, and citation responsibility will be documented. Each finding
+has an implementation card in the dossier: reproduction, files, exact messages,
+tests and stop conditions. HANDS changes no Procedure, Store layout, runtime
+model, details schema or contract manifest, so `v0.2.18` Stores stay readable
+and no writer predecessor is needed. The only classification change is the
+dossier's narrow history-definition refusal. Structured legacy alternatives
+remain [DF-055](../deferred-feedback/README.md). No target release is assigned.
+Release, installation, Store migration and consumer-repository changes remain
+separately authorized.
+
+Tasks run in numeric order. At most the first unfinished Task is In Progress,
+In Review or Blocked. Each Task passes the dossier's task gate before review.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `HANDS-001` | Name correctable causes in refusals | Planned | Implement M1, H1, H2, H3 and H7: name unknown arguments and invalid values, stdin template placeholders, blank reasons and domain-state causes, activation causes and every missing removal confirmation. Refuse a retained group digest without `--group-execution` as non-retryable `REQUEST_INVALID`. Done when every card test passes and the manifest is unchanged. | [Cards M1, H1, H2, H3, H7](../todo/TODO-podway-hands-on-usability.md#4-accepted-design-decisions-and-implementation-cards) |
+| `HANDS-002` | Show non-destructive legacy recovery | Planned | Implement H4: add generation-aware human hint lines that name the original writer before the destructive reset, with JSON byte-identical in both generations. Update specifications, upgrade QA and the runtime skill. Done when the generation-15 e2e passes with unchanged Store bytes. | [Card H4](../todo/TODO-podway-hands-on-usability.md#h4-non-destructive-legacy-guidance-hands-002) |
+| `HANDS-003` | Remove authoring and configuration surprises | Planned | Implement H5, H6 and H10: stop writing the inert `default_preset`, accept absolute in-worktree paths by lexical normalization, and give the minimal scaffold a distinct identity. Done when card tests and the existing path-safety tests pass. | [Cards H5, H6, H10](../todo/TODO-podway-hands-on-usability.md#h5-inert-default-preset-hands-003) |
+| `HANDS-004` | Summarize human status and document citations | Planned | Implement H8 and H9: render compact human status and next output (except `--verbose`) without changing JSON, and document that citation-free assessments are unsubstantiated caller assertions. Done when the human-output e2e and updated help tests pass. | [Cards H8, H9](../todo/TODO-podway-hands-on-usability.md#h8-human-status-summary-hands-004) |
+| `HANDS-005` | Qualify HANDS and prepare closeout | Planned | Pass `make test`, an independent whole-Epic review and a repeated hands-on pass over every reproduction step. Promote durable owners and prepare owner-approved dossier retirement. | [Verification](../todo/TODO-podway-hands-on-usability.md#7-verification-and-release-acceptance) |
+
 ## Execution Group Continuation Program
 
 Target product release: `v0.2.18`, selected by the owner for the current open
