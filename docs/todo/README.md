@@ -102,10 +102,6 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-- The [hands-on usability dossier](TODO-podway-hands-on-usability.md) records
-  the decision-complete design for
-  [HANDS](../roadmap/README.md#hands-hands-on-usability-corrections), which
-  corrects the ten findings from the `v0.2.18` hands-on evaluation.
 - The [execution-group continuation dossier](TODO-podway-continuation-groups.md)
   records the shared design for
   [FRAME, GROUP, TRACE and ADOPT](../roadmap/README.md#execution-group-continuation-program).

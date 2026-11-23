@@ -29,10 +29,11 @@ successor CLI. The walkthrough covers first activation, current evidence,
 correction, justified replanning and base closeout.
 
 Current adopted work is tracked by the [active roadmap](roadmap/).
-[HANDS](roadmap/README.md#hands-hands-on-usability-corrections) is In Progress. It
-corrects the ten usability findings from the `v0.2.18` hands-on evaluation
-under its [adopted dossier](todo/TODO-podway-hands-on-usability.md). No target
-release is assigned.
+[HANDS](roadmap/README.md#hands-hands-on-usability-corrections) completed the
+ten usability corrections from the `v0.2.18` hands-on evaluation. The
+[CLI specification](specs/interfaces/cli-specification.md) and
+[integrated qualification](implementation-tips/testing.md#hands-integrated-qualification)
+retain the delivered behavior and verification. No target release is assigned.
 The [execution-group continuation program](roadmap/README.md#execution-group-continuation-program)
 targets `v0.2.18` for its first public release. FRAME implements the internal
 model through successor schemas, Config source admission and Core lifecycle
