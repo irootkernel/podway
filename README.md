@@ -78,9 +78,9 @@ System Settings before its first run.
 
 ## Install a release
 
-The Procedure v3 and Execution Group v1 cutover targets `v0.2.18`. These
-source instructions apply to a matching development build until a compatible
-release is published. Select a released archive by its exact contract identity.
+The Procedure v3 and Execution Group v1 cutover ships in
+[v0.2.18](https://github.com/irootkernel/podway/releases/tag/v0.2.18).
+Select a released archive by its exact contract identity.
 
 If an older daemon-based generation is installed, complete the separately
 authorized [legacy cutover](#legacy-state-and-cutover) before installing this CLI
@@ -172,8 +172,8 @@ For a small project-wide policy, add this template to the project's `AGENTS.md`:
 - Podway records assertions; it does not run the work or prove semantic truth.
 ```
 
-The checked-in [runtime skill](skills/use-podway/) and
-[authoring skill](skills/create-podway-procedure/) cover the successor source.
+The [v0.2.18 runtime skill](https://github.com/irootkernel/podway/tree/v0.2.18/skills/use-podway) and
+[v0.2.18 authoring skill](https://github.com/irootkernel/podway/tree/v0.2.18/skills/create-podway-procedure) cover Procedure v3 and Execution Group v1.
 Use both complete directories from the same reviewed commit or published release
 as the matching CLI. See the
 [Procedure v3 continuation walkthrough](docs/examples/continuation-v3.md) for
