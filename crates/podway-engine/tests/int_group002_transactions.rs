@@ -829,7 +829,8 @@ fn insufficient_plan_return_output_and_stale_identity_do_not_publish_success() {
             || panic!("invalid source reads no clock"),
             &NativeDirectIdSourceV1
         ),
-        Err(SuccessorExecutionError::GroupDefinitionMismatch)
+        Err(SuccessorExecutionError::GroupActivationDefinitionMismatch { actual })
+            if &actual == group.digest()
     ));
     fixture.compare_rejected(&ready, "digest", (0, 0, 0));
 

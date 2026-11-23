@@ -601,6 +601,43 @@ fn hands001_assess_criteria_reports_the_invalid_domain_state() {
 }
 
 #[test]
+fn hands005_message_suffix_truncates_at_the_unicode_scalar_limit() {
+    const REASON: &str = "\
+        流程状态不符合当前迁移条件流程状态不符合当前迁移条件流程状态不符合当前迁移条件流程状态不符合当前迁移条件流程状态不符合当前迁移条件\
+        流程状态不符合当前迁移条件流程状态不符合当前迁移条件流程状态不符合当前迁移条件流程状态不符合当前迁移条件流程状态不符合当前迁移条件\
+        流程状态不符合当前迁移条件流程状态不符合当前迁移条件流程状态不符合当前迁移条件流程状态不符合当前迁移条件流程状态不符合当前迁移条件\
+        流程状态不符合当前迁移条件流程状态不符合当前迁移条件流程状态不符合当前迁移条件流程状态不符合当前迁移条件流程状态不符合当前迁移条件\
+        流程状态不符合当前迁移条件流程状态不符合当前迁移条件流程状态不符合当前迁移条件流程状态不符合当前迁移条件流程状态不符合当前迁移条件\
+        流程状态不符合当前迁移条件流程状态不符合当前迁移条件流程状态不符合当前迁移条件流程状态不符合当前迁移条件流程状态不符合当前迁移条件\
+        流程状态不符合当前迁移条件流程状态不符合当前迁移条件流程状态不符合当前迁移条件流程状态不符合当前迁移条件流程状态不符合当前迁移条件\
+        流程状态不符合当前迁移条件界🦦|truncated suffix";
+    const PREFIX: &str = "Request is malformed or violates schema. (";
+    const LIMIT: usize = 512;
+    // The marker follows the last admitted Unicode scalar.
+    let (expected_reason, _) = REASON.split_once('|').unwrap();
+
+    let command = "goal.assess_criteria";
+    let value = assert_error(
+        DirectExecutionErrorV1::Successor(
+            podway_engine::successor_execution::SuccessorExecutionError::Domain(
+                DomainError::InvalidState { reason: REASON },
+            ),
+        ),
+        command,
+        "REQUEST_INVALID",
+    );
+    let message = value["message"].as_str().unwrap();
+    let retained_reason = message.strip_prefix(PREFIX).unwrap();
+    assert_eq!(message.chars().count(), LIMIT);
+    assert_eq!(retained_reason, expected_reason);
+    assert_eq!(value["command"], command);
+    assert_eq!(value["request_id"], ID);
+    assert_eq!(value["exit_code"], 2);
+    assert_eq!(value["retryable"], false);
+    assert_eq!(value["details"], serde_json::json!({}));
+}
+
+#[test]
 fn hands001_group_activation_outside_the_anchor_explains_the_next_action() {
     let value = assert_error(
         DirectExecutionErrorV1::Successor(

@@ -1744,6 +1744,51 @@ Engine cases exercise internal transaction boundaries. The CLI cases exercise
 public invocation, durable outcomes, response delivery and the selected wire
 contracts. Stable release qualification uses its own selected release gate.
 
+## HANDS integrated qualification
+
+The integrated run used the product source at
+`20639278a4130a01ef8fe83a8021d9abe4bf019d`. The first `make test` run stopped
+at two stale Engine expectations. The activation transaction check now expects
+the typed mismatch with the admitted source digest. The history check now expects
+the distinct refusal for a retained group digest without an execution. Their
+rollback and retention assertions remain in place. Both corrected exact checks
+passed, followed by the complete configured Gaori `full` run of `make test` on
+the aligned inputs.
+
+The hands-on pass used the same optimized `aarch64-apple-darwin` candidate in
+owned Git fixtures. All 317 captured candidate JSON envelopes passed offline
+validation against the packaged Draft 2020-12 schemas with format checks.
+Removing the request ID from each envelope caused all 317 negative controls to
+fail validation. The package verifier checked 143 schemas and 183 manifest assets.
+The matrix includes both contract selectors and the default selector.
+The checked scopes and regression owners complement the
+[CLI specification](../specs/interfaces/cli-specification.md),
+[error contract](../specs/interfaces/errors-and-exit-codes.md), and
+[JSON contract](../specs/interfaces/json-contract.md).
+
+The Store 15 renderer regression runs in the normal offline `make test` gate.
+The authentic E2E case requires `PODWAY_TEST_LEGACY_V017_BINARY` pointing to a
+verified `v0.2.17` writer. The [upgrade scenario](release-upgrade-qa.md#direct-to-direct-boundary-for-store-16)
+gives the exact opt-in invocation. The H4 row records the separate native run
+with the optimized candidate and the verified writer.
+
+| Scope | Native scenario and observed result | Regression owners |
+| --- | --- | --- |
+| M1 | Domain and activation refusals retain the catalog prefix and typed fields, append the exact cause or admitted digest, and land within the 512-scalar bound. Rejected keys are absent and observation and sequence are unchanged. | Engine `int_v2dfc006_errors`, `int_group002_transactions`; CLI `e2e_hands_usability` |
+| H1 | The literal archive and timeout syntax refusals identify trusted route and option labels. A real replacement activation reports the unfilled `prior_work` token and pointer, with fallback and human escaping controls. Blank block, retry and cancel reasons and an unknown scoped criterion give their own diagnostics. | CLI `e2e_v2dfc007_local_cli`, `e2e_hands_usability`; Protocol `int_hands_usability`; Engine `int_v2dfc006_errors` |
+| H2 | After returning a completed group, DAG and attempts require its execution ID for its retained digest. The explicit execution works and an ordinary mismatched digest remains retryable. A wrong activation pin names the actual supplied definition digest. | Engine `int_trace002_history`, `int_group002_transactions`; CLI `e2e_hands_usability` |
+| H3 | Off-anchor activation with no current activation template, empty prior work, and unknown retained execution each produce the expected cause and leave no outcome. | CLI `e2e_hands_usability`; Engine `int_v2dfc006_errors` |
+| H4 | The verified v0.2.17 writer creates Store 15. Human status gives the ordered original-writer and reset guidance, and JSON matches the frozen refusal in both selectors. The closed writer's main and WAL bytes are retained in a separate SHM-free witness, preserved by every read. | CLI `authentic_store_15_preserves_json_and_adds_human_history_guidance` and renderer tests |
+| H5 | New init omits the reserved default. An existing v2 preset value remains readable, healthy and byte-identical through init, repair and reset. | Config `int_phase4_workspace_config`; Engine `int_v2dfc006_workspace`; CLI `e2e_hands_usability` |
+| H6 | Literal in-worktree absolute preview and start admit the file. Preview emits its relative path and argv. Start retains the relative canonical request identity, confirmed by digest and exact same-key replay. Absolute lexical cleanup works and outside paths, parent traversal, directory roots and symlinks are refused. | CLI `e2e_hands_usability` and `command::procedure_files`; Git `int_phase3_layout`, `int_phase3_resolver`; [filesystem rules](../architecture/git-worktree-and-filesystem.md#path-containment) |
+| H7 | Each incomplete JSON and non-interactive human confirmation combination lists the missing requirements in order, exits 2 and retains no success. | CLI `hands001_removal_reports_every_missing_confirmation_in_order` |
+| H8 | Prepared, blocked and ready base, running group, and completed views emit the ordered human summary. Tracked native views print the current outcome and revision. Quiet, full status and observe views, history attempts and the next verbose refusal retain their established behavior. | CLI `e2e_hands_usability`, `agent006_scoped_goal_assessment_and_closeout` and renderer controls; GUIDE-004/006 compatibility baselines |
+| H9 | The optimized batch help, CLI specification and source [goal reference](../../skills/use-podway/references/goal.md#assess-and-decide) carry the exact citation-responsibility sentence. | CLI `agent003_goal_assess_criteria_help_example_decodes_and_names_status_goal_revision` |
+| H10 | The minimal Procedure v3 scaffold has its own identity and digest. Strict check, canonical format, preview and Mermaid graph agree with admission, and every shipped v3 base/group pin differs. | Config `minimal_v3_scaffold_is_canonical_admissible_and_distinct_from_presets`, retained v2 scaffold suite; CLI `scaffold_v3_admits_a_distinct_custom_procedure` |
+
+The integrated pass covers development and isolated native behavior. Stable
+distribution and release qualification follow their own [release workflow](release.md).
+
 ## Candidate group-lineage qualification
 
 Run the registered history cases against the isolated successor Engine and

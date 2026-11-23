@@ -759,7 +759,7 @@ fn scoped_attempts_values_and_artifact_presence_survive_replacement_and_archive(
             SuccessorHistoryDefinition::Base(group.digest()),
             None
         ),
-        Err(SuccessorExecutionError::GroupDefinitionMismatch)
+        Err(SuccessorExecutionError::HistoryGroupExecutionRequired)
     ));
     let unknown_execution =
         GroupExecutionIdV1::new("00000000-0000-4000-8000-000000000001").unwrap();
