@@ -103,7 +103,11 @@ pub enum SuccessorExecutionError {
     InvalidHistoryPageToken,
     StaleHistoryPageToken,
     HistoryGroupNotFound,
+    HistoryGroupExecutionRequired,
     GroupDefinitionMismatch,
+    GroupActivationDefinitionMismatch {
+        actual: Sha256Digest,
+    },
     GroupActivationNotAllowed,
     GroupActivationPriorWorkInvalid(DomainError),
     GroupReturnNotAllowed,
@@ -274,7 +278,9 @@ pub fn activate_group(
         request.format,
     )?)?;
     if prepared.digest() != &request.expected_definition {
-        return Err(SuccessorExecutionError::GroupDefinitionMismatch);
+        return Err(SuccessorExecutionError::GroupActivationDefinitionMismatch {
+            actual: prepared.digest().clone(),
+        });
     }
     let canonical = prepared.canonical_json().as_str();
     // Retained definitions are reconstructed from normalized canonical bytes, including map order.

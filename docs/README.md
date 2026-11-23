@@ -29,7 +29,7 @@ successor CLI. The walkthrough covers first activation, current evidence,
 correction, justified replanning and base closeout.
 
 Current adopted work is tracked by the [active roadmap](roadmap/).
-[HANDS](roadmap/README.md#hands-hands-on-usability-corrections) is Planned. It
+[HANDS](roadmap/README.md#hands-hands-on-usability-corrections) is In Progress. It
 corrects the ten usability findings from the `v0.2.18` hands-on evaluation
 under its [adopted dossier](todo/TODO-podway-hands-on-usability.md). No target
 release is assigned.

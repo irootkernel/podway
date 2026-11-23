@@ -62,6 +62,10 @@ pub enum SliceErrorV1 {
     InvalidPayload {
         message: String,
     },
+    InvalidSuccessorDocument {
+        message: String,
+        pointer: Option<String>,
+    },
     NotAMutation {
         command: &'static str,
     },
@@ -92,6 +96,13 @@ impl fmt::Display for SliceErrorV1 {
             Self::EmptyValue { field } => write!(f, "{field} must not be empty"),
             Self::InvalidValue { field } => write!(f, "invalid {field}"),
             Self::InvalidPayload { message } => write!(f, "invalid command payload: {message}"),
+            Self::InvalidSuccessorDocument { message, pointer } => {
+                f.write_str(message)?;
+                if let Some(pointer) = pointer {
+                    write!(f, " at {pointer}")?;
+                }
+                Ok(())
+            }
             Self::NotAMutation { command } => write!(f, "{command} is not a mutation"),
             Self::Canonicalization { message } => {
                 write!(f, "cannot canonicalize mutation identity: {message}")

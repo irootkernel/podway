@@ -267,6 +267,50 @@ fn calls004_help_explains_lifecycle_attribution_and_original_request_recovery() 
 }
 
 #[test]
+fn hands001_invalid_syntax_identifies_the_route_or_trusted_label() {
+    let fixture = Fixture::new();
+    for (arguments, message) in [
+        (
+            vec!["--json", "archive", "show", "--session", "x"],
+            "unknown argument for archive show; run podway help archive show",
+        ),
+        (
+            vec!["--json", "status", "--timeout", "banana"],
+            "invalid value for --timeout <DURATION>",
+        ),
+    ] {
+        let output = fixture.run(
+            &arguments
+                .iter()
+                .map(|arg| (*arg).to_owned())
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        assert!(output.stderr.is_empty(), "{arguments:?}");
+        let error = one_json(&output);
+        assert_eq!(error["code"], "REQUEST_INVALID");
+        assert_eq!(error["retryable"], false);
+        assert_eq!(error["details"], json!({}));
+        assert_eq!(error["message"], message);
+    }
+}
+
+#[test]
+fn hands001_hidden_completion_route_uses_the_generic_refusal() {
+    let fixture = Fixture::new();
+    let output = fixture.run(&["--json", "__complete", "--private-value"].map(str::to_owned));
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stderr.is_empty());
+    let error = one_json(&output);
+    assert_eq!(error["command"], "__complete");
+    assert_eq!(error["code"], "REQUEST_INVALID");
+    assert_eq!(error["exit_code"], 2);
+    assert_eq!(error["retryable"], false);
+    assert_eq!(error["details"], json!({}));
+    assert_eq!(error["message"], "invalid command syntax");
+}
+
+#[test]
 fn calls002_missing_required_diagnostics_use_trusted_labels_and_keep_error_contracts() {
     let fixture = Fixture::new();
     for (arguments, route, label) in [
@@ -312,21 +356,37 @@ fn calls002_missing_required_diagnostics_use_trusted_labels_and_keep_error_contr
         );
         assert!(!String::from_utf8_lossy(&output.stdout).contains("private-value"));
     }
-    for arguments in [
-        vec!["status", "--private-value", "--json"],
-        vec!["start", "--preset", "private-value", "--unknown", "--json"],
-        vec!["--json", "--contract-generation"],
-        vec![
-            "decide",
-            "--option",
-            "private-value",
-            "--reason",
-            "safe",
-            "--if-goal-revision",
-            "private-value",
-            "--json",
-        ],
-        vec!["start", "--unknown", "--account", "private-value", "--json"],
+    for (arguments, message) in [
+        (
+            vec!["status", "--private-value", "--json"],
+            "unknown argument for status; run podway help status",
+        ),
+        (
+            vec!["start", "--preset", "private-value", "--unknown", "--json"],
+            "unknown argument for start; run podway help start",
+        ),
+        (
+            vec!["--json", "--contract-generation"],
+            "invalid value for --contract-generation <1|2>",
+        ),
+        (
+            vec![
+                "decide",
+                "--option",
+                "private-value",
+                "--reason",
+                "safe",
+                "--if-goal-revision",
+                "private-value",
+                "--json",
+            ],
+            "invalid value for --if-goal-revision <N>",
+        ),
+        (
+            vec!["start", "--unknown", "--account", "private-value", "--json"],
+            "unknown argument for start; run podway help start",
+        ),
+        (vec!["--json", "--private-value"], "invalid command syntax"),
     ] {
         let output = fixture.run(
             &arguments
@@ -336,7 +396,7 @@ fn calls002_missing_required_diagnostics_use_trusted_labels_and_keep_error_contr
         );
         assert_eq!(output.status.code(), Some(2), "{arguments:?}: {output:?}");
         let error = one_json(&output);
-        assert_eq!(error["message"], "invalid command syntax", "{arguments:?}");
+        assert_eq!(error["message"], message, "{arguments:?}");
         assert!(output.stderr.is_empty());
         assert_eq!(error["code"], "REQUEST_INVALID");
         assert_eq!(error["details"], json!({}));
@@ -480,7 +540,12 @@ fn calls002_help_usage_distinguishes_global_options_and_key_owners() {
         let error = one_json(&output);
         assert_eq!(error["command"], format!("workspace.{command}"));
         assert_eq!(error["code"], "REQUEST_INVALID");
-        assert_eq!(error["message"], "invalid command syntax");
+        assert_eq!(
+            error["message"],
+            format!(
+                "unknown argument for workspace {command}; run podway help workspace {command}"
+            )
+        );
         assert_eq!(error["details"], json!({}));
         assert_eq!(error["exit_code"], 2);
         assert_eq!(error["retryable"], false);

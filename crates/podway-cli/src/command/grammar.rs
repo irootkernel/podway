@@ -1201,31 +1201,62 @@ pub(super) fn syntax_failure_message(error: &clap::Error, arguments: &[OsString]
     use clap::error::{ContextKind, ContextValue, ErrorKind};
 
     let generic = || "invalid command syntax".to_owned();
-    if error.kind() != ErrorKind::MissingRequiredArgument {
+    if !matches!(
+        error.kind(),
+        ErrorKind::MissingRequiredArgument
+            | ErrorKind::UnknownArgument
+            | ErrorKind::InvalidValue
+            | ErrorKind::ValueValidation
+    ) {
         return generic();
     }
-    let Some(ContextValue::Strings(missing)) = error.get(ContextKind::InvalidArg) else {
-        return generic();
-    };
     let mut grammar = Cli::command().ignore_errors(true);
     let Ok(matches) = grammar.try_get_matches_from_mut(arguments) else {
         return generic();
     };
     let mut scope = &grammar;
     let mut selected = &matches;
+    let mut route = Vec::new();
+    let mut public_route = true;
     while let Some((name, nested)) = selected.subcommand() {
         let Some(child) = scope.find_subcommand(name) else {
             return generic();
         };
+        route.push(child.get_name());
+        public_route &= !child.is_hide_set();
         scope = child;
         selected = nested;
     }
-    // get_arguments retains declaration order, independently of Clap's diagnostic ordering.
-    for argument in scope.get_arguments() {
-        let label = argument.clone().required(true).to_string();
-        if missing.contains(&label) {
-            return format!("missing required argument: {label}");
+    let argument_context = error.get(ContextKind::InvalidArg);
+    match error.kind() {
+        ErrorKind::MissingRequiredArgument => {
+            let Some(ContextValue::Strings(missing)) = argument_context else {
+                return generic();
+            };
+            // get_arguments retains declaration order, independently of diagnostic ordering.
+            for argument in scope.get_arguments() {
+                let label = argument.clone().required(true).to_string();
+                if missing.contains(&label) {
+                    return format!("missing required argument: {label}");
+                }
+            }
         }
+        ErrorKind::UnknownArgument if public_route && !route.is_empty() => {
+            let route = route.join(" ");
+            return format!("unknown argument for {route}; run podway help {route}");
+        }
+        ErrorKind::InvalidValue | ErrorKind::ValueValidation => {
+            let Some(ContextValue::String(invalid)) = argument_context else {
+                return generic();
+            };
+            for argument in scope.get_arguments() {
+                if argument.to_string() == *invalid {
+                    let label = argument.clone().required(true).to_string();
+                    return format!("invalid value for {label}");
+                }
+            }
+        }
+        _ => {}
     }
     generic()
 }

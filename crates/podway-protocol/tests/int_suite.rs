@@ -2,6 +2,8 @@
 mod int_build_identity_git_refs;
 #[path = "int_guide007_contract_generations.rs"]
 mod int_guide007_contract_generations;
+#[path = "int_hands_usability.rs"]
+mod int_hands_usability;
 #[path = "int_integ003_settings.rs"]
 mod int_integ003_settings;
 #[cfg(feature = "release-contract-verifier")]

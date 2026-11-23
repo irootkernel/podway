@@ -4,6 +4,12 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.2.19 - Unreleased
 
+### Fixed
+
+- Identify correctable CLI refusals, list all missing workspace removal
+  confirmations at once, and return non-retryable `REQUEST_INVALID` when
+  history DAG or attempts receives a retained group digest without its execution.
+
 ## v0.2.18 - 2026-11-23
 
 ### Added

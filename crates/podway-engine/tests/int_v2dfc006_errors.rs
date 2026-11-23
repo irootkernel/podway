@@ -582,6 +582,39 @@ fn context(command: &str) -> DirectErrorContextV1 {
     }
 }
 
+#[test]
+fn hands001_assess_criteria_reports_the_invalid_domain_state() {
+    let reason = "criterion assessment repeats or names an unknown criterion";
+    let value = assert_error(
+        DirectExecutionErrorV1::Successor(
+            podway_engine::successor_execution::SuccessorExecutionError::Domain(
+                DomainError::InvalidState { reason },
+            ),
+        ),
+        "goal.assess_criteria",
+        "REQUEST_INVALID",
+    );
+    assert_eq!(
+        value["message"],
+        format!("Request is malformed or violates schema. ({reason}).")
+    );
+}
+
+#[test]
+fn hands001_group_activation_outside_the_anchor_explains_the_next_action() {
+    let value = assert_error(
+        DirectExecutionErrorV1::Successor(
+            podway_engine::successor_execution::SuccessorExecutionError::GroupActivationNotAllowed,
+        ),
+        "group.activate",
+        "GROUP_ACTIVATION_NOT_ALLOWED",
+    );
+    assert_eq!(
+        value["message"],
+        "Group activation requires the current unselected base anchor and valid prior work. The current attempt is not the unselected base anchor; observe and use the current group.activate template."
+    );
+}
+
 fn assert_error(error: DirectExecutionErrorV1, command: &str, code: &str) -> serde_json::Value {
     let output = render_direct_error_v1(&error, &context(command))
         .unwrap_or_else(|failure| panic!("{code} ({error:?}) did not validate: {failure:?}"));

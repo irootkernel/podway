@@ -69,10 +69,19 @@ pub enum DirectMaintenanceRecoveryV1 {
 struct Presentation {
     code: &'static str,
     details: Value,
+    message_suffix: Option<String>,
+}
+
+impl Presentation {
+    fn with_message_suffix(mut self, suffix: impl Into<String>) -> Self {
+        self.message_suffix = Some(suffix.into());
+        self
+    }
 }
 
 fn simple(code: &'static str) -> Presentation {
     Presentation {
+        message_suffix: None,
         code,
         details: json!({}),
     }
@@ -116,6 +125,7 @@ fn writer_mismatch_generation2_reason(release: Option<&str>) -> String {
 
 fn recovery(code: &'static str) -> Presentation {
     Presentation {
+        message_suffix: None,
         code,
         details: json!({"schema":"podway.workspace-recovery-details/v2", "recovery":diagnose_invalid_workspace()}),
     }
@@ -136,6 +146,7 @@ fn runtime(code: &'static str, mut fields: Value) -> Presentation {
         fields["recovery"] = refresh();
     }
     Presentation {
+        message_suffix: None,
         code,
         details: fields,
     }
@@ -147,6 +158,7 @@ fn revision(
     actual: impl serde::Serialize,
 ) -> Presentation {
     Presentation {
+        message_suffix: None,
         code,
         details: json!({"schema":"podway.revision-conflict-details/v3",
         "expected_revision":expected, "current_revision":actual, "recovery":refresh()}),
@@ -155,6 +167,7 @@ fn revision(
 
 fn session(expected: impl serde::Serialize, actual: impl serde::Serialize) -> Presentation {
     Presentation {
+        message_suffix: None,
         code: "SESSION_ID_MISMATCH",
         details: json!({"schema":"podway.session-id-mismatch-details/v3",
         "expected_session_id":expected,"actual_session_id":actual,"recovery":refresh()}),
@@ -163,6 +176,7 @@ fn session(expected: impl serde::Serialize, actual: impl serde::Serialize) -> Pr
 
 fn workspace(expected: impl serde::Serialize, actual: impl serde::Serialize) -> Presentation {
     Presentation {
+        message_suffix: None,
         code: "WORKSPACE_UUID_MISMATCH",
         details: json!({"schema":"podway.workspace-uuid-mismatch-details/v3",
         "expected_workspace_uuid":expected,"actual_workspace_uuid":actual,"recovery":diagnose()}),
@@ -179,6 +193,7 @@ fn attempt(expected: impl serde::Serialize, actual: impl serde::Serialize) -> Pr
             .remove("actual_attempt_id");
     }
     Presentation {
+        message_suffix: None,
         code: "ATTEMPT_NOT_CURRENT",
         details,
     }
@@ -186,6 +201,7 @@ fn attempt(expected: impl serde::Serialize, actual: impl serde::Serialize) -> Pr
 
 fn digest(expected: impl serde::Serialize, actual: impl serde::Serialize) -> Presentation {
     Presentation {
+        message_suffix: None,
         code: "PROCEDURE_DIGEST_MISMATCH",
         details: json!({"schema":"podway.procedure-digest-mismatch-details/v3",
         "expected_procedure_digest":expected,"actual_procedure_digest":actual,"recovery":refresh()}),
@@ -194,6 +210,7 @@ fn digest(expected: impl serde::Serialize, actual: impl serde::Serialize) -> Pre
 
 fn delegation(code: &'static str, reason: &'static str) -> Presentation {
     Presentation {
+        message_suffix: None,
         code,
         details: json!({"schema":"podway.delegation-error-details/v2","reason":reason}),
     }
@@ -252,13 +269,16 @@ fn domain(error: &DomainError, context: &DirectErrorContextV1) -> Presentation {
         DomainError::BlockerLimitReached {
             maximum_open_blockers,
         } => Presentation {
+            message_suffix: None,
             code: "BLOCKER_LIMIT_REACHED",
             details: json!({"schema":"podway.blocker-limit-details/v2","maximum_open_blockers":maximum_open_blockers}),
         },
         DomainError::ArtifactChanged => simple("ARTIFACT_CHANGED"),
         DomainError::ItemNotFound { .. } => simple("ITEM_NOT_FOUND"),
         DomainError::BlockerNotCurrent => simple("BLOCKER_NOT_CURRENT"),
-        DomainError::InvalidState { .. } => simple("REQUEST_INVALID"),
+        DomainError::InvalidState { reason } => {
+            simple("REQUEST_INVALID").with_message_suffix(format!("({reason})."))
+        }
         DomainError::InvalidTransition { .. } => {
             simple(if context.command.as_str() == "session.skip" {
                 "STAGE_NOT_SKIPPABLE"
@@ -399,6 +419,7 @@ fn graph(error: &GraphMutationErrorV2, context: &DirectErrorContextV1) -> Presen
                     json!({"criterion_id":criterion_id,"citation":citation}),
                 ),
                 ContractGenerationV1::Generation2 => Presentation {
+                    message_suffix: None,
                     code: "CRITERION_CITATION_INVALID",
                     details: json!({"schema":"podway.criterion-citation-invalid-details/v1",
                     "criterion_id":criterion_id,"citation":citation,
@@ -440,6 +461,7 @@ fn graph(error: &GraphMutationErrorV2, context: &DirectErrorContextV1) -> Presen
             simple("REQUEST_INVALID")
         }
         E::TooManyOpenBlockers { maximum } => Presentation {
+            message_suffix: None,
             code: "BLOCKER_LIMIT_REACHED",
             details: json!({"schema":"podway.blocker-limit-details/v2","maximum_open_blockers":maximum}),
         },
@@ -458,6 +480,7 @@ fn graph(error: &GraphMutationErrorV2, context: &DirectErrorContextV1) -> Presen
         E::ListValueNotFound => simple("LIST_VALUE_NOT_FOUND"),
         E::ListValueDuplicate => simple("LIST_VALUE_DUPLICATE"),
         E::RequiredItemsMissing { item_ids } => Presentation {
+            message_suffix: None,
             code: "REQUIRED_ITEMS_MISSING",
             details: json!({"item_ids":item_ids}),
         },
@@ -476,6 +499,7 @@ fn state(error: &StoreErrorV1, context: &DirectErrorContextV1) -> Presentation {
             lifecycle: value,
             current_terminal_disposition,
         } => Presentation {
+            message_suffix: None,
             code: "SESSION_RESET_NOT_ELIGIBLE",
             details: json!({"schema":"podway.session-reset-not-eligible-details/v2", "lifecycle":lifecycle(*value),
                 "required_action":if *value == SessionLifecycle::Running { "force" } else { "record_disposition" },
@@ -485,16 +509,19 @@ fn state(error: &StoreErrorV1, context: &DirectErrorContextV1) -> Presentation {
             lifecycle: value,
             current_terminal_disposition,
         } => Presentation {
+            message_suffix: None,
             code: "SESSION_ARCHIVE_NOT_ELIGIBLE",
             details: json!({"schema":"podway.session-archive-not-eligible-details/v2", "lifecycle":lifecycle(*value),
                 "required_action":if matches!(value, SessionLifecycle::Prepared | SessionLifecycle::Running) { "complete_or_cancel" } else { "record_disposition" },
                 "current_terminal_disposition":current_terminal_disposition}),
         },
         StoreErrorV1::SessionArchiveLimitReachedV1 { maximum } => Presentation {
+            message_suffix: None,
             code: "SESSION_ARCHIVE_LIMIT_REACHED",
             details: json!({"schema":"podway.session-archive-limit-details/v2","maximum":maximum}),
         },
         StoreErrorV1::SessionArchiveNotFoundV1 { session_id } => Presentation {
+            message_suffix: None,
             code: "SESSION_ARCHIVE_NOT_FOUND",
             details: json!({"schema":"podway.session-archive-not-found-details/v2","session_id":session_id}),
         },
@@ -502,6 +529,7 @@ fn state(error: &StoreErrorV1, context: &DirectErrorContextV1) -> Presentation {
             lifecycle: value,
             current_terminal_disposition,
         } => Presentation {
+            message_suffix: None,
             code: "SESSION_START_STATE_CONFLICT",
             details: json!({"schema":"podway.session-start-state-conflict-details/v2", "lifecycle":lifecycle(*value),
                 "current_terminal_disposition":current_terminal_disposition,"allowed_actions":allowed_actions(*value,*current_terminal_disposition)}),
@@ -629,12 +657,14 @@ fn store(error: &DirectStoreErrorV1, context: &DirectErrorContextV1) -> Presenta
                 }),
             };
             Presentation {
+                message_suffix: None,
                 code: "WORKSPACE_MAINTENANCE",
                 details: json!({"schema":"podway.workspace-maintenance-details/v1",
                 "boundary":boundary,"timeout_ms":context.timeout_ms,"recovery":recipe}),
             }
         }
         E::Busy | E::ConnectionBusy | E::ReadAdmissionBusy => Presentation {
+            message_suffix: None,
             code: "WORKSPACE_BUSY",
             details: json!({"schema":"podway.workspace-busy-details/v1",
             "boundary": if matches!(error, E::ConnectionBusy) {"connection_gate"}
@@ -643,6 +673,7 @@ fn store(error: &DirectStoreErrorV1, context: &DirectErrorContextV1) -> Presenta
             "timeout_ms":context.timeout_ms,"recovery":refresh()}),
         },
         E::Legacy { generation, marker } => Presentation {
+            message_suffix: None,
             code: "LEGACY_RUNTIME_STATE_UNSUPPORTED",
             details: json!({
             "schema": if context.successor_store {
@@ -660,6 +691,7 @@ fn store(error: &DirectStoreErrorV1, context: &DirectErrorContextV1) -> Presenta
                 15
             };
             Presentation {
+                message_suffix: None,
                 code: "WORKSPACE_SCHEMA_UNSUPPORTED",
                 details: json!({
                     "schema": if context.successor_store {
@@ -678,6 +710,7 @@ fn store(error: &DirectStoreErrorV1, context: &DirectErrorContextV1) -> Presenta
         }
         E::WriterMismatch { expected, actual } => match context.generation {
             ContractGenerationV1::Generation1 => Presentation {
+                message_suffix: None,
                 code: "WORKSPACE_CONTRACT_MISMATCH",
                 details: json!({
                 "schema":"podway.workspace-contract-mismatch-details/v1", "expected_contract_manifest_digest":expected,
@@ -686,6 +719,7 @@ fn store(error: &DirectStoreErrorV1, context: &DirectErrorContextV1) -> Presenta
             ContractGenerationV1::Generation2 => {
                 let release = released_writer_release_v1(actual);
                 Presentation {
+                    message_suffix: None,
                     code: "WORKSPACE_CONTRACT_MISMATCH",
                     details: json!({
                     "schema":"podway.workspace-contract-mismatch-details/v2", "expected_contract_manifest_digest":expected,
@@ -697,6 +731,7 @@ fn store(error: &DirectStoreErrorV1, context: &DirectErrorContextV1) -> Presenta
         E::BindingMismatch => simple("WORKSPACE_ID_CONFLICT"),
         E::ExpectedWorkspaceUuidMismatch { expected, actual } => workspace(expected, actual),
         E::IdempotencyKeyReused => Presentation {
+            message_suffix: None,
             code: "IDEMPOTENCY_KEY_REUSED",
             details: json!({"schema":"podway.idempotency-key-reused-details/v2"}),
         },
@@ -705,6 +740,7 @@ fn store(error: &DirectStoreErrorV1, context: &DirectErrorContextV1) -> Presenta
                 return simple("INTERNAL_ERROR");
             };
             Presentation {
+                message_suffix: None,
                 code: "MUTATION_OUTCOME_UNKNOWN",
                 details: json!({"schema":"podway.mutation-outcome-unknown-details/v3",
                 "outcome":"unknown","idempotency_key":key.as_str(),"reconcile":{"command":"outcome.lookup","idempotency_key":key.as_str()},
@@ -822,6 +858,7 @@ fn successor_source(error: &DirectSuccessorSourceErrorV1) -> Presentation {
         E::InvalidAdmittedDefinition => return simple("INTERNAL_ERROR"),
     };
     Presentation {
+        message_suffix: None,
         code,
         details: json!({
             "schema": "podway.procedure-source-error-details/v1",
@@ -899,6 +936,7 @@ fn maintenance(
             store(&DirectStoreErrorV1::Maintenance, context)
         }
         E::Filesystem(F::MaintenanceBusy) => Presentation {
+            message_suffix: None,
             code: "WORKSPACE_MAINTENANCE",
             details: json!({"schema":"podway.workspace-maintenance-details/v1",
                 "boundary":"maintenance_lock","timeout_ms":context.timeout_ms,
@@ -908,6 +946,7 @@ fn maintenance(
             if source.kind() == std::io::ErrorKind::DirectoryNotEmpty =>
         {
             Presentation {
+                message_suffix: None,
                 code: "WORKSPACE_STATE_UNREADABLE",
                 details: json!({"schema":"podway.workspace-recovery-details/v2",
                     "recovery":diagnose_writer("The workspace directory was repopulated before removal finished. Preserve its current contents; inspect writer identity and the current workspace before considering any new authorized request.")}),
@@ -938,6 +977,7 @@ fn resolution(error: &WorkspaceResolutionErrorV1, _context: &DirectErrorContextV
         E::Git { source, .. } => git(source),
         E::Selector { .. } => simple("REQUEST_INVALID"),
         E::WorkspaceConfigInvalid => Presentation {
+            message_suffix: None,
             code: "WORKSPACE_CONFIG_INVALID",
             details: json!({"guidance":"Remove any non-prod mode from .podway/config.yaml, then run podway reset --all with explicit authorization."}),
         },
@@ -996,6 +1036,7 @@ pub fn render_direct_error_v1(
                     json!({"expected_goal_revision": expected.get(), "actual_goal_revision": actual.get()}),
                 ),
                 E::GuardUnsatisfied(error) => Presentation {
+                    message_suffix: None,
                     code: "OPTION_GUARD_UNSATISFIED",
                     details: json!({
                         "schema": "podway.scoped-option-guard-unsatisfied-details/v1",
@@ -1014,6 +1055,7 @@ pub fn render_direct_error_v1(
                     option,
                     allowed_option_ids,
                 } => Presentation {
+                    message_suffix: None,
                     code: "OPTION_NOT_ALLOWED",
                     details: json!({
                         "schema": "podway.scoped-option-not-allowed-details/v1",
@@ -1023,6 +1065,7 @@ pub fn render_direct_error_v1(
                     }),
                 },
                 E::GroupReplanRequired { decision, option } => Presentation {
+                    message_suffix: None,
                     code: "ROUTE_NOT_ALLOWED",
                     details: json!({
                         "schema": "podway.scoped-group-replan-required-details/v1",
@@ -1061,6 +1104,7 @@ pub fn render_direct_error_v1(
                         details["citable_item_ids"] = json!(error.citable_items);
                     }
                     Presentation {
+                        message_suffix: None,
                         code: "CRITERION_CITATION_INVALID",
                         details,
                     }
@@ -1076,14 +1120,27 @@ pub fn render_direct_error_v1(
                     selector,
                     item,
                 } => Presentation {
+                    message_suffix: None,
                     code: "EVIDENCE_NOT_AVAILABLE",
                     details: json!({"schema":"podway.scoped-evidence-unavailable-details/v1","consumer":consumer,"selector":selector,"item":item}),
                 },
                 E::HistoryAttemptNotFound => simple("ATTEMPT_NOT_FOUND"),
                 E::GroupDefinitionMismatch => simple("GROUP_DEFINITION_MISMATCH"),
-                E::GroupActivationNotAllowed | E::GroupActivationPriorWorkInvalid(_) => {
+                E::HistoryGroupExecutionRequired => simple("REQUEST_INVALID").with_message_suffix(
+                    "--definition-digest names a retained group definition; add --group-execution <uuid> from group list.",
+                ),
+                E::GroupActivationDefinitionMismatch { actual } => simple("GROUP_DEFINITION_MISMATCH")
+                    .with_message_suffix(format!("Supplied source digest: {}.", actual.as_str())),
+                E::GroupActivationNotAllowed => simple("GROUP_ACTIVATION_NOT_ALLOWED").with_message_suffix(
+                    "The current attempt is not the unselected base anchor; observe and use the current group.activate template.",
+                ),
+                E::GroupActivationPriorWorkInvalid(DomainError::InvalidState { reason }) => {
                     simple("GROUP_ACTIVATION_NOT_ALLOWED")
+                        .with_message_suffix(format!("Prior work is invalid ({reason})."))
                 }
+                E::GroupActivationPriorWorkInvalid(_) => simple("GROUP_ACTIVATION_NOT_ALLOWED")
+                    .with_message_suffix("Prior work is invalid."),
+                E::Domain(error @ DomainError::InvalidState { .. }) => domain(error, context),
                 E::GroupReturnNotAllowed => simple("GROUP_RETURN_NOT_ALLOWED"),
                 E::GroupPlanStale => simple("GROUP_PLAN_STALE"),
                 E::HistoryGroupNotFound => simple("GROUP_EXECUTION_NOT_FOUND"),
@@ -1101,6 +1158,7 @@ pub fn render_direct_error_v1(
             current_terminal_disposition,
             ..
         } => Presentation {
+            message_suffix: None,
             code: "SESSION_START_DECISION_REQUIRED",
             details: json!({"schema":"podway.session-start-decision-required-details/v2",
                 "lifecycle":lifecycle(*value),"current_terminal_disposition":current_terminal_disposition,
@@ -1156,15 +1214,23 @@ pub fn render_direct_error_v1(
         .ok_or_else(|| ProtocolError::InvalidErrorDetails {
             code: presentation.code.to_owned(),
         })?;
+    let mut message = entry["summary"]
+        .as_str()
+        .expect("the canonical catalog has summaries")
+        .to_owned();
+    if let Some(suffix) = presentation.message_suffix {
+        let capacity = 512usize.saturating_sub(message.chars().count() + 1);
+        if capacity > 0 {
+            message.push(' ');
+            message.extend(suffix.chars().take(capacity));
+        }
+    }
     ErrorEnvelopeV2::new(ErrorEnvelopeInputV2 {
         request_id: context.request_id.clone(),
         command: context.command.clone(),
         generated_at: context.observed_at.clone(),
         code: ErrorCodeV1::new(presentation.code)?,
-        message: entry["summary"]
-            .as_str()
-            .expect("the canonical catalog has summaries")
-            .to_owned(),
+        message,
         retryable,
         exit_code: ExitCodeV1::new(exit)?,
         workspace: None,

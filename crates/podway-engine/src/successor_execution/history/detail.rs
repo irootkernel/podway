@@ -33,7 +33,16 @@ impl SuccessorHistoryDefinition<'_> {
             Self::Base(digest) if digest == state.base_digest() => {
                 Ok((ExecutionScopeV1::Base, state.base_digest()))
             }
-            Self::Base(_) => Err(SuccessorExecutionError::GroupDefinitionMismatch),
+            Self::Base(digest) => {
+                if state
+                    .group_history()
+                    .iter()
+                    .any(|group| digest == group.identity().definition_digest())
+                {
+                    return Err(SuccessorExecutionError::HistoryGroupExecutionRequired);
+                }
+                Err(SuccessorExecutionError::GroupDefinitionMismatch)
+            }
             Self::Group { execution, digest } => {
                 let admitted = retained_group(state, execution)?
                     .1

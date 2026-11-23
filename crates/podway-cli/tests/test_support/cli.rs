@@ -203,7 +203,11 @@ impl Fixture {
     }
 
     pub(super) fn output_with_stdin(&self, arguments: &[&str], input: &[u8]) -> Output {
-        self.stdin_run(&podway_binary(), arguments, input, &[])
+        self.stdin_run(&podway_binary(), arguments, input, &[], true)
+    }
+
+    pub(super) fn human_output_with_stdin(&self, arguments: &[&str], input: &[u8]) -> Output {
+        self.stdin_run(&podway_binary(), arguments, input, &[], false)
     }
 
     /// Stdin child run against an explicitly supplied binary with additional
@@ -216,7 +220,7 @@ impl Fixture {
         input: &[u8],
         envs: &[(String, String)],
     ) -> Output {
-        self.stdin_run(binary, arguments, input, envs)
+        self.stdin_run(binary, arguments, input, envs, true)
     }
 
     fn stdin_run(
@@ -225,13 +229,15 @@ impl Fixture {
         arguments: &[&str],
         input: &[u8],
         envs: &[(String, String)],
+        json: bool,
     ) -> Output {
         assert_packaged_fixture(&self.0);
         let mut command = Command::new(binary);
+        command.arg("--worktree").arg(&self.0);
+        if json {
+            command.arg("--json");
+        }
         command
-            .arg("--worktree")
-            .arg(&self.0)
-            .arg("--json")
             .args(arguments)
             .current_dir(&self.0)
             .env_remove("HOME")

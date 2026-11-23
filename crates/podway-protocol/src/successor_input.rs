@@ -222,6 +222,74 @@ fn invalid(error: impl std::fmt::Display) -> SliceErrorV1 {
     }
 }
 
+fn find_placeholder<'a>(value: &'a Value, pointer: &mut String) -> Option<&'a str> {
+    let prefix_len = pointer.len();
+    match value {
+        Value::String(text) => {
+            let body = text.strip_prefix('<')?.strip_suffix('>')?;
+            if !body.is_empty() && !body.contains(['<', '>']) && body.chars().count() <= 62 {
+                return Some(text);
+            }
+        }
+        Value::Array(values) => {
+            for (index, value) in values.iter().enumerate() {
+                pointer.push('/');
+                pointer.push_str(&index.to_string());
+                if let Some(token) = find_placeholder(value, pointer) {
+                    return Some(token);
+                }
+                pointer.truncate(prefix_len);
+            }
+        }
+        Value::Object(entries) => {
+            for (key, value) in entries {
+                pointer.push('/');
+                for character in key.chars() {
+                    match character {
+                        '~' => pointer.push_str("~0"),
+                        '/' => pointer.push_str("~1"),
+                        other => pointer.push(other),
+                    }
+                }
+                if let Some(token) = find_placeholder(value, pointer) {
+                    return Some(token);
+                }
+                pointer.truncate(prefix_len);
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+fn invalid_successor_document(schema: &str, value: &Value) -> SliceErrorV1 {
+    const MAX_ERROR_MESSAGE_SCALARS: usize = 65_536;
+
+    let mut pointer = String::new();
+    let Some(token) = find_placeholder(value, &mut pointer) else {
+        return SliceErrorV1::InvalidSuccessorDocument {
+            message: format!(
+                "invalid successor input document {schema}: the document does not match its schema"
+            ),
+            pointer: None,
+        };
+    };
+    let mut message = format!(
+        "invalid successor input document {schema}: replace template placeholder {token:?}"
+    );
+    // Error v2 bounds its message in Unicode scalars. Keep the token even if
+    // the complete RFC 6901 pointer cannot fit that envelope.
+    let pointer = if message.chars().count() + " at ".len() + pointer.chars().count()
+        <= MAX_ERROR_MESSAGE_SCALARS
+    {
+        Some(pointer)
+    } else {
+        message.push_str(" (RFC 6901 pointer exceeds the error message length limit)");
+        None
+    };
+    SliceErrorV1::InvalidSuccessorDocument { message, pointer }
+}
+
 fn decode<T: DeserializeOwned>(bytes: &[u8], expected: &str) -> Result<T, SliceErrorV1> {
     if bytes.len() > MAX_DIRECT_INPUT_BYTES_V1 {
         return Err(SliceErrorV1::ValueTooLong {
@@ -236,9 +304,7 @@ fn decode<T: DeserializeOwned>(bytes: &[u8], expected: &str) -> Result<T, SliceE
         return Err(SliceErrorV1::InvalidValue { field: "schema" });
     }
     if !crate::validate_daemon_free_document_v1(expected, &value) {
-        return Err(SliceErrorV1::InvalidValue {
-            field: "successor input document",
-        });
+        return Err(invalid_successor_document(expected, &value));
     }
     // Decode original bytes so that duplicate typed properties are always rejected.
     serde_json::from_slice(bytes).map_err(invalid)

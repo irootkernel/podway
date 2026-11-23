@@ -820,29 +820,30 @@ fn validate_direct_flags(cli: &Cli) -> Result<(), LocalFailure> {
             "archive purge requires --yes",
         ));
     }
-    if cli.json
-        && matches!(
-            command,
-            Command::Workspace {
-                command: WorkspaceCommand::Remove { force: false }
-            }
-        )
+    if let Command::Workspace {
+        command: WorkspaceCommand::Remove { force },
+    } = command
+        && (cli.json || !io::stdin().is_terminal())
     {
-        return Err(LocalFailure::request_invalid(
-            "JSON workspace removal requires --force",
-        ));
-    }
-    if matches!(
-        command,
-        Command::Workspace {
-            command: WorkspaceCommand::Remove { .. }
+        let missing: Vec<_> = [
+            (cli.json && !force, "--force"),
+            (!cli.yes, "--yes"),
+            (explicit.workspace_id.is_none(), "--if-workspace-uuid"),
+        ]
+        .into_iter()
+        .filter_map(|(missing, flag)| missing.then_some(flag))
+        .collect();
+        if !missing.is_empty() {
+            let required = if cli.json {
+                "JSON workspace removal requires --force, --yes and --if-workspace-uuid"
+            } else {
+                "non-interactive workspace removal requires --yes and --if-workspace-uuid"
+            };
+            return Err(LocalFailure::request_invalid(format!(
+                "{required}; missing: {}",
+                missing.join(", ")
+            )));
         }
-    ) && (cli.json || !io::stdin().is_terminal())
-        && (!cli.yes || explicit.workspace_id.is_none())
-    {
-        return Err(LocalFailure::request_invalid(
-            "non-interactive workspace removal requires --yes and --if-workspace-uuid",
-        ));
     }
     if matches!(
         command,
@@ -1018,11 +1019,13 @@ fn validate_command_shape(command: &Command) -> Result<(), LocalFailure> {
         },
         Command::Decide(args) => {
             OptionId::new(args.option.clone()).map_err(invalid_v2_value)?;
+            validate_reason_cli(&args.reason, "--reason")?;
             ReasonV2::new(args.reason.clone()).map_err(invalid_v2_value)?;
             validate_actor(args.actor.as_deref())?;
         }
         Command::Rework(args) => {
             GraphNodeId::new(args.to.clone()).map_err(invalid_v2_value)?;
+            validate_reason_cli(&args.reason, "--reason")?;
             ReasonV2::new(args.reason.clone()).map_err(invalid_v2_value)?;
             validate_actor(args.actor.as_deref())?;
         }
@@ -1062,6 +1065,15 @@ fn validate_command_shape(command: &Command) -> Result<(), LocalFailure> {
             }
         }
         _ => {}
+    }
+    Ok(())
+}
+
+fn validate_reason_cli(value: &str, option: &str) -> Result<(), LocalFailure> {
+    if value.trim().is_empty() {
+        return Err(LocalFailure::request_invalid(format!(
+            "{option} must contain a non-whitespace character"
+        )));
     }
     Ok(())
 }

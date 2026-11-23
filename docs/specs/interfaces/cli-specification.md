@@ -122,6 +122,7 @@ route while retired syntax keeps `COMMAND_RETIRED` precedence.
 | `group activate --stdin`, `group replan --stdin` | Closed, scoped requests supply every fence and the idempotency key |
 | `group return` | Move from the selected group's terminal action to the declared base successor |
 | `group list\|show\|prior-work`, `history dag\|attempts\|blockers\|item\|goal-revisions` | Exact session and optional `--archived`; bounded pages use the continuation returned by the same query |
+| `history dag\|attempts --definition-digest <DIGEST>` | Omit `--group-execution` for a base definition. A retained group definition requires its execution UUID from `group list`. |
 | `complete`, `skip [--reason <TEXT>]`, `retry --reason <TEXT>` | Complete/skip act on actions; retry repeats the active action or decision |
 | `block --reason <TEXT>`, `unblock (<BLOCKER>\|--all)`, `cancel --reason <TEXT>` | Exactly one unblock selector |
 | `decide --option <ID> --reason <TEXT> [--actor <TEXT>]` | Goal fence also applies to goal-assessment decisions |
@@ -560,9 +561,12 @@ the rebuilt error envelope cannot be validated, rendering falls back to a stderr
 diagnostic and exit 6 without aborting.
 For a typed missing-required-argument parse failure, the message names the first
 missing option or positional in grammar declaration order, using only a label
-regenerated from the trusted grammar. Unrecognized or unavailable typed context
-and every other syntax error retain `invalid command syntax`. Raw parser output
-and argument values never enter this diagnostic. Route attribution, retirement
+regenerated from the trusted grammar. An unknown argument names the resolved
+command route and its help command. A typed invalid value or value validation
+failure names the corresponding trusted grammar label. Unrecognized or
+unavailable typed context and other syntax errors retain
+`invalid command syntax`. Raw parser output and argument values never enter
+this diagnostic. Route attribution, retirement
 precedence, JSON selection and `REQUEST_INVALID` code, details, exit and
 retryability remain unchanged.
 Diagnostics go to the structured envelope in JSON mode and stderr only where the

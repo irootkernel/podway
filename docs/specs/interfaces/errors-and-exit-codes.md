@@ -30,6 +30,13 @@ closed empty details. A rejected mutation leaves no state change or successful
 outcome. Reduce the request or the active definition's projected scope before
 trying a new operation.
 
+For `history dag` and `history attempts`, definition selection precedes page
+projection. If `--group-execution` is omitted and the digest names a retained
+group definition for the selected session, either contract generation returns
+non-retryable `REQUEST_INVALID` with exit 2. Supply the execution UUID from
+`group list`. Other definition digest mismatches retain
+`GROUP_DEFINITION_MISMATCH`, exit 4 and `retryable: true`.
+
 ## Integration settings failures
 
 The accepted [integration-settings contract](../operations/integration-settings.md)

@@ -6,6 +6,8 @@ mod e2e_adopt001_scoped_cli;
 mod e2e_guide006_generation1_baselines;
 #[path = "e2e_guide009_generation2_lifecycle.rs"]
 mod e2e_guide009_generation2_lifecycle;
+#[path = "e2e_hands_usability.rs"]
+mod e2e_hands_usability;
 #[path = "e2e_integ003_settings.rs"]
 mod e2e_integ003_settings;
 #[path = "e2e_integ005_continuity.rs"]

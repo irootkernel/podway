@@ -65,6 +65,7 @@ fn goal(statement: &str, criteria: &[String]) -> Result<ExecutionGoalV3, LocalFa
 }
 
 fn reason(value: &str) -> Result<ReasonV2, LocalFailure> {
+    validate_reason_cli(value, "--reason")?;
     ReasonV2::new(value.to_owned()).map_err(invalid_v2_value)
 }
 
