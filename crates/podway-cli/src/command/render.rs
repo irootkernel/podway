@@ -316,6 +316,11 @@ pub(super) fn render_human_error_direct(
         }
         write_text_line(stderr, format_args!("reason: {reason}"))?;
     }
+    if error["code"] == "LEGACY_RUNTIME_STATE_UNSUPPORTED" {
+        for line in legacy_runtime_state_hint_lines(&error["details"]) {
+            write_text_line(stderr, format_args!("hint: {line}"))?;
+        }
+    }
     if error["code"]
         .as_str()
         .unwrap_or_default()
@@ -386,6 +391,44 @@ fn workspace_contract_mismatch_hint_lines(details: &Value) -> Vec<String> {
                 .to_owned(),
         );
     }
+    lines
+}
+
+fn legacy_runtime_state_hint_lines(details: &Value) -> Vec<String> {
+    const WRITER_HINTS: [(std::ops::RangeInclusive<u64>, &str); 2] = [
+        (
+            15..=15,
+            "to keep history, finish or abandon the session with its original writer: Podway v0.2.13 through v0.2.17",
+        ),
+        (
+            1..=13,
+            "to keep history, use the Podway v0.2.12-or-earlier release that created this Store",
+        ),
+    ];
+    let generation = details["store_schema_version"].as_u64();
+    let mut lines = Vec::new();
+    if let Some(generation) = generation {
+        lines.push(format!("stored Store generation: {generation}"));
+    }
+    let writer = generation
+        .and_then(|generation| {
+            WRITER_HINTS
+                .iter()
+                .find(|(range, _)| range.contains(&generation))
+                .map(|&(_, hint)| hint)
+        })
+        .unwrap_or("to keep history, use the Podway release that created this Store");
+    lines.push(writer.to_owned());
+    if generation == Some(15) {
+        lines.push(
+            "with v0.2.15 or later, --contract-generation 2 --json observe names the exact writer release when it is not the writer"
+                .to_owned(),
+        );
+    }
+    lines.push(
+        "reset --all destroys current and retained history and requires explicit authorization"
+            .to_owned(),
+    );
     lines
 }
 
@@ -755,4 +798,101 @@ pub(super) fn render_preview_start_command(argv: &[String]) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_error_guidance_covers_known_and_unknown_generations() {
+        let old_writer = "hint: to keep history, use the Podway v0.2.12-or-earlier release that created this Store";
+        let store_15_writer = "hint: to keep history, finish or abandon the session with its original writer: Podway v0.2.13 through v0.2.17";
+        let store_15_observe = "hint: with v0.2.15 or later, --contract-generation 2 --json observe names the exact writer release when it is not the writer";
+        let unknown_writer =
+            "hint: to keep history, use the Podway release that created this Store";
+        for (generation, writer, observe) in [
+            (Some(1), old_writer, None),
+            (Some(13), old_writer, None),
+            (Some(14), unknown_writer, None),
+            (Some(15), store_15_writer, Some(store_15_observe)),
+            (None, unknown_writer, None),
+        ] {
+            let error = podway_protocol::ErrorEnvelopeV2::from_value(json!({
+                "schema":"podway.error/v2",
+                "request_id":"48414e44-532d-4030-8032-000000000002",
+                "command":"session.status",
+                "generated_at":"2026-11-23T00:00:00.000Z",
+                "code":"LEGACY_RUNTIME_STATE_UNSUPPORTED",
+                "message":"Legacy Store refusal.",
+                "retryable":false,
+                "exit_code":5,
+                "details":{
+                    "schema":"podway.legacy-runtime-state-unsupported-details/v2",
+                    "store_schema_version":generation,
+                    "markers":[],
+                    "recovery":{
+                        "action":"reset_legacy_state",
+                        "argv":["podway","--json","reset","--all","--yes","--idempotency-key","<new-idempotency-key>"],
+                        "command":"workspace.reset_all",
+                        "reason":"Explicit reset recipe.",
+                        "requires_explicit_authorization":true,
+                    },
+                },
+            }))
+            .unwrap();
+            let mut stderr = Vec::new();
+            assert!(render_human_error_direct(&error, None, &mut stderr).is_ok());
+            let mut expected = [
+                "error: LEGACY_RUNTIME_STATE_UNSUPPORTED: Legacy Store refusal.",
+                "reason: Explicit reset recipe.",
+            ]
+            .join("\n");
+            if let Some(generation) = generation {
+                expected.push_str(&format!("\nhint: stored Store generation: {generation}"));
+            }
+            expected.push_str(&format!("\n{writer}"));
+            if let Some(observe) = observe {
+                expected.push_str(&format!("\n{observe}"));
+            }
+            expected.push_str(
+                "\nhint: reset --all destroys current and retained history and requires explicit authorization\n",
+            );
+            assert_eq!(
+                String::from_utf8(stderr).unwrap(),
+                expected,
+                "{generation:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn newer_store_refusal_keeps_its_own_guidance() {
+        let error = podway_protocol::ErrorEnvelopeV2::from_value(json!({
+            "schema":"podway.error/v2",
+            "request_id":"48414e44-532d-4030-8032-000000000002",
+            "command":"session.status",
+            "generated_at":"2026-11-23T00:00:00.000Z",
+            "code":"WORKSPACE_SCHEMA_UNSUPPORTED",
+            "message":"The Store generation is newer than this Podway supports.",
+            "retryable":false,
+            "exit_code":5,
+            "details":{
+                "schema":"podway.workspace-schema-unsupported-details/v2",
+                "store_schema_version":17,
+                "supported_store_schema_version":16,
+                "guidance":"Use a Podway version that supports Store generation 17. This binary supports generation 16 and cannot open, reset or remove this newer Store.",
+            },
+        }))
+        .unwrap();
+        let mut stderr = Vec::new();
+        assert!(render_human_error_direct(&error, None, &mut stderr).is_ok());
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            concat!(
+                "error: WORKSPACE_SCHEMA_UNSUPPORTED: The Store generation is newer than this Podway supports.\n",
+                "hint: Use a Podway version that supports Store generation 17. This binary supports generation 16 and cannot open, reset or remove this newer Store.\n",
+            )
+        );
+    }
 }

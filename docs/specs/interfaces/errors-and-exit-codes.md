@@ -266,6 +266,12 @@ observed; the changed diagnostic snapshot grants no recovery authority.
 Normal reads, writes and replay refuse Store generations 1–15 and supported
 legacy input markers without conversion, deletion or SHM creation. The
 `LEGACY_RUNTIME_STATE_UNSUPPORTED` details carry the explicit reset recipe.
+Human stderr follows the recovery reason with the known Store generation, the
+original-writer guidance for keeping history, the generation-15 writer release
+lookup hint, and the warning that `reset --all` destroys current and retained
+history and requires explicit authorization. See the ordered hints in the
+[CLI specification](cli-specification.md). Both contract generations preserve
+the JSON error and recovery recipe.
 Unsupported newer state
 uses `WORKSPACE_SCHEMA_UNSUPPORTED`; corruption uses `WORKSPACE_STATE_UNREADABLE`.
 An unsupported writer digest uses `WORKSPACE_CONTRACT_MISMATCH` before key replay.

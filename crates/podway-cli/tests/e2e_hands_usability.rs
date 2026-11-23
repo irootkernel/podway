@@ -1,11 +1,16 @@
 //! Reproduce the HANDS usability changes through the native CLI.
 
-use std::process::Output;
+use std::{
+    fs,
+    path::PathBuf,
+    process::{Command, Output, Stdio},
+};
 
 use podway_protocol::ErrorEnvelopeV2;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
-use super::cli_fixture::Fixture;
+use super::cli_fixture::{Fixture, GuardedChild, bounded_output};
 
 const BASIS_DIGEST: &str =
     "sha256:1111111111111111111111111111111111111111111111111111111111111111";
@@ -17,6 +22,117 @@ const GROUP_ACTIVATION: &str =
     "Group activation requires the current unselected base anchor and valid prior work.";
 const REQUEST_INVALID: &str = "Request is malformed or violates schema.";
 const ACTIVATE: &[&str] = &["group", "activate", "--stdin"];
+const LEGACY_STORE_15_WRITER_SHA256: &str =
+    "c9923c6c1fee8c31e595c8163863051ebc5d62ae651c3a947b8662cd3aa927a7";
+const LEGACY_STATUS_15_JSON: &str = concat!(
+    r#"{"code":"LEGACY_RUNTIME_STATE_UNSUPPORTED","command":"session.status","details":{"markers":[],"recovery":{"action":"reset_legacy_state","argv":["podway","--json","reset","--all","--yes","--idempotency-key","<new-idempotency-key>"],"command":"workspace.reset_all","reason":"Replace <new-idempotency-key> with a fresh caller-owned key, then explicitly reset unsupported older runtime state.","requires_explicit_authorization":true},"schema":"podway.legacy-runtime-state-unsupported-details/v2","store_schema_version":15},"exit_code":5,"generated_at":"<generated_at>","message":"Older workspace state requires an explicitly confirmed reset before initializing a current Store.","request_id":"<request_id>","retryable":false,"schema":"podway.error/v2"}"#,
+    "\n",
+);
+
+#[test]
+fn authentic_store_15_preserves_json_and_adds_human_history_guidance() {
+    let Some(writer) = std::env::var_os("PODWAY_TEST_LEGACY_V017_BINARY") else {
+        eprintln!("Authentic Store 15 case requires PODWAY_TEST_LEGACY_V017_BINARY.");
+        return;
+    };
+    let writer = PathBuf::from(writer);
+    assert_eq!(writer.canonicalize().unwrap(), writer);
+    assert!(fs::symlink_metadata(&writer).unwrap().is_file());
+    assert_eq!(
+        format!("{:x}", Sha256::digest(fs::read(&writer).unwrap())),
+        LEGACY_STORE_15_WRITER_SHA256
+    );
+
+    let producer = Fixture::new();
+    for args in [
+        &["init", "--idempotency-key", "init"][..],
+        &[
+            "start",
+            "--preset",
+            "small-change-v2",
+            "--task",
+            "HANDS-002 authentic Store fixture",
+            "--idempotency-key",
+            "start",
+        ],
+    ] {
+        let child = Command::new(&writer)
+            .arg("--worktree")
+            .arg(&producer.0)
+            .args(["--contract-generation", "2", "--json"])
+            .args(args)
+            .current_dir(&producer.0)
+            .env_remove("HOME")
+            .env_remove("XDG_CONFIG_HOME")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let output = bounded_output(GuardedChild::new(child), args);
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
+        assert!(output.stderr.is_empty(), "{args:?}: {output:?}");
+    }
+    let producer_before = producer.podway_snapshot();
+
+    // The stopped native writer can leave transient SHM behind. Build the
+    // no-SHM witness from the closed producer's unchanged file bytes.
+    let fixture = Fixture::new();
+    fs::create_dir_all(fixture.0.join(".podway/runtime")).unwrap();
+    for (path, bytes, _, _) in &producer_before {
+        let Some(bytes) = bytes else { continue };
+        if path.ends_with("state.sqlite3-shm") {
+            continue;
+        }
+        let source = producer.0.join(".podway").join(path);
+        let destination = fixture.0.join(".podway").join(path);
+        fs::copy(source, &destination).unwrap();
+        assert_eq!(&fs::read(destination).unwrap(), bytes, "{path:?}");
+    }
+    let runtime = fixture.0.join(".podway/runtime");
+    let store = fs::read(runtime.join("state.sqlite3")).unwrap();
+    assert_eq!(u32::from_be_bytes(store[60..64].try_into().unwrap()), 15);
+    assert!(!runtime.join("state.sqlite3-shm").exists());
+    let before = fixture.podway_snapshot();
+    for args in [
+        &["--json", "status"][..],
+        &["--contract-generation", "2", "--json", "status"],
+    ] {
+        let output = fixture.raw_output(args);
+        assert_eq!(output.status.code(), Some(5), "{args:?}: {output:?}");
+        assert!(output.stderr.is_empty(), "{args:?}: {output:?}");
+        let envelope = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout).unwrap();
+        let mut actual = String::from_utf8(output.stdout).unwrap();
+        for field in ["request_id", "generated_at"] {
+            let value = envelope.as_value()[field].as_str().unwrap();
+            actual = actual.replace(
+                &format!(r#""{field}":"{value}""#),
+                &format!(r#""{field}":"<{field}>""#),
+            );
+        }
+        assert_eq!(actual, LEGACY_STATUS_15_JSON, "{args:?}");
+        fixture.assert_podway_snapshot(&before);
+        assert!(!runtime.join("state.sqlite3-shm").exists());
+    }
+    let human = fixture.raw_output(&["status"]);
+    assert_eq!(human.status.code(), Some(5), "{human:?}");
+    assert!(human.stdout.is_empty(), "{human:?}");
+    fixture.assert_podway_snapshot(&before);
+    assert!(!runtime.join("state.sqlite3-shm").exists());
+    producer.assert_podway_snapshot(&producer_before);
+    assert_eq!(
+        String::from_utf8(human.stderr).unwrap(),
+        concat!(
+            "error: LEGACY_RUNTIME_STATE_UNSUPPORTED: Older workspace state requires an explicitly confirmed reset before initializing a current Store.\n",
+            "reason: Replace <new-idempotency-key> with a fresh caller-owned key, then explicitly reset unsupported older runtime state.\n",
+            "hint: stored Store generation: 15\n",
+            "hint: to keep history, finish or abandon the session with its original writer: Podway v0.2.13 through v0.2.17\n",
+            "hint: with v0.2.15 or later, --contract-generation 2 --json observe names the exact writer release when it is not the writer\n",
+            "hint: reset --all destroys current and retained history and requires explicit authorization\n",
+        )
+    );
+    println!("Verified authentic v0.2.17 Store 15 in a no-SHM witness.");
+}
 
 fn refuse(output: Output, code: &str, exit: i32, message: &str) {
     assert_eq!(output.status.code(), Some(exit), "{output:?}");

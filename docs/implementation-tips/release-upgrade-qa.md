@@ -110,9 +110,30 @@ or managed workspace outside both fixture operation and reset.
 
 | Executing writer and input | Expected refusal |
 | --- | --- |
-| Store 16 candidate opening an authentic `v0.2.17` Store 15 | Error v2, exit `5`, `LEGACY_RUNTIME_STATE_UNSUPPORTED`, `podway.legacy-runtime-state-unsupported-details/v2`, `store_schema_version: 15`. The explicit reset recipe requires separate authorization. |
+| Store 16 candidate opening an authentic `v0.2.17` Store 15 | Error v2, exit `5`, `LEGACY_RUNTIME_STATE_UNSUPPORTED`, `podway.legacy-runtime-state-unsupported-details/v2`, `store_schema_version: 15`. Human stderr appends the four Store 15 hints below. The explicit reset recipe requires separate authorization. |
 | Verified `v0.2.17` writer opening a successor Store 16 | Error v2, exit `5`, `WORKSPACE_SCHEMA_UNSUPPORTED`, `podway.workspace-schema-unsupported-details/v1`, actual generation `16`, supported generation `15`. Use a compatible writer. |
 | Store 16 `start` with a well-formed Procedure v2 source on an admitted successor workspace | Error v2, exit `1`, `PROCEDURE_SCHEMA_UNSUPPORTED`, `podway.procedure-source-error-details/v1`, `expected_schema: podway.procedure/v3`, `reason: unsupported_schema`, `known_source_schema: podway.procedure/v2`. |
+
+In human `status`, expect these hints after the error and its recovery reason:
+
+```text
+hint: stored Store generation: 15
+hint: to keep history, finish or abandon the session with its original writer: Podway v0.2.13 through v0.2.17
+hint: with v0.2.15 or later, --contract-generation 2 --json observe names the exact writer release when it is not the writer
+hint: reset --all destroys current and retained history and requires explicit authorization
+```
+
+Run the focused development regression with an absolute path to the verified
+`v0.2.17` binary documented in [Supported Store continuity](testing.md#supported-store-continuity):
+
+```bash
+PODWAY_TEST_LEGACY_V017_BINARY=/absolute/verified/podway \
+  make test-e2e-exact E2E_TEST=podway-cli::e2e_suite::e2e_hands_usability::authentic_store_15_preserves_json_and_adds_human_history_guidance
+```
+
+The opt-in case verifies the writer hash, copies the stopped writer's original
+Store bytes to a no-SHM fixture, and compares the two JSON presentations and the
+unchanged Store. Run it explicitly to establish authentic Store 15 coverage.
 
 Both Store refusal cases classify by generation before opening SQLite for
 recovery, writes or SHM creation. `WORKSPACE_CONTRACT_MISMATCH` describes a

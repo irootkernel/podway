@@ -16,6 +16,23 @@ Human error rendering may include the exact Procedure path supplied to `start`
 and a visible truncation summary after a bounded diagnostic window. JSON mode
 emits the machine response only; clients never parse human guidance.
 
+For `LEGACY_RUNTIME_STATE_UNSUPPORTED`, human stderr appends these hints after
+the error and recovery reason:
+
+1. The stored Store generation, when known.
+2. The writer to use to keep history. For generation 15, finish or abandon the
+   session with its original Podway writer from v0.2.13 through v0.2.17. For
+   generations 1–13, use the v0.2.12-or-earlier release that created the Store.
+   For other or unknown generations, use the release that created the Store.
+3. For generation 15 only, `--contract-generation 2 --json observe` on a
+   verified v0.2.15–v0.2.17 binary that supports Store 15 may name the original
+   writer release in `WORKSPACE_CONTRACT_MISMATCH`. Use retained provenance
+   when the writer release is unknown.
+4. A warning that `reset --all` destroys current and retained history and
+   requires explicit authorization.
+
+Both contract generations retain the same JSON error and recovery recipe.
+
 ## Integration permission query
 
 `podway integration show dolgorae` reports effective permission and the winning

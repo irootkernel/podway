@@ -127,6 +127,20 @@ closed detail schemas. On legacy refusal the candidate may have a generation
 classification without the original manifest. Identify the writer from retained
 provenance without opening the Store through a speculative binary.
 
+| Classified Store generation | Writer for keeping history |
+| --- | --- |
+| 15 | Finish or abandon the session with the original Podway writer, `v0.2.13` through `v0.2.17`. |
+| 1–13 | Use the Podway `v0.2.12`-or-earlier release that created the Store. |
+| Other or unknown | Use the Podway release that created the Store. |
+
+For Store 15, a verified `v0.2.15`–`v0.2.17` binary that supports Store 15 may
+name the original writer release in `WORKSPACE_CONTRACT_MISMATCH` from
+`--contract-generation 2 --json observe`. Use retained provenance when the
+writer release is unknown.
+
+`reset --all` destroys current and retained history and requires explicit
+authorization.
+
 Current selectors 1 and 2 both use the successor model. They cannot enable
 v2 authoring, old routes, old-Store migration or downgrade. Releases `v0.2.13`
 and `v0.2.14` have no `--contract-generation` flag and use observation v5.
