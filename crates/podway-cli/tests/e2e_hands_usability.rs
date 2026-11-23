@@ -758,6 +758,178 @@ fn group_review(fixture: &Fixture, verdict: &str, stage: &str, score: &str, exit
     complete(fixture, "complete-assessment");
 }
 
+const STATUS_HINT: &str =
+    "hint: use --json for the complete result, or --verbose for the full human dump";
+
+fn assert_human_status_lines(fixture: &Fixture, expected: &[&str]) {
+    for generation in ["1", "2"] {
+        for route in ["status", "next"] {
+            let output = fixture.raw_output(&["--contract-generation", generation, route]);
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{generation} {route}: {output:?}"
+            );
+            assert!(output.stderr.is_empty());
+            let text = String::from_utf8(output.stdout).unwrap();
+            let mut lines = text.lines();
+            assert!(lines.next().unwrap().starts_with("workspace: "));
+            assert!(lines.next().unwrap().starts_with("session: "));
+            let lines: Vec<_> = lines.collect();
+            assert_eq!(lines, expected, "{generation} {route}");
+        }
+    }
+}
+
+#[test]
+fn human_status_and_next_use_ordered_scoped_summaries() {
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    fixture.run(&[
+        "start",
+        "--preset",
+        "small-change-v3",
+        "--task",
+        "Human status lines",
+        "--idempotency-key",
+        "start",
+    ]);
+    assert_human_status_lines(&fixture, &["lifecycle: prepared", STATUS_HINT]);
+
+    fixture.run(&["begin", "--idempotency-key", "begin"]);
+    fixture.run(&[
+        "block",
+        "--reason",
+        "Wait for the fixture.",
+        "--idempotency-key",
+        "block",
+    ]);
+    assert_human_status_lines(
+        &fixture,
+        &[
+            "lifecycle: running",
+            "attempt: base inspect",
+            "ready: false",
+            "missing items: scope-summary",
+            "open blockers: 1",
+            "operations: session.block, session.cancel, session.retry, session.unblock, item.clear, item.record_many, item.set, group.activate",
+            STATUS_HINT,
+        ],
+    );
+
+    fixture.run(&["unblock", "--all", "--idempotency-key", "unblock"]);
+    fixture.run(&[
+        "set",
+        "scope-summary",
+        "Record the fixture scope.",
+        "--idempotency-key",
+        "scope",
+    ]);
+    assert_human_status_lines(
+        &fixture,
+        &[
+            "lifecycle: running",
+            "attempt: base inspect",
+            "ready: true",
+            "operations: session.block, session.cancel, session.retry, item.clear, item.record_many, item.set, group.activate",
+            STATUS_HINT,
+        ],
+    );
+    let activation = activate_first(&fixture);
+    let execution = activation["result"]["execution_id"].as_str().unwrap();
+    let attempt = format!("attempt: group implement group {execution}");
+    assert_human_status_lines(
+        &fixture,
+        &[
+            "lifecycle: running",
+            &attempt,
+            "ready: false",
+            "missing items: implementation-summary",
+            "operations: session.block, session.cancel, session.retry, session.rework, item.clear, item.record_many, item.set, session.complete",
+            STATUS_HINT,
+        ],
+    );
+    for generation in ["1", "2"] {
+        let scoped_schema = if generation == "1" {
+            "podway.observation-result/v7"
+        } else {
+            "podway.observation-result/v8"
+        };
+        for route in ["status", "next"] {
+            let quiet =
+                fixture.raw_output(&["--contract-generation", generation, route, "--quiet"]);
+            assert!(quiet.status.success() && quiet.stdout.is_empty() && quiet.stderr.is_empty());
+            let json = fixture.run(&["--contract-generation", generation, route]);
+            assert_eq!(json["result"]["schema"], "podway.observation-result/v7");
+        }
+        for (route, schema) in [
+            (
+                &["status", "--verbose"][..],
+                "podway.scoped-verbose-status-result/v1",
+            ),
+            (
+                &["status", "--compact"][..],
+                "podway.scoped-compact-status-result/v1",
+            ),
+            (&["observe"][..], scoped_schema),
+        ] {
+            let mut args = vec!["--contract-generation", generation];
+            args.extend_from_slice(route);
+            let human = fixture.raw_output(&args);
+            assert_eq!(human.status.code(), Some(0), "{human:?}");
+            assert!(human.stderr.is_empty());
+            let human = String::from_utf8(human.stdout).unwrap();
+            let full = human.split_once("\nresult: ").unwrap().1;
+            let json = fixture.run(&args);
+            assert_eq!(serde_json::from_str::<Value>(full).unwrap(), json["result"]);
+            assert_eq!(json["result"]["schema"], schema);
+        }
+        refuse(
+            fixture.output(&["--contract-generation", generation, "next", "--verbose"]),
+            "REQUEST_INVALID",
+            2,
+            "--verbose applies only to status",
+        );
+    }
+
+    group_review(&fixture, "success", "not-scored", "0", "0");
+    fixture.run(&[
+        "decide",
+        "--option",
+        "ready",
+        "--reason",
+        "Fixture work is ready.",
+        "--idempotency-key",
+        "ready",
+    ]);
+    for (item, value) in [
+        ("implementation-summary", "Return current fixture work."),
+        (
+            "verification-command",
+            "Record successful fixture verification.",
+        ),
+        ("verification-exit-status", "0"),
+    ] {
+        fixture.run(&[
+            "set",
+            item,
+            value,
+            "--idempotency-key",
+            &format!("return-{item}"),
+        ]);
+    }
+    fixture.run(&["group", "return", "--idempotency-key", "return"]);
+    fixture.run(&[
+        "set",
+        "closeout-note",
+        "Finish the owned fixture.",
+        "--idempotency-key",
+        "closeout",
+    ]);
+    fixture.run(&["complete", "--idempotency-key", "finish"]);
+    assert_human_status_lines(&fixture, &["lifecycle: completed", STATUS_HINT]);
+}
+
 fn replacement_fixture() -> Fixture {
     let fixture = small_change();
     activate_first(&fixture);

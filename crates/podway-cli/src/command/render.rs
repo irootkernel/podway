@@ -572,13 +572,97 @@ fn render_human_output_direct(
             ),
         )?;
     }
-    let rendered = serde_json::to_string_pretty(result)
-        .map_err(|_| LocalFailure::response_invalid("cannot render Procedure v2 result"))?;
-    write_text_line(stdout, format_args!("result: {rendered}"))?;
+    // Both selectors use v7 here. Compact and verbose status have distinct
+    // result schemas and keep the full dump.
+    if matches!(
+        value["command"].as_str(),
+        Some("session.status" | "session.next")
+    ) && result["schema"] == "podway.observation-result/v7"
+    {
+        render_human_observation_summary(result, stdout)?;
+    } else {
+        let rendered = serde_json::to_string_pretty(result)
+            .map_err(|_| LocalFailure::response_invalid("cannot render Procedure v2 result"))?;
+        write_text_line(stdout, format_args!("result: {rendered}"))?;
+    }
     for warning in value["warnings"].as_array().into_iter().flatten() {
         write_text_line(stdout, format_args!("warning: {warning}"))?;
     }
     Ok(())
+}
+
+fn nonempty_summary_text(value: &Value) -> Option<&str> {
+    value.as_str().filter(|text| !text.is_empty())
+}
+
+fn render_human_observation_summary(
+    result: &Value,
+    stdout: &mut dyn Write,
+) -> Result<(), LocalFailure> {
+    if let Some(lifecycle) = nonempty_summary_text(&result["lifecycle"]) {
+        write_text_line(stdout, format_args!("lifecycle: {lifecycle}"))?;
+    }
+    let attempt = &result["cursor"]["attempt"];
+    let scope = &attempt["scope"];
+    if let (Some(kind), Some(node)) = (
+        nonempty_summary_text(&scope["kind"]),
+        nonempty_summary_text(&attempt["node"]),
+    ) {
+        let group = nonempty_summary_text(&scope["group_execution_id"])
+            .map(|id| format!(" group {id}"))
+            .unwrap_or_default();
+        write_text_line(stdout, format_args!("attempt: {kind} {node}{group}"))?;
+    }
+
+    let guidance = &result["guidance"];
+    if let Some(ready) = guidance["ready"].as_bool() {
+        write_text_line(stdout, format_args!("ready: {ready}"))?;
+    }
+    let missing = guidance["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|item| item["required"] == true && item["satisfied"] == false)
+        .filter_map(|item| nonempty_summary_text(&item["item"]))
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        write_text_line(
+            stdout,
+            format_args!("missing items: {}", missing.join(", ")),
+        )?;
+    }
+    if let Some(blockers) = result["open_blockers"]
+        .as_array()
+        .filter(|ids| !ids.is_empty())
+    {
+        write_text_line(stdout, format_args!("open blockers: {}", blockers.len()))?;
+    }
+    let operations = guidance["available_operations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(nonempty_summary_text)
+        .collect::<Vec<_>>();
+    if !operations.is_empty() {
+        write_text_line(
+            stdout,
+            format_args!("operations: {}", operations.join(", ")),
+        )?;
+    }
+    let goal = &result["goal"];
+    if let Some(revision) = goal["revision"].as_u64() {
+        let outcome = nonempty_summary_text(&goal["outcome"]).unwrap_or("undetermined");
+        write_text_line(
+            stdout,
+            format_args!("goal: {outcome} (revision {revision})"),
+        )?;
+    }
+    write_text_line(
+        stdout,
+        format_args!(
+            "hint: use --json for the complete result, or --verbose for the full human dump"
+        ),
+    )
 }
 
 pub(super) fn contains_check_result_projection_v1(value: &Value) -> bool {
@@ -803,6 +887,83 @@ pub(super) fn render_preview_start_command(argv: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn human_observation_orders_missing_items_goal_and_warnings() {
+        let workspace = "00000000-0000-4000-8000-000000000001";
+        let session = "00000000-0000-4000-8000-000000000002";
+        let execution = "00000000-0000-4000-8000-000000000003";
+        let base_digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+        let group_digest =
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+        let items = [
+            ("write-summary", true, false),
+            ("optional-note", false, false),
+            ("record-check", true, true),
+            ("explain-change", true, false),
+        ];
+        let output = podway_protocol::OutputEnvelopeV4::from_value(json!({
+            "schema":"podway.output/v4",
+            "command":"session.status",
+            "request_id":"00000000-0000-4000-8000-000000000004",
+            "generated_at":"2026-11-23T00:00:00.000Z",
+            "workspace":{"uuid":workspace,"root":"/fixture","latest_workspace_sequence":12},
+            "session":{"id":session,"title":"Ordered observation","lifecycle":"running",
+                "revision_before":10,"revision_after":10},
+            "result":{
+                "schema":"podway.observation-result/v7",
+                "workspace":workspace,"workspace_sequence":12,"title":"Ordered observation",
+                "base":{"id":"ordered-demo","version":"1","digest":base_digest,"goal_tracking":true},
+                "cursor":{"session":session,"session_revision":10,"goal_revision":7,"selected_group":execution,
+                    "attempt":{"session":session,"base_digest":base_digest,"node":"implementation",
+                        "attempt":"00000000-0000-4000-8000-000000000005",
+                        "scope":{"kind":"group","definition_digest":group_digest,"group_execution_id":execution}}},
+                "lifecycle":"running",
+                "lifecycle_guidance":{"activity":"current","current_terminal_disposition":false,"operations":[]},
+                "decision_entry":null,"next_decision_entry":null,
+                "selection":{"execution":execution,"definition_digest":group_digest,"outcome":"running","terminal_attempt":null},
+                "counters":[{"scope":"group","node":"implementation","attempt_count":1,"decision_entry":null}],
+                "guidance":{
+                    "placement":{"id":"implementation","use":"implement","next":"verify"},
+                    "definition":{"type":"action","title":"Implement","intent":"Record completed work.",
+                        "items":items.map(|(item, required, _)| json!({
+                            "id":item,"type":"text","prompt":"Record the item.","required":required,
+                            "min_length":1,"max_length":500,"multiline":false,
+                        }))},
+                    "ready":false,
+                    "items":items.map(|(item, required, satisfied)| json!({"item":item,"required":required,"satisfied":satisfied})),
+                    "evidence":[],"available_operations":["session.unblock","item.set"],"manual_rework_targets":[],
+                },
+                "goal":{"statement":"Finish the work.","revision":7,"actor":null,"outcome":"not_achieved",
+                    "criteria":[{"id":"verified","statement":"Verification succeeds.","status":null}]},
+                "plan":null,
+                "items":items.map(|(item, _, recorded)| json!({"item":item,"recorded":recorded,"revision":u64::from(recorded)})),
+                "open_blockers":["00000000-0000-4000-8000-000000000006","00000000-0000-4000-8000-000000000007"],
+                "delegation":null,"retained_group_count":1,"remaining_activations":63,"remaining_attempts":65532,
+            },
+            "warnings":[{"code":"PROJECTION_NOTICE","path":"result","message":"Fixture warning."}],
+        }))
+        .expect("the fixture must satisfy the closed Output v4 observation contract");
+
+        let mut stdout = Vec::new();
+        assert!(render_human_output_direct(&output, &mut stdout).is_ok());
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            concat!(
+                "workspace: 00000000-0000-4000-8000-000000000001 /fixture sequence=12\n",
+                "session: 00000000-0000-4000-8000-000000000002 Ordered observation running revision=10\n",
+                "lifecycle: running\n",
+                "attempt: group implementation group 00000000-0000-4000-8000-000000000003\n",
+                "ready: false\n",
+                "missing items: write-summary, explain-change\n",
+                "open blockers: 2\n",
+                "operations: session.unblock, item.set\n",
+                "goal: not_achieved (revision 7)\n",
+                "hint: use --json for the complete result, or --verbose for the full human dump\n",
+                "warning: {\"code\":\"PROJECTION_NOTICE\",\"message\":\"Fixture warning.\",\"path\":\"result\"}\n",
+            )
+        );
+    }
 
     #[test]
     fn legacy_error_guidance_covers_known_and_unknown_generations() {

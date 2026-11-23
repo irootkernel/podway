@@ -449,6 +449,7 @@ attempt, as exposed by `guidance.references[]`; an item citation must name a
 recorded item of that decision attempt. Unrecorded items and undeclared, skipped
 or stale sources are ineligible. `not_applicable` accepts no citations. Keep
 the observed session, attempt and goal fences.
+Citations are optional for satisfied and unsatisfied results; a citation-free result is a caller assertion that Podway records but does not substantiate, so cite resolved evidence for every non-retirement status.
 
 Clearing an optional cited item leaves the recorded assessment without that
 current citation. While the item is unset, the decision has no assessed outcome
@@ -567,6 +568,12 @@ Successful versioned JSON output uses `podway.output/v4`; failures use `podway.e
 Machine clients consume schema IDs, command names, stable fields, and error codes,
 never text. Text mode is advisory rendering of the same result. Exit status follows
 the canonical [exit-code table](errors-and-exit-codes.md#exit-codes).
+
+Human `podway status` and `podway next` summarize lifecycle, active attempt,
+readiness, missing required items, open blocker count, available operations
+and goal outcome with its revision when those fields are present. Use
+`--json` for the complete result of either command. Use
+`podway status --verbose` for the full human dump with retained attempts.
 
 Except for the failure-rendering escape boundary below, versioned JSON emits
 exactly one bounded newline-terminated object on stdout.

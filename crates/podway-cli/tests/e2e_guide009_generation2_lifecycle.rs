@@ -510,6 +510,28 @@ fn agent006_small_change_v3_integrated_caller_workflow_and_call_counts() {
 #[test]
 fn agent006_scoped_goal_assessment_and_closeout() {
     let fixture = Fixture::new();
+    let assert_human_summary = |expected: &[&str]| {
+        let expected: Vec<_> = expected
+            .iter()
+            .copied()
+            .chain([
+                "hint: use --json for the complete result, or --verbose for the full human dump",
+            ])
+            .collect();
+        for generation in ["1", "2"] {
+            for route in ["status", "next"] {
+                let output = fixture.raw_output(&["--contract-generation", generation, route]);
+                assert!(output.status.success(), "{generation} {route}: {output:?}");
+                assert!(output.stderr.is_empty());
+                let text = String::from_utf8(output.stdout).unwrap();
+                assert_eq!(
+                    text.lines().skip(2).collect::<Vec<_>>(),
+                    expected,
+                    "{generation} {route}",
+                );
+            }
+        }
+    };
     let result_item = json!({
         "id":"finding","type":"text","prompt":"Record the scoped finding.","required":true,
     });
@@ -585,6 +607,14 @@ fn agent006_scoped_goal_assessment_and_closeout() {
         "--idempotency-key",
         "begin",
     ]);
+    assert_human_summary(&[
+        "lifecycle: running",
+        "attempt: base plan",
+        "ready: false",
+        "missing items: plan-note",
+        "operations: session.block, session.cancel, session.retry, item.clear, item.record_many, item.set, group.activate",
+        "goal: undetermined (revision 1)",
+    ]);
     set(&fixture, "plan-note", "State the fixture plan.", "plan");
     let observation = observe(&fixture, "2");
     let mut activation = template_input(template(&observation, "group.activate"), "activate");
@@ -650,6 +680,7 @@ fn agent006_scoped_goal_assessment_and_closeout() {
         final_state["result"]["observation"]["lifecycle"],
         "completed"
     );
+    assert_human_summary(&["lifecycle: completed", "goal: achieved (revision 1)"]);
 }
 
 #[test]

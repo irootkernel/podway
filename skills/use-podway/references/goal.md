@@ -28,6 +28,7 @@ read the same fields under `result.observation`. Use only declared currently
 resolved evidence with a non-null scoped attempt, or current recorded Decision
 items. Explain actual findings. Podway validates citation applicability and
 shape. The caller owns semantic assessment.
+Citations are optional for satisfied and unsatisfied results; a citation-free result is a caller assertion that Podway records but does not substantiate, so cite resolved evidence for every non-retirement status.
 
 Use `goal assess-criteria --stdin` for an atomic batch. Copy the
 `goal.assess_criteria` `stdin_template` with its exact `context`, or assemble

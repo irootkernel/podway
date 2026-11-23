@@ -14,6 +14,8 @@ This file records concise shipped outcomes and the planned next stable release.
 - Omit the reserved default preset from new workspace configuration, accept
   absolute Procedure paths within the selected worktree, and give the minimal
   Procedure scaffold its own identity and digest.
+- Summarize human `status` and `next` output and clarify the caller's
+  responsibility for citation-free goal assessments.
 
 ## v0.2.18 - 2026-11-23
 

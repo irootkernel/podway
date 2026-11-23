@@ -1995,6 +1995,8 @@ result.cursor.goal_revision. Each of 1..16 assessments supplies criterion,
 status, reason, and up to four scoped citations. The batch commits one revision
 or leaves the session unchanged.
 
+Citations are optional for satisfied and unsatisfied results; a citation-free result is a caller assertion that Podway records but does not substantiate, so cite resolved evidence for every non-retirement status.
+
 Example stdin document:
   {"schema":"podway.scoped-criterion-assessment-input/v1","context":{"workspace_uuid":"00000000-0000-4000-8000-000000000001","idempotency_key":"assess-example","cursor":{"attempt":{"session":"00000000-0000-4000-8000-000000000002","scope":{"kind":"base"},"base_digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","node":"assessment","attempt":"00000000-0000-4000-8000-000000000003"},"session_revision":7,"goal_revision":1,"selected_group":null}},"assessments":[{"criterion":"tested","status":"satisfied","reason":"The test passed.","citations":[{"kind":"execution_result"}]}]}"#
         }
@@ -2582,6 +2584,7 @@ mod tests {
             help_text(&["goal.assess_criteria".to_owned()]).unwrap()
         );
         assert!(text.contains("result.cursor.goal_revision"));
+        assert!(text.contains("Citations are optional for satisfied and unsatisfied results; a citation-free result is a caller assertion that Podway records but does not substantiate, so cite resolved evidence for every non-retirement status."));
         let example = text
             .lines()
             .map(str::trim_start)
