@@ -515,7 +515,7 @@ fn agent006_scoped_goal_assessment_and_closeout() {
             .iter()
             .copied()
             .chain([
-                "hint: use --json for the complete result, or --verbose for the full human dump",
+                "hint: use --json for the complete result, or podway status --verbose for the full human dump",
             ])
             .collect();
         for generation in ["1", "2"] {

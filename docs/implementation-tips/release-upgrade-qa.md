@@ -113,13 +113,15 @@ or managed workspace outside both fixture operation and reset.
 | Store 16 candidate opening an authentic `v0.2.17` Store 15 | Error v2, exit `5`, `LEGACY_RUNTIME_STATE_UNSUPPORTED`, `podway.legacy-runtime-state-unsupported-details/v2`, `store_schema_version: 15`. Human stderr appends the four Store 15 hints below. The explicit reset recipe requires separate authorization. |
 | Verified `v0.2.17` writer opening a successor Store 16 | Error v2, exit `5`, `WORKSPACE_SCHEMA_UNSUPPORTED`, `podway.workspace-schema-unsupported-details/v1`, actual generation `16`, supported generation `15`. Use a compatible writer. |
 | Store 16 `start` with a well-formed Procedure v2 source on an admitted successor workspace | Error v2, exit `1`, `PROCEDURE_SCHEMA_UNSUPPORTED`, `podway.procedure-source-error-details/v1`, `expected_schema: podway.procedure/v3`, `reason: unsupported_schema`, `known_source_schema: podway.procedure/v2`. |
+| Store 16 candidate opening an authentic `v0.2.18` Store 16 with a different undeclared manifest digest | Error v2, exit `5`, `WORKSPACE_CONTRACT_MISMATCH`, `podway.workspace-contract-mismatch-details/v1` (gen 1) or `v2` with `actual_product_version: "v0.2.18"` (gen 2), byte-identical main/WAL, no SHM, and no outcome replay. Explicit reset requires separate authorization. |
+| Verified `v0.2.18` writer opening a newer Store 16 with a different manifest digest | Error v2, exit `5`, `WORKSPACE_CONTRACT_MISMATCH` under `v0.2.18`'s error contract, byte-identical main/WAL, no SHM, and no outcome replay. |
 
 In human `status`, expect these hints after the error and its recovery reason:
 
 ```text
 hint: stored Store generation: 15
 hint: to keep history, finish or abandon the session with its original writer: Podway v0.2.13 through v0.2.17
-hint: with v0.2.15 or later, --contract-generation 2 --json observe names the exact writer release when it is not the writer
+hint: with a verified v0.2.15-v0.2.17 binary, --contract-generation 2 --json observe may name the writer release; otherwise use retained provenance
 hint: reset --all destroys current and retained history and requires explicit authorization
 ```
 

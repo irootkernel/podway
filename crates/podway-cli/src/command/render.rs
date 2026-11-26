@@ -421,7 +421,7 @@ fn legacy_runtime_state_hint_lines(details: &Value) -> Vec<String> {
     lines.push(writer.to_owned());
     if generation == Some(15) {
         lines.push(
-            "with v0.2.15 or later, --contract-generation 2 --json observe names the exact writer release when it is not the writer"
+            "with a verified v0.2.15-v0.2.17 binary, --contract-generation 2 --json observe may name the writer release; otherwise use retained provenance"
                 .to_owned(),
         );
     }
@@ -660,7 +660,7 @@ fn render_human_observation_summary(
     write_text_line(
         stdout,
         format_args!(
-            "hint: use --json for the complete result, or --verbose for the full human dump"
+            "hint: use --json for the complete result, or podway status --verbose for the full human dump"
         ),
     )
 }
@@ -959,7 +959,7 @@ mod tests {
                 "open blockers: 2\n",
                 "operations: session.unblock, item.set\n",
                 "goal: not_achieved (revision 7)\n",
-                "hint: use --json for the complete result, or --verbose for the full human dump\n",
+                "hint: use --json for the complete result, or podway status --verbose for the full human dump\n",
                 "warning: {\"code\":\"PROJECTION_NOTICE\",\"message\":\"Fixture warning.\",\"path\":\"result\"}\n",
             )
         );
@@ -969,7 +969,7 @@ mod tests {
     fn legacy_error_guidance_covers_known_and_unknown_generations() {
         let old_writer = "hint: to keep history, use the Podway v0.2.12-or-earlier release that created this Store";
         let store_15_writer = "hint: to keep history, finish or abandon the session with its original writer: Podway v0.2.13 through v0.2.17";
-        let store_15_observe = "hint: with v0.2.15 or later, --contract-generation 2 --json observe names the exact writer release when it is not the writer";
+        let store_15_observe = "hint: with a verified v0.2.15-v0.2.17 binary, --contract-generation 2 --json observe may name the writer release; otherwise use retained provenance";
         let unknown_writer =
             "hint: to keep history, use the Podway release that created this Store";
         for (generation, writer, observe) in [

@@ -651,7 +651,7 @@ fn authentic_store_15_preserves_json_and_adds_human_history_guidance() {
             "reason: Replace <new-idempotency-key> with a fresh caller-owned key, then explicitly reset unsupported older runtime state.\n",
             "hint: stored Store generation: 15\n",
             "hint: to keep history, finish or abandon the session with its original writer: Podway v0.2.13 through v0.2.17\n",
-            "hint: with v0.2.15 or later, --contract-generation 2 --json observe names the exact writer release when it is not the writer\n",
+            "hint: with a verified v0.2.15-v0.2.17 binary, --contract-generation 2 --json observe may name the writer release; otherwise use retained provenance\n",
             "hint: reset --all destroys current and retained history and requires explicit authorization\n",
         )
     );
@@ -759,7 +759,7 @@ fn group_review(fixture: &Fixture, verdict: &str, stage: &str, score: &str, exit
 }
 
 const STATUS_HINT: &str =
-    "hint: use --json for the complete result, or --verbose for the full human dump";
+    "hint: use --json for the complete result, or podway status --verbose for the full human dump";
 
 fn assert_human_status_lines(fixture: &Fixture, expected: &[&str]) {
     for generation in ["1", "2"] {
