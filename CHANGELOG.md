@@ -4,16 +4,21 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.2.19 - Unreleased
 
+### Changed
+
+- Re-pin automation to the `v0.2.19` contract manifest: `v0.2.18` Stores refuse normal reads, writes and replay with
+  `WORKSPACE_CONTRACT_MISMATCH` because the manifest digest includes the product version and no writer predecessor is declared.
+- Finish or abandon `v0.2.18` sessions with `v0.2.18`, or preserve desired history before explicitly confirming an
+  unfenced `reset --all` to discard current and retained runtime history and create fresh Store 16 state.
+
 ### Fixed
 
-- Identify correctable CLI refusals, list all missing workspace removal
-  confirmations at once, and return non-retryable `REQUEST_INVALID` when
-  history DAG or attempts receives a retained group digest without its execution.
+- Identify correctable CLI refusals, list all missing workspace removal confirmations at once, and return
+  non-retryable `REQUEST_INVALID` when history DAG or attempts receives a retained group digest without its execution.
 - Show how to keep legacy Store history with its original Podway writer and
   warn that `reset --all` destroys current and retained history.
-- Omit the reserved default preset from new workspace configuration, accept
-  absolute Procedure paths within the selected worktree, and give the minimal
-  Procedure scaffold its own identity and digest.
+- Omit the reserved default preset from new workspace configuration, accept contained absolute Procedure paths
+  for preview and start, and give the minimal Procedure scaffold its own identity and digest.
 - Summarize human `status` and `next` output and clarify the caller's
   responsibility for citation-free goal assessments.
 
