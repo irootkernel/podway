@@ -153,6 +153,16 @@ struct LocalFailure {
     details: Map<String, Value>,
 }
 
+fn refresh_recovery_json() -> Value {
+    json!({
+        "action": "refresh_state",
+        "command": "session.observe",
+        "argv": ["podway", "--json", "observe"],
+        "reason": "Read the current committed state before retrying.",
+        "requires_explicit_authorization": false,
+    })
+}
+
 impl LocalFailure {
     fn catalog(code: &'static str, message: impl Into<String>, command: impl Into<String>) -> Self {
         let (exit_code, retryable) = match code {
@@ -212,12 +222,7 @@ impl LocalFailure {
             "schema": "podway.revision-conflict-details/v3",
             "expected_revision": expected,
             "current_revision": current,
-            "recovery": {
-                "action": "refresh_state", "command": "session.observe",
-                "argv": ["podway", "--json", "observe"],
-                "reason": "Read the current committed state before retrying.",
-                "requires_explicit_authorization": false,
-            },
+            "recovery": refresh_recovery_json(),
         })
         .as_object()
         .expect("revision conflict details are an object")
@@ -313,6 +318,7 @@ impl LocalFailure {
                 "actual_procedure_digest".to_owned(),
                 Value::String(actual.as_str().to_owned()),
             ),
+            ("recovery".to_owned(), refresh_recovery_json()),
         ]);
         failure
     }

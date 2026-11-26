@@ -1702,3 +1702,70 @@ fn cntrt002_format_write_emission_overflow_preserves_original_bytes() {
             .contains(".podway-tmp")
     }));
 }
+
+#[test]
+fn start_dry_run_procedure_digest_mismatch_returns_schema_valid_recovery_error() {
+    let fixture = Fixture::new();
+    let source = include_str!("../../../assets/presets/small-change-v3.yaml");
+    fs::write(fixture.root.join("procedure.yaml"), source).unwrap();
+    let preview = fixture.cli.run(&["procedure", "preview", "procedure.yaml"]);
+    let actual_digest = preview["result"]["digest"].as_str().unwrap().to_owned();
+    let wrong_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    assert_ne!(actual_digest, wrong_digest);
+
+    for generation in ["1", "2"] {
+        let output = fixture.run(
+            &[
+                "--json",
+                "--contract-generation",
+                generation,
+                "start",
+                "--procedure",
+                "procedure.yaml",
+                "--expect-procedure-digest",
+                wrong_digest,
+                "--task",
+                "Digest mismatch dry run",
+                "--dry-run",
+            ]
+            .map(str::to_owned),
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(4),
+            "generation {generation}: {output:?}"
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "generation {generation}: {output:?}"
+        );
+        let error = one_json(&output);
+        assert_eq!(
+            error["schema"], "podway.error/v2",
+            "generation {generation}"
+        );
+        assert_eq!(error["command"], "session.start", "generation {generation}");
+        assert_eq!(
+            error["code"], "PROCEDURE_DIGEST_MISMATCH",
+            "generation {generation}"
+        );
+        assert_eq!(error["exit_code"], 4, "generation {generation}");
+        assert_eq!(error["retryable"], false, "generation {generation}");
+        assert_eq!(
+            error["details"],
+            json!({
+                "schema": "podway.procedure-digest-mismatch-details/v3",
+                "expected_procedure_digest": wrong_digest,
+                "actual_procedure_digest": actual_digest,
+                "recovery": {
+                    "action": "refresh_state",
+                    "command": "session.observe",
+                    "argv": ["podway", "--json", "observe"],
+                    "reason": "Read the current committed state before retrying.",
+                    "requires_explicit_authorization": false,
+                },
+            }),
+            "generation {generation}"
+        );
+    }
+}
